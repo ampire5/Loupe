@@ -26,27 +26,21 @@ private final class Gate: @unchecked Sendable {
 private final class Log: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String] = []
-    private var sems: [String: DispatchSemaphore] = [:]
-
-    private func sem(_ name: String) -> DispatchSemaphore {
-        if let s = sems[name] { return s }
-        let s = DispatchSemaphore(value: 0)
-        sems[name] = s
-        return s
-    }
 
     func started(_ name: String) {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         items.append(name)
-        let s = sem(name)
-        lock.unlock()
-        s.signal()
     }
 
-    /// Blocks (up to 10 s) until `name` has started; false on timeout.
-    func awaitStarted(_ name: String) -> Bool {
-        lock.lock(); let s = sem(name); lock.unlock()
-        return s.wait(timeout: .now() + 10) == .success
+    /// Waits (up to 10 s) until `name` has started; false on timeout. Polls instead of blocking on a semaphore: a
+    /// blocked cooperative thread starves the pool's own tasks on a machine with few cores (CI runners have 3).
+    func awaitStarted(_ name: String) async -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        while !has(name) {
+            if Date() > deadline { return false }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return true
     }
 
     var order: [String] { lock.lock(); defer { lock.unlock() }; return items }
@@ -79,7 +73,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let g1 = Gate(), g2 = Gate()
         let n1 = Task { try await pool.run(forCurrent: false, rank: 1, blocking("n1", log, g1)) }
         let n2 = Task { try await pool.run(forCurrent: false, rank: 2, blocking("n2", log, g2)) }
-        #expect(log.awaitStarted("n1") && log.awaitStarted("n2"))
+        #expect(await log.awaitStarted("n1")); #expect(await log.awaitStarted("n2"))
 
         let n3 = Task { try await pool.run(forCurrent: false, rank: 3, instant("n3", log)) }
         #expect(await waitUntil { pool.waitingCount == 1 })
@@ -105,7 +99,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let tasks = (0..<3).map { i in
             Task { try await pool.run(forCurrent: true, rank: i, blocking("c\(i)", log, gates[i])) }
         }
-        for i in 0..<3 { #expect(log.awaitStarted("c\(i)")) }
+        for i in 0..<3 { #expect(await log.awaitStarted("c\(i)")) }
         #expect(pool.runningCount == 3)
         gates.forEach { $0.open() }
         for t in tasks { _ = try await t.value }
@@ -117,7 +111,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let g1 = Gate(), g2 = Gate()
         let n1 = Task { try await pool.run(forCurrent: false, rank: 0, blocking("n1", log, g1)) }
         let n2 = Task { try await pool.run(forCurrent: false, rank: 0, blocking("n2", log, g2)) }
-        #expect(log.awaitStarted("n1") && log.awaitStarted("n2"))
+        #expect(await log.awaitStarted("n1")); #expect(await log.awaitStarted("n2"))
 
         // Two neighbours hold the shared slots and a third queues with the best rank; a current job
         // (worst rank) still starts at once on the reserved slot, and again after it finished.
@@ -140,7 +134,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let busy = (0..<3).map { i in
             Task { try await pool.run(forCurrent: true, rank: i, blocking("busy\(i)", log, gates[i])) }
         }
-        for i in 0..<3 { #expect(log.awaitStarted("busy\(i)")) }
+        for i in 0..<3 { #expect(await log.awaitStarted("busy\(i)")) }
 
         let neighbour = Task { try await pool.run(forCurrent: false, rank: 0, instant("neighbour", log)) }
         #expect(await waitUntil { pool.waitingCount == 1 })
@@ -161,7 +155,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let log = Log()
         let gate = Gate()
         let blocker = Task { try await pool.run(forCurrent: false, rank: 0, blocking("blocker", log, gate)) }
-        #expect(log.awaitStarted("blocker"))
+        #expect(await log.awaitStarted("blocker"))
 
         var tasks: [Task<String, Error>] = []
         for (i, rank) in [5, 1, 3].enumerated() {
@@ -179,7 +173,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let log = Log()
         let gate = Gate()
         let blocker = Task { try await pool.run(forCurrent: false, rank: 0, blocking("blocker", log, gate)) }
-        #expect(log.awaitStarted("blocker"))
+        #expect(await log.awaitStarted("blocker"))
 
         var tasks: [Task<String, Error>] = []
         for i in 0..<4 {
@@ -197,7 +191,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let log = Log()
         let gate = Gate()
         let blocker = Task { try await pool.run(forCurrent: false, rank: 0, blocking("blocker", log, gate)) }
-        #expect(log.awaitStarted("blocker"))
+        #expect(await log.awaitStarted("blocker"))
 
         let waiter = Task { try await pool.run(forCurrent: false, rank: 1, instant("waiter", log)) }
         #expect(await waitUntil { pool.waitingCount == 1 })
@@ -232,7 +226,7 @@ private func instant(_ name: String, _ log: Log) -> @Sendable () throws -> Strin
         let log = Log()
         let gate = Gate()
         let task = Task { try await pool.run(forCurrent: true, rank: 0, blocking("job", log, gate)) }
-        #expect(log.awaitStarted("job"))
+        #expect(await log.awaitStarted("job"))
         task.cancel()
         gate.open()
         #expect(try await task.value == "job")
