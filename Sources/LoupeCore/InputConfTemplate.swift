@@ -1,161 +1,161 @@
-/// The text of `input.conf` with every built-in binding commented out, grouped as the cheat sheet is, with Russian notes
+/// The text of `input.conf` with every built-in binding commented out, grouped as the cheat sheet is, with English notes
 /// like `loupe.conf`'s (spec §2.4). Uncommented, its binding lines give exactly the built-in layout (a test checks);
 /// `Loupe --print-input-conf` prints it.
 public enum InputConfTemplate {
     public static let text = """
-    # Loupe — привязки клавиш и кнопок мыши (формат mpv: <вход> <действие> [аргументы], комментарии с #).
-    # Файл перечитывается вместе с loupe.conf, когда вы переключаетесь на Loupe. Встроенная раскладка
-    # действует всегда: строка файла добавляет привязку или заменяет встроенную с тем же входом.
-    # Из двух строк с одним входом действует последняя. «<вход> ignore» снимает привязку — встроенную
-    # или из строки выше. Ошибки (неизвестный вход или действие, плохой аргумент) показываются плашкой
-    # в окне и пишутся в stderr; строка с ошибкой пропускается, остальные действуют.
-    # Ниже вся встроенная раскладка, закомментированная: раскомментируйте строку и поменяйте действие.
+    # Loupe — key and mouse button bindings (mpv format: <input> <action> [args], comments start with #).
+    # The file is reread together with loupe.conf whenever you switch to Loupe. The built-in layout
+    # always applies: a line in this file adds a binding or replaces the built-in one for the same input.
+    # Of two lines with the same input, the last one wins. "<input> ignore" removes a binding, built-in
+    # or from a line above. Errors (unknown input or action, bad argument) show as a banner in the
+    # window and go to stderr; a line with an error is skipped, the others still apply.
+    # Below is the whole built-in layout, commented out: uncomment a line and change the action.
     #
-    # Клавиши. Буква — по символу (на русской раскладке клавиша F остаётся f); заглавная = Shift+буква
-    # (L ≡ Shift+l). Остальные — по положению: LEFT RIGHT UP DOWN SPACE BS PGUP PGDWN HOME END ESC ENTER KP_ENTER,
-    # 0…9, KP0…KP9 (цифровой блок), KP_ADD и KP_SUBTRACT (его + и −), = - [ ] / и ? (≡ Shift+/).
-    # Модификаторы: Shift+ и Alt+ (⌥). ⌘ и ⌃ принадлежат меню, в этом файле их нет.
+    # Keys. Letters go by character (on a non-Latin layout such as Russian, the F key is still f); a capital
+    # is Shift+letter (L ≡ Shift+l). Other keys go by position: LEFT RIGHT UP DOWN SPACE BS PGUP PGDWN HOME END
+    # ESC ENTER KP_ENTER, 0…9, KP0…KP9 (numeric keypad), KP_ADD and KP_SUBTRACT (its + and −), = - [ ] / and
+    # ? (≡ Shift+/). Modifiers: Shift+ and Alt+ (⌥). ⌘ and ⌃ belong to the menus and are not used in this file.
     #
-    # Кнопки мыши: MBTN_MID (нажатие колеса), MBTN_BACK, MBTN_FORWARD; у MX Master 4 ещё MX_PANEL
-    # (тактильная панель), MX_GESTURE (кнопка жестов) и MX_SHIFT (кнопка за колесом). Способ нажатия:
-    #   MX_PANEL fit                                   коротко: на отпускании, без колеса и движения
-    #                                                  (если у кнопки нет других привязок — сразу на нажатии)
-    #   MX_PANEL-long fill                             долго: по достижении mouse-long-press (loupe.conf);
-    #                                                  у кнопки с «+ колесо» / «+ движение» — на отпускании
-    #   MX_PANEL+WHEEL add vibrance-amount 0.05        зажать + колесо: каждый шаг, вверх — плюс
-    #   MX_GESTURE+MX_THUMB add vibrance-amount 0.05   зажать + колесо под большим пальцем, вправо — плюс
-    #   MX_PANEL+MOVE add vibrance-amount 0.05         зажать + движение: шаг на mouse-move-step pt, вверх — плюс
-    #   MBTN_RIGHT+MBTN_MID fit-width                  средняя, пока зажата правая
-    # Пока у кнопки есть привязка «+ колесо», колесо при зажатой кнопке идёт только в неё.
+    # Mouse buttons: MBTN_MID (wheel click), MBTN_BACK, MBTN_FORWARD; on the MX Master 4 also MX_PANEL
+    # (haptic panel), MX_GESTURE (gesture button) and MX_SHIFT (button behind the wheel). How it is pressed:
+    #   MX_PANEL fit                                   short: on release, with no wheel or movement
+    #                                                  (if the button has no other bindings, right on press)
+    #   MX_PANEL-long fill                             long: once mouse-long-press (loupe.conf) is reached;
+    #                                                  on a button with "+ wheel" / "+ move", on release
+    #   MX_PANEL+WHEEL add vibrance-amount 0.05        hold + wheel: every step, up adds
+    #   MX_GESTURE+MX_THUMB add vibrance-amount 0.05   hold + thumb wheel: right adds
+    #   MX_PANEL+MOVE add vibrance-amount 0.05         hold + move: a step per mouse-move-step pt, up adds
+    #   MBTN_RIGHT+MBTN_MID fit-width                  middle while right is held
+    # While a button has a "+ wheel" binding, the wheel goes only to it while the button is held.
     #
-    # Действия — те, что ниже в этом файле: previous, fit, toggle-auto-color… Ещё:
-    #   toggle-info-panel                              инфо-панель (как ⌘I)
-    #   add <ключ> <шаг>                               шаг к значению папки: auto-color-strength или
-    #                                                  vibrance-amount (0…1); шаг 0.01…1 со знаком,
-    #                                                  шаг колеса или движения вниз вычитает
-    #   zoom-step                                      зум в точке под курсором по ступеням: шаг √2, как у
-    #                                                  zoom-in, но остановку zoom-stops не перескакивает;
-    #                                                  колесо или движение вверх — крупнее, вниз — мельче;
-    #                                                  на нажатии или клавише — на ступень крупнее
-    #   next-folder, previous-folder                   на «+ колесо» / «+ движение» идут в обе стороны:
-    #                                                  next-folder вниз — в следующую папку, вверх — в
-    #                                                  предыдущую (previous-folder наоборот); не чаще
-    #                                                  folder-scroll-repeat (loupe.conf)
-    #   ignore                                         снять привязку
+    # Actions: the ones further down in this file (previous, fit, toggle-auto-color…). Also:
+    #   toggle-info-panel                              info panel (as ⌘I)
+    #   add <key> <step>                               a step to a folder value: auto-color-strength or
+    #                                                  vibrance-amount (0…1); a signed step of 0.01…1;
+    #                                                  a wheel or move step down subtracts
+    #   zoom-step                                      zoom at the pointer through the stops: a √2 step like
+    #                                                  zoom-in, but it never skips a zoom-stops stop;
+    #                                                  wheel or move up zooms in, down zooms out;
+    #                                                  on a press or a key, one stop in
+    #   next-folder, previous-folder                   on "+ wheel" / "+ move" they go both ways:
+    #                                                  next-folder down goes to the next folder, up to
+    #                                                  the previous one (previous-folder the reverse);
+    #                                                  at most once per folder-scroll-repeat (loupe.conf)
+    #   ignore                                         remove the binding
 
-    # ── Навигация ─────────────────────────────────────────────────────────────────────────────────────
-    # LEFT previous                                 # предыдущее фото
-    # BS previous                                   # предыдущее фото
-    # PGUP previous                                 # предыдущее фото
-    # RIGHT next                                    # следующее фото
-    # SPACE next                                    # следующее фото
-    # PGDWN next                                    # следующее фото
-    # Alt+LEFT previous-folder                      # предыдущая папка
-    # [ previous-folder                             # предыдущая папка
-    # Alt+RIGHT next-folder                         # следующая папка
-    # ] next-folder                                 # следующая папка
-    # HOME first                                    # первое фото
-    # END last                                      # последнее фото
-    # ENTER browse                                  # браузер папок на папке этого фото
-    # KP_ENTER browse                               # то же, Enter цифрового блока
+    # ── Navigation ────────────────────────────────────────────────────────────────────────────────────
+    # LEFT previous                                 # previous photo
+    # BS previous                                   # previous photo
+    # PGUP previous                                 # previous photo
+    # RIGHT next                                    # next photo
+    # SPACE next                                    # next photo
+    # PGDWN next                                    # next photo
+    # Alt+LEFT previous-folder                      # previous folder
+    # [ previous-folder                             # previous folder
+    # Alt+RIGHT next-folder                         # next folder
+    # ] next-folder                                 # next folder
+    # HOME first                                    # first photo
+    # END last                                      # last photo
+    # ENTER browse                                  # folder browser on this photo's folder
+    # KP_ENTER browse                               # the same, keypad Enter
 
-    # ── Зум ───────────────────────────────────────────────────────────────────────────────────────────
-    # 0 fit                                         # вписать в окно
-    # KP0 fit                                       # вписать в окно
+    # ── Zoom ──────────────────────────────────────────────────────────────────────────────────────────
+    # 0 fit                                         # fit to window
+    # KP0 fit                                       # fit to window
     # 1 actual-100                                  # 100 %
     # KP1 actual-100                                # 100 %
     # 2 actual-200                                  # 200 %
     # KP2 actual-200                                # 200 %
     # 4 actual-400                                  # 400 %
     # KP4 actual-400                                # 400 %
-    # w fit-width                                   # по ширине окна
-    # h fit-height                                  # по высоте окна
-    # x fill                                        # заполнить окно
-    # z toggle-fit-actual                           # вписать ↔ 100 % в точке под курсором
-    # = zoom-in                                     # крупнее
-    # KP_ADD zoom-in                                # крупнее
-    # - zoom-out                                    # мельче
-    # KP_SUBTRACT zoom-out                          # мельче
-    # l toggle-keep-zoom                            # держать зум и положение в папке, вкл/выкл
-    # L save-keep-zoom                              # держать зум — по умолчанию для всех папок
-    # Shift+LEFT pan-left                           # сдвиг влево на десятую окна
-    # Shift+RIGHT pan-right                         # сдвиг вправо
-    # Shift+UP pan-up                               # сдвиг вверх
-    # Shift+DOWN pan-down                           # сдвиг вниз
+    # w fit-width                                   # fit width
+    # h fit-height                                  # fit height
+    # x fill                                        # fill the window
+    # z toggle-fit-actual                           # fit ↔ 100 % at the pointer
+    # = zoom-in                                     # zoom in
+    # KP_ADD zoom-in                                # zoom in
+    # - zoom-out                                    # zoom out
+    # KP_SUBTRACT zoom-out                          # zoom out
+    # l toggle-keep-zoom                            # keep zoom and position in this folder, on/off
+    # L save-keep-zoom                              # keep zoom as the default for all folders
+    # Shift+LEFT pan-left                           # pan left by a tenth of the window
+    # Shift+RIGHT pan-right                         # pan right
+    # Shift+UP pan-up                               # pan up
+    # Shift+DOWN pan-down                           # pan down
 
-    # ── Масштабирование ───────────────────────────────────────────────────────────────────────────────
-    # s cycle-filter                                # следующий фильтр масштабирования в папке
-    # S save-filters                                # фильтры — по умолчанию
-    # a toggle-antiring                             # подавление ореолов в папке, вкл/выкл
-    # A save-antiring                               # подавление ореолов — по умолчанию
+    # ── Scaling ───────────────────────────────────────────────────────────────────────────────────────
+    # s cycle-filter                                # next scaling filter in this folder
+    # S save-filters                                # save filters as default
+    # a toggle-antiring                             # anti-ringing in this folder, on/off
+    # A save-antiring                               # save anti-ringing as default
 
-    # ── Цвет ──────────────────────────────────────────────────────────────────────────────────────────
-    # c toggle-auto-color                           # авто-цвет в папке, вкл/выкл
-    # C save-auto-color                             # авто-цвет — по умолчанию
-    # v toggle-vibrance                             # vibrance в папке, вкл/выкл
-    # V save-vibrance                               # vibrance — по умолчанию
+    # ── Colour ────────────────────────────────────────────────────────────────────────────────────────
+    # c toggle-auto-color                           # auto colour in this folder, on/off
+    # C save-auto-color                             # save auto colour as default
+    # v toggle-vibrance                             # vibrance in this folder, on/off
+    # V save-vibrance                               # save vibrance as default
 
-    # ── Вид ───────────────────────────────────────────────────────────────────────────────────────────
-    # f toggle-full-screen                          # полный экран
-    # ESC exit-full-screen                          # выйти из полного экрана
-    # i cycle-stats                                 # бар статистики
-    # t toggle-strip                                # закрепить / открепить ленту миниатюр
-    # ? cheat-sheet                                 # шпаргалка
-    # p cycle-pan-indicators                        # индикаторы сдвига: auto / always / off
-    # P save-pan-indicators                         # индикаторы сдвига — по умолчанию
-    #   Инфо-панель (toggle-info-panel) по умолчанию без клавиши: ⌘I в меню и кнопки мыши ниже.
+    # ── View ──────────────────────────────────────────────────────────────────────────────────────────
+    # f toggle-full-screen                          # full screen
+    # ESC exit-full-screen                          # leave full screen
+    # i cycle-stats                                 # stats bar
+    # t toggle-strip                                # pin / unpin the thumbnail strip
+    # ? cheat-sheet                                 # cheat sheet
+    # p cycle-pan-indicators                        # pan indicators: auto / always / off
+    # P save-pan-indicators                         # save pan indicators as default
+    #   The info panel (toggle-info-panel) has no key by default: ⌘I in the menu and the mouse buttons below.
 
-    # ── Табы и окна ───────────────────────────────────────────────────────────────────────────────────
-    #   По умолчанию ни одна клавиша и кнопка табы не трогает: ⌘T, ⌘N, ⌘W, ⇧⌘W, ⇧⌘T, ⌘[, ⇧⌘] и ⇧⌘[ — в меню;
-    #   ⌘1…⌘8 (таб по номеру), ⌘9 (последний), ⌥⌘→ / ⌥⌘← (следующий / предыдущий) — как в браузере.
-    #   Привязываются, как любое действие, к клавише или кнопке:
-    #   new-tab                                        новый таб (как ⌘T)
-    #   new-window                                     новое окно (как ⌘N)
-    #   close-tab                                      закрыть таб (как ⌘W)
-    #   close-window                                   закрыть окно со всеми табами (как ⇧⌘W)
-    #   reopen-tab                                     вернуть последний закрытый таб (как ⇧⌘T)
-    #   back                                           назад в Recent, Folders или Stash, откуда открыто (как ⌘[)
-    #   browse                                         браузер папок на папке этого фото, фото выделено (Return, двойной клик)
-    #   next-tab, previous-tab                         следующий / предыдущий таб окна, по кругу (как
-    #                                                  ⌘⇧] / ⌘⇧[); на «+ колесо» / «+ движение» идут в обе
-    #                                                  стороны, как next-folder; не чаще folder-scroll-repeat
-    #   open-in-new-tab                                выбрать файл и открыть в новом табе (как ⌥⌘O), что бы ни стояло в open-in
-    #   open-in-new-window                             выбрать файл и открыть в новом окне (как ⇧⌘O)
-    #   home                                           главный экран в этом табе (как ⇧⌘H)
-    #   Например:
-    #   MX_SHIFT+WHEEL next-tab                        кнопка за колесом + колесо: вниз — следующий таб, вверх — предыдущий
-    #   MX_GESTURE+MX_THUMB next-tab                   кнопка жестов + колесо под пальцем: таб в обе стороны
-    #   MBTN_FORWARD-long new-tab                      «вперёд», долго: новый таб
-    #   MX_GESTURE-long close-tab                      кнопка жестов, долго: закрыть таб
+    # ── Window ────────────────────────────────────────────────────────────────────────────────────────
+    #   By default no key or button touches tabs: ⌘T, ⌘N, ⌘W, ⇧⌘W, ⇧⌘T, ⌘[, ⇧⌘] and ⇧⌘[ are in the menus;
+    #   ⌘1…⌘8 (tab by number), ⌘9 (last), ⌥⌘→ / ⌥⌘← (next / previous) work as in a browser.
+    #   Bind them to a key or button like any other action:
+    #   new-tab                                        new tab (as ⌘T)
+    #   new-window                                     new window (as ⌘N)
+    #   close-tab                                      close tab (as ⌘W)
+    #   close-window                                   close window with all its tabs (as ⇧⌘W)
+    #   reopen-tab                                     reopen the last closed tab (as ⇧⌘T)
+    #   back                                           back to Recent, Folders or Stash, where it was opened from (as ⌘[)
+    #   browse                                         folder browser on this photo's folder, photo selected (Return, double-click)
+    #   next-tab, previous-tab                         next / previous tab of the window, wrapping around (as
+    #                                                  ⌘⇧] / ⌘⇧[); on "+ wheel" / "+ move" they go both
+    #                                                  ways, like next-folder; at most once per folder-scroll-repeat
+    #   open-in-new-tab                                choose a file and open it in a new tab (as ⌥⌘O), whatever open-in says
+    #   open-in-new-window                             choose a file and open it in a new window (as ⇧⌘O)
+    #   home                                           Home in this tab (as ⇧⌘H)
+    #   For example:
+    #   MX_SHIFT+WHEEL next-tab                        button behind the wheel + wheel: down for the next tab, up for the previous
+    #   MX_GESTURE+MX_THUMB next-tab                   gesture button + thumb wheel: tabs both ways
+    #   MBTN_FORWARD-long new-tab                      forward, long: new tab
+    #   MX_GESTURE-long close-tab                      gesture button, long: close tab
 
-    # ── Трекпад ───────────────────────────────────────────────────────────────────────────────────────
-    #   Жесты трекпада привязываются как кнопка: только действие, без -long и +WHEEL. Свайп тремя пальцами
-    #   вверх / вниз работает, если в Системных настройках › Трекпад он не отдан Mission Control / Exposé.
-    # TP_3UP browse                                 # три пальца вверх: браузер папок на папке этого фото
-    # TP_3DOWN back                                 # три пальца вниз: назад в Recent, Folders или Stash
-    # TP_3TAP cycle-stats                           # тап тремя пальцами: бар статистики
-    # TP_FORCE toggle-info-panel                    # сильное нажатие: инфо-панель
-    # TP_CLICK_DOWN next-tab                        # клик зажат + два пальца вниз: следующий таб
-    # TP_CLICK_UP previous-tab                      # клик зажат + два пальца вверх: предыдущий таб
+    # ── Trackpad ──────────────────────────────────────────────────────────────────────────────────────
+    #   Trackpad gestures bind like a button: only an action, no -long or +WHEEL. The three-finger swipe
+    #   up / down works unless System Settings › Trackpad gives it to Mission Control / Exposé.
+    # TP_3UP browse                                 # three fingers up: folder browser on this photo's folder
+    # TP_3DOWN back                                 # three fingers down: back to Recent, Folders or Stash
+    # TP_3TAP cycle-stats                           # three-finger tap: stats bar
+    # TP_FORCE toggle-info-panel                    # force click: info panel
+    # TP_CLICK_DOWN next-tab                        # click held + two fingers down: next tab
+    # TP_CLICK_UP previous-tab                      # click held + two fingers up: previous tab
 
-    # ── Мышь ──────────────────────────────────────────────────────────────────────────────────────────
-    # MX_PANEL toggle-auto-color                    # панель: авто-цвет в папке, вкл/выкл
-    # MX_PANEL-long toggle-vibrance                 # панель, долго: vibrance в папке, вкл/выкл
-    # MX_PANEL+WHEEL add auto-color-strength 0.05   # панель + колесо: сила авто-цвета для папки
-    # MX_PANEL+MOVE add vibrance-amount 0.05        # панель + движение вверх/вниз: сила vibrance для папки
-    # MBTN_MID toggle-fit-actual                    # средняя: вписать ↔ 100 % в точке под курсором
-    # MBTN_MID-long fill                            # средняя, долго: заполнить окно
-    # MBTN_BACK back                                # «назад»: назад в Recent, Folders или Stash, как в браузере
-    # MBTN_BACK-long cycle-stats                    # «назад», долго: бар статистики
-    # MBTN_BACK+WHEEL next-folder                   # «назад» + колесо: вниз — следующая папка, вверх — предыдущая
-    # MBTN_FORWARD toggle-info-panel                # «вперёд»: инфо-панель
-    # MBTN_FORWARD+WHEEL zoom-step                  # «вперёд» + колесо: зум по ступеням под курсором
-    # MX_GESTURE cycle-stats                        # кнопка жестов (перед «вперёд»/«назад»): бар статистики
-    # MX_GESTURE+WHEEL add vibrance-amount 0.05     # кнопка жестов + колесо: сила vibrance для папки
-    # MBTN_RIGHT+MBTN_MID fit-width                 # правая + средняя: по ширине окна
-    #   Свободны: MBTN_FORWARD-long, MX_GESTURE-long, MX_SHIFT и все +MX_THUMB. «Назад» долго
-    #   и кнопка жестов делают одно и то же — одну из них можно переназначить.
-    #   «Назад» и «вперёд» MX Master Loupe слышит и рядом с Mac Mouse Fix: mx-side-buttons в loupe.conf.
+    # ── Mouse ─────────────────────────────────────────────────────────────────────────────────────────
+    # MX_PANEL toggle-auto-color                    # panel: auto colour in this folder, on/off
+    # MX_PANEL-long toggle-vibrance                 # panel, long: vibrance in this folder, on/off
+    # MX_PANEL+WHEEL add auto-color-strength 0.05   # panel + wheel: auto colour strength for this folder
+    # MX_PANEL+MOVE add vibrance-amount 0.05        # panel + move up/down: vibrance strength for this folder
+    # MBTN_MID toggle-fit-actual                    # middle: fit ↔ 100 % at the pointer
+    # MBTN_MID-long fill                            # middle, long: fill the window
+    # MBTN_BACK back                                # back: back to Recent, Folders or Stash, as in a browser
+    # MBTN_BACK-long cycle-stats                    # back, long: stats bar
+    # MBTN_BACK+WHEEL next-folder                   # back + wheel: down for the next folder, up for the previous
+    # MBTN_FORWARD toggle-info-panel                # forward: info panel
+    # MBTN_FORWARD+WHEEL zoom-step                  # forward + wheel: zoom through the stops at the pointer
+    # MX_GESTURE cycle-stats                        # gesture button (in front of forward/back): stats bar
+    # MX_GESTURE+WHEEL add vibrance-amount 0.05     # gesture button + wheel: vibrance strength for this folder
+    # MBTN_RIGHT+MBTN_MID fit-width                 # right + middle: fit width
+    #   Free: MBTN_FORWARD-long, MX_GESTURE-long, MX_SHIFT and every +MX_THUMB. Back (long) and the
+    #   gesture button do the same thing, so one of them can be reassigned.
+    #   Loupe hears the MX Master's back and forward buttons even alongside Mac Mouse Fix: mx-side-buttons in loupe.conf.
 
     """
 }

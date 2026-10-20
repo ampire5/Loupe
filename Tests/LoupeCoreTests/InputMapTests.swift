@@ -120,7 +120,7 @@ import Testing
     /// The template names the five, commented, in a section of their own, with gesture examples (none of them active).
     @Test func templateListsTabActions() throws {
         let text = InputConfTemplate.text
-        let start = try #require(text.range(of: "# ── Табы и окна ──"))
+        let start = try #require(text.range(of: "# ── Window ──"))
         let body = String(text[start.lowerBound...].components(separatedBy: "\n\n")[0])
         for name in ["new-tab", "new-window", "close-tab", "next-tab", "previous-tab", "MX_SHIFT+WHEEL next-tab"] {
             #expect(body.contains(name), "\(name)")
@@ -130,7 +130,7 @@ import Testing
         for (input, action) in [(InputTrigger.mouse(.shift, .wheel), KeyAction.fit), (.mouse(.gesture, .thumbWheel), .fit),
                                 (.mouse(.forward, .long), .fill), (.mouse(.gesture, .long), .fill)] {
             let out = InputConfText.binding(input, to: .action(action), in: text)
-            let outStart = try #require(out.range(of: "# ── Табы и окна ──"))
+            let outStart = try #require(out.range(of: "# ── Window ──"))
             #expect(String(out[outStart.lowerBound...].components(separatedBy: "\n\n")[0]) == body, "\(input)")
             #expect(InputConf.parse(out).lines.map(\.trigger) == [input])
         }
@@ -292,7 +292,7 @@ import Testing
         let text = InputConfTemplate.text
         #expect(text.hasPrefix("# Loupe"))
         for word in ["ignore", "MX_PANEL-long", "+WHEEL", "+MX_THUMB", "+MOVE", "MBTN_RIGHT+MBTN_MID", "⌘",
-                     "на отпускании", "MBTN_FORWARD+WHEEL zoom-step",
+                     "on release", "MBTN_FORWARD+WHEEL zoom-step",
                      "MX_GESTURE+WHEEL add vibrance-amount 0.05", "MX_GESTURE cycle-stats", "zoom-step",
                      "MBTN_BACK+WHEEL next-folder"] {
             #expect(text.contains(word), "\(word)")

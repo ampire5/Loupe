@@ -101,12 +101,12 @@ import Testing
         let at = template.firstIndex { $0.hasPrefix("# f toggle-full-screen") }!
         #expect(result[0].line == at + 1)
         let row = lines(out)[at]
-        #expect(row.hasPrefix("f fill") && row.contains("# полный экран"), "\(row)")
+        #expect(row.hasPrefix("f fill") && row.contains("# full screen"), "\(row)")
         #expect(lines(out).count == template.count)
     }
 
     @Test func templateDocLineIsNotUncommented() {
-        // `#   MX_GESTURE+MX_THUMB add vibrance-amount 0.05   зажать + колесо…` is documentation, not a binding.
+        // `#   MX_GESTURE+MX_THUMB add vibrance-amount 0.05   hold + thumb wheel…` is documentation, not a binding.
         let out = InputConfText.binding(.mouse(.gesture, .thumbWheel), to: .action(.fit), in: InputConfTemplate.text)
         let result = parsed(out)
         #expect(result.count == 1 && result[0].trigger == .mouse(.gesture, .thumbWheel))
