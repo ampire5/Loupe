@@ -169,6 +169,10 @@ scripts/test.sh full      # everything
 
 `LoupeBench` measures decoding, thumbnails, rendering, pyramids, auto colour and the browser; `scripts/latency-matrix.sh` measures input-to-photon latency.
 
+## Roadmap
+
+Next up: side-by-side comparison of two photos, Favorites and Viewed, animated images, HDR photos — and a plugin architecture for media servers. See **[ROADMAP.md](ROADMAP.md)**.
+
 ## Image credits
 
 The screenshots show public-domain and openly licensed works: space images by NASA, ESA, CSA and STScI (Webb and Hubble, CC BY 4.0) and NASA (public domain); paintings and sculpture from The Metropolitan Museum of Art Open Access (CC0) and public-domain works on Wikimedia Commons (Van Gogh, Hokusai, Leonardo, Vermeer, Bruegel, Klimt, Munch, Kandinsky, Mondrian and others); historic photographs in the public domain (Library of Congress, NARA); birds and animals under CC0.
