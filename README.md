@@ -31,6 +31,17 @@ whole folders of photos on a NAS — with the keyboard, the trackpad or an MX Ma
 - **A real home for your photos.** A Photos-style Home with Recent, Sessions, a folder browser with live covers, a sidebar tree, two thumbnail modes — and a native window onto your [Stash](https://github.com/stashapp/stash) library.
 - **Made for hands, not menus.** mpv-style `input.conf` bindings, trackpad gestures, right-button drag zoom with inertia, and first-class Logitech MX Master 4 support, haptics included.
 
+## Made for big collections
+
+Loupe is built for libraries of tens of thousands of photos on a NAS, not for a dozen snapshots on the desktop.
+
+- **It remembers where you were.** The last photo, zoom and spot in each folder, for up to 1 000 folders, across launches. Come back a month later and land on the same picture.
+- **Folders stay live.** New, removed and renamed files show up within about 300 ms, on SMB shares too, so a folder that is still being filled (a download, a sync, a render queue) updates on its own.
+- **Zip archives are folders.** Browse and view zips on a share without unpacking or copying them.
+- **Thumbnails are cached.** A SQLite catalog keeps thumbnails and folder covers, so a big folder opens with its grid already there the second time.
+- **Tidy as you go.** Rename (`F2`) and move to the Trash right in the browser, sort by name, date or size per folder; Recent, Sessions and folder settings follow a rename.
+- **Your Stash library** in a tab, with galleries opened straight from the share (see [Stash](#stash)).
+
 ## Numbers
 
 Measured on a MacBook Pro with M4 Max (36 GB), macOS 27, on the public images credited [below](#image-credits). Every figure can be reproduced with the scripts in this repo.
