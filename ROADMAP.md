@@ -11,6 +11,7 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 
 ## Planned
 
+- **A contributing guide**: how to build, test and send a pull request, plus the code layout and conventions.
 - **Animated images:** GIF, animated WebP, APNG, animated AVIF and JPEG XL.
 - **HDR photos** shown the way macOS shows them: gain-map HEIC from the iPhone, Ultra HDR JPEG, HDR AVIF and JPEG XL on XDR and HDR displays.
 - **Manual colour:** exposure, contrast, saturation and warmth per folder, built into the same colour cube as auto colour, so they cost nothing per frame.

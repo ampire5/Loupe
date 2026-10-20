@@ -12,7 +12,7 @@ env:
 
 jobs:
   release:
-    runs-on: macos-26
+    runs-on: xcode-27
     env:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
