@@ -650,6 +650,10 @@ struct ImageCacheTests {
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }
         queue.hold(files[0])
+        // The current read takes the slot first; only then does dwelling queue the neighbours behind it (on a slow
+        // machine their reads could otherwise reach the reader first and run through the free slot).
+        await rig.focus(files, 0)
+        #expect(await eventually { queue.started == [files[0]] })
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 6 })
         #expect(queue.queuedPriority(files[5]).map { $0 > 0 } == true)
