@@ -26,7 +26,7 @@ whole folders of photos on a NAS — with the keyboard, the trackpad or an MX Ma
 ## Why Loupe
 
 - **Huge images are not a special case.** A tiled Metal pyramid keeps 100–300 MP photos as fluid as a phone snapshot: zoom, pan, flick through a folder — no spinner, no blurry wait.
-- **Every format gets its fastest decoder.** libjpeg-turbo for JPEG, a patched libjxl for JPEG XL (with an instant 1:8 preview), ImageIO for HEIC, AVIF, WebP, PNG, TIFF and the rest — chosen by the file's magic bytes, not its extension.
+- **Every format gets its fastest decoder.** libjpeg-turbo for JPEG, a patched libjxl for JPEG XL (with an instant 1:8 preview), ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP — chosen by the file's magic bytes, not its extension.
 - **It predicts where you're going.** Neighbouring photos are decoded and uploaded to the GPU before you ask, so the next photo is already there.
 - **A real home for your photos.** A Photos-style Home with Recent, Sessions, a folder browser with live covers, a sidebar tree, two thumbnail modes — and a native window onto your [Stash](https://github.com/stashapp/stash) library.
 - **Made for hands, not menus.** mpv-style `input.conf` bindings, trackpad gestures, right-button drag zoom with inertia, and first-class Logitech MX Master 4 support, haptics included.
@@ -53,7 +53,7 @@ Measured on a MacBook Pro with M4 Max (36 GB), macOS 27, on the public images cr
 
 Lossy JPEG XL: 194 ms vs ImageIO's 580 ms. The 20 ms preview comes from `JxlDecoderGetDCImage`, a small addition to libjxl that Loupe ships with: you see the whole photo almost at once, and the full resolution replaces it a moment later.
 
-While you look, the stats bar (`I`) shows what the GPU is doing — frame time, dropped frames, the decoder used and how long it took.
+While you look, the stats bar (`i`) shows what the GPU is doing — frame time, dropped frames, the decoder used and how long it took.
 
 ## Features
 
@@ -71,7 +71,7 @@ While you look, the stats bar (`I`) shows what the GPU is doing — frame time, 
 <td><img src="docs/images/folders.webp" alt="Folder browser with live covers"></td>
 </tr>
 <tr>
-<td><b>Home.</b> Recent folders with their covers and progress, Sessions you can reopen, and browser-like tabs and windows that come back after a restart.</td>
+<td><b>Home.</b> Recent folders with their covers and progress, Sessions you can save and reopen, and browser-like tabs and windows (with <code>session-restore=last</code> they all come back at launch).</td>
 <td><b>Folders.</b> A fast browser with live four-photo covers, built on a SQLite thumbnail catalog. It browses zip archives on a share without copying them.</td>
 </tr>
 <tr>
@@ -86,8 +86,8 @@ While you look, the stats bar (`I`) shows what the GPU is doing — frame time, 
 <td><img src="docs/images/info.webp" alt="Info panel"></td>
 </tr>
 <tr>
-<td><b>Auto colour and vibrance.</b> <code>C</code> and <code>V</code> — left half original, right half corrected. Applied on the GPU as a colour cube, remembered per folder, never written to your files.</td>
-<td><b>Info panel.</b> <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and AI generation parameters (A1111, ComfyUI) when a PNG carries them.</td>
+<td><b>Auto colour and vibrance.</b> <code>c</code> and <code>v</code> for this folder (<code>⇧C</code> / <code>⇧V</code> make it the default) — left half original, right half corrected. Applied on the GPU as a colour cube, never written to your files.</td>
+<td><b>Info panel.</b> <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
 </tr>
 <tr>
 <td><img src="docs/images/sidebar.webp" alt="Sidebar with the folder tree"></td>
@@ -101,7 +101,7 @@ While you look, the stats bar (`I`) shows what the GPU is doing — frame time, 
 
 ### Image quality
 
-Pick the resampling filter per folder (`S`): Lanczos-3 and Lanczos-2 with anti-ringing, Mitchell, Catmull-Rom, EWA Lanczos, bilinear, MetalFX spatial upscaling, and a crisp nearest-neighbour *pixel-art* mode for sprites and screenshots. Downscaling goes through a filtered pyramid, so a 300 MP photo at 20 % stays clean instead of shimmering. The render tests compare every filter pixel by pixel against Core Graphics and a CPU reference.
+Pick the resampling filter per folder (`s`, `⇧S` for the default): Lanczos-3 and Lanczos-2 with anti-ringing, Mitchell, Catmull-Rom, EWA Lanczos, bilinear, MetalFX spatial upscaling, and a crisp nearest-neighbour *pixel-art* mode for sprites and screenshots. Downscaling goes through a filtered pyramid, so a 300 MP photo at 20 % stays clean instead of shimmering. The render tests compare every filter pixel by pixel against Core Graphics and a CPU reference.
 
 ### Mouse, trackpad and MX Master
 
@@ -140,7 +140,7 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 | | |
 |---|---|
 | **Rendering** | Metal: a tiled image pyramid with its own shaders (Lanczos, EWA, Mitchell, Catmull-Rom, pixel art) in linear light, MetalFX spatial upscaling, display colour management through Core Graphics. |
-| **Decoding** | libjpeg-turbo for JPEG; a [fork of libjxl 0.12](https://github.com/ampire5/libjxl/tree/loupe) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF and the rest. The decoder is chosen by the file's magic bytes. |
+| **Decoding** | libjpeg-turbo for JPEG; a [fork of libjxl 0.12](https://github.com/ampire5/libjxl/tree/loupe) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP. The decoder is chosen by the file's magic bytes. |
 | **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a 3 GB budget per window by default (`cache-memory`) and memory-pressure handling. |
 | **Colour** | Auto colour and vibrance from Core Image's analysis, baked into a 33³ colour cube that is applied on the GPU, so every frame costs the same. |
 | **Storage** | SQLite (the C API, no ORM) for the thumbnail catalog, sessions and per-folder settings. Zip archives are read in place through Compression and zlib. |
