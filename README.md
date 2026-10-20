@@ -111,6 +111,14 @@ Pick the resampling filter per folder (`S`): Lanczos-3 and Lanczos-2 with anti-r
 
 <p align="center"><img src="docs/images/settings-mouse.webp" width="49%" alt="Settings: Mouse & Trackpad"> <img src="docs/images/settings-zoom.webp" width="49%" alt="Settings: Zoom & Pan"></p>
 
+### Icons
+
+<p align="center"><img src="docs/images/icons.webp" width="80%" alt="Loupe's icons: the glass owl, Aphrodite, the chrome profile and the hat"></p>
+
+Liquid Glass icons made in Icon Composer. The glass owl follows macOS's light, dark, clear and tinted icon styles; the alternates swap in from **Settings → General → Dock icon**, with a picture of each in the menu. Or bring your own: drop a PNG, an `.icns` or a whole Icon Composer `.icon` package into `~/.config/loupe/icons`, and Loupe compiles it and puts it in the Dock — no rebuild.
+
+<p align="center"><img src="docs/images/icon-modes.webp" width="70%" alt="The owl in light, dark, clear light and clear dark styles"></p>
+
 ## Stash
 
 <img src="docs/images/stash.webp" alt="Stash library inside Loupe">
