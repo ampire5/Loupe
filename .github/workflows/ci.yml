@@ -16,7 +16,7 @@ jobs:
       - name: Toolchain
         run: swift --version
       - name: Homebrew dependencies
-        run: brew install jpeg-turbo cmake ninja brotli highway
+        run: brew install jpeg-turbo cmake ninja brotli highway libheif
       # Loupe links its own libjxl: v0.12.0 plus the DC preview functions, branch `loupe` of the fork.
       - name: Clone libjxl
         run: |

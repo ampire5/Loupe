@@ -138,7 +138,7 @@ Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). 
 You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
 
 ```sh
-brew install jpeg-turbo cmake ninja brotli highway
+brew install jpeg-turbo cmake ninja brotli highway libheif   # libheif: only for the LoupeBench target
 
 # Loupe links its own libjxl (v0.12.0 + the DC preview functions): clone it next to Loupe
 git clone -b loupe https://github.com/ampire5/libjxl ../libjxl

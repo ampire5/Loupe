@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Homebrew dependencies
-        run: brew install jpeg-turbo cmake ninja brotli highway
+        run: brew install jpeg-turbo cmake ninja brotli highway libheif
       - name: Build libjxl
         run: |
           git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
