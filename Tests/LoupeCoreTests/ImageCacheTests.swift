@@ -904,15 +904,15 @@ struct ImageCacheTests {
     }
 
     /// No `.normal` event: the limit returns on its own once the interval after the last pressure event passes,
-    /// and a newer event postpones it.
+    /// and a newer event postpones it. Seconds, not milliseconds: a loaded CI runner oversleeps by hundreds of ms.
     @Test func pressureRestoresByItself() async {
-        guard let (rig, _, memory) = await pressureRig(restoreAfter: .milliseconds(300)) else {
+        guard let (rig, _, memory) = await pressureRig(restoreAfter: .seconds(2)) else {
             Issue.record("fill timed out"); return
         }
         await rig.cache.setMemoryPressure(.warning)
-        try? await Task.sleep(for: .milliseconds(200))
+        try? await Task.sleep(for: .milliseconds(1300))
         await rig.cache.setMemoryPressure(.critical)   // restarts the clock
-        try? await Task.sleep(for: .milliseconds(200))
+        try? await Task.sleep(for: .milliseconds(1300))
         #expect(await rig.cache.stats().effectiveLimitBytes == memory / 4, "restored too early")
         #expect(await eventually { await rig.cache.stats().effectiveLimitBytes == memory })
         await rig.clear()
@@ -920,14 +920,14 @@ struct ImageCacheTests {
 
     /// An explicit `.normal` cancels the pending restore, so a later pressure level is not undone by a stale timer.
     @Test func normalCancelsPendingRestore() async {
-        guard let (rig, _, memory) = await pressureRig(restoreAfter: .milliseconds(300)) else {
+        guard let (rig, _, memory) = await pressureRig(restoreAfter: .seconds(2)) else {
             Issue.record("fill timed out"); return
         }
         await rig.cache.setMemoryPressure(.warning)
         await rig.cache.setMemoryPressure(.normal)
-        try? await Task.sleep(for: .milliseconds(150))
+        try? await Task.sleep(for: .milliseconds(1000))
         await rig.cache.setMemoryPressure(.warning)
-        try? await Task.sleep(for: .milliseconds(200))   // the first timer would have fired by now (300 ms in)
+        try? await Task.sleep(for: .milliseconds(1300))   // the first timer would have fired by now (2 s in), the second not yet
         #expect(await rig.cache.stats().effectiveLimitBytes == memory / 2)
         await rig.clear()
     }
