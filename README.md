@@ -29,6 +29,7 @@ whole folders of photos on a NAS — with the keyboard, the trackpad or an MX Ma
 - **Every format gets its fastest decoder.** libjpeg-turbo for JPEG, a patched libjxl for JPEG XL (with an instant 1:8 preview), ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP — chosen by the file's magic bytes, not its extension.
 - **It predicts where you're going.** Neighbouring photos are decoded and uploaded to the GPU before you ask, so the next photo is already there.
 - **A real home for your photos.** A Photos-style Home with Recent, Sessions, a folder browser with live covers, a sidebar tree, two thumbnail modes — and a native window onto your [Stash](https://github.com/stashapp/stash) library.
+- **Every pixel on a big screen.** 100 % means one image pixel per physical pixel, not per Retina point, so a 6K display shows a 300 MP photo at its true resolution; MetalFX and Lanczos keep it clean when it is scaled.
 - **Made for hands, not menus.** mpv-style `input.conf` bindings, trackpad gestures, right-button drag zoom with inertia, and first-class Logitech MX Master 4 support, haptics included.
 
 ## Made for big collections
@@ -148,6 +149,8 @@ Pick the resampling filter per folder (`s`, `⇧S` for the default): Lanczos-3 a
 Around the picture: a checkerboard behind transparent pixels (or the background colour, black or white), any background colour you like, EXIF orientation on or off, and the strip either over the photo, as a fixed band under it, or not at all.
 
 ### Mouse, trackpad and MX Master
+
+As far as we know, no other Mac app goes this deep into Logitech hardware, and it keeps growing.
 
 - Three-finger swipes and taps, force click, two-finger scrubbing on the strip, click-and-swipe chords.
 - Right-button drag to zoom with inertia and rubber banding.

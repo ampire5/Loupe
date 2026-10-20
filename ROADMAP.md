@@ -11,6 +11,7 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 
 ## Planned
 
+- **Logitech, deeper.** More of the mouse's own features and more events worth feeling, mice connected over Bluetooth without a receiver, and more HID++ devices as people test them.
 - **A contributing guide**: how to build, test and send a pull request, plus the code layout and conventions.
 - **Animated images:** GIF, animated WebP, APNG, animated AVIF and JPEG XL.
 - **HDR photos** shown the way macOS shows them: gain-map HEIC from the iPhone, Ultra HDR JPEG, HDR AVIF and JPEG XL on XDR and HDR displays.
