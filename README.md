@@ -38,7 +38,9 @@ Loupe is built for libraries of tens of thousands of photos on a NAS, not for a 
 - **It remembers where you were.** The last photo, zoom and spot in each folder, for up to 1 000 folders, across launches. Come back a month later and land on the same picture.
 - **Folders stay live.** New, removed and renamed files show up within about 300 ms, on SMB shares too, so a folder that is still being filled (a download, a sync, a render queue) updates on its own.
 - **Zip archives are folders.** Browse and view zips on a share without unpacking or copying them.
-- **Thumbnails are cached.** A SQLite catalog keeps thumbnails and folder covers, so a big folder opens with its grid already there the second time.
+- **Thumbnails are cached.** A SQLite catalog keeps thumbnails and folder covers, so a big folder opens with its grid already there the second time. The disk cache stays under 2 GB by default (`thumb-cache-size`), dropping the longest unseen first; **File → Clean Up Thumbnails** forgets files that are gone, **Clear Thumbnail Cache…** starts over.
+- **Sessions.** **File → Save Session As…** keeps every window and tab under a name, to reopen from Home. *Last Session* is always there, and `session-restore=last` brings it back at launch.
+- **Drop a folder on Home** to open it, or a single photo.
 - **Tidy as you go.** Rename (`F2`) and move to the Trash right in the browser, sort by name, date or size per folder; Recent, Sessions and folder settings follow a rename.
 - **Your Stash library** in a tab, with galleries opened straight from the share (see [Stash](#stash)).
 
@@ -64,7 +66,9 @@ Measured on a MacBook Pro with M4 Max (36 GB), macOS 27, on the public images cr
 
 Lossy JPEG XL: 194 ms vs ImageIO's 580 ms. The 20 ms preview comes from `JxlDecoderGetDCImage`, a small addition to libjxl that Loupe ships with: you see the whole photo almost at once, and the full resolution replaces it a moment later.
 
-While you look, the stats bar (`i`) shows what the GPU is doing — frame time, dropped frames, the decoder used and how long it took.
+While you look, the stats bar (`i`) shows the file, its place in the folder, size, format, zoom and decode time. The info panel's Diagnostics (`⌘I`) adds the decoder, its timings, cache, memory and GPU frame times.
+
+<p align="center"><img src="docs/images/stats-bar.webp" alt="The stats bar over a Hubble galaxy: file name, 1 / 9, 11477×7965, 39.7 MB, JPEG, Fit 24 %, decode 359 ms"></p>
 
 ## Features
 
@@ -110,15 +114,45 @@ While you look, the stats bar (`i`) shows what the GPU is doing — frame time, 
 </tr>
 </table>
 
+### Formats
+
+JPEG, HEIC/HEIF, AVIF, JPEG XL, WebP, PNG, GIF (first frame), TIFF and BMP, plus `.zip` archives, browsed as folders. RAW, PSD and other archive types are not supported yet, and neither is animation (it is on the [roadmap](ROADMAP.md)).
+
+Loupe can be your default viewer for any of these: **Get Info → Open with → Change All…** in Finder. Each format then gets its own document icon.
+
+### Keys
+
+The most useful defaults. `?` shows every binding, gestures included; a capital letter means Shift.
+
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `←` `→` `Space` `⌫` | Previous / next photo | `0` | Fit to window |
+| `⌥←` `⌥→` `[` `]` | Previous / next folder | `1` `2` `4` | 100 / 200 / 400 % |
+| `Home` `End` | First / last photo | `w` `h` `x` | Fit width / fit height / fill |
+| `Return` | Folder browser on this photo | `z` | Fit ↔ 100 % at the pointer |
+| `⇧⌘H` | Home | `=` `-` | Zoom in / out |
+| `⌘[` | Back to where it was opened from | `⇧` + arrows | Pan |
+| `t` | Pin or unpin the strip | `c` `v` | Auto colour / vibrance, this folder (`⇧C` `⇧V`: default) |
+| `i` | Stats bar | `s` | Next scaling filter, this folder (`⇧S`: default) |
+| `⌘I` | Info panel | `f` `Esc` | Full screen / leave it |
+| `⌘T` `⌘N` `⌘W` | New tab / window, close tab | `⇧⌘T` | Reopen closed tab |
+| `⌘1` … `⌘9` | Go to a tab | `⇧⌘L` | Stash library |
+| `?` | Cheat sheet | `⌘,` | Settings |
+
+Letters work by key, not by input language: with a Russian or Greek layout, the F key is still `f`. Digits and `=` `-` `[` `]` go by position, so AZERTY needs no Shift. Sessions are in the File menu. Every key and mouse binding can be changed in **Settings → Key Bindings** or in `input.conf` (see [Configure](#configure)).
+
 ### Image quality
 
 Pick the resampling filter per folder (`s`, `⇧S` for the default): Lanczos-3 and Lanczos-2 with anti-ringing, Mitchell, Catmull-Rom, EWA Lanczos, bilinear, MetalFX spatial upscaling, and a crisp nearest-neighbour *pixel-art* mode for sprites and screenshots. Downscaling goes through a filtered pyramid, so a 300 MP photo at 20 % stays clean instead of shimmering. The render tests compare every filter pixel by pixel against Core Graphics and a CPU reference.
+
+Around the picture: a checkerboard behind transparent pixels (or the background colour, black or white), any background colour you like, EXIF orientation on or off, and the strip either over the photo, as a fixed band under it, or not at all.
 
 ### Mouse, trackpad and MX Master
 
 - Three-finger swipes and taps, force click, two-finger scrubbing on the strip, click-and-swipe chords.
 - Right-button drag to zoom with inertia and rubber banding.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
+- Plays well with **Mac Mouse Fix**: Loupe still hears the MX Master's back and forward buttons while Mac Mouse Fix has them (`mx-side-buttons`).
 
 <p align="center"><img src="docs/images/settings-mouse.webp" width="49%" alt="Settings: Mouse & Trackpad"> <img src="docs/images/settings-zoom.webp" width="49%" alt="Settings: Zoom & Pan"></p>
 
@@ -161,11 +195,19 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 
 ## Install
 
+Loupe needs macOS 26 or later and an Apple Silicon Mac.
+
 ```sh
 brew install --cask ampire5/tap/loupe
 ```
 
 Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). Builds are not signed with an Apple Developer ID yet; the cask clears the quarantine flag for you.
+
+**macOS won't open the downloaded app?** That is Gatekeeper refusing an unsigned build. Try to open Loupe once, then click **Open Anyway** in **System Settings → Privacy & Security**. Or clear the flag yourself:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Loupe.app
+```
 
 ### Build from source
 
@@ -184,6 +226,19 @@ scripts/make-app.sh --install      # → ~/Applications/Loupe.app
 
 `make-app.sh` bundles the libraries into the app and checks that nothing links outside it, so the app runs without Homebrew afterwards. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at your build.
 
+### Uninstall
+
+```sh
+brew uninstall --cask loupe          # the app
+brew uninstall --zap --cask loupe    # the app and all its data
+```
+
+Loupe keeps its data in three places, which `--zap` removes:
+
+- `~/.config/loupe` — your settings, bindings and Dock icons.
+- `~/Library/Application Support/Loupe` — Recent, sessions and per-folder settings.
+- `~/Library/Caches/Loupe` — the thumbnail cache.
+
 ## Configure
 
 Everything is in the Settings window (`⌘,`) — and in two plain-text files, so you can keep them in your dotfiles:
@@ -192,6 +247,14 @@ Everything is in the Settings window (`⌘,`) — and in two plain-text files, s
 - `~/.config/loupe/input.conf` — key, mouse, trackpad and MX Master bindings: `<input> <action> [args]`. `Loupe --print-input-conf` prints the full template.
 
 Both reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
+
+The Settings window searches every setting, and its **Key Bindings** page is an editor for `input.conf`: press a key or choose a mouse button, pick the action, or go back to the built-in binding. It follows the system's light or dark look; Home and the folder browser stay dark, like a darkroom.
+
+<p align="center"><img src="docs/images/settings-light.webp" width="49%" alt="Settings in light mode: Stash"> <img src="docs/images/settings-general.webp" width="49%" alt="Settings in dark mode: General, with the background colour and the Dock icon"></p>
+
+## Privacy
+
+No telemetry, no analytics, no update checks. Loupe reads your files and your shares, and talks to nothing else unless you give it a Stash address (`stash-url`); then it talks to that server only.
 
 ## Tests
 
@@ -202,6 +265,16 @@ scripts/test.sh full      # everything
 ```
 
 `LoupeBench` measures decoding, thumbnails, rendering, pyramids, auto colour and the browser; `scripts/latency-matrix.sh` measures input-to-photon latency.
+
+## Reporting bugs and contributing
+
+Found a bug or a photo Loupe gets wrong? Open an [issue](https://github.com/ampire5/Loupe/issues) with:
+
+- your macOS version and Mac model;
+- the stats bar line (`i`) or the info panel's Diagnostics (`⌘I`), which name the format, the decoder and its timings;
+- a sample file, if you can share one.
+
+Contributions are welcome. A full contributing guide is on the roadmap; until then, [Build from source](#build-from-source) and [Tests](#tests) cover the basics.
 
 ## Roadmap
 
