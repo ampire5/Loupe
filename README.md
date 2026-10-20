@@ -127,7 +127,15 @@ Stash support is under active development in both Loupe and its sibling video pl
 
 ## Install
 
-Loupe is built from source. You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
+```sh
+brew install --cask ampire5/tap/loupe
+```
+
+Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). Builds are not signed with an Apple Developer ID yet; the cask clears the quarantine flag for you.
+
+### Build from source
+
+ You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
 
 ```sh
 brew install jpeg-turbo cmake ninja brotli highway

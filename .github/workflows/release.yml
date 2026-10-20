@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  LOUPE_LIBJXL: ${{ github.workspace }}/../libjxl
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Homebrew dependencies
+        run: brew install jpeg-turbo cmake ninja brotli highway
+      - name: Build libjxl
+        run: |
+          git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
+          git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
+          scripts/build-libjxl.sh
+      - name: Test
+        run: scripts/test.sh
+      - name: Build the app
+        run: scripts/make-app.sh
+      # Not signed with a Developer ID yet: the release notes say how to open it.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip="Loupe-${GITHUB_REF_NAME}-macOS-arm64.zip"
+          ditto -c -k --keepParent build/Loupe.app "$zip"
+          gh release create "$GITHUB_REF_NAME" "$zip" --generate-notes \
+            --notes "Unsigned build for Apple Silicon, macOS 26+. After unzipping: \`xattr -dr com.apple.quarantine Loupe.app\`, then open it."
+      # Points the cask in ampire5/homebrew-tap at this release. Needs a TAP_TOKEN secret that can push to that repo.
+      - name: Update the Homebrew cask
+        if: env.TAP_TOKEN != ''
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha=$(shasum -a 256 "Loupe-${GITHUB_REF_NAME}-macOS-arm64.zip" | cut -d' ' -f1)
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ampire5/homebrew-tap" tap
+          sed -i '' -E "s/^  version \".*\"/  version \"$version\"/; s/^  sha256 .*/  sha256 \"$sha\"/" tap/Casks/loupe.rb
+          git -C tap -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -am "loupe $version"
+          git -C tap push

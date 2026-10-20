@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  LOUPE_LIBJXL: ${{ github.workspace }}/../libjxl
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Homebrew dependencies
+        run: brew install jpeg-turbo cmake ninja brotli highway
+      # Loupe links its own libjxl: v0.12.0 plus the DC preview functions, branch `loupe` of the fork.
+      - name: Clone libjxl
+        run: |
+          git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
+          git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
+          echo "LIBJXL_SHA=$(git -C "$LOUPE_LIBJXL" rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Cache libjxl build
+        id: libjxl
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LOUPE_LIBJXL }}/dist
+          key: libjxl-${{ runner.os }}-${{ env.LIBJXL_SHA }}
+      - name: Build libjxl
+        if: steps.libjxl.outputs.cache-hit != 'true'
+        run: scripts/build-libjxl.sh
+      # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
+      - name: Test
+        run: scripts/test.sh
+      - name: Build the app
+        run: scripts/make-app.sh
+      - name: Upload the app
+        run: ditto -c -k --keepParent build/Loupe.app Loupe-macOS-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Loupe-macOS-arm64
+          path: Loupe-macOS-arm64.zip
