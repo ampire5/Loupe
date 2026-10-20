@@ -125,6 +125,21 @@ Stash support is under active development in both Loupe and its sibling video pl
 
 <p align="center"><img src="docs/images/settings-stash.webp" width="60%" alt="Settings: Stash"></p>
 
+## Under the hood
+
+Native Swift and AppKit: no Electron and no web views, except the Stash tab, which is a WebKit view of your Stash server.
+
+| | |
+|---|---|
+| **Rendering** | Metal: a tiled image pyramid with its own shaders (Lanczos, EWA, Mitchell, Catmull-Rom, pixel art) in linear light, MetalFX spatial upscaling, display colour management through Core Graphics. |
+| **Decoding** | libjpeg-turbo for JPEG; a [fork of libjxl 0.12](https://github.com/ampire5/libjxl/tree/loupe) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF and the rest. The decoder is chosen by the file's magic bytes. |
+| **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a 3 GB budget per window by default (`cache-memory`) and memory-pressure handling. |
+| **Colour** | Auto colour and vibrance from Core Image's analysis, baked into a 33³ colour cube that is applied on the GPU, so every frame costs the same. |
+| **Storage** | SQLite (the C API, no ORM) for the thumbnail catalog, sessions and per-folder settings. Zip archives are read in place through Compression and zlib. |
+| **Input** | `input.conf` bindings for keys, mouse buttons, trackpad gestures and chords; the MX Master 4 over IOKit HID with [LogiHIDPP](https://github.com/ampire5/LogiHIDPP), a HID++ 2.0 library written for this. |
+| **Structure** | A SwiftPM package with no Xcode project: `LoupeCore` (files, decoding, cache, config, with no UI), `LoupeRender` (Metal), `LoupeSettings` and the app, on top of the shared packages HomeScreenKit, InfoPanelKit, SettingsKit and StashKit. About 38 000 lines of Swift; scripts assemble the `.app` and bundle the dylibs. |
+| **Tests** | 1 789 tests in Swift Testing, including pixel-exact render tests against Core Graphics and a CPU reference; `LoupeBench` for decoding, rendering and browsing numbers; CI on GitHub Actions. |
+
 ## Install
 
 ```sh
