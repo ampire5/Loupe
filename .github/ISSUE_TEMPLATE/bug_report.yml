@@ -1,0 +1,28 @@
+name: Bug report
+description: Something in Loupe doesn't work as it should
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open …\n2. Press …\n3. …"
+  - type: input
+    id: version
+    attributes:
+      label: Loupe version, macOS version and Mac model
+      placeholder: "0.1.0, macOS 26.1, MacBook Pro M3 Pro"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: The info panel (`⌘I`): file, format and decoder lines
+      description: Paste it here; a sample file (or a link to one) helps a lot.
+      render: text

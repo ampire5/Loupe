@@ -1,9 +1,10 @@
 # Roadmap
 
-Loupe is made by one person in their spare time, so there are no dates here — just the order things are likely to happen in. Bugs are always fixed first. Ideas and votes are welcome in [Issues](https://github.com/ampire5/Loupe/issues).
+Loupe is made by one person in their spare time, so there are no dates here — just the order things are likely to happen in. Bugs are always fixed first. **What would make Loupe work better for you?** Tell me in a [feature request](https://github.com/ampire5/Loupe/issues/new?template=feature_request.yml): what you want to do, how you do it today, and what your collection looks like. Requests and 👍 on existing issues decide what comes next; questions and ideas are welcome in [Discussions](https://github.com/ampire5/Loupe/discussions).
 
 ## Next
 
+- **Light, dark or system theme everywhere.** Home, the folder browser and the keys cheat sheet follow the choice in Settings, as the Settings window already does.
 - **Compare two photos side by side.** Two images in one window with zoom and pan locked together — for picking the best shot of a burst, the best of several AI renders, or checking an edit against the original.
 - **Favorites and Viewed.** Mark photos and folders, see at a glance what you haven't looked at yet, filter by *Unviewed*.
 - **A new stats bar and strip** in the viewer, in the style of the new Home.

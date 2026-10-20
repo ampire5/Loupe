@@ -269,9 +269,11 @@ scripts/test.sh full      # everything
 
 `LoupeBench` measures decoding, thumbnails, rendering, pyramids, auto colour and the browser; `scripts/latency-matrix.sh` measures input-to-photon latency.
 
-## Reporting bugs and contributing
+## Feedback, bugs and contributing
 
-Found a bug or a photo Loupe gets wrong? Open an [issue](https://github.com/ampire5/Loupe/issues) with:
+**I want to hear what you need.** If Loupe is close to what you want but not quite there, open a [feature request](https://github.com/ampire5/Loupe/issues/new?template=feature_request.yml): what you're trying to do, how you do it today, and what your collection looks like. That is what decides the [roadmap](ROADMAP.md). Questions, half-formed ideas and stories of how you use it are welcome in [Discussions](https://github.com/ampire5/Loupe/discussions).
+
+Found a bug or a photo Loupe gets wrong? Open a [bug report](https://github.com/ampire5/Loupe/issues/new?template=bug_report.yml) with:
 
 - your macOS version and Mac model;
 - the stats bar line (`i`) or the info panel's Diagnostics (`⌘I`), which name the format, the decoder and its timings;
