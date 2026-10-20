@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Loupe</string>
+    <key>CFBundleDisplayName</key><string>Loupe</string>
+    <key>CFBundleIdentifier</key><string>local.loupe</string>
+    <key>CFBundleExecutable</key><string>Loupe</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>26.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <!-- Stash on the local network over plain HTTP (Stash spec §2.1): its API calls go through URLSession. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key><true/>
+    </dict>
+    <!-- libmalloc's large-block cache kept freed libjpeg-turbo buffers resident: 2.9 GB after closing a
+         progressive folder (spec M2 §11.1.8). Off, freed buffers go straight back to the system. -->
+    <key>LSEnvironment</key>
+    <dict>
+        <key>MallocLargeCache</key><string>0</string>
+    </dict>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <!-- One type per format with its own icon (Resources/DocumentIcons/<ext>.icns): Finder shows it for
+             files whose default app is Loupe. jpg/jpeg and tif/tiff share one system type each. -->
+        <dict>
+            <key>CFBundleTypeName</key><string>JPEG Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>jpg</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.jpeg</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>PNG Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>png</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.png</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>HEIC Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>heic</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.heic</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>HEIF Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>heif</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.heif</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>AVIF Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>avif</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.avif</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>JPEG XL Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>jxl</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.jpeg-xl</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>WebP Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>webp</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>org.webmproject.webp</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>TIFF Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>tiff</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.tiff</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>GIF Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>gif</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>com.compuserve.gif</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>BMP Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconFile</key><string>bmp</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>com.microsoft.bmp</string></array>
+        </dict>
+        <!-- Every other image format: Finder draws the document icon (the app icon on a page). -->
+        <dict>
+            <key>CFBundleTypeName</key><string>Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeIconSystemGenerated</key><integer>1</integer>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+            </array>
+        </dict>
+        <!-- Zip archives open like a folder of photos (Stash spec §2.4); Open With only, never the default. -->
+        <dict>
+            <key>CFBundleTypeName</key><string>Zip Archive</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.zip-archive</string></array>
+        </dict>
+    </array>
+</dict>
+</plist>

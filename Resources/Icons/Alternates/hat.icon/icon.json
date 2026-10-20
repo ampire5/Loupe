@@ -1,0 +1,62 @@
+{
+  "fill": {
+    "solid": "srgb:0.91373,0.75294,0.56078,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "frame.svg",
+          "name": "frame",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.55
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      },
+      "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "lens.svg",
+          "name": "lens",
+          "glass": true
+        }
+      ],
+      "translucency": {
+        "enabled": false,
+        "value": 0.0
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "art.svg",
+          "name": "art",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "specular": false
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

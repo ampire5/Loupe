@@ -1,0 +1,51 @@
+{
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "art.png",
+          "name": "art",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "glow.svg",
+          "name": "glow",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "bg.svg",
+          "name": "bg",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "specular": false
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}
