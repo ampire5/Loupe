@@ -253,6 +253,7 @@ import UniformTypeIdentifiers
             self?.infoPanel.place()
             self?.updateIndicatorInset()
         }
+        container.onWindowKey = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
         strip.view.isScrollSpent = { [weak viewerView] in viewerView?.stripScrollIsSpent($0) ?? false }
@@ -1382,6 +1383,28 @@ import UniformTypeIdentifiers
         strip.setFullScreen(on)
     }
 
+    /// F (or the key input.conf gives full screen) while the viewer does not have the keys: on Home's grid and sidebar,
+    /// or with nothing focused (`KeyMap.windowLookup`). A text field (Home's filter, a rename, a selected info panel
+    /// value) and Stash's page keep every key, so F types there; the viewer takes its own keys (`ViewerView`).
+    private func windowKey(_ event: NSEvent) -> Bool {
+        guard let window, window.isKeyWindow, !cheatSheet.isOpen else { return false }
+        let responder = window.firstResponder
+        guard responder !== viewerView, !(responder is NSTextInputClient) else { return false }
+        let flags = event.modifierFlags
+        guard flags.isDisjoint(with: [.command, .control]) else { return false }
+        var modifiers: KeyModifiers = []
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        let key = KeyboardLayout.characters(for: event)?.lowercased()
+        switch Settings.shared.inputMap.keys.windowLookup(keyCode: event.keyCode, character: key, modifiers: modifiers,
+                                                          isRepeat: event.isARepeat) {
+        case .action: window.toggleFullScreen(nil)                      // full screen is the only window action
+        case .ignoredRepeat: break                                      // a held F: not typed into Home's names
+        case .unbound: return false
+        }
+        return true
+    }
+
     /// `?`: opens or closes the cheat sheet.
     func toggleCheatSheet() { setCheatSheet(open: !cheatSheet.isOpen) }
 
@@ -1987,6 +2010,14 @@ import UniformTypeIdentifiers
 /// panel, which is placed by frame rather than by constraints, keeps to its corner.
 private final class ViewerContainerView: NSView {
     var onLayout: (() -> Void)?
+    /// Offered every key press before the views under it (true: taken), so a key Home would take as typing a name can
+    /// be the window's (`ViewerWindowController.windowKey`).
+    var onWindowKey: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, onWindowKey?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func layout() {
         super.layout()

@@ -101,6 +101,17 @@ public struct KeyMap: Sendable, Equatable {
         return action
     }
 
+    /// The actions whose keys work in a viewer window whatever it shows: Home over the viewer, a page with no photo.
+    public static let windowActions: Set<KeyAction> = [.toggleFullScreen]
+
+    /// `lookup` for a key pressed while the viewer does not have the keys: a `windowActions` key (or its swallowed
+    /// repeat), else `.unbound`, so every other key stays with what is on screen.
+    public func windowLookup(keyCode: UInt16, character: String?, modifiers: KeyModifiers, isRepeat: Bool) -> Lookup {
+        guard let action = binding(keyCode: keyCode, character: character, modifiers: modifiers)?.action,
+              Self.windowActions.contains(action) else { return .unbound }
+        return lookup(keyCode: keyCode, character: character, modifiers: modifiers, isRepeat: isRepeat)
+    }
+
     /// The first binding that matches the key, whatever the repeat.
     private func binding(keyCode: UInt16, character: String?, modifiers: KeyModifiers) -> KeyBinding? {
         let character = character?.lowercased()
