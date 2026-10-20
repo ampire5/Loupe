@@ -23,6 +23,6 @@ body:
   - type: textarea
     id: details
     attributes:
-      label: The info panel (`⌘I`): file, format and decoder lines
+      label: "The info panel (⌘I) — the file, format and decoder lines"
       description: Paste it here; a sample file (or a link to one) helps a lot.
       render: text
