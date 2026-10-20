@@ -135,7 +135,7 @@ Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). 
 
 ### Build from source
 
- You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
+You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
 
 ```sh
 brew install jpeg-turbo cmake ninja brotli highway
