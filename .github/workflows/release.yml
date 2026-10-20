@@ -13,6 +13,7 @@ env:
 jobs:
   release:
     runs-on: xcode-27
+    timeout-minutes: 60
     env:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
@@ -25,7 +26,7 @@ jobs:
           git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
           scripts/build-libjxl.sh
       - name: Test
-        run: scripts/test.sh
+        run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
       - name: Build the app
         run: scripts/make-app.sh
       # Not signed with a Developer ID yet: the release notes say how to open it.

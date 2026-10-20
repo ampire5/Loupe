@@ -11,6 +11,7 @@ env:
 jobs:
   test:
     runs-on: xcode-27
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -34,7 +35,7 @@ jobs:
         run: scripts/build-libjxl.sh
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
-        run: scripts/test.sh
+        run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
       - name: Build the app
         run: scripts/make-app.sh
       - name: Upload the app
