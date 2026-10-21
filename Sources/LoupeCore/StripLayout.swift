@@ -1,15 +1,5 @@
 import Foundation
 
-/// One cell of the thumbnail strip: `range` is the files it stands for and `file` the one it shows
-/// (the middle of the range). `x` is its left edge in points from the strip view's left edge, `width` its
-/// width (the strip's cell height is the layout's).
-public struct StripCell: Equatable {
-    public let range: Range<Int>
-    public let file: Int
-    public let x: Double
-    public let width: Double
-}
-
 /// The thumbnail strip as a time axis over the whole folder, like a video scrub bar: cells edge to edge, one
 /// per file while they fit (then the strip is centred), otherwise a sample of cells that each show the middle
 /// file of an even range. Within a cell the cursor maps to the files of its range linearly, so every file of a
