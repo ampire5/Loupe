@@ -9,6 +9,9 @@
 # The log: .build/test.log (TEST_LOG), started anew by each scripts/test.sh.
 # Bash 3.2 (macOS's /bin/bash) is enough.
 
+# Outside CI, Swift Testing on macOS marks results with SF Symbols glyphs (private-use characters) instead of ✔ and ✘;
+# the reader knows only the latter, and took a green run for one that never finished.
+export SWT_SF_SYMBOLS_ENABLED=0
 TEST_LOG=${TEST_LOG:-.build/test.log}
 mkdir -p "$(dirname "$TEST_LOG")"
 : >"$TEST_LOG"
