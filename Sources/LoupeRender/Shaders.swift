@@ -94,13 +94,22 @@ enum Shaders {
     constant bool CURVE_TABLE [[function_constant(3)]];
     constant bool kCurveTable = is_function_constant_defined(CURVE_TABLE) && CURVE_TABLE;
 
+    // The resample kernels' output on a GPU that cannot write _srgb textures from a shader (Intel and AMD Macs,
+    // lts/macos26): they get the drawable's unorm view and encode with the exact sRGB curve themselves. Undefined
+    // means false.
+    constant bool ENCODE_SRGB [[function_constant(5)]];
+    constant bool kEncodeSRGB = is_function_constant_defined(ENCODE_SRGB) && ENCODE_SRGB;
+
     constexpr sampler kCurveLerp(coord::normalized, filter::linear, address::clamp_to_edge);
 
+    static float3 linearToSRGB(float3 c);
+
     // An opaque output in linear light, as the target stores it: unchanged for the _srgb drawable (which encodes on
-    // store); with CURVE_TABLE, the photo's encoded level of each channel from the inverse table, a 4096-entry r16Unorm
+    // store), sRGB-encoded with ENCODE_SRGB; with CURVE_TABLE, the photo's encoded level of each channel from the inverse table, a 4096-entry r16Unorm
     // 1D texture indexed by the square root of the light, sampled at (sqrt(light) · 4095 + 0.5) / 4096. These three
     // samples are the variant's cost (+0.45 ms on a 6K Lanczos-3 frame at 100 %; pow() for a pure gamma would be free).
     static float4 encodeOutput(float4 c, texture1d<float, access::sample> inverse) {
+        if (kEncodeSRGB) return float4(linearToSRGB(c.rgb), c.a);
         if (!kCurveTable) return c;
         float3 u = sqrt(saturate(c.rgb)) * (4095.0 / 4096.0) + 0.5 / 4096.0;
         return float4(inverse.sample(kCurveLerp, u.r).x, inverse.sample(kCurveLerp, u.g).x,

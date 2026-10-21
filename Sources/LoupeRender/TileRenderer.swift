@@ -209,7 +209,17 @@ public final class TileRenderer {
     /// instances: each threadgroup finds its texels' slots itself.
     private func encodeResample(_ frame: LevelFrame, kernel: ResampleKernel?, upscale: Bool,
                                 commandBuffer: MTLCommandBuffer, target: MTLTexture) {
-        guard target.width > 0, target.height > 0, let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        guard target.width > 0, target.height > 0 else { return }
+        // A GPU that cannot write _srgb textures from a shader (Intel and AMD Macs) gets the target's unorm view and
+        // the ENCODE_SRGB variant, which encodes itself; background(for:) then gives the background encoded too. A
+        // `.table` frame's target is that view already, written through the inverse table.
+        var target = target, encodeSRGB = false
+        if !context.supportsSRGBWrites, let format = Self.unormFormat(of: target.pixelFormat),
+           let view = target.makeTextureView(pixelFormat: format) {
+            target = view
+            encodeSRGB = true
+        }
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.label = kernel == nil ? "resampleEWA" : "resample"
         let size = frame.grid.levelSize(frame.level)
         // lanczos-antiring is a Lanczos option (spec §5), EWA Lanczos included; the separable shader applies it only
@@ -225,9 +235,11 @@ public final class TileRenderer {
         let table = frame.inverseCurve != nil, cube = frame.color != nil
         if let kernel {
             encoder.setComputePipelineState(context.resamplePipeline(kernel: kernel, upscale: upscale, alpha: frame.hasAlpha,
-                                                                     curveTable: table, colorLUT: cube))
+                                                                     curveTable: table, colorLUT: cube,
+                                                                     encodeSRGB: encodeSRGB))
         } else {
-            encoder.setComputePipelineState(context.ewaPipeline(alpha: frame.hasAlpha, curveTable: table, colorLUT: cube))
+            encoder.setComputePipelineState(context.ewaPipeline(alpha: frame.hasAlpha, curveTable: table, colorLUT: cube,
+                                                                encodeSRGB: encodeSRGB))
             encoder.setTexture(context.ewaWeights, index: 2)
             var cutoff2 = MetalContext.ewaCutoffSquared
             encoder.setBytes(&cutoff2, length: MemoryLayout<Float>.stride, index: 1)

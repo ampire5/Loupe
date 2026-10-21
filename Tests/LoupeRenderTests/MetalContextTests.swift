@@ -368,6 +368,23 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
     }
 }
 
+@Test func encodeSRGBVariantsCompile() throws {
+    // The resample kernels' ENCODE_SRGB variants (GPUs without shader writes to _srgb textures, Intel and AMD Macs):
+    // every kernel, both directions, with the other variants they combine with. On such a GPU TileRenderer uses them
+    // for every compute frame, so a variant that fails to build would leave those Macs without Lanczos, Mitchell or EWA.
+    let c = MetalContext.shared
+    for kernel in ResampleKernel.allCases {
+        for upscale in [false, true] {
+            for (alpha, cube) in [(false, false), (true, false), (false, true)] {
+                _ = try c.device.makeComputePipelineState(function: MetalContext.resampleFunction(
+                    c.library, kernel: kernel, upscale: upscale, alpha: alpha, colorLUT: cube, encodeSRGB: true))
+            }
+        }
+    }
+    _ = try c.device.makeComputePipelineState(function: MetalContext.function(c.library, "resampleEWA", alpha: true,
+                                                                              encodeSRGB: true))
+}
+
 @Test func uploadQueueIsSeparate() {
     let c = MetalContext.shared
     #expect(c.uploadQueue !== c.queue)
