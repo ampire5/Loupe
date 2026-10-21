@@ -2,7 +2,8 @@
 # The prebuilt dependencies (lts/macos26, LTS_POLICY.md in FrameScrub): scripts/build-deps.sh's output, published as a release asset
 # so CI, releases and local builds use the same binaries without building them again.
 # The archive is named after the recipe: deps-x86_64-<first 12 hex digits of build-deps.sh's SHA-256>. A changed recipe
-# has no archive until the "Prebuilt dependencies" workflow publishes one (it is started by hand); until then this
+# has no archive until the "Prebuilt dependencies" workflow publishes one (it runs when the recipe changes on
+# lts/macos26); until then this
 # builds from source.
 #
 # Usage: scripts/deps.sh [fetch]   make .deps/x86_64 hold this recipe's dependencies: kept if it already does,

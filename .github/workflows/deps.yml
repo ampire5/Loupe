@@ -1,9 +1,12 @@
 name: Prebuilt dependencies (x86_64)
 
 # Builds scripts/build-deps.sh's recipe from source and publishes it as the pre-release deps-x86_64-<recipe hash>, which
-# scripts/deps.sh downloads (CI, releases, local builds). Started by hand after the recipe changes; a recipe that is
-# already published is left alone.
+# scripts/deps.sh downloads (CI, releases, local builds). Runs when the recipe changes on lts/macos26 (GitHub offers
+# the manual run only for workflows that main has too); a recipe that is already published is left alone.
 on:
+  push:
+    branches: [lts/macos26]
+    paths: [scripts/build-deps.sh, .github/workflows/deps.yml]
   workflow_dispatch:
 
 permissions:
