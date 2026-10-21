@@ -7,13 +7,19 @@
 # Runs on an Intel Mac and on Apple Silicon (a cross build). Builds every time: scripts/deps.sh, which the build
 # scripts call, downloads the prebuilt result of this exact recipe instead, and runs this only when there is none. A
 # change here is a new recipe (a new prebuilt archive).
+# The `# renovate:` lines let Renovate (renovate.json on main) propose version updates.
 # Needs: brew install cmake ninja nasm pkgconf
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# renovate: datasource=github-tags depName=libjpeg-turbo/libjpeg-turbo
 jpeg_turbo_version=3.2.0
+# renovate: datasource=github-tags depName=google/brotli extractVersion=^v(?<version>.+)$
 brotli_version=1.2.0
+# renovate: datasource=github-tags depName=google/highway
 highway_version=1.4.0
+# renovate: datasource=github-tags depName=strukturag/libde265 extractVersion=^v(?<version>.+)$
 libde265_version=1.1.3
+# renovate: datasource=github-tags depName=strukturag/libheif extractVersion=^v(?<version>.+)$
 libheif_version=1.23.6
 libjxl_commit=8b643990a3f30a55c220386329a3c59ccf189473   # branch loupe
 min=26.0

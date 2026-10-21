@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The prebuilt dependencies (lts/macos26, LTS_POLICY.md in FrameScrub): scripts/build-deps.sh's output, published as a release asset
 # so CI, releases and local builds use the same binaries without building them again.
-# The archive is named after the recipe: deps-x86_64-<first 12 hex digits of build-deps.sh's SHA-256>. A changed recipe
+# The archive is named after the recipe: deps-x86_64-<first 12 hex digits of the SHA-256 of build-deps.sh without
+# its comment lines>. A changed recipe
 # has no archive until the "Prebuilt dependencies" workflow publishes one (it runs when the recipe changes on
-# lts/macos26); until then this
-# builds from source.
+# lts/macos26); until then this builds from source.
 #
 # Usage: scripts/deps.sh [fetch]   make .deps/x86_64 hold this recipe's dependencies: kept if it already does,
 #                                  else downloaded (SHA-256 checked), else built with scripts/build-deps.sh
@@ -14,7 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 prefix=${LOUPE_DEPS:-$PWD/.deps/x86_64}
 repo=${DEPS_REPO:-ampire5/Loupe}
-name=deps-x86_64-$(shasum -a 256 scripts/build-deps.sh | cut -c1-12)
+# Comments do not count: only the recipe's commands and versions name the archive.
+name=deps-x86_64-$(grep -v '^[[:space:]]*#' scripts/build-deps.sh | shasum -a 256 | cut -c1-12)
 # The .pc files hold absolute paths; in the archive they read @DEPS_PREFIX@, put back on unpacking.
 placeholder=@DEPS_PREFIX@
 
