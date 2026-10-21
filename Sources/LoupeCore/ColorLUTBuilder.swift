@@ -15,9 +15,9 @@ public struct ColorCube: Equatable, Sendable {
 
     /// RGBA of each node (alpha 1), r fastest, then g, then b: node (r, g, b) starts at `((b · n + g) · n + r) · 4`
     /// with `n = dimension`. The layout of an `rgba16Float` 3D texture of n³ texels.
-    public let values: [Float16]
+    public let values: [Half]
 
-    public init(values: [Float16]) {
+    public init(values: [Half]) {
         precondition(values.count == Self.dimension * Self.dimension * Self.dimension * 4, "a cube has n³ RGBA nodes")
         self.values = values
     }
@@ -25,13 +25,13 @@ public struct ColorCube: Equatable, Sendable {
     /// No change: each node holds its own position, `i / last`. The renderer's "from" cube when a correction fades in.
     public static let identity: ColorCube = {
         let n = dimension, last = Float(n - 1)
-        var values = [Float16](repeating: 1, count: n * n * n * 4)
+        var values = [Half](repeating: 1, count: n * n * n * 4)
         for b in 0..<n {
             for g in 0..<n {
                 for r in 0..<n {
                     let i = ((b * n + g) * n + r) * 4
-                    values[i] = Float16(Float(r) / last); values[i + 1] = Float16(Float(g) / last)
-                    values[i + 2] = Float16(Float(b) / last)
+                    values[i] = Half(Float(r) / last); values[i + 1] = Half(Float(g) / last)
+                    values[i + 2] = Half(Float(b) / last)
                 }
             }
         }
@@ -76,8 +76,8 @@ public enum ColorLUTBuilder {
     public static func cube(analysis: AutoColorAnalysis?, settings: ColorSettings, colorSpace: CGColorSpace) -> ColorCube? {
         guard let values = correctedLattice(analysis: analysis, settings: settings, colorSpace: colorSpace) else { return nil }
         // sRGB-encoded and clamped to the photo's range (Loupe is SDR; `encode` clamps, NaN gives 0).
-        var halves = [Float16](repeating: 1, count: values.count)
-        for i in values.indices where i % 4 != 3 { halves[i] = Float16(ColorCurve.srgb.encode(values[i])) }
+        var halves = [Half](repeating: 1, count: values.count)
+        for i in values.indices where i % 4 != 3 { halves[i] = Half(ColorCurve.srgb.encode(values[i])) }
         return ColorCube(values: halves)
     }
 

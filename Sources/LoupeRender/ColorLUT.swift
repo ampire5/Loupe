@@ -44,7 +44,7 @@ public final class ColorLUT: @unchecked Sendable {
         d.storageMode = .shared
         d.usage = .shaderRead
         guard let texture = device.makeTexture(descriptor: d) else { return nil }
-        let texel = 4 * MemoryLayout<Float16>.stride
+        let texel = 4 * MemoryLayout<Half>.stride
         cube.values.withUnsafeBytes { bytes in
             texture.replace(region: MTLRegionMake3D(0, 0, 0, n, n, n), mipmapLevel: 0, slice: 0,
                             withBytes: bytes.baseAddress!, bytesPerRow: n * texel, bytesPerImage: n * n * texel)

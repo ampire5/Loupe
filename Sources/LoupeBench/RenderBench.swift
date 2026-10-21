@@ -362,8 +362,8 @@ enum RenderBench {
     /// −0.03), clamped to 0...1. Any non-identity cube costs the same per frame; this one keeps the picture recognisable.
     static func benchCube() -> ColorCube {
         let n = ColorCube.dimension, last = Float(n - 1)
-        var values = [Float16](repeating: 1, count: n * n * n * 4)
-        func contrast(_ e: Float, _ shift: Float) -> Float16 { Float16(min(max(0.5 + 1.2 * (e - 0.5) + shift, 0), 1)) }
+        var values = [Half](repeating: 1, count: n * n * n * 4)
+        func contrast(_ e: Float, _ shift: Float) -> Half { Half(min(max(0.5 + 1.2 * (e - 0.5) + shift, 0), 1)) }
         for b in 0..<n {
             for g in 0..<n {
                 for r in 0..<n {
