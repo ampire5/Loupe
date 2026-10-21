@@ -22,7 +22,9 @@ jobs:
         run: brew install jpeg-turbo cmake ninja brotli highway libheif
       - name: Build libjxl
         run: |
-          git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
+          git init -q "$LOUPE_LIBJXL"
+          git -C "$LOUPE_LIBJXL" fetch -q --depth 1 https://github.com/ampire5/libjxl "$(cat scripts/libjxl.commit)"
+          git -C "$LOUPE_LIBJXL" checkout -q FETCH_HEAD
           git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
           scripts/build-libjxl.sh
       - name: Test
