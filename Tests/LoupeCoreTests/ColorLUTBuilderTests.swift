@@ -295,8 +295,7 @@ private func throughCoreImage(_ image: CGImage, steps: [AutoColorStep], share: D
     var budget = 10.0
     #endif
     // lts/macos26's CI runs the x86_64 tests under Rosetta, which takes the per-node loops ~1.5x longer.
-    var translated: Int32 = 0, size = MemoryLayout<Int32>.size
-    if sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0, translated == 1 { budget *= 2 }
+    if runsUnderRosetta { budget *= 2 }
     let s = settings(vibrance: true)
     let space = CGColorSpace(name: CGColorSpace.displayP3)!
     let first = Date()

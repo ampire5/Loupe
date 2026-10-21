@@ -58,12 +58,14 @@ struct ImageCacheTests {
             rig.decoder.calls.filter { if case .preview = $0.kind { $0.name != "0.jpg" } else { false } }.count >= 2
         })
 
+        // Under Rosetta (lts/macos26's CI) more slack, still short of the 300 ms a blocked focus would wait.
+        let slack = runsUnderRosetta ? 0.2 : 0.1, focusBudget = runsUnderRosetta ? 0.1 : 0.05
         let start = Date()
         await rig.focus(files, 40)
-        #expect(Date().timeIntervalSince(start) < 0.05, "setFocus must not wait for decodes")
+        #expect(Date().timeIntervalSince(start) < focusBudget, "setFocus must not wait for decodes")
         #expect(await eventually { atLeast(.preview, await rig.state(files[40])) })
         let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 0.05 + 0.1, "current preview took \(elapsed) s")
+        #expect(elapsed < 0.05 + slack, "current preview took \(elapsed) s")
         await rig.clear()
     }
 
