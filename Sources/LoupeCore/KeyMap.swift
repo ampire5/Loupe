@@ -5,6 +5,8 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case exitFullScreen
     case fit, actual100, actual200, actual400, fitWidth, fitHeight, fill, toggleFitActual, zoomIn, zoomOut
     case toggleKeepZoom, saveKeepZoom
+    /// `keep-zoom-as` for the folder (`share` ↔ `scale`), and as the loupe.conf default.
+    case toggleZoomCarry, saveZoomCarry
     case toggleFullScreen, cycleStats, toggleStrip, cheatSheet, toggleInfoPanel
     case cyclePanIndicators, savePanIndicators
     case panLeft, panRight, panUp, panDown
@@ -158,7 +160,7 @@ public struct KeyMap: Sendable, Equatable {
     /// The actions a menu item does (Zoom, Scaling, Colour, View); `menuKey` gives the key each item shows.
     static let menuActions: Set<KeyAction> = [
         .fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .zoomIn, .zoomOut,
-        .toggleKeepZoom, .saveKeepZoom,
+        .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance,
         .toggleStrip, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
     ]
@@ -254,6 +256,8 @@ public struct KeyMap: Sendable, Equatable {
         .zoomOut: ("Zoom out", .zoom),
         .toggleKeepZoom: ("Keep zoom and position on/off (this folder)", .zoom),
         .saveKeepZoom: ("Save keep zoom as default", .zoom),
+        .toggleZoomCarry: ("Keep the share of the photo / the scale (this folder)", .zoom),
+        .saveZoomCarry: ("Save share / scale as default", .zoom),
         .panLeft: ("Pan left", .zoom),
         .panRight: ("Pan right", .zoom),
         .panUp: ("Pan up", .zoom),
@@ -340,6 +344,8 @@ public struct KeyMap: Sendable, Equatable {
         // Keep zoom: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "l", modifiers: .shift, allowsRepeat: false, action: .saveKeepZoom),
         KeyBinding(character: "l", allowsRepeat: false, action: .toggleKeepZoom),
+        KeyBinding(character: "k", modifiers: .shift, allowsRepeat: false, action: .saveZoomCarry),
+        KeyBinding(character: "k", allowsRepeat: false, action: .toggleZoomCarry),
         // Scaling: ⇧ variants first, as plain letters ignore Shift.
         KeyBinding(character: "s", modifiers: .shift, allowsRepeat: false, action: .saveFilters),
         KeyBinding(character: "s", allowsRepeat: false, action: .cycleFilter),

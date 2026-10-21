@@ -148,3 +148,25 @@ func aZoomOrPanSinceArrivalYieldsInEveryMemory(_ memory: FolderViewMemory) {
     let r = ViewRestore(file: photo, view: old, arrival: arrival)
     #expect(r.transform(for: photo, imageSize: oriented, over: arrival) == nil)
 }
+
+/// A free zoom is saved with the scale it drew at; a view saved before that (four fields) still reads.
+@Test func savedViewKeepsAFreeZoomsScale() {
+    let t = ViewTransform(imageSize: size, viewSize: CGSize(width: 2000, height: 1000), mode: .free(2))
+    let v = SavedView(t)
+    #expect(v.scale == t.scale)
+    #expect(SavedView(text: v.text) == v)
+    #expect(SavedView(text: "free:2.0 0.5 0.5 6000x4000 0.5")?.scale == 0.5)
+    #expect(SavedView(text: "free:2.0 0.5 0.5 6000x4000 -1") == nil)
+    #expect(SavedView(ViewTransform(imageSize: size, viewSize: t.viewSize, mode: .fitWidth)).scale == nil)
+}
+
+/// Restored in a window of another size: `scale` comes back at the saved scale, `share` at its ratio to Fit.
+@Test func restoreCarriesAFreeZoomByShareOrScale() {
+    let saved = ViewTransform(imageSize: size, viewSize: CGSize(width: 2000, height: 1000), mode: .free(2))
+    let file = URL(fileURLWithPath: "/p/a.jpg")
+    let now = ViewTransform(imageSize: size, viewSize: CGSize(width: 1000, height: 500))
+    let restore = ViewRestore(file: file, view: SavedView(saved), arrival: now)
+    let byScale = restore.transform(for: file, imageSize: size, over: now, carry: .scale)
+    #expect(abs((byScale?.scale ?? 0) - saved.scale) < 1e-9)
+    #expect(restore.transform(for: file, imageSize: size, over: now, carry: .share)?.mode == .free(2))
+}

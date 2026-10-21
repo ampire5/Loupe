@@ -88,7 +88,7 @@ public struct RMBZoomCoast: Sendable {
             || (heading < 0 && ZoomLimit.atLower(r.scale, of: limits)) {
             coast.halt()
         }
-        return (zoom.transform(toScale: r.scale, stop: r.hitStop), stops.justHit)
+        return (zoom.transform(toScale: r.scale), stops.justHit)
     }
 }
 

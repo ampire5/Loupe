@@ -56,9 +56,9 @@ public struct RMBZoom: Equatable, Sendable {
         transform(toScale: scale(dyPoints: dyPoints))
     }
 
-    /// The press transform zoomed to `scale` around the anchor, in `stop`'s mode if it rests on one: the
-    /// view runs `scale(dyPoints:)` through `ZoomStopGesture` first.
-    public func transform(toScale scale: Double, stop: ZoomStop? = nil) -> ViewTransform {
-        start.zoomed(toScale: scale, anchor: anchor, stop: stop)
+    /// The press transform zoomed to `scale` around the anchor, a free zoom even on a stop: the view runs
+    /// `scale(dyPoints:)` through `ZoomStopGesture` first.
+    public func transform(toScale scale: Double) -> ViewTransform {
+        start.zoomed(toScale: scale, anchor: anchor)
     }
 }

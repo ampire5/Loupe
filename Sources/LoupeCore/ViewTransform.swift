@@ -270,12 +270,33 @@ public struct ViewTransform: Equatable, Sendable {
         return t
     }
 
-    /// Window resize: keeps mode and stored centre (clamping is applied when reading geometry).
-    public func withViewSize(_ s: CGSize) -> ViewTransform {
+    /// Window resize: keeps mode and stored centre (clamping is applied when reading geometry). A free zoom keeps its
+    /// ratio to Fit, so the framing stays, or with `keepingScale` (`keep-zoom-as=scale`) the scale it draws at; a view
+    /// not laid out yet (a zero side) has no scale to keep.
+    public func withViewSize(_ s: CGSize, keepingScale: Bool = false) -> ViewTransform {
         var t = self
         t.offset = .zero
         t.stretch = nil
         t.viewSize = s
+        guard keepingScale, viewSize.width > 0, viewSize.height > 0 else { return t }
+        return t.carryingZoom(from: self, .scale)
+    }
+
+    /// This transform with a free zoom carried over from `old` (the previous photo, or this one at another view size)
+    /// by `carry`: `.scale` keeps the scale `old` drew at; `.share` keeps the share of the picture's area in view, so
+    /// a photo of the same pixel count keeps the scale whichever way it is turned (its ratio to Fit would change with
+    /// the orientation), and one of four times the pixels takes twice the scale. Only a free zoom moves: Fit, the
+    /// fit-family and `actual` are named modes and stay as they are.
+    public func carryingZoom(from old: ViewTransform, _ carry: ZoomCarry) -> ViewTransform {
+        guard case .free = old.mode, case .free = mode else { return self }
+        var target = old.scale
+        if carry == .share {
+            let before = Double(old.imageSize.width * old.imageSize.height)
+            let after = Double(imageSize.width * imageSize.height)
+            if before > 0, after > 0 { target *= (before / after).squareRoot() }
+        }
+        var t = self
+        t.mode = .free(target / fitScale)
         return t
     }
 

@@ -82,13 +82,14 @@ private let anchor = CGPoint(x: 1500, y: 900)
     #expect(inv.scale(dyPoints: -200) == 0.5)
 }
 
-@Test func rmbTransformToAStopScaleKeepsTheAnchorAndSetsTheMode() {
+/// A drag halting on 100 % keeps the anchor and stays a free zoom at exactly 100 % (a gesture gives a scale, not a mode).
+@Test func rmbTransformToAStopScaleKeepsTheAnchorAndStaysFree() {
     let t0 = start(.actual(0.4))
     let mid = CGPoint(x: 3000, y: 1700)
     let z = RMBZoom(anchor: mid, transform: t0, pointsPerDoubling: RMBZoom.pointsPerDoubling)
     let p = t0.imagePoint(forView: mid)
-    let t = z.transform(toScale: 1, stop: .percent(100))
-    #expect(t.mode == .actual(1))
+    let t = z.transform(toScale: 1)
+    #expect(t.mode == .free(1 / t0.fitScale) && abs(t.scale - 1) < 1e-12)
     let back = t.viewPoint(forImage: p)
     #expect(abs(back.x - mid.x) < 1e-6 && abs(back.y - mid.y) < 1e-6)
     #expect(abs(z.transform(toScale: 2).scale - z.transform(dyPoints: -200 * log2(2 / 0.4)).scale) < 1e-12)

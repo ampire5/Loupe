@@ -1940,6 +1940,12 @@ import UniformTypeIdentifiers
             toast.show(ZoomKeys.toast(keep: value == "yes"))
         case .saveKeepZoom:
             saveAsDefault([ZoomKeys.keepKey], from: folder, toast: ZoomKeys.keepSaved)
+        case .toggleZoomCarry:
+            let carry = ZoomKeys.toggledCarry(effectiveConfig)
+            folderSettings.set(ZoomKeys.carryKey, carry.rawValue, for: folder)
+            toast.show(ZoomKeys.toast(carry: carry))
+        case .saveZoomCarry:
+            saveAsDefault([ZoomKeys.carryKey], from: folder, toast: ZoomKeys.carrySaved)
         default:
             break
         }

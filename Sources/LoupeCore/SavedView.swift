@@ -4,7 +4,8 @@ import Foundation
 /// How the folder's last photo was being looked at when the user left it: zoom mode, relative centre and the
 /// photo's pixel size as laid out (oriented, M3b spec §2.1), stored with the folder's position (`FolderPositions`,
 /// `folder_positions.view`) so the photo reopens at that zoom and spot. A fit-family mode is kept as the mode itself
-/// (`fit-width`, not its scale), so it still fits a window of another size; `actual` and `free` keep their number.
+/// (`fit-width`, not its scale), so it still fits a window of another size; `actual` and `free` keep their number, and
+/// a free zoom also the scale it drew at, for `keep-zoom-as=scale`.
 public struct SavedView: Equatable, Sendable {
     public var mode: ZoomMode
     /// The transform's stored (desired) centre, 0…1 of the image.
@@ -12,20 +13,26 @@ public struct SavedView: Equatable, Sendable {
     /// Image pixels, the transform's (oriented) image size: the view is restored only onto a photo laid out at this
     /// size (`applies(to:)`). A view saved before M3b for a turned photo has its stored size, and does not apply.
     public var imageSize: CGSize
+    /// A free zoom's scale as drawn (view pixels per image pixel); nil for the named modes and for a view saved before
+    /// it was recorded.
+    public var scale: Double?
 
-    public init(mode: ZoomMode, center: CGPoint, imageSize: CGSize) {
+    public init(mode: ZoomMode, center: CGPoint, imageSize: CGSize, scale: Double? = nil) {
         self.mode = mode
         self.center = center
         self.imageSize = imageSize
+        self.scale = scale
     }
 
     /// The view of `t`.
     public init(_ t: ViewTransform) {
-        self.init(mode: t.mode, center: t.center, imageSize: t.imageSize)
+        let free = if case .free = t.mode { true } else { false }
+        self.init(mode: t.mode, center: t.center, imageSize: t.imageSize, scale: free ? t.scale : nil)
     }
 
-    /// `<mode> <x> <y> <width>x<height>`, e.g. `actual:2.0 0.31 0.62 6000x4000`; the mode is `fit`, `fit-width`,
-    /// `fit-height`, `fill`, `actual:<scale>` or `free:<times fit>`. Numbers in their shortest exact spelling.
+    /// `<mode> <x> <y> <width>x<height>[ <scale>]`, e.g. `actual:2.0 0.31 0.62 6000x4000` or
+    /// `free:1.5 0.5 0.5 6000x4000 0.6`; the mode is `fit`, `fit-width`, `fit-height`, `fill`, `actual:<scale>` or
+    /// `free:<times fit>`, a free zoom followed by its drawn scale. Numbers in their shortest exact spelling.
     public var text: String {
         let modeText: String
         switch mode {
@@ -36,17 +43,23 @@ public struct SavedView: Equatable, Sendable {
         case .actual(let k): modeText = "actual:\(k)"
         case .free(let r): modeText = "free:\(r)"
         }
-        return "\(modeText) \(Double(center.x)) \(Double(center.y)) \(Int(imageSize.width))x\(Int(imageSize.height))"
+        let text = "\(modeText) \(Double(center.x)) \(Double(center.y)) \(Int(imageSize.width))x\(Int(imageSize.height))"
+        return scale.map { text + " \($0)" } ?? text
     }
 
     /// Reads `text`; nil for anything else (a non-finite or non-positive number, a missing or extra field).
     public init?(text: String) {
         let fields = text.split(separator: " ")
-        guard fields.count == 4, let mode = Self.mode(fields[0]),
+        guard fields.count == 4 || fields.count == 5, let mode = Self.mode(fields[0]),
               let x = Double(fields[1]), let y = Double(fields[2]), x.isFinite, y.isFinite else { return nil }
         let sides = fields[3].split(separator: "x", omittingEmptySubsequences: false)
         guard sides.count == 2, let w = Int(sides[0]), let h = Int(sides[1]), w > 0, h > 0 else { return nil }
-        self.init(mode: mode, center: CGPoint(x: x, y: y), imageSize: CGSize(width: w, height: h))
+        var scale: Double?
+        if fields.count == 5 {
+            guard let s = Double(fields[4]), s.isFinite, s > 0 else { return nil }
+            scale = s
+        }
+        self.init(mode: mode, center: CGPoint(x: x, y: y), imageSize: CGSize(width: w, height: h), scale: scale)
     }
 
     private static func mode(_ field: Substring) -> ZoomMode? {
@@ -158,10 +171,18 @@ public struct ViewRestore: Equatable, Sendable {
 
     /// The transform to show `url` at `imageSize` with, given the transform now (`t`, still the previous photo's
     /// size): the saved mode and centre (`target`) at the view size of now, or nil for the normal view (another photo,
-    /// a size the view does not apply to, or a zoom or pan since the arrival).
-    public func transform(for url: URL, imageSize: CGSize, over t: ViewTransform) -> ViewTransform? {
+    /// a size the view does not apply to, or a zoom or pan since the arrival). A saved free zoom comes back by `carry`
+    /// (`keep-zoom-as`), as a switch from the saved photo would carry it: `.scale` at the scale it was saved at, in
+    /// a window of any size; `.share` at its ratio to Fit in this window, moved by the pixel count of another photo.
+    public func transform(for url: URL, imageSize: CGSize, over t: ViewTransform, carry: ZoomCarry = .share,
+                          fitUpscale: Bool = true) -> ViewTransform? {
         guard url == file, let target = target(imageSize: imageSize), t.mode == arrivalMode,
               t.center == arrivalCenter else { return nil }
-        return ViewTransform(imageSize: imageSize, viewSize: t.viewSize, mode: target.mode, center: target.center)
+        let shown = ViewTransform(imageSize: imageSize, viewSize: t.viewSize, mode: target.mode, center: target.center,
+                                  fitUpscale: fitUpscale)
+        guard case .free(let r) = view.mode else { return shown }
+        var saved = ViewTransform(imageSize: view.imageSize, viewSize: t.viewSize, mode: view.mode, fitUpscale: fitUpscale)
+        if carry == .scale, let scale = view.scale { saved.mode = .free(scale / saved.fitScale) } else { saved.mode = .free(r) }
+        return shown.carryingZoom(from: saved, carry)
     }
 }

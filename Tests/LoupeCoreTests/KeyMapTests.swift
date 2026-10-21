@@ -44,7 +44,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     29: ("0", ")"), 18: ("1", "!"), 19: ("2", "@"), 21: ("4", "$"), 82: ("0", "0"), 83: ("1", "1"), 84: ("2", "2"),
     86: ("4", "4"), 24: ("=", "+"), 27: ("-", "_"), 69: ("+", "+"), 78: ("-", "-"),
     13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
-    1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 35: ("p", "P"),
+    1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 40: ("k", "K"), 35: ("p", "P"),
 ]
 
 /// `label` would fall back to the raw case name in the View section; every action has a title of its own instead.
@@ -95,7 +95,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .cycleStats: "I", .toggleStrip: "T", .cheatSheet: "?",
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
         .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
-        .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
+        .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
     ]
     for a in KeyAction.allCases {
         #expect(map.label(a).keys == (mouseOnlyByDefault.contains(a) ? "" : expected[a]), "\(a): \(map.label(a).keys)")
@@ -263,6 +263,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
         .toggleStrip: ("t", []), .cycleStats: ("i", []), .cheatSheet: ("?", []),
         .toggleKeepZoom: ("l", []), .saveKeepZoom: ("l", .shift),
+        .toggleZoomCarry: ("k", []), .saveZoomCarry: ("k", .shift),
         .cyclePanIndicators: ("p", []), .savePanIndicators: ("p", .shift),
     ]
     for a in KeyAction.allCases {
