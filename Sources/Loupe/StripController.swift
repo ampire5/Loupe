@@ -9,60 +9,60 @@ extension Notification.Name {
     static let thumbnailsCleared = Notification.Name("local.loupe.thumbnailsCleared")
 }
 
-/// One window's thumbnail strip (spec §4): decides when it shows, keeps `StripView` in step with the session's
-/// playlist and position, and fills its cells from the `ThumbnailStore`.
+/// One window's thumbnail strip (spec §4, Photos' filmstrip 2026-10-21): decides when it shows, keeps `StripView` in
+/// step with the session's playlist and position, moves the strip under its fixed centre and fills its cells from
+/// the `ThumbnailStore`.
 ///
-/// Showing: in full screen, and in a window with `strip-window=overlay`, the strip floats over the bottom of the
-/// picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the mouse is within the
-/// strip's whole height (+ 8 pt, which is the band) of the window's bottom edge, while its top edge is being
-/// dragged, or while the cursor is over the strip; it hides
+/// Showing: with `strip-window=bar` (the default) the strip is a band of its own under the picture (the window
+/// controller anchors the viewer to its top), shown until `T` or the chevron hides it (`stripBarHidden`). In full
+/// screen, and in a window with `overlay`, it floats over the bottom of the picture and is visible while it is
+/// pinned (`T`, persisted as `stripPinned`), while the mouse is within the strip's whole height of the window's
+/// bottom edge, while its top edge is being dragged, while it moves, or while the cursor is over it; it hides
 /// `strip-hide-delay` ms after none of these holds. While the `?` cheat sheet is open (`staysShown`) a strip on screen
-/// stays too. `bar` keeps it always visible under the picture (the window
-/// controller anchors the viewer to its top); `off` never shows it in a window.
+/// stays too. `off` never shows it in a window. The chevron over the strip (or at the bottom edge while the strip is
+/// hidden) shows while the mouse is over the bottom third of the window and does what `T` does.
 ///
-/// Pictures are asked for only for the cells of the current layout while the strip is shown, at the cell's
-/// pixel size; a store notification refreshes just the cells of that file.
+/// At rest the current file is at the centre, expanded to its photo's proportions. A step to a neighbour (the wheel,
+/// the arrows) moves the strip there with a short animation; a jump farther puts it there at once. A two-finger
+/// horizontal swipe (`StripScroll`, `strip-scroll-direction`; momentum included) or a mouse drag over the cells moves
+/// the strip, every cell narrow: the file reaching the centre becomes current at once as its stretched thumbnail
+/// (`ViewerSession.scrub(to:)`). The end of the motion (the momentum's end, a cancel, `StripScroll.restDelay` without
+/// scroll events, the mouse's release) settles the strip on the nearest file, expands it and ends the scrub
+/// (`endScrub`: the normal plan, the only full decode). A drag resting `ViewerSession.dwellDelay` on one file ends the
+/// scrub there too. A click on a cell opens that file and moves the strip to it; it also stops a momentum or a
+/// settling under way.
 ///
-/// Hover magnifies the cells Dock-style (`StripMagnifier`, `strip-magnify`, `strip-magnify-reach`, the height capped
-/// at `strip-magnify-limit` of the viewer's). Once the file under the cursor has stayed the same for 100 ms, the magnified cells are
-/// asked for again at their magnified pixel size with the cursor on that file (at most `thumb-size`), the hovered cell showing that file rather than its range's middle one; while
-/// the cursor moves, the cells keep what they hold (scaled), so a sweep across the strip decodes nothing.
-///
-/// Cell shapes follow `strip-aspect`: `native` lays each cell out at its photo's proportions, which
-/// `StripAspects` gathers from the store (at most one relayout per 250 ms, none during a drag of the edge). A
-/// sampled strip keeps its cell count while the aspects stream in (`StripLayout.preferredCount`).
-///
-/// A press on the cells scrubs (spec §4.3, §5.3): the file under the cursor becomes current at once as its
-/// stretched thumbnail (`ViewerSession.scrub(to:)`), and the release, or the cursor resting `ViewerSession.dwellDelay`
-/// on one file, ends the scrub (`endScrub`: the normal plan for that file); the next file the drag reaches scrubs
-/// again. A click is a scrub of one file. The strip stays while the press lasts.
-///
-/// A two-finger horizontal swipe over the strip scrubs too (`StripScroll`, Task 20): by default fingers left go to the
-/// next files (`strip-scroll-direction`), a cell's width of travel per cell, momentum included; the end of the
-/// momentum, a cancelled gesture or `StripScroll.restDelay` without scroll events commits (`endScrub`). A vertical
-/// swipe over the strip does nothing; the wheel and a held-button scroll go on to the viewer.
+/// Pictures are asked for only for the visible cells while the strip is shown, at the pixel size of the cell at
+/// rest (the photo's aspect at the cell height, at most `thumb-size`); while the strip moves only for cells that
+/// stayed in view `ViewerSession.dwellDelay`, so a fling decodes nothing it passes. A store notification refreshes
+/// just that file. The aspects come from `StripAspects` (at most one relayout per 250 ms, none during a drag of the
+/// edge); a relayout keeps the file at the centre.
 ///
 /// Dragging the strip's top edge resizes it live (cells relaid each move, pictures asked for again only on release,
 /// at the new pixel size) and saves `strip-height` through `Settings`.
 @MainActor final class StripController: NSObject {
     static let pinnedKey = "stripPinned"
+    static let barHiddenKey = "stripBarHidden"
+    /// The chevron's gap to the strip's top, or to the window's bottom while the strip is hidden.
+    private static let chevronGap: CGFloat = 6
 
     let view = StripView()
+    private let chevron = NSButton()
     private let session: ViewerSession
     private let store: ThumbnailStore
     private let aspects: StripAspects
     private var heightConstraint: NSLayoutConstraint!
+    private var chevronAboveStrip: NSLayoutConstraint?
+    private var chevronAtBottom: NSLayoutConstraint?
 
-    private var mode = StripWindowMode.overlay
-    private var cellHeight: CGFloat = 64
+    private var mode = StripWindowMode.bar
+    private var cellHeight: CGFloat = 68
+    private var cellMax = 1.5
     private var hideDelay: Duration = .milliseconds(500)
     /// `strip-fade-in` / `strip-fade-out` in seconds; read at each show / hide, so a loupe.conf edit applies at the
     /// next activation.
     private var fadeIn: TimeInterval = 0.15
     private var fadeOut: TimeInterval = 0.25
-    private var magnify = 2.0
-    private var reach = 2.0
-    private var magnifyLimit = 15.0
     private var thumbSize = 512
     private var isFullScreen = false
 
@@ -71,22 +71,31 @@ extension Notification.Name {
         set { UserDefaults.standard.set(newValue, forKey: Self.pinnedKey) }
     }
 
+    private var barHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.barHiddenKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.barHiddenKey) }
+    }
+
     /// The cursor is in the bottom zone (the band's height above the window's bottom edge, shown or not).
     private var mouseNearBottom = false
+    /// The cursor is over the window's bottom third: the chevron shows.
+    private var mouseInLowerThird = false
     /// The strip's top edge is being dragged: the pointer is above the band then, and the strip stays.
     private var resizing = false
     /// The cell height when the drag began: what a cut-off drag goes back to, and what tells a drag that
     /// ended where it began.
     private var heightBeforeResize: CGFloat = 0
     private let hoverState = StripHover()
-    /// A press on the cells is scrubbing (from the view's `onScrub` to its `onScrubEnd`).
-    private var scrubbing = false
-    /// Ends the scrub once the cursor rests on one file.
-    private var scrubRest: Task<Void, Never>?
-    /// Trackpad scrolling over the strip and its scrub, which `scrollRest` commits once `StripScroll.restDeadline`
-    /// passes: one timer, re-armed when it wakes before a deadline that later events put off.
+    /// The strip's motion: a trackpad gesture with its momentum (`StripScroll`), or a mouse drag (`dragging`).
     private var scroll = StripScroll()
     private var scrollRest: Task<Void, Never>?
+    private var dragging = false
+    /// Ends the session's scrub once a drag rests on one file.
+    private var dragRest: Task<Void, Never>?
+    /// The session scrubs for this strip (from the first `scrub(to:)` to its `endScrub`).
+    private var sessionScrubbing = false
+    /// The file the strip was last put at rest on.
+    private var shownCurrent: Int?
     private(set) var isShown = false
     private var hideTask: Task<Void, Never>?
     /// Set by `close()`: a settings push or a late callback must not touch the closed window's session.
@@ -94,15 +103,15 @@ extension Notification.Name {
     private var container: NSView?
     private var observers: [NSObjectProtocol] = []
 
-    /// The playlist the layout was made for.
+    /// The playlist the layout was made for, and each file's index in it.
     private var files: [URL] = []
-    /// The playlist and aspect mode of the view's layout: a sampled strip keeps its cell count only for them.
-    private var laidFiles: [URL] = []
-    /// The file each cell shows, and the file whose picture (or placeholder) the cell holds for good with the
-    /// pixel size it was asked for at: a cell is asked for again while the files differ or the size is off.
-    private var cellFiles: [URL] = []
-    private var settled: [(url: URL, maxPixel: Int)?] = []
+    private var indices: [URL: Int] = [:]
+    /// The picture each file's cell holds for good, with the pixel size it was asked for at: asked for again while
+    /// the file differs or the size is off. Pictures in flight, and when each visible file came into view.
+    private var given: [Int: (url: URL, maxPixel: Int)] = [:]
     private var loads: [Int: Task<Void, Never>] = [:]
+    private var inViewSince: [Int: ContinuousClock.Instant] = [:]
+    private var dwellTask: Task<Void, Never>?
 
     /// The strip took or gave back its own space below the picture (`bar` in a window).
     var onReservesSpaceChange: (() -> Void)?
@@ -110,10 +119,12 @@ extension Notification.Name {
     var onShownChange: (() -> Void)?
 
     /// Whether the viewer must end at the strip's top instead of the window's bottom.
-    var reservesSpace: Bool { !isFullScreen && mode == .bar }
+    var reservesSpace: Bool { !isFullScreen && mode == .bar && !barHidden }
 
     /// The band's height: cells plus padding.
     var bandHeight: CGFloat { cellHeight + 2 * StripView.padding }
+
+    private var isMoving: Bool { scroll.isMoving || dragging }
 
     init(session: ViewerSession, store: ThumbnailStore) {
         self.session = session
@@ -128,8 +139,10 @@ extension Notification.Name {
         view.alphaValue = 0
         view.isHidden = true
         view.onHover = { [weak self] in self?.hover($0) }
-        view.onScrub = { [weak self] in self?.scrub(to: $0) }
-        view.onScrubEnd = { [weak self] in self?.endScrub() }
+        view.onPress = { [weak self] in self?.pressed($0) }
+        view.onDrag = { [weak self] in self?.dragged(by: $0) }
+        view.onDragEnd = { [weak self] in self?.dragEnded() }
+        view.onVisibleChange = { [weak self] in self?.visibleChanged() }
         view.onTrackpadScroll = { [weak self] in self?.scrolled($0) }
         view.onResize = { [weak self] in self?.relayout() }
         view.onResizeDrag = { [weak self] in self?.resize(toBandHeight: $0) }
@@ -150,22 +163,45 @@ extension Notification.Name {
     }
 
     /// Mouse moves anywhere in `container` (the window's content view) tell whether the cursor is near the
-    /// bottom edge.
+    /// bottom edge; the chevron goes into it, over the strip.
     func attach(to container: NSView) {
         self.container = container
         container.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
                                                                         .activeInKeyWindow, .inVisibleRect],
                                                  owner: self))
+        chevron.isBordered = false
+        chevron.title = ""
+        chevron.imagePosition = .imageOnly
+        chevron.imageScaling = .scaleProportionallyUpOrDown
+        chevron.contentTintColor = NSColor(white: 1, alpha: 0.75)
+        chevron.target = self
+        chevron.action = #selector(chevronClicked)
+        chevron.alphaValue = 0
+        chevron.isHidden = true
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(chevron, positioned: .above, relativeTo: view)
+        let above = chevron.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Self.chevronGap)
+        let bottom = chevron.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.chevronGap)
+        chevronAboveStrip = above
+        chevronAtBottom = bottom
+        NSLayoutConstraint.activate([
+            chevron.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            chevron.widthAnchor.constraint(equalToConstant: 18),
+            chevron.heightAnchor.constraint(equalToConstant: 9),
+        ])
+        updateChevron()
     }
 
     /// The window closes: no timers, no more notifications.
     func close() {
         closed = true
         resizing = false   // a drag cut off by the close has nothing left to restore or save
-        scrubbing = false   // the session closes too
-        scrubRest?.cancel()
+        dragging = false
+        sessionScrubbing = false   // the session closes too
+        dragRest?.cancel()
         scroll.takeOver()   // nothing to commit: the session closes too
         scrollRest?.cancel()
+        dwellTask?.cancel()
         hideTask?.cancel()
         hoverState.cancel()
         aspects.close()
@@ -191,17 +227,13 @@ extension Notification.Name {
         fadeOut = Double(config.stripFadeOutMilliseconds) / 1000
         view.cornerRadius = CGFloat(config.stripCornerRadius)   // a no-op while unchanged
         scroll.direction = config.stripScrollDirection
-        if config.stripMagnify != magnify || config.stripMagnifyReach != reach
-            || config.stripMagnifyLimit != magnifyLimit || config.thumbSize != thumbSize {
-            magnify = config.stripMagnify
-            reach = config.stripMagnifyReach
-            magnifyLimit = config.stripMagnifyLimit
+        if config.stripCellMax != cellMax {
+            cellMax = config.stripCellMax
+            relayout()
+        }
+        if config.thumbSize != thumbSize {
             thumbSize = config.thumbSize
-            view.magnify = CGFloat(magnify)
-            view.reach = reach
-            view.magnifyLimit = magnifyLimit
-            retarget()
-            loadCells()   // other magnified pixel sizes
+            reloadAll()   // other pixel sizes
         }
         if config.exifOrientation != aspects.appliesOrientation {
             // Thumbnails are stored turned: with the key off the cells turn back to the stored layout, at the stored aspect.
@@ -255,7 +287,7 @@ extension Notification.Name {
             reloadAll()
             Settings.shared.setStripHeight(Int(cellHeight))
         } else {
-            loadCells()   // the cells the drag skipped
+            loadVisible()   // the cells the drag skipped
         }
         aspects.paused = false   // what arrived during the drag
         update()
@@ -265,23 +297,31 @@ extension Notification.Name {
         guard on != isFullScreen else { return }
         let reserved = reservesSpace
         view.cancelResize()
-        view.cancelScrub()
-        endScrollScrub()
+        endMotion()
         isFullScreen = on
         mouseNearBottom = false
         if reservesSpace != reserved { onReservesSpaceChange?() }
         update()
     }
 
-    /// `T` and View › Thumbnail Strip.
+    /// `T`, View › Thumbnail Strip and the chevron: a bar hides or comes back, an overlay is pinned or let go.
     func togglePin() {
-        pinned.toggle()
-        DebugLog.log("strip \(pinned ? "pinned" : "unpinned")")
-        // Unpinned with nothing else holding it: it goes now, the user asked for that.
+        if placement == .bar {
+            barHidden.toggle()
+            DebugLog.log("strip bar \(barHidden ? "hidden" : "shown")")
+            onReservesSpaceChange?()
+        } else {
+            pinned.toggle()
+            DebugLog.log("strip \(pinned ? "pinned" : "unpinned")")
+        }
+        // Let go with nothing else holding it: it goes now, the user asked for that.
         update(hideAtOnce: true)
     }
 
-    var isPinned: Bool { pinned }
+    /// Whether `T` holds the strip on screen: a bar not hidden, a pinned overlay.
+    var isPinned: Bool { placement == .bar ? !barHidden : pinned }
+
+    @objc private func chevronClicked() { togglePin() }
 
     /// Set while the cheat sheet is open: a strip on screen does not hide under it (the sheet's Mouse & Trackpad column
     /// talks about it), and a hidden one does not come up for it. Cleared, the usual delay starts.
@@ -300,9 +340,9 @@ extension Notification.Name {
         let holds: Bool
         switch placement {
         case .off: holds = false
-        case .bar: holds = true
+        case .bar: holds = !barHidden || resizing
         case .overlay:
-            holds = pinned || mouseNearBottom || hoverState.file != nil || resizing || scrubbing || scroll.isScrubbing
+            holds = pinned || mouseNearBottom || hoverState.file != nil || resizing || isMoving
                 || (staysShown && isShown)
         }
         if holds {
@@ -322,6 +362,7 @@ extension Notification.Name {
                 self.hide()
             }
         }
+        updateChevron()
     }
 
     private func show() {
@@ -340,7 +381,7 @@ extension Notification.Name {
             view.alphaValue = 1
         }
         relayout()
-        loadCells()
+        loadVisible()
         sendVisible()
         onShownChange?()
     }
@@ -373,10 +414,40 @@ extension Notification.Name {
         onShownChange?()
     }
 
+    /// The chevron: over the strip while it is on screen, at the bottom edge while not, down or up as `T` would go;
+    /// shown while the mouse is over the window's bottom third, never with `strip-window=off` in a window.
+    private func updateChevron() {
+        guard container != nil else { return }
+        let wanted = mouseInLowerThird && placement != .off
+        let symbol = isShown ? "chevron.down" : "chevron.up"
+        if chevron.image?.accessibilityDescription != symbol {
+            chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol)
+        }
+        chevron.toolTip = isShown ? "Hide the thumbnails (T)" : "Show the thumbnails (T)"
+        if isShown {
+            chevronAtBottom?.isActive = false
+            chevronAboveStrip?.isActive = true
+        } else {
+            chevronAboveStrip?.isActive = false
+            chevronAtBottom?.isActive = true
+        }
+        guard wanted != (chevron.alphaValue > 0 && !chevron.isHidden) else { return }
+        if wanted { chevron.isHidden = false }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = wanted ? fadeIn : fadeOut
+            chevron.animator().alphaValue = wanted ? 1 : 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !(self.mouseInLowerThird && self.placement != .off) else { return }
+                self.chevron.isHidden = true
+            }
+        })
+    }
+
     /// The store makes the visible cells' thumbnails first; none while the strip is hidden.
     private func sendVisible() {
         guard !closed else { return }
-        session.stripVisibleFiles = isShown ? view.layout.cells.map(\.file) : []
+        session.stripVisibleFiles = isShown ? view.visibleFiles : []
     }
 
     // MARK: Mouse near the bottom (tracking area owner)
@@ -387,7 +458,13 @@ extension Notification.Name {
         guard let container else { return }
         if isShown { view.trackOutside(event) }
         let p = container.convert(event.locationInWindow, from: nil)
-        let near = container.bounds.contains(p) && p.y - container.bounds.minY <= bandHeight
+        let inside = container.bounds.contains(p)
+        let near = inside && p.y - container.bounds.minY <= bandHeight
+        let lower = inside && p.y - container.bounds.minY <= container.bounds.height / 3
+        if lower != mouseInLowerThird {
+            mouseInLowerThird = lower
+            updateChevron()
+        }
         guard near != mouseNearBottom else { return }
         mouseNearBottom = near
         update()
@@ -396,7 +473,11 @@ extension Notification.Name {
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
 
     @objc(mouseExited:) func mouseExited(with event: NSEvent) {
-        if !scrubbing { hover(nil) }   // left the window from a magnified cell above the band; a scrub keeps its hover
+        if !dragging { hover(nil) }   // a drag keeps its hover
+        if mouseInLowerThird {
+            mouseInLowerThird = false
+            updateChevron()
+        }
         guard mouseNearBottom else { return }
         mouseNearBottom = false
         update()
@@ -405,10 +486,11 @@ extension Notification.Name {
     /// The window is no longer key: mouse moves stop arriving, so what they said is stale.
     func windowDidResignKey() {
         view.cancelResize()
-        view.cancelScrub()
-        endScrollScrub()
+        endMotion()
         mouseNearBottom = false
+        mouseInLowerThird = false
         hover(nil)
+        updateChevron()
     }
 
     // MARK: Session
@@ -417,125 +499,180 @@ extension Notification.Name {
     func sessionDidChange() {
         guard let list = session.playlist else { return }
         if list.files != files {
-            // A press or trackpad scrub over the old list ends with it (the session already ended its scrub): its
-            // cells are other files now, and a press held on would go on scrubbing a list it never saw.
-            view.cancelScrub()
-            endScrollScrub()
-            files = list.files
-            aspects.setPlaylist(files)
-            // The label showed a file of the old playlist (the interim one-file list replaced by the listing): the
-            // hover comes back for the new file under the cursor on the next move.
-            hover(nil)
-            relayout()
+            playlistChanged(list.files, current: list.index)
+            return
         }
-        view.current = list.index
+        // While the strip moves, the files it reaches are the session's current ones already.
+        guard list.index != shownCurrent, !isMoving else { return }
+        let step = shownCurrent.map { abs($0 - list.index) == 1 } ?? false
+        rest(on: list.index, animated: step)
     }
 
-    /// A layout for the view's width and the playlist; cells showing another file than before are asked for.
-    /// The files are compared too: another folder of the same length has an equal layout.
-    private func relayout() {
-        let width = Double(view.bounds.width), height = Double(cellHeight)
-        let preferred = laidFiles == files
-            ? StripLayout.preferredCount(after: view.layout, fileCount: files.count, width: width, cellHeight: height) : nil
-        let layout = StripLayout(fileCount: files.count, width: width, cellHeight: height,
-                                 aspects: StripLayout.Aspects(StripLayout.filledAspects(aspects.aspects)),
-                                 preferredCount: preferred)
-        let shown = layout.cells.map { files[$0.file] }
-        laidFiles = files
-        guard layout != view.layout || shown != cellFiles else { return }
-        view.layout = layout
-        scroll.settle()   // interim until the strip is rebuilt on StripScrollLayout
-        retarget()
-        cellFiles = shown
-        settled = settled.count > cellFiles.count ? Array(settled.prefix(cellFiles.count))
-                                                  : settled + Array(repeating: nil, count: cellFiles.count - settled.count)
-        for (index, task) in loads where index >= cellFiles.count {
-            task.cancel()
-            loads[index] = nil
+    /// Another playlist: a press or a motion over the old one ends with it (the session already ended its scrub):
+    /// its cells are other files now. Every picture goes, the strip rests on the current file.
+    private func playlistChanged(_ list: [URL], current: Int) {
+        view.cancelPress()
+        dragRest?.cancel()
+        dragging = false
+        sessionScrubbing = false
+        scroll.takeOver()
+        scroll.settle()
+        scrollRest?.cancel()
+        scrollRest = nil
+        files = list
+        indices = Dictionary(list.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        aspects.setPlaylist(files)
+        // The label showed a file of the old playlist (the interim one-file list replaced by the listing): the
+        // hover comes back for the new file under the cursor on the next move.
+        hover(nil)
+        loads.values.forEach { $0.cancel() }
+        loads = [:]
+        given = [:]
+        inViewSince = [:]
+        view.forgetAll()
+        shownCurrent = nil
+        relayout()
+        rest(on: current, animated: false)
+    }
+
+    /// The strip at rest on `file`: at the centre, expanded.
+    private func rest(on file: Int, animated: Bool) {
+        guard files.indices.contains(file) else { return }
+        shownCurrent = file
+        view.show(offset: view.layout.centre(of: file), current: file, expansion: 1, animated: animated)
+        view.refreshHover()
+    }
+
+    /// The strip moving: at the offset of the motion, every cell narrow; `animated` for the first move, so the
+    /// expanded cell narrows rather than jumps.
+    private func drawMotion(animated: Bool) {
+        guard let offset = scroll.offset else { return }
+        let file = view.layout.file(atBase: offset) ?? 0
+        view.show(offset: offset, current: file, expansion: 0, animated: animated)
+    }
+
+    /// A layout for the view's width, the playlist and the aspects. The file at the centre stays there: the moving
+    /// strip's, or the current one.
+    private func relayout(animated: Bool = false) {
+        let layout = StripScrollLayout(fileCount: files.count, width: Double(view.bounds.width),
+                                       cellHeight: Double(cellHeight), maxAspect: cellMax, aspects: aspects.aspects)
+        guard layout != view.layout else { return }
+        let centre = scroll.offset.flatMap(view.layout.file(atBase:))
+        view.setLayout(layout, animated: animated)
+        if let centre {
+            scroll.layoutChanged(keeping: centre, layout: layout)
+            drawMotion(animated: false)
+        } else if let current = shownCurrent ?? session.playlist?.index {
+            rest(on: current, animated: animated)
         }
         if let file = hoverState.file, file >= files.count { hover(nil) }
-        loadCells()
-        if isShown { sendVisible() }
+        loadVisible()
     }
 
     // MARK: Aspects
 
-    /// New aspects moved the cells: a cursor resting on the strip now points at another file.
+    /// New aspects narrowed cells, or gave the current one its shape: it grows to it.
     private func aspectsArrived() {
         DebugLog.log("strip aspects: \(aspects.knownCount) / \(files.count) known")
-        relayout()
+        relayout(animated: !isMoving)
         view.refreshHover()
     }
 
     // MARK: Cell pictures
 
-    /// The rested hover's magnification for the current layout and settings.
-    private func retarget() {
-        hoverState.retarget(layout: view.layout, magnify: Double(view.effectiveMagnify), reach: view.reach)
-    }
-
-    /// The file a cell is to show: its own, or for the rested hover's cell the file under the cursor (in a sampled
-    /// strip, one of the files of its range).
-    private func shownURL(_ index: Int) -> URL {
-        if let rested = hoverState.restedFile, index == hoverState.restedCell(in: view.layout), files.indices.contains(rested) {
-            return files[rested]
-        }
-        return cellFiles[index]
-    }
-
-    /// The cell's pixel size on its long side: its width, or its height for a portrait cell; magnified around the
-    /// rested hover, up to `thumb-size` (the thumbnail has no more).
-    private func maxPixel(forCell index: Int) -> Int {
+    /// The pixel size of a file's picture on its long side: the cell at rest covered by the photo, the cell height at
+    /// its aspect (3:2 while unknown; a portrait photo's height), at most `thumb-size` (the thumbnail has no more).
+    private func maxPixel(forFile file: Int) -> Int {
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let width = view.layout.cells.indices.contains(index) ? CGFloat(view.layout.cells[index].width) : cellHeight
-        let base = Int((max(width, cellHeight) * scale).rounded())
-        let grow = hoverState.pictureScale(ofCell: index)
-        guard grow > 1 else { return base }
-        return max(base, min(Int((Double(base) * grow).rounded()), thumbSize))
+        let known = file < aspects.aspects.count ? aspects.aspects[file] : nil
+        let aspect = max(1, known ?? StripScrollLayout.unknownCurrentAspect)
+        return min(thumbSize, Int((Double(cellHeight) * aspect * Double(scale)).rounded()))
     }
 
-    /// Whether a cell holds its file at a size good enough for its frame now: native cells change width a
-    /// little with every relayout for new aspects, which should not ask for every picture again, but an
-    /// upscale of more than 10 % or a picture over twice the size is worth a new one.
-    private func isSettled(_ index: Int) -> Bool {
-        guard let held = settled[index], held.url == shownURL(index) else { return false }
-        let needed = maxPixel(forCell: index)
+    /// Whether a file's cell holds its picture at a size good enough now: an upscale of more than 10 % or a picture
+    /// over twice the size is worth a new one.
+    private func isSettled(_ file: Int) -> Bool {
+        guard let held = given[file], held.url == files[file] else { return false }
+        let needed = maxPixel(forFile: file)
         return Double(needed) <= Double(held.maxPixel) * 1.1 && needed * 2 >= held.maxPixel
     }
 
-    /// Asks for every cell not holding its file's picture yet; only while shown (a hidden strip costs nothing)
-    /// and not while the edge is dragged (the release asks once, for the final pixel size).
-    private func loadCells() {
-        guard isShown, !resizing else { return }
-        for index in cellFiles.indices where loads[index] == nil && !isSettled(index) {
-            load(cell: index)
+    /// The visible files changed: those that came into view start their dwell; at rest their pictures are asked
+    /// for at once.
+    private func visibleChanged() {
+        let visible = view.visibleFiles, now = ContinuousClock.now
+        let set = Set(visible)
+        inViewSince = inViewSince.filter { set.contains($0.key) }
+        for file in visible where inViewSince[file] == nil { inViewSince[file] = now }
+        loadVisible()
+        if isMoving {
+            armDwell()
+        } else {
+            sendVisible()
         }
     }
 
-    private func load(cell index: Int) {
-        let url = shownURL(index), store = self.store, maxPixel = maxPixel(forCell: index)
+    /// While the strip moves: wakes once the newest cells have dwelt, asks for their pictures and tells the store.
+    private func armDwell() {
+        guard dwellTask == nil else { return }
+        dwellTask = Task { [weak self] in
+            try? await Task.sleep(for: ViewerSession.dwellDelay)
+            guard !Task.isCancelled, let self, !self.closed else { return }
+            self.dwellTask = nil
+            self.loadVisible()
+            self.sendVisible()
+            if self.isMoving, self.view.visibleFiles.contains(where: { self.loads[$0] == nil && !self.isSettled($0) }) {
+                self.armDwell()
+            }
+        }
+    }
+
+    /// Asks for every visible cell not holding its file's picture yet (while the strip moves, only those that have
+    /// dwelt in view); only while shown (a hidden strip costs nothing) and not while the edge is dragged (the release
+    /// asks once, for the final pixel size). Pictures far from the window are dropped.
+    private func loadVisible() {
+        guard isShown, !resizing, !closed else { return }
+        let moving = isMoving, now = ContinuousClock.now
+        for file in view.visibleFiles where files.indices.contains(file) && loads[file] == nil && !isSettled(file) {
+            if moving, let since = inViewSince[file], now - since < ViewerSession.dwellDelay { continue }
+            load(file)
+        }
+        forgetFar()
+    }
+
+    /// Keeps the pictures of a few hundred files around the window: the rest are asked for again when they return.
+    private func forgetFar() {
+        guard given.count > 400, let centre = view.visibleFiles.first else { return }
+        let reach = view.visibleFiles.count + 150
+        for file in Array(given.keys) where abs(file - centre) > reach {
+            given[file] = nil
+            loads[file]?.cancel()
+            loads[file] = nil
+            view.forget(file)
+        }
+    }
+
+    private func load(_ file: Int) {
+        let url = files[file], store = self.store, maxPixel = maxPixel(forFile: file)
         let applies = aspects.appliesOrientation
-        loads[index] = Task { [weak self] in
+        loads[file] = Task { [weak self] in
             let image = await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies)
             let status = image == nil ? await store.status(url) : .ready
             guard let self, !Task.isCancelled else { return }
-            self.loads[index] = nil
-            // The layout or the hover moved on meanwhile: this cell shows another file now.
-            guard self.cellFiles.indices.contains(index), self.shownURL(index) == url else {
-                self.loadCells()
-                return
-            }
+            self.loads[file] = nil
+            // Another playlist meanwhile: this file is someone else's cell now.
+            guard self.files.indices.contains(file), self.files[file] == url else { return }
             if let image {
-                self.view.setImage(image, forCell: index)
+                self.view.setImage(image, forFile: file)
                 self.aspects.cellPictureArrived(url)
             } else if status == .unavailable {
-                self.view.setUnavailable(forCell: index)
-            } else if url == self.cellFiles[index] {
-                self.view.setImage(nil, forCell: index)
-            }   // the hovered file of a sampled cell, not made yet: the cell keeps its own picture, not a grey box
-            self.settled[index] = (url, maxPixel)
-            // The rest changed the size this cell needs while it was being read.
-            if !self.isSettled(index) { self.loadCells() }
+                self.view.setUnavailable(forFile: file)
+            } else {
+                self.view.setImage(nil, forFile: file)
+            }
+            self.given[file] = (url, maxPixel)
+            // An aspect that arrived meanwhile changed the size this file needs.
+            if !self.isSettled(file) { self.loadVisible() }
         }
     }
 
@@ -544,81 +681,151 @@ extension Notification.Name {
     private func reloadAll() {
         loads.values.forEach { $0.cancel() }
         loads = [:]
-        settled = Array(repeating: nil, count: cellFiles.count)
-        loadCells()
+        given = [:]
+        loadVisible()
     }
 
     private func thumbnailChanged(_ url: URL) {
         aspects.thumbnailArrived(url)
-        for index in cellFiles.indices where shownURL(index) == url {
-            settled[index] = nil
-            loads[index]?.cancel()
-            loads[index] = nil
-        }
-        loadCells()
+        guard let file = indices[url] else { return }
+        given[file] = nil
+        loads[file]?.cancel()
+        loads[file] = nil
+        loadVisible()
     }
 
-    // MARK: Scrub
+    // MARK: Motion
 
-    /// A press reached `file` (the press itself, or a new file under the drag): the session scrubs to it, and a
-    /// rest of `dwellDelay` on it ends the scrub.
+    /// The file the strip brings to the centre becomes current, as its stretched thumbnail.
     private func scrub(to file: Int) {
-        guard !closed else { return }
-        // A press takes over a scroll's scrub (the session's scrub goes on under the press, which commits it).
+        if !sessionScrubbing { DebugLog.log("strip scrub from \((session.playlist?.index ?? 0) + 1)") }
+        sessionScrubbing = true
+        session.scrub(to: file)
+    }
+
+    /// The session's scrub, if this strip has one on, ends: the normal plan for the file it rests on.
+    private func endSessionScrub() {
+        guard sessionScrubbing else { return }
+        sessionScrubbing = false
+        DebugLog.log("strip scrub end on \((session.playlist?.index ?? 0) + 1)")
+        if !closed { session.endScrub() }
+    }
+
+    /// The motion is over (momentum end, cancel, rest, release): the strip settles on the nearest file and expands
+    /// it, and the scrub ends there.
+    private func finishMotion() {
+        scrollRest?.cancel()
+        scrollRest = nil
+        dragRest?.cancel()
+        dragRest = nil
+        dwellTask?.cancel()
+        dwellTask = nil
+        dragging = false
+        if let settled = scroll.settled(layout: view.layout), !closed {
+            if settled.file != session.playlist?.index { scrub(to: settled.file) }
+            shownCurrent = settled.file
+            view.show(offset: settled.offset, current: settled.file, expansion: 1, animated: true)
+        }
+        scroll.settle()
+        endSessionScrub()
+        loadVisible()
+        sendVisible()
+        view.refreshHover()
+        update()
+    }
+
+    /// The window lost key or changes full screen, or the playlist changed: a motion under way finishes now.
+    private func endMotion() {
+        view.cancelPress()   // a drag ends as at a release
+        guard scroll.offset != nil || sessionScrubbing else { return }
+        _ = scroll.end()
+        finishMotion()
+    }
+
+    /// A click on a cell: that file opens, and the strip moves to it; a momentum or a settling under way stops.
+    private func pressed(_ file: Int) {
+        guard !closed, files.indices.contains(file) else { return }
         scroll.takeOver()
         scrollRest?.cancel()
         scrollRest = nil
-        scrubbing = true
-        session.scrub(to: file)
-        scrubRest?.cancel()
-        scrubRest = Task { [weak self] in
-            try? await Task.sleep(for: ViewerSession.dwellDelay)
-            guard !Task.isCancelled, let self, !self.closed else { return }
-            self.scrubRest = nil
-            self.session.endScrub()
+        DebugLog.log("strip click on \(file + 1)")
+        shownCurrent = file   // the session's change below is this move
+        if session.playlist?.index != file {
+            sessionScrubbing = true
+            session.scrub(to: file)
         }
+        endSessionScrub()
+        view.show(offset: view.layout.centre(of: file), current: file, expansion: 1, animated: true)
+        scroll.settle()
+        loadVisible()
+        sendVisible()
         update()
     }
 
-    /// The press ended (or was cut off): the scrub ends unless a rest already ended it.
-    private func endScrub() {
-        guard scrubbing else { return }
-        scrubbing = false
-        scrubRest?.cancel()
-        scrubRest = nil
-        if !closed { session.endScrub() }
-        update()
+    /// A mouse drag across the cells moves the strip with the cursor; it takes over a trackpad motion under way.
+    private func dragged(by dx: CGFloat) {
+        guard !closed, let current = session.playlist?.index else { return }
+        let first = !dragging
+        if first {
+            dragging = true
+            scroll.takeOver()
+            scrollRest?.cancel()
+            scrollRest = nil
+            dropHover()
+        }
+        let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current)
+        if let file = outcome.file {
+            scrub(to: file)
+            armDragRest()
+        }
+        drawMotion(animated: first)
+        if first { update() }
+    }
+
+    /// A drag resting `dwellDelay` on one file ends the session's scrub there (the sharp photo); the next file it
+    /// reaches scrubs again.
+    private func armDragRest() {
+        dragRest?.cancel()
+        dragRest = Task { [weak self] in
+            try? await Task.sleep(for: ViewerSession.dwellDelay)
+            guard !Task.isCancelled, let self, self.dragging else { return }
+            self.dragRest = nil
+            self.endSessionScrub()
+        }
+    }
+
+    private func dragEnded() {
+        guard dragging else { return }
+        finishMotion()
     }
 
     // MARK: Trackpad scroll
 
-    /// A precise scroll over the strip that is the strip's (`StripView.onTrackpadScroll`): a new file the selection
-    /// reaches scrubs to it; the end of the momentum or a cancelled gesture commits at once, otherwise the rest timer
-    /// does. Not during a press: that is the press's scrub.
+    /// A precise scroll over the strip that is the strip's (`StripView.onTrackpadScroll`): the strip moves, a new
+    /// file at the centre scrubs to it; the end of the momentum or a cancelled gesture finishes at once, otherwise
+    /// the rest timer does. Not during a press: the press owns the strip.
     private func scrolled(_ event: NSEvent) {
-        guard !closed, !scrubbing, let current = session.playlist?.index else { return }
-        let wasScrubbing = scroll.isScrubbing
+        guard !closed, !view.isPressed, let current = session.playlist?.index else { return }
+        let wasMoving = scroll.isMoving
         let fingers = FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
         let outcome = scroll.event(fingerDX: fingers * event.scrollingDeltaX, dy: event.scrollingDeltaY,
                                    phase: ScrollPhase(rawValue: event.phase.rawValue),
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
-                                   layout: StripScrollLayout(fileCount: view.layout.fileCount, width: view.layout.width,
-                                                             cellHeight: view.layout.cellHeight, maxAspect: 1.5,
-                                                             aspects: []),
-                                   current: current, now: event.timestamp)
-        if let file = outcome.file {
-            if !wasScrubbing { DebugLog.log("strip scroll scrub from \(current + 1)") }
-            session.scrub(to: file)
-            update()
-        }
+                                   layout: view.layout, current: current, now: event.timestamp)
+        if let file = outcome.file { scrub(to: file) }
         if outcome.commit {
-            committedScrollScrub()
-        } else {
-            armScrollRest()
+            drawMotion(animated: false)
+            finishMotion()
+            return
         }
+        guard scroll.isMoving else { return }
+        if !wasMoving { dropHover() }
+        drawMotion(animated: !wasMoving)
+        armScrollRest()
+        if !wasMoving { update() }
     }
 
-    /// One timer for the rest: armed for the deadline it finds, and on waking it commits or, when events put the
+    /// One timer for the rest: armed for the deadline it finds, and on waking it finishes or, when events put the
     /// deadline off meanwhile, sleeps again until the new one. Event timestamps and `systemUptime` share a clock.
     private func armScrollRest() {
         guard scrollRest == nil, let deadline = scroll.restDeadline else { return }
@@ -627,60 +834,43 @@ extension Notification.Name {
             guard !Task.isCancelled, let self else { return }
             self.scrollRest = nil
             if self.scroll.rested(now: ProcessInfo.processInfo.systemUptime) {
-                self.committedScrollScrub()
-            } else {
+                self.finishMotion()
+            } else if self.scroll.isMoving {
                 self.armScrollRest()
             }
         }
     }
 
-    /// The window lost key or changes full screen: a scroll's scrub commits now.
-    private func endScrollScrub() {
-        if scroll.end() { committedScrollScrub() }
-    }
-
-    /// `StripScroll` ended its scrub (momentum end, cancel, rest, `end()`): the session's scrub commits.
-    private func committedScrollScrub() {
-        scrollRest?.cancel()
-        scrollRest = nil
-        DebugLog.log("strip scroll scrub end")
-        if !closed { session.endScrub() }
-        update()
-    }
-
     // MARK: Hover
 
     private func hover(_ file: Int?) {
-        // Moves seen while fading out (or before a show) must not leave a magnification to resurface on the next show.
-        if file != nil, !isShown {
+        // Moves seen while fading out (or before a show) must not leave a label to resurface on the next show.
+        if file != nil, !isShown || isMoving {
             view.endHover()
             return
         }
         guard let file, files.indices.contains(file) else {
-            if hoverState.file != nil {
-                dropHover()
+            if hoverState.drop() {
+                view.endHover()
                 update()
             }
             return
         }
+        let labelled = hoverState.restedFile != nil
         guard hoverState.set(file) else { return }
-        view.showLabel(file: file, name: ArchivePath.shortName(files[file]))
+        // Once a label is up it follows the cursor at once; the first waits for the rest.
+        if labelled { view.showLabel(file: file, name: ArchivePath.shortName(files[file])) }
         update()
     }
 
-    /// No hover: the base layout, and the cells back to their own files at their own size (keeping the larger
-    /// pictures until those arrive; none are asked for while hidden).
     private func dropHover() {
+        hoverState.drop()
         view.endHover()
-        guard hoverState.drop() else { return }
-        loadCells()
     }
 
-    /// The cursor stayed on one file: the magnified cells get pictures for their size, the hovered one its file.
+    /// The cursor stayed on one file: its label goes up.
     private func rested() {
-        retarget()
-        let before = loads.count
-        loadCells()
-        DebugLog.log("strip rest on \((hoverState.restedFile ?? 0) + 1): \(loads.count - before) cells asked for at the magnified size")
+        guard let file = hoverState.restedFile, files.indices.contains(file), isShown else { return }
+        view.showLabel(file: file, name: ArchivePath.shortName(files[file]))
     }
 }

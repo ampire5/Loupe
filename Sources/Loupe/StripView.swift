@@ -2,76 +2,74 @@ import AppKit
 import LoupeCore
 import QuartzCore
 
-/// The thumbnail strip's surface (spec §4.4): a layer per visible cell over a dark band, an accent border on
-/// the current photo's cell and, while the cursor is over the strip, Dock-style magnification (Build 1.1, in
-/// place of the preview of Build 1): the cells grow upwards by how close they are to the cursor, continuously, up
-/// to `magnify` (at most `strip-magnify-limit` of the viewer's height), the rest part (`StripMagnifier`), with "137 / 200 · name"
-/// over the cell under the cursor. Pure Core Animation: thumbnails arrive as
-/// `layer.contents` and the cells move by their layer frames, so nothing is drawn on the main thread. What to show
-/// comes from `StripController`; this view only reports the cursor (`onHover`), a press and drag on the cells
-/// (`onScrub` / `onScrubEnd`, Build 2; a click is a scrub of one file), a drag of its top edge (`onResize*`,
-/// Build 1.1) and trackpad scrolling (`onTrackpadScroll`, Task 20; the wheel goes on to the viewer).
+/// The thumbnail strip's surface (spec 2026-10-21, Photos' filmstrip): narrow cells on one line that moves under the
+/// strip's fixed centre, the current photo there in its own proportions, the edges fading out. No band, border or
+/// glass behind the cells: the strip lies on the viewer's background (a bar) or the photo (the overlay); only the
+/// hover label is glass. Pure Core Animation: the cells are layers of one content layer that moves as a whole (its
+/// position, without implicit animations, while the strip follows a gesture), a layer per visible file from a pool,
+/// thumbnails as `layer.contents`, so nothing is drawn on the main thread and the layer count follows the window,
+/// not the folder.
 ///
-/// Magnified cells reach above the band, outside the view's bounds: once the cursor is over the strip, it stays
-/// over it while it is inside a magnified cell or the grab band on its top (hit-testing and `trackOutside` cover
-/// that part), so neither collapses under a cursor moving up into it. The file under the cursor always comes from
-/// the base layout, never from the magnified frames, so the mapping from x to file stays put while the cells move.
+/// What to show comes from `StripController` (`show(offset:current:expansion:animated:)`, the pictures by file);
+/// this view reports the cursor (`onHover`), a click on a cell (`onPress`), a drag across the cells (`onDrag` /
+/// `onDragEnd`), a drag of its top edge (`onResize*`) and trackpad scrolling (`onTrackpadScroll`; the wheel goes on
+/// to the viewer).
 @MainActor final class StripView: NSView {
-    /// Space above and below the cells, inside the band.
-    static let padding: CGFloat = 4
-    /// Between the magnified cell and its label, and between the label and the window's edges.
+    /// Space above and below the cells, inside the band: Photos' ≈ 6 pt between the photo and the cells.
+    static let padding: CGFloat = 6
+    /// Between a cell and its label above it.
     private static let labelGap: CGFloat = 6
-    /// The implicit animation of the cells' frames as the magnification comes and goes (the cursor enters or leaves
-    /// the strip). In between the frames follow the cursor directly.
-    private static let magnifyDuration: CFTimeInterval = 0.1
+    /// A press that moves less than this is a click.
+    private static let clickSlop: CGFloat = 3
+    /// The settling, a click's move and a step to a neighbour.
+    private static let moveDuration: CFTimeInterval = 0.2
     private static let fadeDuration: CFTimeInterval = 0.15
-    private static let placeholderColor = CGColor(gray: 0x33 / 255, alpha: 1)
+    private static let placeholderBorder = CGColor(gray: 1, alpha: 0.38)
     private static let unavailableColor = CGColor(gray: 0x1c / 255, alpha: 1)
 
-    var layout = StripLayout(fileCount: 0, width: 0, cellHeight: 64) {
-        didSet { if layout != oldValue { layoutCells() } }
+    var layout = StripScrollLayout(fileCount: 0, width: 0, cellHeight: 68, maxAspect: 1.5, aspects: []) {
+        didSet {
+            guard layout != oldValue else { return }
+            withoutAnimation(placeFade)
+            placeCells(animated: animatesLayout)
+        }
+    }
+    private var animatesLayout = false
+
+    /// A new layout whose cells move to their new frames in `moveDuration` (aspects that arrived: the current cell
+    /// grows to its photo's proportions) rather than at once (a resize, another playlist).
+    func setLayout(_ layout: StripScrollLayout, animated: Bool) {
+        animatesLayout = animated
+        self.layout = layout
+        animatesLayout = false
     }
 
-    /// The current photo's file index: its cell gets the accent border.
-    var current = 0 {
-        didSet { if current != oldValue { withoutAnimation { placeBorder() } } }
-    }
-
-    /// `strip-magnify`, `strip-magnify-reach` and `strip-magnify-limit` (% of the viewer's height).
-    var magnify: CGFloat = 2 {
-        didSet { if magnify != oldValue { placeCells(animated: false) } }
-    }
-    var reach = 2.0 {
-        didSet { if reach != oldValue { placeCells(animated: false) } }
-    }
-    var magnifyLimit = 15.0 {
-        didSet { if magnifyLimit != oldValue { placeCells(animated: false) } }
-    }
-
-    /// `strip-corner-radius`: the cells' corner radius in points at the base height (a magnified cell scales it with
-    /// its height); the band behind a strip that does not fill the width is rounded `padding` more, so its corners
-    /// are concentric with the cells'.
-    var cornerRadius: CGFloat = 4 {
+    /// `strip-corner-radius`: the cells' corner radius in points.
+    var cornerRadius: CGFloat = 3 {
         didSet {
             guard cornerRadius != oldValue else { return }
-            for cell in cells { cell.shown = .null }   // the radius is written with the frame
-            bandShown = nil
-            placeCells(animated: false)
+            withoutAnimation {
+                for cell in cells.values + pool {
+                    cell.layer.cornerRadius = cornerRadius
+                    cell.image.cornerRadius = cornerRadius
+                }
+            }
         }
     }
 
-    /// Floating over the picture (translucent band) or a bar of its own (solid).
-    var isOverlay = true {
-        didSet { if isOverlay != oldValue { needsDisplay = true } }
-    }
+    /// Floating over the picture or a bar of its own.
+    var isOverlay = true
 
     /// The file under the cursor while it is over the cells, nil when it leaves them.
     var onHover: ((Int?) -> Void)?
-    /// A press on the cells, then every new file a drag reaches (spec §4.3): the file under the cursor's x, the x
-    /// held within the cells while the drag goes past either end or off the strip.
-    var onScrub: ((Int) -> Void)?
-    /// The press that scrubbed ended: mouse-up, or a press cut off (`cancelScrub`).
-    var onScrubEnd: (() -> Void)?
+    /// A click (press and release with less than `clickSlop` of travel) on a file's cell.
+    var onPress: ((Int) -> Void)?
+    /// A press on the cells moved more than a click: each drag event's horizontal travel in points, then the release
+    /// or a cut-off press (`cancelPress`).
+    var onDrag: ((CGFloat) -> Void)?
+    var onDragEnd: (() -> Void)?
+    /// The visible files changed (`visibleFiles`): pictures to ask for.
+    var onVisibleChange: (() -> Void)?
     /// The backing scale changed: cell pictures must be asked for at the new pixel size.
     var onBackingChange: (() -> Void)?
     /// A drag of the top edge asks for this band height (points); the controller clamps it and answers by
@@ -85,7 +83,7 @@ import QuartzCore
     /// Scrolling over the strip that is the viewer's (`StripScroll.route`): the wheel steps through photos everywhere
     /// (spec §4.3), and a scroll with a folder-gesture button held steps folders.
     var onScroll: ((NSEvent) -> Void)?
-    /// Trackpad scrolling with no button held, the strip's own: the controller scrubs on a horizontal swipe
+    /// Trackpad scrolling with no button held, the strip's own: the controller moves the strip on a horizontal swipe
     /// (`StripScroll`) and ignores a vertical one, so the photo under the strip does not pan.
     var onTrackpadScroll: ((NSEvent) -> Void)?
     /// Whether the viewer's scroll guard says the rest of this precise scroll's gesture does nothing
@@ -96,52 +94,52 @@ import QuartzCore
         let layer = CALayer()
         let image = CALayer()
         let mark = CATextLayer()
-        var hasImage = false
-        /// The frame last given to `layer`: the frames follow the cursor on every move, and most of them do not change.
+        /// The frame last given to `layer`, in the content layer.
         var shown = CGRect.null
     }
 
-    private var cells: [Cell] = []
-    private let border = CALayer()
-    /// The dark band: the view's full width when the cells fill it, else only behind the cells (`StripBand`).
-    private let band = CALayer()
-    /// The frame and radius last given to `band`: written only when they change.
-    private var bandShown: (frame: CGRect, radius: CGFloat)?
-    /// "N / M · name" over the magnified cell, and its size, measured once per text rather than on every move.
-    private let label = CATextLayer()
-    private var labelSize = CGSize.zero
-    /// The cursor's x while it is over the strip (base layout coordinates), and the base cell under it: the cell
-    /// that is magnified most, with the label.
-    private var hoverX: CGFloat?
-    private var magnifiedCell: Int?
-    /// The cells' frames as shown (magnified around `magnifiedCell`, or the base layout).
-    private var frames: [(x: Double, width: Double, height: Double)] = []
-    /// While a press on the cells scrubs: the file last reported by `onScrub`.
-    private var scrubFile: Int?
-    /// While the top edge is dragged: the press's y in the window and the base height for each distance from it
-    /// (`StripResizeDrag`: a magnified top stays under the cursor while it can, else the base follows 1:1). The
+    /// The pictures the controller gave, by file, until it forgets them.
+    private var pictures: [Int: CGImage] = [:]
+    private var unavailable: Set<Int> = []
+    /// The cell of each file on screen, and the cells waiting for one.
+    private var cells: [Int: Cell] = [:]
+    private var pool: [Cell] = []
+    /// The edges' fade (the mask) over everything the cells are in.
+    private let fadeLayer = CALayer()
+    private let fadeMask = CAGradientLayer()
+    /// The cells, moved as one: its x is the view x of base x 0.
+    private let contentLayer = CALayer()
+    /// What `show` was last asked to show.
+    private var offset = 0.0, current = 0, expansion = 1.0
+    /// The cells shown, left to right, in view x.
+    private var shownCells: [StripCell] = []
+    /// The files on screen, from the centre outwards.
+    private(set) var visibleFiles: [Int] = []
+    private let label = StripLabelView()
+    /// The file whose label is up, and the point last hovered (view coordinates), for `refreshHover`.
+    private var labelFile: Int?
+    private var hoverPoint: NSPoint?
+    /// A press on the cells: where it began in the window, the x of the last drag event, the file under it and
+    /// whether it moved far enough to be a drag.
+    private var press: (startX: CGFloat, lastX: CGFloat, file: Int?, dragging: Bool)?
+    /// While the top edge is dragged: the press's y in the window and the height for each distance from it. The
     /// view sits at the window's bottom and grows upwards, so its own coordinates move with it; the window's do not.
     private var resizeStart: (y: CGFloat, drag: StripResizeDrag)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
-        // Magnified cells and their label rise above the band, outside the view's bounds.
+        layerContentsRedrawPolicy = .never
+        // The hover label stands above the band, outside the view's bounds.
         clipsToBounds = false
-        border.borderWidth = 2
-        border.cornerCurve = .continuous
-        border.borderColor = NSColor.controlAccentColor.cgColor
-        border.zPosition = 1
-        label.fontSize = 12
-        label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        label.foregroundColor = CGColor(gray: 0.92, alpha: 1)
-        label.backgroundColor = CGColor(gray: 0.1, alpha: 0.75)
-        label.cornerRadius = 4
-        label.alignmentMode = .center
-        label.truncationMode = .middle
+        fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        fadeMask.colors = [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 1),
+                           CGColor(gray: 0, alpha: 0)]
+        fadeLayer.mask = fadeMask
+        fadeLayer.addSublayer(contentLayer)
         label.isHidden = true
-        label.zPosition = 2
+        addSubview(label)
     }
 
     @available(*, unavailable)
@@ -149,106 +147,138 @@ import QuartzCore
 
     override func makeBackingLayer() -> CALayer {
         let layer = CALayer()
-        layer.addSublayer(band)   // first: under the cells
-        layer.addSublayer(border)
-        layer.addSublayer(label)
+        layer.addSublayer(fadeLayer)
         return layer
-    }
-
-    override var wantsUpdateLayer: Bool { true }
-
-    override func updateLayer() {
-        withoutAnimation { band.backgroundColor = CGColor(gray: 0.1, alpha: isOverlay ? 0.6 : 1) }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = newSize.width != frame.width
         super.setFrameSize(newSize)
-        withoutAnimation(placeBand)   // the height too
-        if widthChanged { onResize?() }
+        withoutAnimation(placeFade)
+        if widthChanged { onResize?() } else { placeCells(animated: false) }
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 1
-        for cell in cells { cell.mark.contentsScale = scale }
-        label.contentsScale = scale
+        for cell in cells.values + pool { cell.mark.contentsScale = scale }
         onBackingChange?()
     }
 
-    // MARK: Cells
-
-    /// The picture of a cell; nil puts the grey "not made yet" placeholder back. A cell that had no picture
-    /// fades it in; one replacing another picture (a new layout, a new size) swaps at once, so a resize does
-    /// not flicker.
-    func setImage(_ image: CGImage?, forCell index: Int) {
-        guard cells.indices.contains(index) else { return }
-        let cell = cells[index]
-        withoutAnimation {
-            cell.mark.isHidden = true
-            cell.layer.backgroundColor = Self.placeholderColor
-            cell.image.contents = image
-        }
-        if image != nil, !cell.hasImage {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 0
-            fade.toValue = 1
-            fade.duration = Self.fadeDuration
-            cell.image.add(fade, forKey: "fade")
-        }
-        cell.hasImage = image != nil
+    /// The fade over the band: the whole view, opaque but for `fadeLength` at each end.
+    private func placeFade() {
+        fadeLayer.frame = bounds
+        fadeMask.frame = fadeLayer.bounds
+        let share = bounds.width > 0 ? min(0.5, layout.fadeLength / Double(bounds.width)) : 0
+        fadeMask.locations = [0, NSNumber(value: share), NSNumber(value: 1 - share), 1]
     }
 
-    /// The darker "no thumbnail" placeholder with a ×: the file could not be read or decoded.
-    func setUnavailable(forCell index: Int) {
-        guard cells.indices.contains(index) else { return }
-        let cell = cells[index]
-        withoutAnimation {
-            cell.image.contents = nil
-            cell.layer.backgroundColor = Self.unavailableColor
-            cell.mark.isHidden = false
-        }
-        cell.hasImage = false
+    // MARK: Showing
+
+    /// Base x `offset` under the strip's centre, `current` expanded by `expansion` (0 narrow … 1 its photo's
+    /// proportions). `animated`: the cells move there in `moveDuration`, ease-out (the settling, a click, a step);
+    /// otherwise at once (a gesture, a jump).
+    func show(offset: Double, current: Int, expansion: Double, animated: Bool) {
+        let previous = self.offset
+        guard offset != previous || current != self.current || expansion != self.expansion else { return }
+        self.offset = offset
+        self.current = current
+        self.expansion = expansion
+        placeCells(animated: animated, from: animated ? previous : nil)
     }
 
-    /// Adds or removes cell layers to match the layout; the pictures stay with the layers until the controller
-    /// replaces them.
-    private func layoutCells() {
-        withoutAnimation {
-            while cells.count > layout.cells.count { cells.removeLast().layer.removeFromSuperlayer() }
-            while cells.count < layout.cells.count {
-                let cell = makeCell()
-                cells.append(cell)
-                layer?.addSublayer(cell.layer)
+    /// The cells for the state `show` was given, each layer at its frame in the content layer, which carries the
+    /// offset. An animated move also keeps the cells of where it starts until it ends, so none leaves the screen
+    /// early.
+    private func placeCells(animated: Bool, from previous: Double? = nil) {
+        let target = layout.cells(offset: offset, current: current, expansion: expansion)
+        let origin = Double(bounds.width) / 2 - offset
+        // Each cell's x in the content layer: its view x less the origin it was laid out with.
+        var frames: [Int: (x: Double, width: Double)] = [:]
+        for c in target { frames[c.file] = (c.x - origin, c.width) }
+        if let previous, previous != offset {
+            let previousOrigin = Double(bounds.width) / 2 - previous
+            for c in layout.cells(offset: previous, current: current, expansion: expansion) where frames[c.file] == nil {
+                frames[c.file] = (c.x - previousOrigin, c.width)
             }
-            placeCells(animated: false)
         }
+        let place = {
+            // Cells that leave go back to the pool and new ones start where they belong, so only the move animates.
+            self.withoutAnimation {
+                for file in Array(self.cells.keys) where frames[file] == nil { self.recycle(file) }
+                for (file, frame) in frames where self.cells[file] == nil {
+                    self.cells[file] = self.takeCell(for: file)
+                    self.place(file, frame)
+                }
+            }
+            self.contentLayer.frame = CGRect(x: origin, y: Double(Self.padding), width: 0, height: 0)
+            for (file, frame) in frames { self.place(file, frame) }
+        }
+        if animated {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Self.moveDuration)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            CATransaction.setCompletionBlock { [weak self] in
+                MainActor.assumeIsolated { self?.dropCellsOffScreen() }
+            }
+            place()
+            CATransaction.commit()
+        } else {
+            withoutAnimation(place)
+        }
+        shownCells = target
+        let files = target.map(\.file).sorted { abs($0 - current) < abs($1 - current) }
+        if files != visibleFiles {
+            visibleFiles = files
+            onVisibleChange?()
+        }
+        placeLabel()
     }
 
-    /// The band for the frames as shown, in the caller's animation context: full width and square when the cells fill
-    /// the view, else just behind them (the magnified row too) with `padding` beside them, rounded.
-    private func placeBand() {
-        let shape = StripBand(leftEdge: frames.first.map(\.x), rightEdge: frames.last.map { $0.x + $0.width },
-                              viewWidth: Double(bounds.width), margin: Double(Self.padding))
-        let frame = CGRect(x: shape.x, y: 0, width: shape.width, height: bounds.height)
-        let radius = shape.isFull ? 0 : min(cornerRadius + Self.padding, min(frame.width, frame.height) / 2)
-        guard bandShown?.frame != frame || bandShown?.radius != radius else { return }
-        bandShown = (frame, radius)
-        band.frame = frame
-        band.cornerRadius = radius
+    /// After an animated move: the cells kept for its start that are not shown now go back to the pool.
+    private func dropCellsOffScreen() {
+        let shown = Set(shownCells.map(\.file))
+        withoutAnimation { for file in Array(cells.keys) where !shown.contains(file) { recycle(file) } }
+    }
+
+    private func place(_ file: Int, _ frame: (x: Double, width: Double)) {
+        guard let cell = cells[file] else { return }
+        let height = layout.cellHeight
+        let rect = CGRect(x: frame.x, y: 0, width: frame.width, height: height)
+        guard rect != cell.shown else { return }
+        cell.shown = rect
+        cell.layer.frame = rect
+        cell.image.frame = CGRect(origin: .zero, size: rect.size)
+        cell.mark.frame = CGRect(x: 0, y: (height - 20) / 2, width: frame.width, height: 20)
+    }
+
+    private func takeCell(for file: Int) -> Cell {
+        let cell = pool.popLast() ?? makeCell()
+        cell.shown = .null
+        if cell.layer.superlayer == nil { contentLayer.addSublayer(cell.layer) }
+        cell.layer.isHidden = false
+        fill(cell, file: file, fade: false)
+        return cell
+    }
+
+    private func recycle(_ file: Int) {
+        guard let cell = cells.removeValue(forKey: file) else { return }
+        cell.layer.isHidden = true
+        cell.image.contents = nil
+        cell.image.removeAllAnimations()
+        pool.append(cell)
     }
 
     private func makeCell() -> Cell {
         let cell = Cell()
-        cell.layer.backgroundColor = Self.placeholderColor
-        // The cell's layer draws only the placeholder (background and rounded corners, no clipping of sublayers); the
-        // picture clips itself, so no cell needs an offscreen mask pass while the frames follow the cursor.
+        // The placeholder is a frame of the cell's shape; the picture covers it (centre crop to the cell) once it
+        // comes, clipped to the same radius.
         cell.layer.cornerCurve = .continuous
+        cell.layer.cornerRadius = cornerRadius
+        cell.layer.borderColor = Self.placeholderBorder
         cell.image.masksToBounds = true
         cell.image.cornerCurve = .continuous
-        // Crop mode: the centre 3:2. Native: the cell has the photo's proportions, so the whole picture; a
-        // sampled strip scales its cells by one factor to fill the width, and the few per cent that leaves
-        // over are cropped rather than shown as slivers between cells.
+        cell.image.cornerRadius = cornerRadius
         cell.image.contentsGravity = .resizeAspectFill
         cell.layer.addSublayer(cell.image)
         cell.mark.string = "×"
@@ -261,102 +291,86 @@ import QuartzCore
         return cell
     }
 
-    /// `magnify` as applied: the magnified cell at most `magnifyLimit` % of the viewer's height (the window's, less
-    /// the strip in `bar` mode, where the viewer ends at the strip's top).
-    var effectiveMagnify: CGFloat {
-        let viewer = (superview?.bounds.height ?? 0) - (isOverlay ? 0 : bounds.height)
-        return CGFloat(StripMagnifier.effectiveMagnify(Double(magnify), cellHeight: layout.cellHeight,
-                                                       viewerHeight: Double(viewer), limitPercent: magnifyLimit))
+    /// The cell's look for what the file has: its picture (faded in when `fade`), the "no thumbnail" ×, or the frame.
+    private func fill(_ cell: Cell, file: Int, fade: Bool) {
+        let image = pictures[file]
+        let isUnavailable = image == nil && unavailable.contains(file)
+        cell.image.contents = image
+        cell.mark.isHidden = !isUnavailable
+        cell.layer.backgroundColor = isUnavailable ? Self.unavailableColor : nil
+        cell.layer.borderWidth = image == nil && !isUnavailable ? 1 : 0
+        guard fade, image != nil else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = 0
+        animation.toValue = 1
+        animation.duration = Self.fadeDuration
+        cell.image.add(animation, forKey: "fade")
     }
 
-    /// The cells at their frames for the cursor (`StripMagnifier`): animated when the magnification comes or goes,
-    /// at once while it follows the cursor and for a new layout or setting.
-    private func placeCells(animated: Bool) {
-        let height = layout.cellHeight
-        magnifiedCell = hoverX.flatMap(baseCell(atX:))
-        let base = layout.cells.map { (x: $0.x, width: $0.width) }, cursor = hoverX.map(Double.init)
-        let magnified = StripMagnifier.frames(baseCells: base, height: height, cursorX: cursor,
-                                              magnify: Double(effectiveMagnify), reach: reach)
-        frames = StripMagnifier.keepingInside(magnified, baseCells: base, cursorX: cursor, width: Double(bounds.width))
-        let place = {
-            for (cell, f) in zip(self.cells, self.frames) {
-                // Grown upwards from the band's bottom padding. A hairline between cells keeps neighbours apart
-                // without breaking the edge-to-edge axis.
-                let frame = CGRect(x: f.x, y: Self.padding, width: f.width, height: f.height)
-                guard frame != cell.shown else { continue }
-                let resized = frame.size != cell.shown.size
-                cell.shown = frame
-                cell.layer.frame = frame
-                guard resized else { continue }
-                cell.image.frame = CGRect(origin: .zero, size: frame.size).insetBy(dx: 0.5, dy: 0)
-                // The radius follows the height, and only a size change moves it.
-                let radius = CGFloat(StripCorners.radius(base: Double(self.cornerRadius), height: Double(f.height),
-                                                         baseHeight: Double(self.layout.cellHeight), width: f.width))
-                cell.layer.cornerRadius = radius
-                cell.image.cornerRadius = radius
-                cell.mark.frame = CGRect(x: 0, y: (f.height - 20) / 2, width: f.width, height: 20)
-            }
-            self.placeBand()
-            self.placeBorder()
-            self.placeLabel()
-        }
-        if animated { magnifying(place) } else { withoutAnimation(place) }
+    // MARK: Pictures
+
+    /// The file's picture; nil puts the frame back. A picture over the frame fades in; one replacing another (a
+    /// new size) swaps at once, so a resize does not flicker.
+    func setImage(_ image: CGImage?, forFile file: Int) {
+        let had = pictures[file] != nil
+        pictures[file] = image
+        unavailable.remove(file)
+        guard let cell = cells[file] else { return }
+        withoutAnimation { fill(cell, file: file, fade: !had) }
     }
 
-    private func placeBorder() {
-        guard let index = layout.cell(containingFile: current) else {
-            border.isHidden = true
-            return
-        }
-        border.isHidden = false
-        guard cells.indices.contains(index) else {
-            border.frame = .zero
-            return
-        }
-        border.frame = cells[index].layer.frame
-        let radius = cells[index].layer.cornerRadius
-        if border.cornerRadius != radius { border.cornerRadius = radius }
+    /// The darker "no thumbnail" cell with a ×: the file could not be read or decoded.
+    func setUnavailable(forFile file: Int) {
+        pictures[file] = nil
+        unavailable.insert(file)
+        guard let cell = cells[file] else { return }
+        withoutAnimation { fill(cell, file: file, fade: false) }
     }
 
-    /// The base cell under `x`, nil beside the cells.
-    private func baseCell(atX x: CGFloat) -> Int? {
-        layout.fileIndex(atX: Double(x)).flatMap(layout.cell(containingFile:))
+    /// The controller no longer keeps the file's picture (far from the window): a cell for it shows what it has
+    /// until the controller asks again.
+    func forget(_ file: Int) {
+        pictures[file] = nil
+        unavailable.remove(file)
+    }
+
+    /// Another playlist: every picture goes, the cells show frames until the new ones come.
+    func forgetAll() {
+        pictures = [:]
+        unavailable = []
+        withoutAnimation { for (file, cell) in cells { fill(cell, file: file, fade: false) } }
     }
 
     // MARK: Hover label
 
-    /// "N / M · name" of the file under the cursor, over the magnified cell.
+    /// "N / M · name" of the file under the cursor, over its cell.
     func showLabel(file: Int, name: String) {
-        withoutAnimation {
-            label.string = "\(file + 1) / \(layout.fileCount) · \(name)"
-            labelSize = label.preferredFrameSize()
-            label.isHidden = false
-        }
-        withoutAnimation(placeLabel)
+        label.text = "\(file + 1) / \(layout.fileCount) · \(name)"
+        labelFile = file
+        placeLabel()
     }
 
-    /// The cursor left the strip (or the controller dropped the hover: hidden, window not key, another
-    /// playlist): back to the base layout, no label.
+    /// The cursor left the strip (or the controller dropped the hover: hidden, window not key, another playlist).
     func endHover() {
-        withoutAnimation { label.isHidden = true }
-        guard hoverX != nil else { return }
-        hoverX = nil
-        placeCells(animated: true)
-        releaseResizeCursor()
+        label.isHidden = true
+        labelFile = nil
+        hoverPoint = nil
     }
 
-    /// Centred over the magnified cell, inside the window: the view spans the window's width, and a tall strip can
-    /// push the label against the window's top.
+    /// Centred over the file's cell, inside the window: the view spans the window's width, and a tall strip can push
+    /// the label against the window's top. Hidden while the cell is off screen or a drag moves the strip.
     private func placeLabel() {
-        guard !label.isHidden, let index = magnifiedCell, frames.indices.contains(index) else { return }
-        let f = frames[index], gap = Self.labelGap
-        let size = labelSize
-        let width = min(size.width + 16, max(40, bounds.width - 2 * gap))
-        let height = size.height + 4
-        let left = min(max(f.x + f.width / 2 - width / 2, gap), max(gap, bounds.width - gap - width))
-        var bottom = Self.padding + f.height + gap
-        if let superview { bottom = min(bottom, convert(superview.bounds, from: superview).maxY - gap - height) }
-        label.frame = CGRect(x: left, y: bottom, width: width, height: height)
+        guard let file = labelFile, press?.dragging != true, let c = shownCells.first(where: { $0.file == file }) else {
+            label.isHidden = true
+            return
+        }
+        label.isHidden = false
+        let gap = Self.labelGap, size = label.fittingSize
+        let width = min(size.width, max(40, bounds.width - 2 * gap))
+        let left = min(max(CGFloat(c.x + c.width / 2) - width / 2, gap), max(gap, bounds.width - gap - width))
+        var bottom = Self.padding + CGFloat(layout.cellHeight) + gap
+        if let superview { bottom = min(bottom, convert(superview.bounds, from: superview).maxY - gap - size.height) }
+        label.frame = CGRect(x: left, y: bottom, width: width, height: size.height)
     }
 
     // MARK: Mouse
@@ -369,21 +383,23 @@ import QuartzCore
                                        owner: self))
     }
 
-    /// The grab band, the magnified cells and the hover zone (`StripHitZone`) for the frames as shown.
     private var zone: StripHitZone {
-        StripHitZone(frames: frames, width: Double(bounds.width), height: Double(bounds.height),
-                     padding: Double(Self.padding), hovering: hoverX != nil)
+        StripHitZone(width: Double(bounds.width), height: Double(bounds.height), padding: Double(Self.padding))
     }
 
     private func inResizeBand(_ p: NSPoint) -> Bool {
         acceptsMouse && zone.inResizeBand(x: Double(p.x), y: Double(p.y))
     }
 
-    private func overMagnifiedCell(_ p: NSPoint) -> Bool { zone.overMagnifiedCell(x: Double(p.x), y: Double(p.y)) }
-
     /// Where the cursor counts as over the strip; fading out, nowhere.
     private func inHoverZone(_ p: NSPoint) -> Bool {
         acceptsMouse && zone.inHoverZone(x: Double(p.x), y: Double(p.y))
+    }
+
+    /// The file whose cell, as shown, is under view x (half a gap on each side counts), nil beside the cells.
+    private func file(atX x: CGFloat) -> Int? {
+        let half = layout.gap / 2, x = Double(x)
+        return shownCells.first { x >= $0.x - half && x < $0.x + $0.width + half }?.file
     }
 
     /// Ends a drag of the top edge whose mouse-up never came (Mission Control, a sheet, the window closing, a
@@ -395,17 +411,18 @@ import QuartzCore
         onResizeEnd?(false)
     }
 
-    /// Ends a scrub whose mouse-up never came (the same cases as `cancelResize`): the session gets its normal plan.
-    func cancelScrub() {
-        guard scrubFile != nil else { return }
-        scrubFile = nil
-        onScrubEnd?()
+    /// Ends a press whose mouse-up never came (the same cases as `cancelResize`): a drag ends as at a release, a
+    /// click is dropped.
+    func cancelPress() {
+        guard let press else { return }
+        self.press = nil
+        if press.dragging { onDragEnd?() }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         cancelResize()
-        cancelScrub()
+        cancelPress()
     }
 
     /// The arrow over the strip, whatever the picture under it would show; up-down arrows on the top edge.
@@ -422,87 +439,49 @@ import QuartzCore
         setCursor(for: event)
         hover(event)
     }
-
-    /// Moves arrive only while no button is down, so a resize or scrub still on lost its mouse-up without the
-    /// window resigning key (which `cancelResize` / `cancelScrub` cover): it ends as cut off, and the strip stops
-    /// being held with a frozen hover.
-    private func endLostPress() {
-        guard resizeStart != nil || scrubFile != nil, NSEvent.pressedMouseButtons & 1 == 0 else { return }
-        cancelResize()
-        cancelScrub()
-    }
-
-    /// Leaving the band upwards into a magnified cell is not leaving the strip.
     override func mouseExited(with event: NSEvent) { hover(event) }
 
-    /// A mouse move anywhere in the window (the controller's tracking area): the view's own tracking area covers
-    /// only its bounds, so the magnified cells above the band and the grab band on their tops are followed from
-    /// here (the cursor too: the view's `cursorUpdate` comes only inside its bounds).
-    func trackOutside(_ event: NSEvent) {
-        endLostPress()
-        let p = convert(event.locationInWindow, from: nil)
-        guard hoverX != nil, !bounds.contains(p) else { return }
-        hover(event)
-        if hoverX != nil { setCursor(for: event) } else { releaseResizeCursor() }
+    /// Moves arrive only while no button is down, so a resize or press still on lost its mouse-up without the window
+    /// resigning key (which `cancelResize` / `cancelPress` cover): it ends as cut off.
+    private func endLostPress() {
+        guard resizeStart != nil || press != nil, NSEvent.pressedMouseButtons & 1 == 0 else { return }
+        cancelResize()
+        cancelPress()
     }
 
-    /// The hover ended with the cursor in the grab band over a magnified cell, which is gone with it: the ↕ goes
-    /// too. The viewer may already have handled this move (seeing the strip there), so nothing else would replace
-    /// the ↕ before the next one; the viewer sets its own cursor on that move.
-    private func releaseResizeCursor() {
-        if resizeStart == nil, NSCursor.current == NSCursor.resizeUpDown { NSCursor.arrow.set() }
-    }
+    /// A mouse move anywhere in the window (the controller's tracking area): a press that lost its mouse-up outside
+    /// the strip ends there.
+    func trackOutside(_ event: NSEvent) { endLostPress() }
 
-    /// Not while scrubbing: the drag moves the hover (`scrubbed`), and the cursor leaving the strip then is no exit.
-    /// Not while the top edge is dragged either: the magnification stays as it was at the press.
+    /// Not during a press or a drag of the top edge: the hover stays as it was at the press.
     private func hover(_ event: NSEvent) {
-        guard scrubFile == nil, resizeStart == nil else { return }
+        guard press == nil, resizeStart == nil else { return }
         let p = convert(event.locationInWindow, from: nil)
-        let file = inHoverZone(p) ? layout.fileIndex(atX: p.x) : nil
-        setHoverX(file == nil ? nil : p.x)
-        onHover?(file)
+        hoverPoint = inHoverZone(p) ? p : nil
+        onHover?(hoverPoint.flatMap { file(atX: $0.x) })
     }
 
-    /// The frames follow the cursor on every move, set directly (an animation per move would lag behind it);
-    /// only entering and leaving the strip animate.
-    private func setHoverX(_ x: CGFloat?) {
-        let entersOrLeaves = (x == nil) != (hoverX == nil)
-        guard x != hoverX else { return }
-        hoverX = x
-        placeCells(animated: entersOrLeaves)
-    }
-
-    /// The layout moved under a cursor that did not (new aspects): the file under it again.
+    /// The cells moved under a cursor that did not (new aspects, the strip settled): the file under it again.
     func refreshHover() {
-        guard let x = hoverX else { return }
-        let file = layout.fileIndex(atX: x)
-        if file == nil { setHoverX(nil) }
-        onHover?(file)
+        guard let p = hoverPoint, press == nil else { return }
+        onHover?(file(atX: p.x))
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// Taken here so the press never reaches the picture underneath (no pan starts on the strip). The grab band
-    /// on the shown top edge starts a resize; a press on a cell (the band or a magnified one) starts a scrub;
-    /// anywhere else nothing.
+    /// Taken here so the press never reaches the picture underneath (no pan starts on the strip). The grab band on
+    /// the top edge starts a resize; a press on the cells a click or a drag; anywhere else nothing.
     override func mouseDown(with event: NSEvent) {
         // A press while a drag is still on means its mouse-up was lost.
         cancelResize()
-        cancelScrub()
+        cancelPress()
         let p = convert(event.locationInWindow, from: nil)
         if inResizeBand(p) {
-            let base = Double(layout.cellHeight)
-            let drag = StripResizeDrag(startHeight: base, shownHeight: zone.shownCellHeight(atX: Double(p.x)) ?? base,
-                                       magnify: Double(magnify), windowHeight: Double(superview?.bounds.height ?? 0),
-                                       viewerShrinks: !isOverlay, padding: Double(Self.padding),
-                                       limitPercent: magnifyLimit)
-            resizeStart = (event.locationInWindow.y, drag)
+            resizeStart = (event.locationInWindow.y, StripResizeDrag(startHeight: Double(layout.cellHeight)))
             return
         }
-        // The base layout's file under x, as the hover said: not the magnified frame's.
-        guard bounds.contains(p) || overMagnifiedCell(p), let file = layout.fileIndex(atX: p.x) else { return }
-        scrubFile = file
-        onScrub?(file)
+        guard inHoverZone(p) else { return }
+        press = (event.locationInWindow.x, event.locationInWindow.x, file(atX: p.x), false)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -511,21 +490,17 @@ import QuartzCore
             onResizeDrag?(CGFloat(height) + 2 * Self.padding)
             return
         }
-        if scrubFile != nil { scrubbed(event) }
-    }
-
-    /// A drag of a scrub: the hover follows the cursor's x (mouse moves stop while the button is down), held within
-    /// the cells like a scroll bar's thumb, and each new file under it is reported.
-    private func scrubbed(_ event: NSEvent) {
-        guard !layout.cells.isEmpty else { return }
-        let p = convert(event.locationInWindow, from: nil)
-        let x = min(max(p.x, CGFloat(layout.originX)), CGFloat(layout.originX + layout.span).nextDown)
-        guard let file = layout.fileIndex(atX: Double(x)) else { return }
-        setHoverX(x)
-        onHover?(file)
-        guard file != scrubFile else { return }
-        scrubFile = file
-        onScrub?(file)
+        guard var press else { return }
+        let x = event.locationInWindow.x
+        if !press.dragging {
+            guard abs(x - press.startX) >= Self.clickSlop else { return }
+            press.dragging = true
+            label.isHidden = true
+        }
+        let dx = x - press.lastX
+        press.lastX = x
+        self.press = press
+        if dx != 0 { onDrag?(dx) }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -536,14 +511,18 @@ import QuartzCore
             setCursor(for: event)
             return
         }
-        guard scrubFile != nil else { return }
-        scrubFile = nil
-        onScrubEnd?()
+        guard let press else { return }
+        self.press = nil
+        if press.dragging {
+            onDragEnd?()
+        } else if let file = press.file {
+            onPress?(file)
+        }
         hover(event)   // the drag may have left the strip
     }
 
     // The middle, back and forward buttons are the viewer's bindings over the strip too (`MouseButtons`, as in
-    // `ViewerView`); the left button stays the strip's own (a scrub, a resize).
+    // `ViewerView`); the left button stays the strip's own (a click, a drag, a resize).
     override func otherMouseDown(with event: NSEvent) {
         if !MouseButtons.shared.otherMouseDown(event) { super.otherMouseDown(with: event) }
     }
@@ -565,20 +544,15 @@ import QuartzCore
         }
     }
 
-    /// A press of the strip's own is on (a scrub or a resize of its top edge), until its mouse-up.
-    var isPressed: Bool { resizeStart != nil || scrubFile != nil }
+    /// A press of the strip's own is on (a click, a drag or a resize of its top edge), until its mouse-up.
+    var isPressed: Bool { resizeStart != nil || press != nil }
 
-    /// Fading out, the strip already lets clicks through to the picture; before its first show too: it starts
-    /// hidden, and `hitTest` claims the grab band without `super`, which is what skips a hidden view.
+    /// Fading out, the strip already lets clicks through to the picture; before its first show too.
     var acceptsMouse = false
 
-    /// The magnified cells above the band and the grab band on their tops are the strip's too (clicks, scrolling,
-    /// and the viewer's cursor and autohide, which hit-test to tell the picture from the strip).
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard acceptsMouse, !isHidden else { return nil }
-        if let hit = super.hitTest(point) { return hit }
-        let p = convert(point, from: superview)
-        return overMagnifiedCell(p) || inResizeBand(p) ? self : nil
+        return super.hitTest(point)
     }
 
     private func withoutAnimation(_ body: () -> Void) {
@@ -587,12 +561,50 @@ import QuartzCore
         body()
         CATransaction.commit()
     }
+}
 
-    /// The magnification's implicit animation.
-    private func magnifying(_ body: () -> Void) {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Self.magnifyDuration)
-        body()
-        CATransaction.commit()
+/// The hover label: "137 / 200 · name" on a glass capsule, 12 pt, digits of one width. Takes no clicks.
+@MainActor final class StripLabelView: NSView {
+    private let glass = NSGlassEffectView()
+    private let field = NSTextField(labelWithString: "")
+
+    var text: String {
+        get { field.stringValue }
+        set { field.stringValue = newValue }
     }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        appearance = NSAppearance(named: .darkAqua)
+        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingMiddle
+        field.translatesAutoresizingMaskIntoConstraints = false
+        let content = NSView()
+        content.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+        ])
+        glass.contentView = content
+        glass.autoresizingMask = [.width, .height]
+        addSubview(glass)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var fittingSize: NSSize {
+        let text = field.intrinsicContentSize
+        return NSSize(width: ceil(text.width) + 20, height: ceil(text.height) + 6)
+    }
+
+    override func layout() {
+        super.layout()
+        glass.frame = bounds
+        glass.cornerRadius = bounds.height / 2
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
