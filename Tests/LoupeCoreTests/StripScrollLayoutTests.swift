@@ -180,3 +180,25 @@ private func medianMicroseconds(_ body: () -> Void) -> Double {
     #expect(StripPlaylist.indexMap(from: urls, to: []).isEmpty)
     #expect(StripPlaylist.indexMap(from: [], to: urls).isEmpty)
 }
+
+/// The edges fade only where more cells go on past them, and never over the current cell.
+@Test func fadesOnlyWhereTheStripGoesOn() {
+    let l = layout(100), fade = 0.85 * h
+    // At the first file: nothing before it, so no fade on the left.
+    let first = l.cells(offset: l.centre(of: 0), current: 0, expansion: 1)
+    #expect(l.fades(cells: first, current: 0) == (left: 0, right: fade))
+    let last = l.cells(offset: l.centre(of: 99), current: 99, expansion: 1)
+    #expect(l.fades(cells: last, current: 99) == (left: fade, right: 0))
+    let middle = l.cells(offset: l.centre(of: 50), current: 50, expansion: 1)
+    #expect(l.fades(cells: middle, current: 50) == (left: fade, right: fade))
+    // A few files that fit: no fade at all.
+    let few = layout(3)
+    #expect(few.fades(cells: few.cells(offset: few.centre(of: 1), current: 1, expansion: 1), current: 1) == (left: 0, right: 0))
+    // A narrow strip: the fade stops at the current cell.
+    let narrow = layout(100, width: 160)
+    let cells = narrow.cells(offset: narrow.centre(of: 50), current: 50, expansion: 1)
+    let current = cells.first { $0.file == 50 }!
+    let fades = narrow.fades(cells: cells, current: 50)
+    #expect(fades.left == current.x && fades.right == 160 - current.x - current.width)
+    #expect(narrow.fades(cells: [], current: 0) == (left: 0, right: 0))
+}
