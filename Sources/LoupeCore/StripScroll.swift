@@ -1,29 +1,33 @@
-/// Trackpad scrolling over the thumbnail strip (M2.5 spec §4.3): a horizontal swipe moves the selection like a
-/// scrub, a vertical one does nothing (the photo under the strip does not pan), and a notched wheel steps photos as
-/// everywhere. Pure: the strip feeds it the event's deltas and phases and the controller acts on the outcome
-/// (`ViewerSession.scrub(to:)` for a new file, `endScrub()` for a commit).
+/// Scrolling over the thumbnail strip (M2.5 spec §4.3, Photos' filmstrip 2026-10-21): a horizontal trackpad swipe
+/// or a mouse drag moves the strip under its fixed centre, and the file that reaches the centre becomes the current
+/// one, like a scrub; a vertical swipe does nothing (the photo under the strip does not pan), and a notched wheel steps
+/// photos as everywhere. Pure: the strip feeds it the event's deltas and phases, and the controller draws the strip at
+/// `offset` and acts on the outcome (`ViewerSession.scrub(to:)` for a new file; for a commit, settles the strip on
+/// `settled(layout:)` and ends the scrub).
 ///
-/// The selection moves as a point along the strip's base layout, a cell's width of finger travel per cell: one file
-/// per cell while there is a cell per file, the cell's range of files (linearly, as `StripLayout.fileIndex(atX:)`)
-/// in a sampled strip. It starts at the centre of the current file's slot and is held within the cells like a
-/// scroll bar's thumb, so turning back at an end moves it at once.
+/// `offset` is the base x (`StripScrollLayout`) under the strip's centre while the strip moves, nil while it follows
+/// the current file. It starts at the current file's centre — again whenever the current file is not the one reached
+/// last (a key or the wheel moved it) — and moves point for point with the fingers or the cursor. Past the first or
+/// last file a trackpad pulls it on at `rubberBand` of the travel (and back the same way); a mouse stops there, so
+/// turning back moves at once.
 ///
 /// Direction (`strip-scroll-direction`): `natural` (the default) takes fingers moving left to the next files, as the
-/// three-finger swipe does: the strip is content under the selection that follows
-/// the fingers. `reversed` moves the selection with them. `fingerDX` is the fingers' own movement, whatever "natural
-/// scrolling" says (`FingerDirection`).
+/// three-finger swipe does: the strip is content that follows the fingers. `reversed` moves the other way. `fingerDX`
+/// is the fingers' own movement, whatever "natural scrolling" says (`FingerDirection`). A mouse drag always carries the
+/// strip with the cursor.
 ///
 /// A gesture's axis is decided once from its first `lockDistance` points of travel, and its momentum keeps it, so a
 /// slightly diagonal swipe neither stutters nor pans; events without phases (no gesture to belong to) are classified
-/// one by one. Momentum carries the scrub on, like a flick, and its end commits. The fingers' own `.ended` does not
-/// commit: the momentum that may follow begins up to ~100 ms later (the wait Chromium allows between the two), so a
-/// rest of `restDelay` without events commits a lift without momentum.
+/// one by one. Momentum (the system's; there is none of our own) carries the strip on, like a flick, and its end
+/// commits. The fingers' own `.ended` does not commit: the momentum that may follow begins up to ~100 ms later (the
+/// wait Chromium allows between the two), so a rest of `restDelay` without events commits a lift without momentum.
 ///
-/// The scrub is on (`isScrubbing`) from the first new file to its commit: the end of the momentum or a cancelled
-/// gesture (`Outcome.commit`), the rest (`rested(now:)` once `restDeadline` has passed; every event puts it off, so the
+/// The strip moves (`isMoving`) from its first travel to the commit: the end of the momentum or a cancelled gesture
+/// (`Outcome.commit`), the rest (`rested(now:)` once `restDeadline` has passed; every event puts it off, so the
 /// controller keeps one timer and re-arms it when it wakes early), or `end()` (the window resigned key, full screen).
-/// A press on the cells takes it over (`takeOver()`): the session's scrub goes on under the press, whose release
-/// commits it. Times are seconds on the caller's clock.
+/// The scrub is on (`isScrubbing`) from the first new file to that commit. A press on the cells takes over
+/// (`takeOver()`): the rest of the gesture's momentum does nothing. `settle()` once the strip sits on a file again
+/// hands it back to the current file. Times are seconds on the caller's clock.
 public struct StripScroll: Sendable {
     /// Where the strip sends a scroll event.
     public enum Route: Sendable, Equatable {
@@ -58,10 +62,17 @@ public struct StripScroll: Sendable {
     public static let restDelay = 0.15
 
     public var direction = StripScrollDirection.natural
-    /// From the first new file the selection reaches to the commit.
+    /// From the first new file the strip brings to the centre to the commit.
     public private(set) var isScrubbing = false
-    /// When the rest commits the scrub, while it is on.
+    /// When the rest commits, while the strip moves.
     public private(set) var restDeadline: Double?
+    /// The base x under the strip's centre while the strip moves or settles; nil: it follows the current file.
+    public var offset: Double? { raw.map(shown) }
+    /// A gesture, its momentum or a drag moves the strip.
+    public private(set) var isMoving = false
+
+    /// How far a trackpad pulls the strip on past its first or last file, as a share of the travel.
+    public static let rubberBand = 0.3
 
     private enum Axis { case horizontal, vertical }
 
@@ -69,10 +80,14 @@ public struct StripScroll: Sendable {
     private var axis: Axis?
     /// Travel of the gesture so far, while its axis is still open.
     private var openX = 0.0, openY = 0.0
-    /// The selection's x in the base layout, nil until anchored on the current file.
-    private var x: Double?
-    /// The file at `x`: the last one reported, or the anchor.
+    /// The offset the travel adds up to, before the rubber band; nil while the strip follows the current file.
+    private var raw: Double?
+    /// The offset range of the layout `raw` was last moved on (the rubber band's ends).
+    private var range: ClosedRange<Double> = 0...0
+    /// The file at the centre: the last one reported, or the anchor.
     private var file: Int?
+    /// A press took over: the rest of the gesture's momentum is ignored until a new gesture begins.
+    private var ignoresMomentum = false
 
     public init() {}
 
@@ -94,12 +109,16 @@ public struct StripScroll: Sendable {
     /// left); `dy`: the vertical delta (only its size matters). `current`: the session's current file; `now`: the
     /// event's time.
     public mutating func event(fingerDX: Double, dy: Double, phase: ScrollPhase, momentum: ScrollPhase,
-                               layout: StripLayout, current: Int, now: Double) -> Outcome {
+                               layout: StripScrollLayout, current: Int, now: Double) -> Outcome {
         let ends = momentum.contains(.ended) || momentum.contains(.cancelled) || phase.contains(.cancelled)
-        var outcome = Outcome(file: selection(fingerDX: fingerDX, dy: dy, phase: phase, momentum: momentum,
-                                              layout: layout, current: current), commit: false)
-        if outcome.file != nil { isScrubbing = true }
-        guard isScrubbing else { return outcome }
+        if momentum.isEmpty, phase.contains(.began) || phase.contains(.mayBegin) { ignoresMomentum = false }
+        if ignoresMomentum, !momentum.isEmpty { return Outcome(file: nil, commit: false) }
+        var outcome = Outcome(file: nil, commit: false)
+        if let travel = travel(fingerDX: fingerDX, dy: dy, phase: phase, momentum: momentum), travel != 0 {
+            outcome.file = move(by: direction == .natural ? -travel : travel, rubber: true, layout: layout,
+                                current: current)
+        }
+        guard isMoving else { return outcome }
         if ends {
             outcome.commit = true
             takeOver()
@@ -109,17 +128,51 @@ public struct StripScroll: Sendable {
         return outcome
     }
 
-    /// The rest timer woke: true (and the scrub is over) once `restDeadline` has passed.
+    /// A mouse drag over the strip moved by `dx` points: the strip follows the cursor, up to its ends.
+    public mutating func drag(by dx: Double, layout: StripScrollLayout, current: Int) -> Outcome {
+        Outcome(file: move(by: -dx, rubber: false, layout: layout, current: current), commit: false)
+    }
+
+    /// Where the strip comes to rest: the file nearest the centre and the offset that centres it; nil while it
+    /// follows the current file.
+    public func settled(layout: StripScrollLayout) -> (file: Int, offset: Double)? {
+        guard let offset, let file = layout.file(atBase: offset) else { return nil }
+        return (file, layout.centre(of: file))
+    }
+
+    /// The strip sits on a file again: it follows the current file from now on.
+    public mutating func settle() {
+        raw = nil
+        file = nil
+        isMoving = false
+        isScrubbing = false
+        restDeadline = nil
+    }
+
+    /// The layout changed (the folder grew, aspects arrived, a resize) while the strip moves or settles: it stays on
+    /// `file`, at that file's centre in the new layout.
+    public mutating func layoutChanged(keeping file: Int, layout: StripScrollLayout) {
+        guard raw != nil, layout.fileCount > 0 else { return }
+        let file = min(max(file, 0), layout.fileCount - 1)
+        range = layout.offsetRange
+        raw = layout.centre(of: file)
+        self.file = file
+    }
+
+    /// The rest timer woke: true (and the motion is over) once `restDeadline` has passed.
     public mutating func rested(now: Double) -> Bool {
-        guard isScrubbing, let restDeadline, now >= restDeadline else { return false }
+        guard isMoving, let restDeadline, now >= restDeadline else { return false }
         takeOver()
         return true
     }
 
-    /// A press on the cells took the session's scrub over: this one has nothing left to commit.
+    /// A press on the cells took over (or the motion committed): nothing is left to commit, and the rest of the
+    /// gesture's momentum does nothing.
     public mutating func takeOver() {
+        isMoving = false
         isScrubbing = false
         restDeadline = nil
+        ignoresMomentum = true
     }
 
     /// The scrub must commit now (the window resigned key, full screen): true when one was on.
@@ -128,40 +181,25 @@ public struct StripScroll: Sendable {
         return isScrubbing
     }
 
-    /// The new file the event takes the selection to, if any.
-    private mutating func selection(fingerDX: Double, dy: Double, phase: ScrollPhase, momentum: ScrollPhase,
-                                    layout: StripLayout, current: Int) -> Int? {
-        let travel: Double?
+    /// The horizontal travel of this event, nil while it adds none (vertical, or axis still open).
+    private mutating func travel(fingerDX: Double, dy: Double, phase: ScrollPhase, momentum: ScrollPhase) -> Double? {
         if phase.isEmpty, momentum.isEmpty {
             // No gesture: this event alone.
             axis = nil
-            travel = abs(fingerDX) > abs(dy) ? fingerDX : nil
-        } else {
-            if momentum.isEmpty, phase.contains(.began) || phase.contains(.mayBegin) {
-                axis = nil
-                openX = 0
-                openY = 0
-                x = nil   // a new gesture starts from the current photo
-            }
-            travel = horizontalTravel(fingerDX, dy, momentum: !momentum.isEmpty)
+            return abs(fingerDX) > abs(dy) ? fingerDX : nil
         }
-        guard let travel, travel != 0 else { return nil }
-        return move(by: direction == .natural ? -travel : travel, layout: layout, current: current)
-    }
-
-    /// The layout changed (new aspects, a resize, another playlist): the selection's x means something else now, so
-    /// the next event starts again from the current file.
-    public mutating func layoutChanged() { x = nil }
-
-    /// The horizontal travel this event adds to the gesture, nil while it adds none (vertical, or axis still open).
-    private mutating func horizontalTravel(_ dx: Double, _ dy: Double, momentum: Bool) -> Double? {
+        if momentum.isEmpty, phase.contains(.began) || phase.contains(.mayBegin) {
+            axis = nil
+            openX = 0
+            openY = 0
+        }
         switch axis {
-        case .horizontal: return dx
+        case .horizontal: return fingerDX
         case .vertical: return nil
         case nil:
             // Momentum of a gesture whose start was not seen here: this event alone.
-            if momentum { return abs(dx) > abs(dy) ? dx : nil }
-            openX += dx
+            if !momentum.isEmpty { return abs(fingerDX) > abs(dy) ? fingerDX : nil }
+            openX += fingerDX
             openY += dy
             guard max(abs(openX), abs(openY)) >= Self.lockDistance else { return nil }
             axis = abs(openX) > abs(openY) ? .horizontal : .vertical
@@ -169,19 +207,29 @@ public struct StripScroll: Sendable {
         }
     }
 
-    /// Moves the selection by `dx` points along the strip; the new file, if it is one.
-    private mutating func move(by dx: Double, layout: StripLayout, current: Int) -> Int? {
-        guard !layout.cells.isEmpty, (0..<layout.fileCount).contains(current) else { return nil }
-        // Anchored on the current file, again whenever it is not the one reached last (a key or a click moved it).
-        if x == nil || file != current {
-            x = layout.x(ofFile: current)
+    /// Moves the strip's offset by `dx` points; the new file at the centre, if it is one.
+    private mutating func move(by dx: Double, rubber: Bool, layout: StripScrollLayout, current: Int) -> Int? {
+        guard layout.fileCount > 1, (0..<layout.fileCount).contains(current) else { return nil }
+        range = layout.offsetRange
+        // Anchored on the current file, again whenever it is not the one reached last (a key or the wheel moved it).
+        if raw == nil || file != current {
+            raw = layout.centre(of: current)
             file = current
         }
-        let low = layout.originX, high = (layout.originX + layout.span).nextDown
-        let moved = min(max(x! + dx, low), high)
-        x = moved
-        guard let reached = layout.fileIndex(atX: moved), reached != file else { return nil }
+        var moved = raw! + dx
+        if !rubber { moved = min(max(moved, range.lowerBound), range.upperBound) }
+        raw = moved
+        isMoving = true
+        guard let reached = layout.file(atBase: shown(moved)), reached != file else { return nil }
         file = reached
+        isScrubbing = true
         return reached
+    }
+
+    /// `raw` with the rubber band past the ends.
+    private func shown(_ raw: Double) -> Double {
+        if raw < range.lowerBound { return range.lowerBound - (range.lowerBound - raw) * Self.rubberBand }
+        if raw > range.upperBound { return range.upperBound + (raw - range.upperBound) * Self.rubberBand }
+        return raw
     }
 }
