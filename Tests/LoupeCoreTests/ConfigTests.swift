@@ -1080,7 +1080,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
@@ -1527,12 +1527,14 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     let c = Config()
     #expect(c.homeSidebarCompact && c.homeSidebarIndent == .compact && c.homeSidebarReroot == 0)
     #expect(c.text(forKey: "home-sidebar-compact") == "yes")
+    #expect(c.homeSidebarFoldersFirst && c.text(forKey: "home-sidebar-folders-first") == "yes")
     #expect(c.text(forKey: "home-sidebar-indent") == "compact")
     #expect(c.text(forKey: "home-sidebar-reroot") == "0")
     let (parsed, errors) = Config.parse("home-sidebar-compact=no\nhome-sidebar-indent=even\nhome-sidebar-reroot=20")
     #expect(errors.isEmpty)
     #expect(!parsed.homeSidebarCompact && parsed.homeSidebarIndent == .even && parsed.homeSidebarReroot == 20)
     #expect(Config.parse("home-sidebar-reroot=1").1 == ["loupe.conf:1: bad option 'home-sidebar-reroot=1'"])
+    #expect(!Config.parse("home-sidebar-folders-first=no").0.homeSidebarFoldersFirst)
     #expect(Config.parse("home-sidebar-reroot=21").1 == ["loupe.conf:1: bad option 'home-sidebar-reroot=21'"])
 }
 

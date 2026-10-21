@@ -915,6 +915,7 @@ import UniformTypeIdentifiers
         homeView.sidebarWidth = CGFloat(config.homeSidebarWidth)
         homeView.sidebarCompactChains = config.homeSidebarCompact
         homeView.sidebarCompactIndent = config.homeSidebarIndent == .compact
+        homeView.sidebarFoldersFirst = config.homeSidebarFoldersFirst
         homeView.sidebarRerootDepth = config.homeSidebarReroot
         if isShowingHome { homeView.isSidebarVisible = config.homeSidebar }
     }
