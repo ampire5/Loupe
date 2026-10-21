@@ -36,6 +36,14 @@ jobs:
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
+      # The whole output; the job's log and summary carry the failed tests (scripts/test-report.sh).
+      - name: Upload the test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: .build/test.log
+          retention-days: 14
       # The package revisions this run built, to compare with (or to commit as) Package.resolved.
       - name: Package.resolved
         run: cat Package.resolved
