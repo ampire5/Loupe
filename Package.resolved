@@ -1,0 +1,51 @@
+{
+  "originHash" : "b9582322d3c2258edbf9ba246fb932d5837448c3783cc87d5ac24bcb5320206f",
+  "pins" : [
+    {
+      "identity" : "homescreenkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/HomeScreenKit.git",
+      "state" : {
+        "revision" : "1ffdc4e89290a660de449f173b666dbd9160850e",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "infopanelkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/InfoPanelKit.git",
+      "state" : {
+        "revision" : "20cecd1a532d3ba94827c8fd0d1e84710d6e65ce",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "logihidpp",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/LogiHIDPP.git",
+      "state" : {
+        "revision" : "0c6849480ac0ea46c0bf5e7727d9eb77b49c7ed0",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "settingskit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/SettingsKit.git",
+      "state" : {
+        "revision" : "2db616dd88c26796c39a170a6381621427423a93",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "stashkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/StashKit.git",
+      "state" : {
+        "revision" : "b361a8bb73288f0a6ec9a1956ff49d3c3e24a141",
+        "version" : "0.1.0"
+      }
+    }
+  ],
+  "version" : 3
+}
