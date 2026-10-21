@@ -405,6 +405,8 @@ public struct Config: Equatable, Sendable {
     /// `grid-names`: file names off (the default), on the photo, or under it.
     public var gridNames = GridNames.off
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
+    /// `home-sidebar-folders-first`: the sidebar tree lists a folder's subfolders before its archives.
+    public var homeSidebarFoldersFirst = true
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
     public var sessionRestore = SessionRestore.none
@@ -517,7 +519,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -662,6 +664,7 @@ public struct Config: Equatable, Sendable {
         case "checker-colors": return checkerColors.text
         case "upscale": return upscale.text
         case "upscale-high": return upscaleHigh.text
+        case "home-sidebar-folders-first": return homeSidebarFoldersFirst ? "yes" : "no"
         case "upscale-high-from": return String(upscaleHighPercent)
         case "downscale": return downscale.text
         case "lanczos-antiring": return lanczosAntiring ? "yes" : "no"
@@ -928,6 +931,8 @@ public struct Config: Equatable, Sendable {
         case "session-restore":
             if let v = SessionRestore(rawValue: value.lowercased()) { sessionRestore = v } else { return .badValue }
         case "transparency":
+        case "home-sidebar-folders-first":
+            if let v = Self.bool(value) { homeSidebarFoldersFirst = v } else { return .badValue }
             if let v = TransparencyMode(text: value) { transparency = v } else { return .badValue }
         case "checker-size":
             if let v = Int(value), Self.checkerSizeRange.contains(v) { checkerSize = v } else { return .badValue }

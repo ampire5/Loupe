@@ -71,6 +71,9 @@ extension SettingsPanel {
                 ], symbol: "increase.indent",
                 description: "Compact: 14 pt for the first three levels, 6 pt past them, with a line per level. "
                     + "Even: 14 pt at every level. Default Compact."),
+                .toggle("home-sidebar-folders-first", "Folders before archives", symbol: "folder.fill",
+                        description: "The tree lists a folder's subfolders first, then its archives, each by name. "
+                            + "Off: all by name together. Default on."),
                 .number("home-sidebar-reroot", "Restart the tree at depth", step: 1, symbol: "arrow.turn.left.up",
                         description: "The current folder this many levels under its place or deeper: the tree starts "
                             + "again further down, under one row of the folders left out (it opens the last of them). "
