@@ -29,6 +29,13 @@ public enum ArchivePath {
                                               isDirectory: false)
     }
 
+    /// The name a photo goes by in a title, the stats line or a label: an entry's own file name (`0001.jpg`, never
+    /// its inner path with "∕"), else the file name.
+    public static func shortName(_ url: URL) -> String {
+        guard let (_, entry) = split(url) else { return url.lastPathComponent }
+        return (entry as NSString).lastPathComponent
+    }
+
     /// `G.zip › caps/0001.jpg` for an entry, the file name otherwise.
     public static func displayName(_ url: URL) -> String {
         guard let (archive, entry) = split(url) else { return url.lastPathComponent }

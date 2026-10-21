@@ -5,13 +5,13 @@ import Foundation
 public enum WindowTitle {
     public static func text(home: HomeTab?, file: URL?) -> String {
         if let home { return title(of: home) }
-        return file?.lastPathComponent ?? "Loupe"
+        return file.map(ArchivePath.shortName) ?? "Loupe"
     }
 
     /// A restored tab not shown yet.
     public static func text(of tab: SessionSnapshot.Tab) -> String {
         switch tab {
-        case .file(let path, _): URL(fileURLWithPath: path).lastPathComponent
+        case .file(let path, _): ArchivePath.shortName(URL(fileURLWithPath: path))
         case .gallery(_, _, _, _, let file, _): file ?? "Stash"
         case .home(let home), .homeOver(let home, _, _): title(of: home)
         }
