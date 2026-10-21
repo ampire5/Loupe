@@ -158,6 +158,9 @@ import LoupeRender
     /// new folder's rules.
     var zoomRules: (URL) -> ZoomRules = { _ in ZoomRules(config: Settings.shared.config) }
 
+    /// A window resize keeps the free zoom's scale rather than its framing (`keep-zoom-as=scale` in the photo's folder).
+    var resizeKeepsScale: Bool { playlist.map { zoomRules($0.current).carry == .scale } ?? false }
+
     /// Called on the main actor after any state change above.
     var onChange: (() -> Void)?
 
@@ -904,14 +907,15 @@ import LoupeRender
     /// the rules of its folder, the default zoom mode when `open` brought it.
     private func transform(showing url: URL, size: CGSize, over base: ViewTransform? = nil) -> ViewTransform {
         let current = base ?? judgedTransform
-        if var saved = restore?.transform(for: url, imageSize: size, over: current) {
-            saved.fitUpscale = zoomRules(url).fitUpscale
+        let rules = zoomRules(url)
+        if let saved = restore?.transform(for: url, imageSize: size, over: current, carry: rules.carry,
+                                          fitUpscale: rules.fitUpscale) {
             return saved
         }
         let arrival: PhotoSwitchView.Arrival = url == laidOut ? .laidOut : url == freshOpen ? .opened : .switched
         // The photo on screen keeps the transform it has (a frame of a zoom animation included), as before.
         return PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
-                                     imageSize: size, rules: zoomRules(url))
+                                     imageSize: size, rules: rules)
     }
 
     /// A zoom that moves the needed level across Lfit re-plans the current photo's full resolution (otherwise

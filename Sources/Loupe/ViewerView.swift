@@ -564,7 +564,7 @@ import QuartzCore
         let anchor = viewPoint(event)
         DebugLog.log("magnify \(event.magnification) -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (p.stops.stretch == 1 ? "" : " stretch \(p.stops.stretch)"))
-        session.transform = t.zoomed(toScale: r.scale, anchor: anchor, stop: r.hitStop)
+        session.transform = t.zoomed(toScale: r.scale, anchor: anchor)
             .withStretch(Self.zoomStretch(p.stops.stretch, anchor: anchor))
         zoomStopFeedback(justHit: p.stops.justHit)
         p.last = session.transform
@@ -1180,7 +1180,7 @@ import QuartzCore
         DebugLog.log("rmb zoom dy \(dy) pt -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (stops.stretch == 1 ? "" : " stretch \(stops.stretch)"))
         // Past a zoom limit (`zoom-rubber-band`) the stretch is about the press anchor, where `RMBZoom` pins the image.
-        session.transform = zoom.transform(toScale: r.scale, stop: r.hitStop)
+        session.transform = zoom.transform(toScale: r.scale)
             .withStretch(Self.zoomStretch(stops.stretch, anchor: zoom.anchor))
         zoomStopFeedback(justHit: stops.justHit)
         rmbZoomFeedback(scale: r.scale, stretch: stops.stretch, limits: zoom.start.scaleLimits, justHit: stops.justHit)
@@ -1444,7 +1444,7 @@ import QuartzCore
         }
         guard var z = thumbZoom?.zoom else { return }
         let r = z.turn(doublings: doublings)
-        let shown = t.zoomed(toScale: r.scale, anchor: cursorOrCentre(), stop: r.stop)
+        let shown = t.zoomed(toScale: r.scale, anchor: cursorOrCentre())
         DebugLog.log("thumb zoom \(delta)/\(stepsPerRevolution): \(t.scale) -> \(r.scale)"
                      + (r.stop.map { " stop \($0)" } ?? "") + (r.bump.map { " \($0)" } ?? ""))
         if shown != t { session.transform = shown }
@@ -1494,7 +1494,7 @@ import QuartzCore
         case .toggleInfoPanel: onToggleInfoPanel?()
         case .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring: return onScalingKey?(action) ?? false
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
-        case .toggleKeepZoom, .saveKeepZoom: return onZoomKey?(action) ?? false
+        case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry: return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false
         case .newTab, .newWindow, .closeTab, .nextTab, .previousTab, .openInNewTab, .openInNewWindow, .home, .back,
              .reopenTab, .closeWindow, .browse:
@@ -1602,7 +1602,7 @@ import QuartzCore
         if session.transform.viewSize != size {
             session.settleZoom()   // a resize starts from the target of a zoom animation (M4b spec §2.3)
             rubber.reset()   // the new size zeroes the offset; a spring would only find it gone
-            session.transform = session.transform.withViewSize(size)   // notifies -> sessionDidChange
+            session.transform = session.transform.withViewSize(size, keepingScale: session.resizeKeepsScale)   // notifies -> sessionDidChange
         }
     }
 }

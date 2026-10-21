@@ -23,13 +23,14 @@ public enum PhotoSwitchView {
     }
 
     /// A switch to another photo from `current` (the session passes a running zoom animation's target): with `keep`
-    /// the mode and the stored relative centre stay, else the photo opens in `defaultMode`, centred. Either way it
-    /// takes `fit-upscale` from the rules, and the transient offset and stretch go.
+    /// the mode and the stored relative centre stay, a free zoom carried by `keep-zoom-as` (`carryingZoom`), else the
+    /// photo opens in `defaultMode`, centred. Either way it takes `fit-upscale` from the rules, and the transient
+    /// offset and stretch go.
     public static func next(current: ViewTransform, imageSize: CGSize, rules: ZoomRules) -> ViewTransform {
         guard rules.keep else { return opened(viewSize: current.viewSize, imageSize: imageSize, rules: rules) }
         var t = current.withImageSize(imageSize)
         t.fitUpscale = rules.fitUpscale
-        return t
+        return t.carryingZoom(from: current, rules.carry)
     }
 
     /// The first photo at launch, or one opened from Finder: `defaultMode`, centred, whatever `keep` says.

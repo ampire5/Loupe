@@ -21,6 +21,8 @@ public enum PanIndicatorMode: String, CaseIterable, Sendable {
 public struct ZoomRules: Equatable, Sendable {
     /// `keep-zoom-position`: a switch keeps the current zoom mode and centre.
     public var keep: Bool
+    /// `keep-zoom-as`: what a kept free zoom keeps.
+    public var carry: ZoomCarry
     /// `default-zoom-mode`: the mode a photo opens in when the view is not kept.
     public var defaultMode: ZoomMode
     /// `fit-upscale`: Fit magnifies a photo smaller than the window (`no`: at most 100 %).
@@ -28,6 +30,7 @@ public struct ZoomRules: Equatable, Sendable {
 
     public init(config: Config) {
         keep = config.keepZoomPosition
+        carry = config.keepZoomAs
         defaultMode = config.defaultZoomMode
         fitUpscale = config.fitUpscale
     }

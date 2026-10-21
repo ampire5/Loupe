@@ -22,6 +22,13 @@ extension SettingsPanel {
                 .toggle("keep-zoom-position", "Keep zoom and position", symbol: "lock",
                         description: "The next photo keeps the zoom and place; off: it opens in Default zoom, centred. "
                             + "L switches it for the folder. Default on."),
+                .choice("keep-zoom-as", "A kept zoom keeps", [
+                    (word: "share", title: "Share of the photo"), (word: "scale", title: "Scale"),
+                ], symbol: "arrow.left.and.right.square",
+                description: "For a pinch or wheel zoom. Share: the next photo shows as much of itself, and a photo "
+                    + "turned the other way keeps the scale; a resize keeps the framing. Scale: 80 % stays 80 % on "
+                    + "every photo, after a resize and in the folder's saved view. K switches it for the folder. "
+                    + "Default Share."),
                 .toggle("fit-upscale", "Upscale small photos in Fit", symbol: "arrow.up.left.and.arrow.down.right",
                         description: "Off: a photo smaller than the window shows at 100 %, centred. Also Zoom › Upscale "
                             + "Small Images in Fit. Default on."),

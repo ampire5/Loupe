@@ -78,6 +78,8 @@ public enum InputConfTemplate {
     # KP_SUBTRACT zoom-out                          # zoom out
     # l toggle-keep-zoom                            # keep zoom and position in this folder, on/off
     # L save-keep-zoom                              # keep zoom as the default for all folders
+    # k toggle-zoom-carry                           # a kept zoom keeps the share of the photo / the scale, this folder
+    # K save-zoom-carry                             # share / scale as the default for all folders
     # Shift+LEFT pan-left                           # pan left by a tenth of the window
     # Shift+RIGHT pan-right                         # pan right
     # Shift+UP pan-up                               # pan up

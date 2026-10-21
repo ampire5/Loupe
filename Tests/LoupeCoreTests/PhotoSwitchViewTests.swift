@@ -4,8 +4,10 @@ import Testing
 
 // M4b spec §4.2: the view a newly shown photo gets.
 
-private func rules(keep: Bool = true, mode: ZoomMode = .fit, fitUpscale: Bool = true) -> ZoomRules {
+private func rules(keep: Bool = true, mode: ZoomMode = .fit, fitUpscale: Bool = true,
+                   carry: ZoomCarry = .share) -> ZoomRules {
     var c = Config()
+    c.keepZoomAs = carry
     c.keepZoomPosition = keep
     c.defaultZoomMode = mode
     c.fitUpscale = fitUpscale
@@ -70,6 +72,34 @@ private func zoomedIn(mode: ZoomMode = .actual(2)) -> ViewTransform {
     // The frame on the way would have carried its `.free` scale over instead.
     let frame = PhotoSwitchView.next(current: zoomedIn(mode: .free(1.4)), imageSize: newSize, rules: rules(keep: true))
     #expect(frame.mode != .actual(1))
+}
+
+/// `keep-zoom-as`: a free zoom on a landscape photo carried to the same photo turned portrait keeps its scale either
+/// way (its ratio to Fit would have jumped by the aspect ratio); to a photo of four times the pixels, `share` doubles
+/// the scale (the same share in view) and `scale` keeps it. Named modes are left alone.
+@Test func photoSwitchViewCarriesAFreeZoomByShareOrScale() {
+    let landscape = ViewTransform(imageSize: CGSize(width: 6000, height: 4000), viewSize: view, mode: .free(2))
+    let s = landscape.scale
+    for carry in [ZoomCarry.share, .scale] {
+        let portrait = PhotoSwitchView.next(current: landscape, imageSize: CGSize(width: 4000, height: 6000),
+                                            rules: rules(carry: carry))
+        #expect(abs(portrait.scale - s) < 1e-9, "\(carry)")
+    }
+    let big = CGSize(width: 12000, height: 8000)
+    #expect(abs(PhotoSwitchView.next(current: landscape, imageSize: big, rules: rules(carry: .share)).scale - s / 2) < 1e-9)
+    #expect(abs(PhotoSwitchView.next(current: landscape, imageSize: big, rules: rules(carry: .scale)).scale - s) < 1e-9)
+    let fitWidth = ViewTransform(imageSize: CGSize(width: 6000, height: 4000), viewSize: view, mode: .fitWidth)
+    #expect(PhotoSwitchView.next(current: fitWidth, imageSize: big, rules: rules(carry: .scale)).mode == .fitWidth)
+}
+
+/// A resize keeps a free zoom's framing (its ratio to Fit), or with `keepingScale` its scale.
+@Test func resizeKeepsFramingOrScale() {
+    let t = ViewTransform(imageSize: CGSize(width: 6000, height: 4000), viewSize: view, mode: .free(2))
+    let smaller = CGSize(width: 1000, height: 500)
+    #expect(t.withViewSize(smaller).mode == .free(2))
+    #expect(abs(t.withViewSize(smaller, keepingScale: true).scale - t.scale) < 1e-9)
+    let unlaid = ViewTransform(imageSize: t.imageSize, viewSize: .zero, mode: .free(2))
+    #expect(unlaid.withViewSize(view, keepingScale: true).mode == .free(2))
 }
 
 @Test func photoSwitchViewOpenedUsesTheDefaultModeCentred() {

@@ -38,6 +38,14 @@ public enum HomeTab: String, Sendable, Codable {
     case recent, sessions, folders, stash
 }
 
+/// `keep-zoom-as`: what a free zoom (a pinch, a wheel, `=` / `-`) keeps when another photo comes or the window changes
+/// size (`ViewTransform.carryingZoom`). `share` (the default): the share of the picture in view, so a turned photo of the
+/// same pixel count keeps its scale and a resize keeps the framing; `scale`: the scale itself, 80 % stays 80 %, also
+/// across a resize and in the folder's saved view. A folder key: `K` switches it for the folder.
+public enum ZoomCarry: String, Sendable {
+    case share, scale
+}
+
 /// `home-sidebar-indent`: how Home's sidebar indents its folder tree. `compact` (the default): 14 pt for the first
 /// three levels, 6 pt past them, with a guide line per level; `even`: 14 pt at every level, no guides.
 public enum SidebarIndent: String, Sendable {
@@ -184,6 +192,8 @@ public struct Config: Equatable, Sendable {
     public var zoomRubberBand = true
     /// `keep-zoom-position`: a photo switch keeps the zoom mode and centre (folder key, `ZoomRules`).
     public var keepZoomPosition = true
+    /// `keep-zoom-as`: what a kept free zoom keeps (`ZoomCarry`; folder key, `ZoomRules`).
+    public var keepZoomAs = ZoomCarry.share
     /// `default-zoom-mode`: the mode a photo opens in when `keep-zoom-position` is off (folder key, `ZoomRules`).
     public var defaultZoomMode = ZoomMode.fit
     /// `fit-upscale`: Fit magnifies a photo smaller than the window (`no`: at most 100 %).
@@ -395,6 +405,8 @@ public struct Config: Equatable, Sendable {
     public var homeSidebarCompact = true
     /// `home-sidebar-indent`: the sidebar tree's indent (`SidebarIndent`).
     public var homeSidebarIndent = SidebarIndent.compact
+    /// `home-sidebar-folders-first`: the sidebar tree lists a folder's subfolders before its archives.
+    public var homeSidebarFoldersFirst = true
     /// `home-sidebar-reroot`: the current folder this many levels under its place or deeper starts the sidebar tree
     /// again further down, under one row of the folders left out; 0 (the default) never, else 3...20.
     public var homeSidebarReroot = 0
@@ -405,8 +417,6 @@ public struct Config: Equatable, Sendable {
     /// `grid-names`: file names off (the default), on the photo, or under it.
     public var gridNames = GridNames.off
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
-    /// `home-sidebar-folders-first`: the sidebar tree lists a folder's subfolders before its archives.
-    public var homeSidebarFoldersFirst = true
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
     public var sessionRestore = SessionRestore.none
@@ -490,7 +500,7 @@ public struct Config: Equatable, Sendable {
 
     /// Every key loupe.conf understands, in file order.
     public static let keys = ["zoom-stops", "zoom-stop-haptics",
-                              "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "default-zoom-mode", "fit-upscale",
+                              "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "default-zoom-mode", "fit-upscale",
                               "rmb-zoom-speed", "rmb-zoom-inertia",
                               "rubber-band", "drag-inertia", "inertia-deceleration", "rmb-zoom-invert",
                               "pan-indicators", "pan-indicators-hide", "pan-indicators-fade",
@@ -529,7 +539,7 @@ public struct Config: Equatable, Sendable {
     public static let colorFolderKeys = ["auto-color", "auto-color-method", "auto-color-strength", "vibrance",
                                          "vibrance-amount"]
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
-    public static let zoomFolderKeys = ["keep-zoom-position", "default-zoom-mode"]
+    public static let zoomFolderKeys = ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"]
     /// The keys a folder may set for itself.
     public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys
 
@@ -570,6 +580,7 @@ public struct Config: Equatable, Sendable {
         case "zoom-animation": return String(zoomAnimationMilliseconds)
         case "zoom-rubber-band": return zoomRubberBand ? "yes" : "no"
         case "keep-zoom-position": return keepZoomPosition ? "yes" : "no"
+        case "keep-zoom-as": return keepZoomAs.rawValue
         case "default-zoom-mode": return ZoomRules.text(of: defaultZoomMode)
         case "fit-upscale": return fitUpscale ? "yes" : "no"
         case "pan-indicators": return panIndicators.rawValue
@@ -653,6 +664,7 @@ public struct Config: Equatable, Sendable {
         case "home-sidebar-width": return String(homeSidebarWidth)
         case "home-sidebar-compact": return homeSidebarCompact ? "yes" : "no"
         case "home-sidebar-indent": return homeSidebarIndent.rawValue
+        case "home-sidebar-folders-first": return homeSidebarFoldersFirst ? "yes" : "no"
         case "home-sidebar-reroot": return String(homeSidebarReroot)
         case "browser-card-size": return String(browserCardSize)
         case "grid-style": return gridStyle.rawValue
@@ -664,7 +676,6 @@ public struct Config: Equatable, Sendable {
         case "checker-colors": return checkerColors.text
         case "upscale": return upscale.text
         case "upscale-high": return upscaleHigh.text
-        case "home-sidebar-folders-first": return homeSidebarFoldersFirst ? "yes" : "no"
         case "upscale-high-from": return String(upscaleHighPercent)
         case "downscale": return downscale.text
         case "lanczos-antiring": return lanczosAntiring ? "yes" : "no"
@@ -732,6 +743,8 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { zoomRubberBand = v } else { return .badValue }
         case "keep-zoom-position":
             if let v = Self.bool(value) { keepZoomPosition = v } else { return .badValue }
+        case "keep-zoom-as":
+            if let v = ZoomCarry(rawValue: value.lowercased()) { keepZoomAs = v } else { return .badValue }
         case "default-zoom-mode":
             if let v = ZoomRules.parseMode(value) { defaultZoomMode = v } else { return .badValue }
         case "fit-upscale":
@@ -918,6 +931,8 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { homeSidebarCompact = v } else { return .badValue }
         case "home-sidebar-indent":
             if let v = SidebarIndent(rawValue: value.lowercased()) { homeSidebarIndent = v } else { return .badValue }
+        case "home-sidebar-folders-first":
+            if let v = Self.bool(value) { homeSidebarFoldersFirst = v } else { return .badValue }
         case "home-sidebar-reroot":
             if let v = Int(value), v == 0 || (3...20).contains(v) { homeSidebarReroot = v } else { return .badValue }
         case "browser-card-size":
@@ -931,8 +946,6 @@ public struct Config: Equatable, Sendable {
         case "session-restore":
             if let v = SessionRestore(rawValue: value.lowercased()) { sessionRestore = v } else { return .badValue }
         case "transparency":
-        case "home-sidebar-folders-first":
-            if let v = Self.bool(value) { homeSidebarFoldersFirst = v } else { return .badValue }
             if let v = TransparencyMode(text: value) { transparency = v } else { return .badValue }
         case "checker-size":
             if let v = Int(value), Self.checkerSizeRange.contains(v) { checkerSize = v } else { return .badValue }

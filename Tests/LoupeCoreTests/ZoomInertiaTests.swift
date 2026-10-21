@@ -140,7 +140,7 @@ private func run(_ coast: RMBZoomCoast, hz: Double) -> (transform: ViewTransform
     let gesture = ZoomStopGesture(transform: t0, stops: [.percent(100)])
     let r = run(RMBZoomCoast(zoom: zoom, stops: gesture, doublings: 0, velocity: 3), hz: 60)
     #expect(r.landed)
-    #expect(r.transform.mode == .actual(1))
+    #expect(abs(r.transform.scale - 1) < 1e-12)
     // It stays at the anchor-pinned stop transform.
     let p = t0.imagePoint(forView: mid)
     let back = r.transform.viewPoint(forImage: p)
