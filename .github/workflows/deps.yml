@@ -1,0 +1,46 @@
+name: Prebuilt dependencies
+
+# Builds scripts/build-deps.sh's recipe for scripts/deps.arch from source and publishes it as the pre-release
+# deps-<arch>-<recipe hash>, which scripts/deps.sh downloads (CI, releases, local builds). Runs when the recipe changes
+# on main (arm64) or on lts/macos26 (x86_64, its own copy of this workflow), and by hand; a recipe that is already
+# published is left alone.
+on:
+  push:
+    branches: [main]
+    paths: [scripts/build-deps.sh, .github/workflows/deps.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Already published?
+        id: check
+        run: |
+          name=$(scripts/deps.sh name)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          if gh release view "$name" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "$name is already published"
+          fi
+      - name: Homebrew tools
+        if: steps.check.outputs.published != 'true'
+        run: brew install cmake ninja pkgconf
+      - name: Build from source
+        if: steps.check.outputs.published != 'true'
+        run: scripts/deps.sh fetch
+      - name: Publish
+        if: steps.check.outputs.published != 'true'
+        run: |
+          name=${{ steps.check.outputs.name }}
+          scripts/deps.sh pack out
+          gh release create "$name" "out/$name.tar.xz" "out/$name.tar.xz.sha256" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "Build dependencies: $name" \
+            --notes "Static $(cat scripts/deps.arch) libraries for ${GITHUB_REF_NAME}, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."

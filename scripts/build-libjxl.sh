@@ -1,26 +1,4 @@
 #!/usr/bin/env bash
-# Builds Loupe's libjxl: ../libjxl next to this checkout, or $LOUPE_LIBJXL (a clone of github.com/libjxl/libjxl,
-# branch `loupe` off v0.12.0 with the DC image functions) into its dist/ — libjxl, libjxl_cms and libjxl_threads only, Release, brotli and
-# highway from Homebrew. Dylibs get absolute install names in dist/lib, so `swift test` runs against them;
-# bundle-dylibs.sh relocates them into the app. Run again after changing the branch: the build is incremental.
-# Needs: brew install cmake ninja brotli highway
-set -euo pipefail
-src=${LOUPE_LIBJXL:-$(cd "$(dirname "$0")/../.." && pwd)/libjxl}
-dist=$src/dist
-[[ -d "$src/.git" ]] || { echo "no libjxl clone at $src" >&2; exit 1; }
-# The commit CI and releases build (scripts/libjxl.commit, on the fork's branch `loupe`); another one builds too, for
-# trying a change to the branch, with a warning.
-pinned=$(cat "$(dirname "$0")/libjxl.commit")
-[[ $(git -C "$src" rev-parse HEAD) == "$pinned" ]] \
-    || echo "warning: $src is at $(git -C "$src" rev-parse --short HEAD), not ${pinned:0:10} (scripts/libjxl.commit)" >&2
-cmake -S "$src" -B "$src/build-dist" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$dist" -DCMAKE_INSTALL_NAME_DIR="$dist/lib" -DCMAKE_MACOSX_RPATH=OFF \
-    -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF \
-    -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_BENCHMARK=OFF \
-    -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_JNI=OFF \
-    -DJPEGXL_ENABLE_PLUGINS=OFF -DJPEGXL_FORCE_SYSTEM_BROTLI=ON -DJPEGXL_FORCE_SYSTEM_HWY=ON >/dev/null
-cmake --build "$src/build-dist"
-cmake --install "$src/build-dist" >/dev/null
-nm -gU "$dist/lib/libjxl.dylib" | grep -q _JxlDecoderGetDCImage \
-    || { echo "error: $dist/lib/libjxl.dylib has no JxlDecoderGetDCImage (wrong branch?)" >&2; exit 1; }
-echo "libjxl ($(git -C "$src" rev-parse --short HEAD)) installed in $dist"
+# Loupe's libjxl (github.com/ampire5/libjxl, branch `loupe`) is built with the other decoders, static, for
+# scripts/deps.arch: scripts/build-deps.sh, through scripts/deps.sh (prebuilt when published).
+exec "$(dirname "$0")/deps.sh" fetch

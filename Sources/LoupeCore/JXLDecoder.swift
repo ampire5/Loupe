@@ -13,7 +13,7 @@ import Foundation
 /// Every call creates its own `JxlDecoder` and thread pool, so calls from the decode pool never
 /// share state.
 public struct JXLDecoder: ImageDecoder {
-    /// "libjxl+dc": Loupe's own libjxl (scripts/build-libjxl.sh) with the 1:8 DC image functions. Calling
+    /// "libjxl+dc": Loupe's own libjxl (scripts/build-deps.sh) with the 1:8 DC image functions. Calling
     /// `JxlDecoderLoupeVersion` also keeps a build against Homebrew's libjxl from linking.
     public var name: String { JxlDecoderLoupeVersion() >= 1 ? "libjxl+dc" : "libjxl" }
 
