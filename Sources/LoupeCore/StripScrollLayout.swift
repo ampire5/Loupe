@@ -121,6 +121,20 @@ public struct StripScrollLayout: Equatable, Sendable {
     /// The length of the fading edges.
     public var fadeLength: Double { Self.fadeRatio * cellHeight }
 
+    /// How far each edge of `cells` (as `cells(offset:current:expansion:)` gives them) fades: `fadeLength` where the
+    /// strip goes on past that edge, so it shows there is more, 0 where it ends inside the view; never over the
+    /// current cell.
+    public func fades(cells: [StripCell], current: Int) -> (left: Double, right: Double) {
+        guard let first = cells.first, let last = cells.last else { return (0, 0) }
+        var left = first.x < 0 ? fadeLength : 0
+        var right = last.x + last.width > width ? fadeLength : 0
+        if let shown = cells.first(where: { $0.file == current }) {
+            left = min(left, max(0, shown.x))
+            right = min(right, max(0, width - shown.x - shown.width))
+        }
+        return (left, right)
+    }
+
     /// The cells on screen, plus one beyond each edge, left to right, in view x: base x `offset` at the strip's
     /// centre, `current` expanded by `expansion` (0 narrow … 1 its photo's proportions, padded).
     public func cells(offset: Double, current: Int, expansion: Double) -> [StripCell] {

@@ -165,12 +165,16 @@ import QuartzCore
         onBackingChange?()
     }
 
-    /// The fade over the band: the whole view, opaque but for `fadeLength` at each end.
+    /// The fade over the band: the whole view, opaque but for the ends where the strip goes on past the view
+    /// (`StripScrollLayout.fades`), so a fading edge always means there is more there.
     private func placeFade() {
         fadeLayer.frame = bounds
         fadeMask.frame = fadeLayer.bounds
-        let share = bounds.width > 0 ? min(0.5, layout.fadeLength / Double(bounds.width)) : 0
-        fadeMask.locations = [0, NSNumber(value: share), NSNumber(value: 1 - share), 1]
+        let width = Double(bounds.width)
+        guard width > 0 else { return }
+        let fades = layout.fades(cells: shownCells, current: current)
+        let left = min(0.5, fades.left / width), right = min(0.5, fades.right / width)
+        fadeMask.locations = [0, NSNumber(value: left), NSNumber(value: 1 - right), 1]
     }
 
     // MARK: Showing
@@ -213,7 +217,9 @@ import QuartzCore
             }
             self.contentLayer.frame = CGRect(x: origin, y: Double(Self.padding), width: 0, height: 0)
             for (file, frame) in frames { self.place(file, frame) }
+            self.placeFade()   // in the move's own transaction: the fade follows the cells
         }
+        shownCells = target
         if animated {
             CATransaction.begin()
             CATransaction.setAnimationDuration(Self.moveDuration)
@@ -226,7 +232,6 @@ import QuartzCore
         } else {
             withoutAnimation(place)
         }
-        shownCells = target
         let files = target.map(\.file).sorted { abs($0 - current) < abs($1 - current) }
         if files != visibleFiles {
             visibleFiles = files
