@@ -14,6 +14,10 @@ import LoupeCore
 /// A window too small for the panel gets a smaller one: the content is built again with its fonts and spacing scaled
 /// (laid out natively at that size, so the text stays crisp and unclipped), down to a legible floor; below that the
 /// window's edge cuts the panel off.
+///
+/// The content is kept between openings and built again only when what it lists changes (`Sheet`) or the scale does;
+/// each section is two multi-line labels (keys, titles) rather than a stack per row, so a build costs milliseconds
+/// instead of the most of a second Auto Layout took over a hundred row stacks on an Intel Mac.
 @MainActor final class CheatSheetView: NSView {
     private static let margin: CGFloat = 16
     private static let minimumScale: CGFloat = 0.75
@@ -27,6 +31,8 @@ import LoupeCore
     private var fullSize = NSSize.zero
     /// The layout the sheet lists.
     private var inputMap = Settings.shared.inputMap
+    /// What `content` lists.
+    private var sheet: Sheet?
 
     /// A click closed the sheet; the window controller owns what else goes with closing.
     var onClose: (() -> Void)?
@@ -58,7 +64,8 @@ import LoupeCore
     func show() {
         guard isHidden else { return }
         isHidden = false
-        contentScale = 0   // built afresh: the menu's shortcuts and the Stash rows follow the settings
+        // The menu's shortcuts and the Stash rows follow the settings: built again only when they changed.
+        if Self.sheet(inputMap: inputMap) != sheet { contentScale = 0 }
         needsLayout = true
         DebugLog.log("cheat sheet open")
     }
@@ -84,6 +91,7 @@ import LoupeCore
         super.layout()
         guard !isHidden else { return }
         if contentScale == 0 {
+            sheet = Self.sheet(inputMap: inputMap)
             build(scale: 1)
             fullSize = content.fittingSize   // here, in the window, so the text is measured at the screen's scale
         }
@@ -102,7 +110,7 @@ import LoupeCore
 
     private func build(scale: CGFloat) {
         content.removeFromSuperview()
-        content = Self.makeContent(scale: scale, inputMap: inputMap)
+        content = Self.makeContent(sheet ?? Self.sheet(inputMap: inputMap), scale: scale)
         contentScale = scale
         panel.addSubview(content)
     }
@@ -144,41 +152,84 @@ import LoupeCore
 
     // MARK: Content
 
-    /// Title, then three columns (Navigation over Colour over View, Zoom over Scaling, Mouse over Mouse & Trackpad),
-    /// then how to close; every font size and gap times `k`. An action input.conf left without a key is not listed.
-    private static func makeContent(scale k: CGFloat, inputMap: InputMap) -> NSView {
+    /// The sections of the three columns (Navigation over Colour over View, Zoom over Scaling, Mouse over Mouse &
+    /// Trackpad), as text: cheap to make, so an opening compares it with what is built.
+    struct Sheet: Equatable {
+        struct Section: Equatable {
+            var title: String
+            var rows: [(keys: String, title: String)]
+
+            static func == (a: Section, b: Section) -> Bool {
+                a.title == b.title && a.rows.elementsEqual(b.rows) { $0.keys == $1.keys && $0.title == $1.title }
+            }
+        }
+
+        var columns: [[Section]]
+    }
+
+    /// An action input.conf left without a key is not listed.
+    static func sheet(inputMap: InputMap) -> Sheet {
+        typealias Section = Sheet.Section
+        func keys(_ group: KeyGroup) -> [(keys: String, title: String)] {
+            KeyAction.allCases.map { inputMap.keys.label($0) }.filter { $0.group == group && !$0.keys.isEmpty }
+                .map { ($0.keys, $0.title) }
+        }
+        let buttons = inputMap.mouseLabels()
+        let mouse = buttons.isEmpty ? [] : [Section(title: "Mouse", rows: buttons.map { ($0.input, $0.title) })]
+        let steps = inputMap.keys.stepLabels()
+        let custom = steps.isEmpty ? [] : [Section(title: "input.conf", rows: steps.map { ($0.keys, $0.title) })]
+        let stash = Settings.shared.config.stashURL == nil ? [] : [Section(title: "Stash", rows: stashRows)]
+        return Sheet(columns: [
+            [Section(title: "Navigation", rows: keys(.navigation)), Section(title: "Colour", rows: keys(.colour)),
+             Section(title: "View", rows: keys(.view))] + custom,
+            // input.conf's tab and window keys under the menu's.
+            [Section(title: "Zoom", rows: keys(.zoom)), Section(title: "Scaling", rows: keys(.scaling)),
+             Section(title: "Window", rows: menuRows() + keys(.tabs))] + stash,
+            mouse + [Section(title: "Mouse & Trackpad", rows: KeyMap.gestures.map { ($0.input, $0.title) })],
+        ])
+    }
+
+    /// Title, the columns, then how to close; every font size and gap times `k`.
+    private static func makeContent(_ sheet: Sheet, scale k: CGFloat) -> NSView {
         let keyFont = NSFont.systemFont(ofSize: 13 * k, weight: .semibold)
         let titleFont = NSFont.systemFont(ofSize: 13 * k)
         let headerFont = NSFont.systemFont(ofSize: 11 * k, weight: .bold)
         let padding = 24 * k
-        func section(_ title: String, _ rows: [(String, String)]) -> NSView {
-            let header = label(title.uppercased(), font: headerFont, color: NSColor(white: 1, alpha: 0.5))
-            // Rows of their own (not a grid, which hands spare height to its first row): the keys in a column as wide
-            // as the widest of this section's.
-            let keyLabels = rows.map { label($0.0, font: keyFont, color: .white) }
-            let keyWidth = (keyLabels.map(\.fittingSize.width).max() ?? 0).rounded(.up)
-            let lines = zip(keyLabels, rows).map { key, row -> NSView in
-                key.widthAnchor.constraint(equalToConstant: keyWidth).isActive = true
-                let line = NSStackView(views: [key, label(row.1, font: titleFont, color: NSColor(white: 1, alpha: 0.85))])
-                line.orientation = .horizontal
-                line.alignment = .firstBaseline
-                line.spacing = 14 * k
-                return line
-            }
-            let stack = NSStackView(views: [header] + lines)
+        // Both columns of a section on the same lines: one line height for both fonts, 5 pt between rows.
+        let lines = NSMutableParagraphStyle()
+        let lineHeight = ceil(max(keyFont.ascender - keyFont.descender + keyFont.leading,
+                                  titleFont.ascender - titleFont.descender + titleFont.leading))
+        lines.minimumLineHeight = lineHeight
+        lines.maximumLineHeight = lineHeight
+        lines.paragraphSpacing = 5 * k
+        lines.lineBreakMode = .byClipping
+        func column(_ texts: [String], font: NSFont, color: NSColor) -> NSTextField {
+            let field = NSTextField(labelWithAttributedString: NSAttributedString(
+                string: texts.joined(separator: "\n"),
+                attributes: [.font: font, .foregroundColor: color, .paragraphStyle: lines]))
+            field.maximumNumberOfLines = 0
+            return field
+        }
+        func section(_ section: Sheet.Section) -> NSView {
+            let header = label(section.title.uppercased(), font: headerFont, color: NSColor(white: 1, alpha: 0.5))
+            // The keys in a column as wide as the widest of this section's, the titles beside them.
+            let table = NSStackView(views: [
+                column(section.rows.map(\.keys), font: keyFont, color: .white),
+                column(section.rows.map(\.title), font: titleFont, color: NSColor(white: 1, alpha: 0.85)),
+            ])
+            table.orientation = .horizontal
+            table.alignment = .top
+            table.spacing = 14 * k
+            let stack = NSStackView(views: [header, table])
             stack.orientation = .vertical
             stack.alignment = .leading
-            stack.spacing = 5 * k
-            stack.setCustomSpacing(8 * k, after: header)
+            stack.spacing = 8 * k
             return stack
         }
-        func keys(_ group: KeyGroup) -> [(String, String)] {
-            KeyAction.allCases.map { inputMap.keys.label($0) }.filter { $0.group == group && !$0.keys.isEmpty }
-                .map { ($0.keys, $0.title) }
-        }
-        func column(_ views: [NSView]) -> NSStackView {
+        func column(_ sections: [Sheet.Section]) -> NSStackView {
             // A shorter column is as tall as the tallest one; the filler at its end takes the difference, so its
             // sections keep their spacing instead of spreading apart.
+            let views = sections.filter { !$0.rows.isEmpty }.map(section)
             let filler = NSView()
             filler.setContentHuggingPriority(.init(1), for: .vertical)
             let stack = NSStackView(views: views + [filler])
@@ -186,22 +237,10 @@ import LoupeCore
             stack.alignment = .leading
             stack.distribution = .fill
             stack.spacing = 22 * k
-            stack.setCustomSpacing(0, after: views[views.count - 1])
+            if let last = views.last { stack.setCustomSpacing(0, after: last) }
             return stack
         }
-        let buttons = inputMap.mouseLabels()
-        let mouse = buttons.isEmpty ? [] : [section("Mouse", buttons.map { ($0.input, $0.title) })]
-        let steps = inputMap.keys.stepLabels()
-        let custom = steps.isEmpty ? [] : [section("input.conf", steps.map { ($0.keys, $0.title) })]
-        let stash = Settings.shared.config.stashURL == nil ? [] : [section("Stash", stashRows)]
-        let columns = NSStackView(views: [
-            column([section("Navigation", keys(.navigation)), section("Colour", keys(.colour)), section("View", keys(.view))]
-                   + custom),
-            // input.conf's tab and window keys under the menu's.
-            column([section("Zoom", keys(.zoom)), section("Scaling", keys(.scaling)),
-                    section("Window", menuRows() + keys(.tabs))] + stash),
-            column(mouse + [section("Mouse & Trackpad", KeyMap.gestures.map { ($0.input, $0.title) })]),
-        ])
+        let columns = NSStackView(views: sheet.columns.map(column))
         columns.orientation = .horizontal
         columns.alignment = .top
         columns.spacing = 36 * k
@@ -225,12 +264,12 @@ import LoupeCore
         return wrapper
     }
 
-    private static func menuRows() -> [(String, String)] {
+    private static func menuRows() -> [(keys: String, title: String)] {
         MenuShortcuts.rows().map { ($0.input, $0.title) }
     }
 
     /// What Stash's page and its galleries answer to (StashKitUI's `StashLibraryView`, `BackButton`).
-    private static let stashRows: [(String, String)] = [
+    private static let stashRows: [(keys: String, title: String)] = [
         ("‹ Recent  ‹ Stash", "Over what Home opened: back there (⌘[)"),
         ("⌘[  ⌘]  ⌘←  ⌘→", "In Stash: back / forward a page"),
         ("Mouse back / forward", "In Stash: back / forward a page"),
