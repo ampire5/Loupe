@@ -13,32 +13,33 @@
 set -e
 cd "$(dirname "$0")/.."
 . scripts/libjxl-env.sh
-# lts/macos26: the tests are x86_64 ($LTS_TRIPLE). On an Intel Mac `swift test` builds and runs them as usual. On
-# Apple Silicon they are cross-built natively and only the test bundle runs under Rosetta, through SwiftPM's own
-# swift-testing helper: the compiler under Rosetta took most of CI's time, and `swift test` itself under Rosetta spent
-# minutes compiling the manifests again. Arguments go to the testing library (`--filter`, `--skip`, `--no-parallel`).
+# The tests are built for scripts/deps.arch ($DEPS_TRIPLE). For the Mac's own architecture `swift test` runs them as
+# usual. For x86_64 on Apple Silicon (lts/macos26's CI) they are cross-built natively and only the test bundle runs
+# under Rosetta, through SwiftPM's own swift-testing helper: the compiler under Rosetta took most of CI's time, and
+# `swift test` itself under Rosetta spent minutes compiling the manifests again. Arguments go to the testing library
+# (`--filter`, `--skip`, `--no-parallel`).
 mode=core
 case "$1" in
     core|render|full) mode=$1; shift ;;
 esac
 NICE=""
-if [ "$(uname -m)" = x86_64 ]; then
-    swift build --build-tests --triple "$LTS_TRIPLE"
-    tests() { $NICE swift test --skip-build --triple "$LTS_TRIPLE" "$@"; }
+if [ "$(uname -m)" = "$DEPS_ARCH" ]; then
+    swift build --build-tests --triple "$DEPS_TRIPLE"
+    tests() { $NICE swift test --skip-build --triple "$DEPS_TRIPLE" "$@"; }
 else
-    swift build --build-tests --triple "$LTS_TRIPLE"
+    swift build --build-tests --triple "$DEPS_TRIPLE"
     helper=$(dirname "$(xcrun --find swift)")/../libexec/swift/pm/swiftpm-testing-helper
-    bundle=$(swift build --triple "$LTS_TRIPLE" --show-bin-path)/LoupePackageTests.xctest/Contents/MacOS/LoupePackageTests
+    bundle=$(swift build --triple "$DEPS_TRIPLE" --show-bin-path)/LoupePackageTests.xctest/Contents/MacOS/LoupePackageTests
     if [ -x "$helper" ] && [ -f "$bundle" ]; then
         # The bundle finds swift-testing where swift test would point it; DYLD_* goes through arch's -e, as
         # /usr/bin/arch drops it from its own environment.
         platform=$(xcrun --show-sdk-platform-path)/Developer
         tests() {
-            $NICE arch -x86_64 -e DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks" -e DYLD_LIBRARY_PATH="$platform/usr/lib" \
+            $NICE arch "-$DEPS_ARCH" -e DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks" -e DYLD_LIBRARY_PATH="$platform/usr/lib" \
                 "$helper" --test-bundle-path "$bundle" --testing-library swift-testing "$@"
         }
     else
-        tests() { $NICE arch -x86_64 swift test --skip-build --triple "$LTS_TRIPLE" "$@"; }
+        tests() { $NICE arch "-$DEPS_ARCH" swift test --skip-build --triple "$DEPS_TRIPLE" "$@"; }
     fi
 fi
 tests --skip LoupeRenderTests "$@"

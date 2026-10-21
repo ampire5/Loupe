@@ -1,6 +1,7 @@
-name: Prebuilt dependencies (x86_64)
+name: Prebuilt dependencies
 
-# Builds scripts/build-deps.sh's recipe from source and publishes it as the pre-release deps-x86_64-<recipe hash>, which
+# Builds scripts/build-deps.sh's recipe for scripts/deps.arch from source and publishes it as the pre-release
+# deps-<arch>-<recipe hash>, which
 # scripts/deps.sh downloads (CI, releases, local builds). Runs when the recipe changes on lts/macos26 (GitHub offers
 # the manual run only for workflows that main has too); a recipe that is already published is left alone.
 on:
@@ -48,4 +49,4 @@ jobs:
           scripts/deps.sh pack out
           gh release create "$name" "out/$name.tar.xz" "out/$name.tar.xz.sha256" --target "$GITHUB_SHA" \
             --prerelease --latest=false --title "Build dependencies: $name" \
-            --notes "Static x86_64 libraries for the lts/macos26 line, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."
+            --notes "Static $(cat scripts/deps.arch) libraries for ${GITHUB_REF_NAME}, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."
