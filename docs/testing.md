@@ -27,3 +27,10 @@
 `metalfxGeometry`, `extremeZoom`, `orientedPathsMatchTheOrientedPicture`, `orientedEdgesHaveNoFringe`,
 `alphaCompositeMatchesReference` (~22 с по одному). Каждый путь отрисовки при этом остаётся в будничном рендер-прогоне
 с более дешёвыми проверками.
+
+## Intel (`lts/macos26`)
+
+В облачном CI ветка проверяется под Rosetta, без рендер-тестов (у виртуальных машин GitHub паравиртуальный GPU). На
+настоящем Intel Mac, подключённом как self-hosted runner, workflow *Intel Mac (self-hosted)* гоняет `scripts/test.sh
+render` и собирает приложение — на push в `lts/macos26` и вручную, никогда на pull request. Как подключить Mac:
+[docs/intel-runner.md](https://github.com/ampire5/FrameScrub/blob/lts/macos26/docs/intel-runner.md) в FrameScrub.
