@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 # renovate: datasource=github-tags depName=libjpeg-turbo/libjpeg-turbo
 jpeg_turbo_version=3.2.0
 # renovate: datasource=github-tags depName=google/brotli extractVersion=^v(?<version>.+)$
-brotli_version=1.2.0
+brotli_version=1.2.1
 # renovate: datasource=github-tags depName=google/highway
 highway_version=1.4.0
 # renovate: datasource=github-tags depName=strukturag/libde265 extractVersion=^v(?<version>.+)$
