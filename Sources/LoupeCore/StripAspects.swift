@@ -1,9 +1,10 @@
 import Foundation
 
-/// One strip's native cell aspects (spec §4.2, `strip-aspect=native`): what the thumbnail store knows of the
-/// playlist's files, with the unknown ones guessed as the median of the known (`StripLayout.filledAspects`).
+/// One strip's photo aspects (width / height, spec 2026-10-21): what the thumbnail store knows of the playlist's
+/// files, nil for the rest. `StripScrollLayout` needs no guess: a narrow cell is as wide without its photo's aspect,
+/// and the current photo's cell takes `unknownCurrentAspect` until its own arrives.
 ///
-/// The store is asked for every unknown file when the playlist (or the mode) changes, for a file when the store
+/// The store is asked for every unknown file when the playlist (or `exif-orientation`) changes, for a file when the store
 /// reports a thumbnail for it, and once more for every unknown file when the playlist's first cell picture
 /// arrives: the folder is synced into the catalog by then, and thumbnails already stored turn up without a
 /// notification, so the fetch at the playlist change may have come too early. Fetches run one at a time and no
@@ -19,13 +20,12 @@ import Foundation
 
     public nonisolated static let defaultInterval: Duration = .milliseconds(250)
 
-    public private(set) var mode = StripAspect.native
     /// `exif-orientation`: whether the aspects are the photos' oriented ones (the default) or the stored ones.
     public private(set) var appliesOrientation = true
-    /// For `StripLayout`: one per playlist file in native mode, nil in crop mode.
-    public private(set) var layoutAspects: StripLayout.Aspects?
-    /// Aspects that arrived changed `layoutAspects`: lay out again. Not called for `setMode` / `setPlaylist`,
-    /// whose callers lay out anyway.
+    /// One per playlist file, by index; nil while the store does not know it.
+    public private(set) var aspects: [Double?] = []
+    /// Aspects that arrived changed `aspects`: lay out again. Not called for `setAppliesOrientation` /
+    /// `setPlaylist`, whose callers lay out anyway.
     public var onChange: (() -> Void)?
     /// True while the strip's edge is dragged: the cells keep still. Back to false applies what arrived.
     public var paused = false {
@@ -41,7 +41,7 @@ import Foundation
     private var fileSet: Set<URL> = []
     /// What the store said, for the playlist's files only.
     private var known: [URL: Double] = [:]
-    /// `known` changed since `layoutAspects` was made.
+    /// `known` changed since `aspects` was made.
     private var stale = false
     /// Asked for at the next fetch: these files, and every unknown one when `askAll`.
     private var wanted: Set<URL> = []
@@ -63,24 +63,13 @@ import Foundation
     /// How many of the playlist's files have a known aspect (diagnostics).
     public var knownCount: Int { known.count }
 
-    /// `strip-aspect`. Aspects are not followed while cropped, so going native asks for all of them again.
-    public func setMode(_ mode: StripAspect) {
-        guard mode != self.mode else { return }
-        self.mode = mode
-        known = [:]
-        askedAllAfterFirstCell = false
-        makeLayoutAspects()
-        ask(all: true)
-    }
-
     /// `exif-orientation` changed: the known aspects (oriented or stored ones) are stale, all are asked for again.
     public func setAppliesOrientation(_ applies: Bool) {
         guard applies != appliesOrientation else { return }
         appliesOrientation = applies
-        guard mode == .native else { return }
         known = [:]
         askedAllAfterFirstCell = false
-        makeLayoutAspects()
+        makeAspects()
         ask(all: true)
     }
 
@@ -90,7 +79,7 @@ import Foundation
         fileSet = Set(files)
         known = known.filter { fileSet.contains($0.key) }
         askedAllAfterFirstCell = false
-        makeLayoutAspects()
+        makeAspects()
         ask(all: true)
     }
 
@@ -116,13 +105,13 @@ import Foundation
 
     // MARK: -
 
-    private func makeLayoutAspects() {
+    private func makeAspects() {
         stale = false
-        layoutAspects = mode == .native ? StripLayout.Aspects(StripLayout.filledAspects(files.map { known[$0] })) : nil
+        aspects = files.map { known[$0] }
     }
 
     private func ask(_ urls: [URL] = [], all: Bool = false) {
-        guard mode == .native, !closed else { return }
+        guard !closed else { return }
         wanted.formUnion(urls.lazy.filter { self.fileSet.contains($0) })
         askAll = askAll || all
         guard !wanted.isEmpty || askAll else { return }
@@ -144,8 +133,8 @@ import Foundation
             let found = urls.isEmpty ? [:] : await self.fetch(urls, applies)
             guard !Task.isCancelled else { return }
             self.task = nil
-            // A playlist, mode or `exif-orientation` that changed meanwhile asked for its own.
-            if self.files == playlist, self.mode == .native, self.appliesOrientation == applies {
+            // A playlist or `exif-orientation` that changed meanwhile asked for its own.
+            if self.files == playlist, self.appliesOrientation == applies {
                 for (url, aspect) in found where self.fileSet.contains(url) && self.known[url] != aspect {
                     self.known[url] = aspect
                     self.stale = true
@@ -158,7 +147,7 @@ import Foundation
 
     private func apply() {
         guard stale, !paused, !closed else { return }
-        makeLayoutAspects()
+        makeAspects()
         lastChange = now()
         onChange?()
     }

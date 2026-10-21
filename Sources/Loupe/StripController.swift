@@ -98,7 +98,6 @@ extension Notification.Name {
     private var files: [URL] = []
     /// The playlist and aspect mode of the view's layout: a sampled strip keeps its cell count only for them.
     private var laidFiles: [URL] = []
-    private var laidMode = StripAspect.native
     /// The file each cell shows, and the file whose picture (or placeholder) the cell holds for good with the
     /// pixel size it was asked for at: a cell is asked for again while the files differ or the size is off.
     private var cellFiles: [URL] = []
@@ -203,12 +202,6 @@ extension Notification.Name {
             view.magnifyLimit = magnifyLimit
             retarget()
             loadCells()   // other magnified pixel sizes
-        }
-        if config.stripAspect != aspects.mode {
-            aspects.setMode(config.stripAspect)
-            DebugLog.log("strip aspect \(config.stripAspect.rawValue)")
-            relayout()
-            reloadAll()   // other pixel sizes
         }
         if config.exifOrientation != aspects.appliesOrientation {
             // Thumbnails are stored turned: with the key off the cells turn back to the stored layout, at the stored aspect.
@@ -442,13 +435,13 @@ extension Notification.Name {
     /// The files are compared too: another folder of the same length has an equal layout.
     private func relayout() {
         let width = Double(view.bounds.width), height = Double(cellHeight)
-        let preferred = laidFiles == files && laidMode == aspects.mode
+        let preferred = laidFiles == files
             ? StripLayout.preferredCount(after: view.layout, fileCount: files.count, width: width, cellHeight: height) : nil
         let layout = StripLayout(fileCount: files.count, width: width, cellHeight: height,
-                                 aspects: aspects.layoutAspects, preferredCount: preferred)
+                                 aspects: StripLayout.Aspects(StripLayout.filledAspects(aspects.aspects)),
+                                 preferredCount: preferred)
         let shown = layout.cells.map { files[$0.file] }
         laidFiles = files
-        laidMode = aspects.mode
         guard layout != view.layout || shown != cellFiles else { return }
         view.layout = layout
         scroll.settle()   // interim until the strip is rebuilt on StripScrollLayout
