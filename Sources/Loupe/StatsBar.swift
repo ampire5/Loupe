@@ -148,7 +148,7 @@ import LoupeCore
         } else if let entry = session.entry, let info = entry.info, let list = session.playlist {
             // The photo on screen, which is the previous one until the cache answers for a new current photo.
             index = entry.url == list.current ? list.index : list.files.firstIndex(of: entry.url) ?? list.index
-            text = StatsLine.loaded(name: entry.url.lastPathComponent, index: index, count: list.files.count,
+            text = StatsLine.loaded(name: ArchivePath.shortName(entry.url), index: index, count: list.files.count,
                                     counted: session.folderCounted,
                                     info: info, applyingOrientation: session.appliesOrientation,
                                     transform: session.zoomTarget ?? session.transform,   // a zoom animation's target
