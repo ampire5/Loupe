@@ -1391,6 +1391,8 @@ import UniformTypeIdentifiers
         guard let window, window.isKeyWindow, !cheatSheet.isOpen else { return false }
         let responder = window.firstResponder
         guard responder !== viewerView, !(responder is NSTextInputClient) else { return false }
+        // A name being typed in the grid ("Sofa") takes its F: full screen only as a first letter.
+        if let browser = homeView?.browser, responder === browser, browser.isTypingName(at: event.timestamp) { return false }
         let flags = event.modifierFlags
         guard flags.isDisjoint(with: [.command, .control]) else { return false }
         var modifiers: KeyModifiers = []
