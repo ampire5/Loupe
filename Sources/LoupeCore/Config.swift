@@ -267,7 +267,7 @@ public struct Config: Equatable, Sendable {
 
     // The thumbnail strip and thumbnail cache (M2.5 spec §7).
     /// `strip-window`: how the strip shows in a window; fullscreen always uses the overlay.
-    public var stripWindow = StripWindowMode.overlay
+    public var stripWindow = StripWindowMode.bar
     public static let stripHeightRange = 40...240
 
     /// A requested strip height (a drag's raw value, say) as a whole number of points inside `stripHeightRange`.
@@ -277,7 +277,11 @@ public struct Config: Equatable, Sendable {
     }
 
     /// `strip-height`: cell height in points, 40...240 (also set by dragging the strip's top edge).
-    public var stripHeight = 64
+    public var stripHeight = 68
+    public static let stripCellMaxRange = 0.5625...1.5
+    /// `strip-cell-max`: how wide (width : height) a strip cell may grow when the strip has room, 0.5625 (9:16, never
+    /// wider than the narrow cell) ...1.5 (3:2); never wider than the cell's photo. A number or `w:h` in loupe.conf.
+    public var stripCellMax = 1.5
     /// `strip-aspect`: cell shape.
     public var stripAspect = StripAspect.native
     /// `strip-magnify`: the Dock-style magnification of the cell under the cursor, 1 (none) ...4; the strip caps it
@@ -294,7 +298,7 @@ public struct Config: Equatable, Sendable {
     public var stripMagnifyLimit = 15.0
     /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square); a magnified cell scales
     /// it with its height.
-    public var stripCornerRadius = 4.0
+    public var stripCornerRadius = 3.0
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`StripScroll`).
     public var stripScrollDirection = StripScrollDirection.natural
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
@@ -517,8 +521,7 @@ public struct Config: Equatable, Sendable {
                               "auto-color", "auto-color-method", "auto-color-strength", "auto-color-filters",
                               "auto-color-vibrance-gain", "auto-color-threshold", "auto-color-full", "auto-color-fade",
                               "vibrance", "vibrance-amount",
-                              "strip-window", "strip-height", "strip-aspect", "strip-magnify", "strip-magnify-reach",
-                              "strip-magnify-limit", "strip-corner-radius", "strip-scroll-direction",
+                              "strip-window", "strip-height", "strip-cell-max", "strip-corner-radius", "strip-scroll-direction",
                               "strip-hide-delay", "strip-fade-in", "strip-fade-out",
                               "strip-jump-preview", "strip-loading-indicator",
                               "thumb-size", "thumb-cache-size", "folder-poll", "folder-view-memory",
@@ -629,10 +632,7 @@ public struct Config: Equatable, Sendable {
         case "cursor-autohide": return cursorAutohideMilliseconds.map(String.init) ?? "no"
         case "strip-window": return stripWindow.rawValue
         case "strip-height": return String(stripHeight)
-        case "strip-aspect": return stripAspect.rawValue
-        case "strip-magnify": return formatNumber(stripMagnify)
-        case "strip-magnify-reach": return formatNumber(stripMagnifyReach)
-        case "strip-magnify-limit": return formatNumber(stripMagnifyLimit)
+        case "strip-cell-max": return formatNumber(stripCellMax)
         case "strip-corner-radius": return formatNumber(stripCornerRadius)
         case "strip-scroll-direction": return stripScrollDirection.rawValue
         case "strip-hide-delay": return String(stripHideDelayMilliseconds)
@@ -853,15 +853,8 @@ public struct Config: Equatable, Sendable {
             if let v = StripWindowMode(rawValue: value.lowercased()) { stripWindow = v } else { return .badValue }
         case "strip-height":
             if let v = Int(value), Self.stripHeightRange.contains(v) { stripHeight = v } else { return .badValue }
-        case "strip-aspect":
-            if let v = StripAspect(rawValue: value.lowercased()) { stripAspect = v } else { return .badValue }
-        case "strip-magnify":
-            if let v = Double(value), (1...4).contains(v) { stripMagnify = v } else { return .badValue }
-        case "strip-magnify-reach":
-            if let v = Double(value), (0...6).contains(v) { stripMagnifyReach = v } else { return .badValue }
-        case "strip-magnify-limit":
-            if let v = Double(value), Self.stripMagnifyLimitRange.contains(v) { stripMagnifyLimit = v }
-            else { return .badValue }
+        case "strip-cell-max":
+            if let v = Self.aspect(value), Self.stripCellMaxRange.contains(v) { stripCellMax = v } else { return .badValue }
         case "strip-corner-radius":
             if let v = Double(value), (0...16).contains(v) { stripCornerRadius = v } else { return .badValue }
         case "strip-scroll-direction":
@@ -1027,6 +1020,10 @@ public struct Config: Equatable, Sendable {
             }
             let key = line[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
             let value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if retiredKeys.contains(key) {
+                warnings.append("\(location): '\(key)' is no longer used")
+                continue
+            }
             let bad = "\(location): bad option '\(key)=\(value)'"
             switch config.set(key, value) {
             case .ok:
@@ -1103,6 +1100,26 @@ public struct Config: Equatable, Sendable {
         if bytes % (1 << 30) == 0 { return "\(bytes >> 30)G" }
         if bytes % (1 << 20) == 0 { return "\(bytes >> 20)M" }
         return String(bytes)
+    }
+
+    /// Keys loupe.conf may still hold from earlier versions: each line gets one warning and its value is ignored.
+    public static let retiredKeys: Set<String> = ["strip-aspect", "strip-magnify", "strip-magnify-reach",
+                                                  "strip-magnify-limit"]
+
+    /// `1.5` or `3:2` (both sides positive) → width / height; nil for anything else or a non-finite result.
+    private static func aspect(_ value: String) -> Double? {
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        let result: Double?
+        switch parts.count {
+        case 1: result = Double(value)
+        case 2:
+            guard let w = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+                  let h = Double(parts[1].trimmingCharacters(in: .whitespaces)), w > 0, h > 0 else { return nil }
+            result = w / h
+        default: result = nil
+        }
+        guard let result, result.isFinite else { return nil }
+        return result
     }
 
     private static func bool(_ value: String) -> Bool? {

@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 122)
+        #expect(Config.keys.count == 119)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -104,7 +104,6 @@ struct PagesTests {
         #expect(set("default-zoom-mode").isSuperset(of: ["fit", "fit-width", "fit-height", "fill", "100%"]))
         #expect(set("auto-color-method") == Set(AutoColorMethod.allCases.map(\.rawValue)))
         #expect(set("strip-window") == ["overlay", "bar", "off"])
-        #expect(set("strip-aspect") == ["native", "crop"])
         #expect(set("strip-scroll-direction") == ["natural", "reversed"])
         #expect(set("wheel-direction") == Set(WheelDirection.allCases.map(\.rawValue)))
         #expect(set("mx-side-buttons") == Set(SideButtonsMode.allCases.map(\.rawValue)))
@@ -137,7 +136,6 @@ struct PagesTests {
         #expect(nested("mouse-haptics") == ["haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle",
                                             "haptic-long-armed", "haptic-detent", "haptic-end", "haptic-strength",
                                             "haptic-strong-strength"])
-        #expect(nested("strip-magnify") == ["strip-magnify-reach", "strip-magnify-limit"])
         #expect(nested("stats-progress") == ["stats-progress-opacity"])
         #expect(nested("vibrance") == ["vibrance-amount"])
         #expect(nested("auto-color") == ["auto-color-method", "auto-color-strength", "auto-color-filters",
@@ -151,10 +149,6 @@ struct PagesTests {
         #expect(pan?.turnsNestedOff(value: "no") == true)
         #expect(pan?.turnsNestedOff(value: "auto") == false)
         #expect(pan?.turnsNestedOff(value: "always") == false)
-        // strip-magnify=1 is no magnification (Config: 1…4).
-        let magnify = row("strip-magnify")
-        #expect(magnify?.turnsNestedOff(value: "1") == true)
-        #expect(magnify?.turnsNestedOff(value: "2") == false)
         #expect(row("mouse-haptics")?.turnsNestedOff(value: "no") == true)
         #expect(row("stats-progress")?.turnsNestedOff(value: "no") == true)
         // A folder can switch auto colour and vibrance on (c, v) while loupe.conf has them off: their rows stay usable.
