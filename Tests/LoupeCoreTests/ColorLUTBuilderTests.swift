@@ -290,10 +290,13 @@ private func throughCoreImage(_ image: CGImage, steps: [AutoColorStep], share: D
 // guard against a lost order of magnitude, not a benchmark (the debug build runs the per-node loops unoptimised).
 @Test func cubeBuildTime() throws {
     #if DEBUG
-    let budget = 200.0
+    var budget = 200.0
     #else
-    let budget = 10.0
+    var budget = 10.0
     #endif
+    // lts/macos26's CI runs the x86_64 tests under Rosetta, which takes the per-node loops ~1.5x longer.
+    var translated: Int32 = 0, size = MemoryLayout<Int32>.size
+    if sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0, translated == 1 { budget *= 2 }
     let s = settings(vibrance: true)
     let space = CGColorSpace(name: CGColorSpace.displayP3)!
     let first = Date()
