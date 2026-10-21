@@ -198,7 +198,11 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 
 ## Install
 
-Loupe needs macOS 26 or later and an Apple Silicon Mac.
+> **This is the `lts/macos26` branch: Loupe for Intel Macs on macOS 26**, the last macOS for them, supported until
+> Apple ends macOS 26 security updates (expected autumn 2028). Fixes and selected features come over from `main`
+> ([LTS_POLICY.md](https://github.com/ampire5/FrameScrub/blob/lts/macos26/LTS_POLICY.md)). On Apple Silicon, use `main`.
+
+Loupe LTS needs macOS 26 on an Intel Mac. Downloads: the `-lts` releases, `macOS-x86_64`.
 
 ```sh
 brew install --cask ampire5/tap/loupe
@@ -214,20 +218,14 @@ xattr -dr com.apple.quarantine /Applications/Loupe.app
 
 ### Build from source
 
-You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
+You need macOS 26 and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon). On Apple Silicon the scripts run themselves under Rosetta: the LTS app is x86_64.
 
 ```sh
-brew install jpeg-turbo cmake ninja brotli highway libheif   # libheif: only for the LoupeBench target
-
-# Loupe links its own libjxl (v0.12.0 + the DC preview functions): clone it next to Loupe
-git clone -b loupe https://github.com/ampire5/libjxl ../libjxl
-git -C ../libjxl submodule update --init --recursive
-scripts/build-libjxl.sh
-
+brew install cmake ninja nasm pkgconf
 scripts/make-app.sh --install      # → ~/Applications/Loupe.app
 ```
 
-`make-app.sh` bundles the libraries into the app and checks that nothing links outside it, so the app runs without Homebrew afterwards. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at your build.
+The first build runs `scripts/build-deps.sh`: libjpeg-turbo, brotli, highway, Loupe's own libjxl (v0.12.0 + the DC preview functions, branch `loupe` of [ampire5/libjxl](https://github.com/ampire5/libjxl)) and libheif (LoupeBench only), x86_64 and static, into `.deps/x86_64`. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
 
 ### Uninstall
 

@@ -1,46 +1,52 @@
-name: CI
+name: CI (LTS, Intel)
 
+# The lts/macos26 line: macOS 26 on Intel Macs (LTS_POLICY.md in FrameScrub). GitHub has no Intel runner with macOS 26,
+# so the job runs on the Apple Silicon macos-26 image with the build steps under Rosetta: SwiftPM builds and tests x86_64.
 on:
   push:
-    branches: [main]
+    branches: [lts/macos26]
   pull_request:
 
-env:
-  LOUPE_LIBJXL: ${{ github.workspace }}/../libjxl
+defaults:
+  run:
+    shell: arch -x86_64 /bin/bash -eo pipefail {0}
 
 jobs:
   test:
-    runs-on: xcode-27
-    timeout-minutes: 60
+    runs-on: macos-26
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain
-        run: swift --version
-      - name: Homebrew dependencies
-        run: brew install jpeg-turbo cmake ninja brotli highway libheif
-      # Loupe links its own libjxl: v0.12.0 plus the DC preview functions, branch `loupe` of the fork.
-      - name: Clone libjxl
+      - uses: actions/checkout@v5
+      - name: Rosetta and Xcode 26
+        shell: bash
         run: |
-          git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
-          git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
-          echo "LIBJXL_SHA=$(git -C "$LOUPE_LIBJXL" rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Cache libjxl build
-        id: libjxl
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - name: Toolchain
+        run: |
+          uname -m
+          swift --version
+      - name: Homebrew tools
+        shell: bash
+        run: brew install cmake ninja nasm pkgconf
+      - name: libjxl revision
+        run: echo "LIBJXL_SHA=$(git ls-remote https://github.com/ampire5/libjxl refs/heads/loupe | cut -f1)" >> "$GITHUB_ENV"
+      - name: Cache decoders
         uses: actions/cache@v4
         with:
-          path: ${{ env.LOUPE_LIBJXL }}/dist
-          key: libjxl-${{ runner.os }}-${{ env.LIBJXL_SHA }}
-      - name: Build libjxl
-        if: steps.libjxl.outputs.cache-hit != 'true'
-        run: scripts/build-libjxl.sh
+          path: .deps/x86_64
+          key: deps-x86_64-${{ hashFiles('scripts/build-deps.sh') }}-${{ env.LIBJXL_SHA }}
+      - name: Build decoders
+        run: scripts/build-deps.sh
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
       - name: Build the app
         run: scripts/make-app.sh
       - name: Upload the app
-        run: ditto -c -k --keepParent build/Loupe.app Loupe-macOS-arm64.zip
+        run: ditto -c -k --keepParent build/Loupe.app Loupe-macOS-x86_64.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: Loupe-macOS-arm64
-          path: Loupe-macOS-arm64.zip
+          name: Loupe-macOS-x86_64
+          path: Loupe-macOS-x86_64.zip

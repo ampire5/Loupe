@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Builds build/Loupe.app (release). Only the Loupe product is built. Its decoders (libjpeg-turbo from Homebrew, Loupe's
-# own libjxl from ../libjxl/dist — scripts/build-libjxl.sh — and their dependencies) are copied into
-# Contents/Frameworks by bundle-dylibs.sh; libheif is not linked by the app.
+# Builds build/Loupe.app (release, x86_64: the lts/macos26 line). Only the Loupe product is built. Its decoders
+# (libjpeg-turbo, Loupe's own libjxl and their dependencies) are linked in statically (scripts/build-deps.sh), so the
+# app bundles no dylibs; libheif is not linked by the app.
 # Usage: scripts/make-app.sh [--install]   (--install copies the app to ~/Applications)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+[[ $(uname -m) == x86_64 ]] || exec arch -x86_64 /bin/bash "$0" "$@"
 . scripts/libjxl-env.sh
 swift build -c release --product Loupe
 app=build/Loupe.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/Loupe" "$app/Contents/MacOS/Loupe"
-scripts/bundle-dylibs.sh "$app"
-# The bundle must run on a Mac without Homebrew: every link of the binary and of each bundled dylib must be a
-# system library or a dylib inside Contents/Frameworks, and no rpath may point outside the bundle/system.
+[[ $(lipo -archs "$app/Contents/MacOS/Loupe") == x86_64 ]] \
+    || { echo "error: Loupe is $(lipo -archs "$app/Contents/MacOS/Loupe"), not x86_64" >&2; exit 1; }
+# The bundle must run on a Mac without Homebrew: every link of the binary must be a system library (or a dylib inside
+# Contents/Frameworks, should one come back), and no rpath may point outside the bundle/system.
 # (Command output is captured first: with pipefail, `otool | grep -q` can fail spuriously when grep quits early.)
 check_links() {
     local bad=0 file links rpaths line name
@@ -81,10 +83,6 @@ if xcrun --find actool >/dev/null 2>&1; then
 else
     echo "warning: actool not found (needs Xcode); Loupe.app gets the generic icon" >&2
 fi
-# Sign nested code first (install_name_tool invalidated the signatures), then the app.
-for dylib in "$app"/Contents/Frameworks/*.dylib; do
-    codesign --force --sign - "$dylib"
-done
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
 echo "Built $app"

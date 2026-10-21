@@ -8,9 +8,10 @@
 | `scripts/test.sh render` | + рендер-тесты без матриц сверки с эталоном на CPU, по одному, `nice` | ~78 с, ~88 с CPU (одно ядро) | задача трогает `LoupeRender`, шейдеры, `ViewTransform`, цвет |
 | `scripts/test.sh full` | + матрицы сверки (`LOUPE_FULL_TESTS=1`, `TestLevel.fullOnly`), по одному, `nice` | дольше, одно ядро | перед слиянием ветки, после правок рендера |
 
-Loupe собирается со своей libjxl (клон рядом с репозиторием — `../libjxl` или `$LOUPE_LIBJXL`, ветка `loupe`): один раз и после правок ветки — `scripts/build-libjxl.sh`;
-`test.sh` и `make-app.sh` подключают её через `scripts/libjxl-env.sh`. Голый `swift build` без этого падает на
-`JxlDecoderLoupeVersion` — так и задумано.
+Ветка `lts/macos26` (x86_64): декодеры, включая свою libjxl (ветка `loupe` форка ampire5/libjxl), собираются статически
+в `.deps/x86_64` скриптом `scripts/build-deps.sh` — `test.sh` и `make-app.sh` запускают его сами при первой сборке и
+подключают через `scripts/libjxl-env.sh`; на Apple Silicon скрипты перезапускаются под Rosetta. Голый `swift build` без этого
+падает на `JxlDecoderLoupeVersion` — так и задумано.
 
 Дополнительные аргументы (`--filter X`) уходят в каждый вызов `swift test`. Повторные `--filter` объединяются по ИЛИ, поэтому
 если передан свой `--filter`, рендер-прогон берёт его вместо стандартного `--filter LoupeRenderTests` и сужается до него

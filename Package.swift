@@ -8,12 +8,13 @@ let package = Package(
         .executable(name: "Loupe", targets: ["Loupe"]),
         .executable(name: "LoupeBench", targets: ["LoupeBench"]),
     ],
+    // lts/macos26: the kits' LTS branches, which take the same backports as this one (LTS_POLICY.md in FrameScrub).
     dependencies: [
-        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/LogiHIDPP.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/StashKit.git", from: "0.1.0"),
+        .package(url: "https://github.com/ampire5/HomeScreenKit.git", branch: "lts/macos26"),
+        .package(url: "https://github.com/ampire5/InfoPanelKit.git", branch: "lts/macos26"),
+        .package(url: "https://github.com/ampire5/LogiHIDPP.git", branch: "lts/macos26"),
+        .package(url: "https://github.com/ampire5/SettingsKit.git", branch: "lts/macos26"),
+        .package(url: "https://github.com/ampire5/StashKit.git", branch: "lts/macos26"),
     ],
     targets: [
         .systemLibrary(name: "CTurboJPEG", pkgConfig: "libturbojpeg", providers: [.brew(["jpeg-turbo"])]),

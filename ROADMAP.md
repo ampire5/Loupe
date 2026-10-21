@@ -27,5 +27,5 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 ## Not planned
 
 - **Developer ID signing and notarization** — not for now. Install with Homebrew (it clears the quarantine flag) or allow the app once in System Settings.
-- **Intel Macs and macOS before 26.** Loupe is built on Metal and the macOS 26 interface.
+- **macOS before 26.** Loupe is built on Metal and the macOS 26 interface. Intel Macs on macOS 26 have this LTS branch.
 - **Editing.** Loupe shows photos; colour adjustments are never written to your files.

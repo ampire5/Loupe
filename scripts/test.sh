@@ -11,7 +11,10 @@
 # Extra arguments go to every `swift test` call (e.g. --filter PanRubberTests). Repeated --filter options are OR-ed, so
 # when the caller passes --filter, the render pass uses it instead of the default LoupeRenderTests filter: it narrows.
 set -e
-. "$(dirname "$0")/libjxl-env.sh"
+# lts/macos26: the tests run as x86_64, under Rosetta on Apple Silicon.
+[ "$(uname -m)" = x86_64 ] || exec arch -x86_64 /bin/sh "$0" "$@"
+cd "$(dirname "$0")/.."
+. scripts/libjxl-env.sh
 mode=core
 case "$1" in
     core|render|full) mode=$1; shift ;;
