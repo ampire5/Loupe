@@ -1,0 +1,51 @@
+{
+  "originHash" : "3c05f3fd3451120af54705199b698bac9180ac1f2738f4a5c3015840ad5455e7",
+  "pins" : [
+    {
+      "identity" : "homescreenkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/HomeScreenKit.git",
+      "state" : {
+        "branch" : "lts/macos26",
+        "revision" : "c968a2a577ff47314685f0575f1b1a7c99964a6d"
+      }
+    },
+    {
+      "identity" : "infopanelkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/InfoPanelKit.git",
+      "state" : {
+        "branch" : "lts/macos26",
+        "revision" : "c1143fb5ab30aa836151597607e029d42b7de513"
+      }
+    },
+    {
+      "identity" : "logihidpp",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/LogiHIDPP.git",
+      "state" : {
+        "branch" : "lts/macos26",
+        "revision" : "92af78ff4abe5ee3812833c2ad1e7836b822132f"
+      }
+    },
+    {
+      "identity" : "settingskit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/SettingsKit.git",
+      "state" : {
+        "branch" : "lts/macos26",
+        "revision" : "4cfe44d0c8d1ab25cdda5943d2e6fc04067d4602"
+      }
+    },
+    {
+      "identity" : "stashkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ampire5/StashKit.git",
+      "state" : {
+        "branch" : "lts/macos26",
+        "revision" : "9a0839b14561c6348a269ae38b254d4fa47f868a"
+      }
+    }
+  ],
+  "version" : 3
+}
