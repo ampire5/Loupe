@@ -11,20 +11,26 @@
 # Extra arguments go to every `swift test` call (e.g. --filter PanRubberTests). Repeated --filter options are OR-ed, so
 # when the caller passes --filter, the render pass uses it instead of the default LoupeRenderTests filter: it narrows.
 set -e
-# lts/macos26: the tests run as x86_64, under Rosetta on Apple Silicon.
-[ "$(uname -m)" = x86_64 ] || exec arch -x86_64 /bin/sh "$0" "$@"
 cd "$(dirname "$0")/.."
 . scripts/libjxl-env.sh
+# lts/macos26: the tests are x86_64 ($LTS_TRIPLE). On Apple Silicon they are cross-built natively and only run under
+# Rosetta (the compiler under Rosetta took most of CI's time); on an Intel Mac `swift test` builds them as usual.
+if [ "$(uname -m)" = x86_64 ]; then
+    run="" build=""
+else
+    swift build --build-tests --triple "$LTS_TRIPLE"
+    run="arch -x86_64" build="--skip-build"
+fi
 mode=core
 case "$1" in
     core|render|full) mode=$1; shift ;;
 esac
-swift test --skip LoupeRenderTests "$@"
+$run swift test $build --triple "$LTS_TRIPLE" --skip LoupeRenderTests "$@"
 render_filter="--filter LoupeRenderTests"
 for arg in "$@"; do
     case "$arg" in --filter|--filter=*) render_filter="" ;; esac
 done
 case "$mode" in
-    render) nice -n 15 swift test --skip-build --no-parallel $render_filter "$@" ;;
-    full) LOUPE_FULL_TESTS=1 nice -n 15 swift test --skip-build --no-parallel $render_filter "$@" ;;
+    render) nice -n 15 $run swift test --skip-build --triple "$LTS_TRIPLE" --no-parallel $render_filter "$@" ;;
+    full) LOUPE_FULL_TESTS=1 nice -n 15 $run swift test --skip-build --triple "$LTS_TRIPLE" --no-parallel $render_filter "$@" ;;
 esac

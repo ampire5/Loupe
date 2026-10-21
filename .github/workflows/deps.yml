@@ -12,10 +12,6 @@ on:
 permissions:
   contents: write
 
-defaults:
-  run:
-    shell: arch -x86_64 /bin/bash -eo pipefail {0}
-
 jobs:
   publish:
     runs-on: macos-26
@@ -35,14 +31,12 @@ jobs:
           fi
       - name: Rosetta and Xcode 26
         if: steps.check.outputs.published != 'true'
-        shell: bash
         run: |
           /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
           xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
           sudo xcode-select -s "$xcode"
       - name: Homebrew tools
         if: steps.check.outputs.published != 'true'
-        shell: bash
         run: brew install cmake ninja nasm pkgconf
       - name: Build from source
         if: steps.check.outputs.published != 'true'

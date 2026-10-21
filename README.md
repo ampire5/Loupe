@@ -218,7 +218,7 @@ xattr -dr com.apple.quarantine /Applications/Loupe.app
 
 ### Build from source
 
-You need macOS 26 and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon). On Apple Silicon the scripts run themselves under Rosetta: the LTS app is x86_64.
+You need macOS 26 and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon). On Apple Silicon the scripts cross-build x86_64 (the LTS app's architecture) and run the tests under Rosetta.
 
 ```sh
 brew install cmake ninja nasm pkgconf

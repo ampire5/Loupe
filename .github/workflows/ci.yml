@@ -1,16 +1,13 @@
 name: CI (LTS, Intel)
 
 # The lts/macos26 line: macOS 26 on Intel Macs (LTS_POLICY.md in FrameScrub). GitHub has no Intel runner with macOS 26,
-# so the job runs on the Apple Silicon macos-26 image with the build steps under Rosetta: SwiftPM builds and tests x86_64.
+# so the job runs on the Apple Silicon macos-26 image: SwiftPM cross-builds x86_64 natively, and the tests run under
+# Rosetta.
 on:
   push:
     branches: [lts/macos26]
   pull_request:
   workflow_dispatch:
-
-defaults:
-  run:
-    shell: arch -x86_64 /bin/bash -eo pipefail {0}
 
 jobs:
   test:
@@ -19,7 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Rosetta and Xcode 26
-        shell: bash
         run: |
           /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
           xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
@@ -29,7 +25,6 @@ jobs:
           uname -m
           swift --version
       - name: Homebrew tools
-        shell: bash
         run: brew install cmake ninja nasm pkgconf
       - name: Cache decoders
         uses: actions/cache@v4

@@ -5,13 +5,12 @@
 # Usage: scripts/make-app.sh [--install]   (--install copies the app to ~/Applications)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[[ $(uname -m) == x86_64 ]] || exec arch -x86_64 /bin/bash "$0" "$@"
 . scripts/libjxl-env.sh
-swift build -c release --product Loupe
+swift build -c release --triple "$LTS_TRIPLE" --product Loupe
 app=build/Loupe.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$(swift build -c release --show-bin-path)/Loupe" "$app/Contents/MacOS/Loupe"
+cp "$(swift build -c release --triple "$LTS_TRIPLE" --show-bin-path)/Loupe" "$app/Contents/MacOS/Loupe"
 [[ $(lipo -archs "$app/Contents/MacOS/Loupe") == x86_64 ]] \
     || { echo "error: Loupe is $(lipo -archs "$app/Contents/MacOS/Loupe"), not x86_64" >&2; exit 1; }
 # The bundle must run on a Mac without Homebrew: every link of the binary must be a system library (or a dylib inside
