@@ -193,12 +193,12 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 | **Colour** | Auto colour and vibrance from Core Image's analysis, baked into a 33³ colour cube that is applied on the GPU, so every frame costs the same. |
 | **Storage** | SQLite (the C API, no ORM) for the thumbnail catalog, sessions and per-folder settings. Zip archives are read in place through Compression and zlib. |
 | **Input** | `input.conf` bindings for keys, mouse buttons, trackpad gestures and chords; the MX Master 4 over IOKit HID with [LogiHIDPP](https://github.com/ampire5/LogiHIDPP), a HID++ 2.0 library written for this. |
-| **Structure** | A SwiftPM package with no Xcode project: `LoupeCore` (files, decoding, cache, config, with no UI), `LoupeRender` (Metal), `LoupeSettings` and the app, on top of the shared packages HomeScreenKit, InfoPanelKit, SettingsKit and StashKit. About 38 000 lines of Swift; scripts assemble the `.app` and bundle the dylibs. |
+| **Structure** | A SwiftPM package with no Xcode project: `LoupeCore` (files, decoding, cache, config, with no UI), `LoupeRender` (Metal), `LoupeSettings` and the app, on top of the shared packages HomeScreenKit, InfoPanelKit, SettingsKit and StashKit. About 38 000 lines of Swift; scripts build the decoders and assemble the `.app`. |
 | **Tests** | 1 789 tests in Swift Testing, including pixel-exact render tests against Core Graphics and a CPU reference; `LoupeBench` for decoding, rendering and browsing numbers; CI on GitHub Actions. |
 
 ## Install
 
-Loupe needs macOS 26 or later and an Apple Silicon Mac.
+Loupe needs macOS 26 or later and an Apple Silicon Mac. Intel Macs on macOS 26 get the [`lts/macos26`](https://github.com/ampire5/Loupe/tree/lts/macos26) line: the `-lts` releases, which the cask picks on Intel.
 
 ```sh
 brew install --cask ampire5/tap/loupe
@@ -217,18 +217,11 @@ xattr -dr com.apple.quarantine /Applications/Loupe.app
 You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
 
 ```sh
-brew install jpeg-turbo cmake ninja brotli highway libheif   # libheif: only for the LoupeBench target
-
-# Loupe links its own libjxl (v0.12.0 + the DC preview functions): clone it next to Loupe
-git clone -b loupe https://github.com/ampire5/libjxl ../libjxl
-git -C ../libjxl checkout "$(cat scripts/libjxl.commit)"   # the commit CI and releases build
-git -C ../libjxl submodule update --init --recursive
-scripts/build-libjxl.sh
-
+brew install cmake ninja pkgconf
 scripts/make-app.sh --install      # → ~/Applications/Loupe.app
 ```
 
-`make-app.sh` bundles the libraries into the app and checks that nothing links outside it, so the app runs without Homebrew afterwards. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at your build.
+Loupe links its decoders statically: libjpeg-turbo, brotli, highway, Loupe's own libjxl (v0.12.0 + the DC preview functions, branch `loupe` of [ampire5/libjxl](https://github.com/ampire5/libjxl), the commit pinned in `scripts/build-deps.sh`) and libheif (LoupeBench only), arm64. The first build downloads them prebuilt into `.deps/arm64` (`scripts/deps.sh`), or builds them from source (`scripts/build-deps.sh`, with the tools above) when the recipe has no prebuilt archive yet. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
 
 ### Uninstall
 

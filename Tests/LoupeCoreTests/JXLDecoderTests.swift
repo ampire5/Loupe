@@ -265,7 +265,7 @@ private func expectGrayMatchesCoreGraphics(_ png: Data, tolerance: Int, _ label:
     }
 }
 
-/// Loupe links its own libjxl (scripts/build-libjxl.sh); stats name it so.
+/// Loupe links its own libjxl (scripts/build-deps.sh); stats name it so.
 @Test func jxlDecoderNamesLoupesLibjxl() {
     #expect(JXLDecoder().name == "libjxl+dc")
 }

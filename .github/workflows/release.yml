@@ -7,9 +7,6 @@ on:
 permissions:
   contents: write
 
-env:
-  LOUPE_LIBJXL: ${{ github.workspace }}/../libjxl
-
 jobs:
   release:
     runs-on: xcode-27
@@ -18,15 +15,10 @@ jobs:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: Homebrew dependencies
-        run: brew install jpeg-turbo cmake ninja brotli highway libheif
-      - name: Build libjxl
-        run: |
-          git init -q "$LOUPE_LIBJXL"
-          git -C "$LOUPE_LIBJXL" fetch -q --depth 1 https://github.com/ampire5/libjxl "$(cat scripts/libjxl.commit)"
-          git -C "$LOUPE_LIBJXL" checkout -q FETCH_HEAD
-          git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
-          scripts/build-libjxl.sh
+      - name: Homebrew tools
+        run: brew install cmake ninja pkgconf
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
       - name: Build the app

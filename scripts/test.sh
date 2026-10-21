@@ -11,17 +11,44 @@
 # Extra arguments go to every `swift test` call (e.g. --filter PanRubberTests). Repeated --filter options are OR-ed, so
 # when the caller passes --filter, the render pass uses it instead of the default LoupeRenderTests filter: it narrows.
 set -e
-. "$(dirname "$0")/libjxl-env.sh"
+cd "$(dirname "$0")/.."
+. scripts/libjxl-env.sh
+# The tests are built for scripts/deps.arch ($DEPS_TRIPLE). For the Mac's own architecture `swift test` runs them as
+# usual. For x86_64 on Apple Silicon (lts/macos26's CI) they are cross-built natively and only the test bundle runs
+# under Rosetta, through SwiftPM's own swift-testing helper: the compiler under Rosetta took most of CI's time, and
+# `swift test` itself under Rosetta spent minutes compiling the manifests again. Arguments go to the testing library
+# (`--filter`, `--skip`, `--no-parallel`).
 mode=core
 case "$1" in
     core|render|full) mode=$1; shift ;;
 esac
-swift test --skip LoupeRenderTests "$@"
+NICE=""
+if [ "$(uname -m)" = "$DEPS_ARCH" ]; then
+    swift build --build-tests --triple "$DEPS_TRIPLE"
+    tests() { $NICE swift test --skip-build --triple "$DEPS_TRIPLE" "$@"; }
+else
+    swift build --build-tests --triple "$DEPS_TRIPLE"
+    helper=$(dirname "$(xcrun --find swift)")/../libexec/swift/pm/swiftpm-testing-helper
+    bundle=$(swift build --triple "$DEPS_TRIPLE" --show-bin-path)/LoupePackageTests.xctest/Contents/MacOS/LoupePackageTests
+    if [ -x "$helper" ] && [ -f "$bundle" ]; then
+        # The bundle finds swift-testing where swift test would point it; DYLD_* goes through arch's -e, as
+        # /usr/bin/arch drops it from its own environment.
+        platform=$(xcrun --show-sdk-platform-path)/Developer
+        tests() {
+            $NICE arch "-$DEPS_ARCH" -e DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks" -e DYLD_LIBRARY_PATH="$platform/usr/lib" \
+                "$helper" --test-bundle-path "$bundle" --testing-library swift-testing "$@"
+        }
+    else
+        tests() { $NICE arch "-$DEPS_ARCH" swift test --skip-build --triple "$DEPS_TRIPLE" "$@"; }
+    fi
+fi
+tests --skip LoupeRenderTests "$@"
 render_filter="--filter LoupeRenderTests"
 for arg in "$@"; do
     case "$arg" in --filter|--filter=*) render_filter="" ;; esac
 done
+NICE="nice -n 15"
 case "$mode" in
-    render) nice -n 15 swift test --skip-build --no-parallel $render_filter "$@" ;;
-    full) LOUPE_FULL_TESTS=1 nice -n 15 swift test --skip-build --no-parallel $render_filter "$@" ;;
+    render) tests --no-parallel $render_filter "$@" ;;
+    full) LOUPE_FULL_TESTS=1; export LOUPE_FULL_TESTS; tests --no-parallel $render_filter "$@" ;;
 esac
