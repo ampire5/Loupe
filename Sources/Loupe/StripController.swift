@@ -451,7 +451,7 @@ extension Notification.Name {
         laidMode = aspects.mode
         guard layout != view.layout || shown != cellFiles else { return }
         view.layout = layout
-        scroll.layoutChanged()
+        scroll.settle()   // interim until the strip is rebuilt on StripScrollLayout
         retarget()
         cellFiles = shown
         settled = settled.count > cellFiles.count ? Array(settled.prefix(cellFiles.count))
@@ -609,7 +609,10 @@ extension Notification.Name {
         let outcome = scroll.event(fingerDX: fingers * event.scrollingDeltaX, dy: event.scrollingDeltaY,
                                    phase: ScrollPhase(rawValue: event.phase.rawValue),
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
-                                   layout: view.layout, current: current, now: event.timestamp)
+                                   layout: StripScrollLayout(fileCount: view.layout.fileCount, width: view.layout.width,
+                                                             cellHeight: view.layout.cellHeight, maxAspect: 1.5,
+                                                             aspects: []),
+                                   current: current, now: event.timestamp)
         if let file = outcome.file {
             if !wasScrubbing { DebugLog.log("strip scroll scrub from \(current + 1)") }
             session.scrub(to: file)
