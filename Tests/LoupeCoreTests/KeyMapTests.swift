@@ -237,6 +237,15 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     #expect(action(200, "t") == .toggleStrip)
 }
 
+/// The strip as Photos' filmstrip (2026-10-21): no magnifier any more, and T hides the strip.
+@Test func stripHelpDescribesTheFilmstrip() {
+    let strip = KeyMap.gestures.filter { $0.input.hasPrefix("Strip:") }
+    #expect(!strip.contains { $0.title.localizedCaseInsensitiveContains("magnif") })
+    #expect(strip.contains { $0.input == "Strip: hover" && $0.title == "Number and name of the photo" })
+    #expect(strip.contains { $0.input == "Strip: press and drag" && $0.title == "Move the strip; the photo in the middle opens" })
+    #expect(KeyMap.titles[.toggleStrip]?.title == "Hide or show the strip")
+}
+
 @Test func gesturesAreListed() {
     #expect(!KeyMap.gestures.isEmpty)
     #expect(KeyMap.gestures.contains { $0.input.hasPrefix("Strip:") && $0.input.contains("swipe") })   // Task 20
