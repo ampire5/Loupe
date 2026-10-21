@@ -48,12 +48,14 @@ cmake_x86_64=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefi
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$min" -DCMAKE_OSX_SYSROOT="$(xcrun --show-sdk-path)"
     -DCMAKE_PREFIX_PATH="$prefix" -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local"
     -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF)
+# Build trees sit next to the sources: highway (and others) have a Bazel BUILD file, which a `build` directory inside
+# would collide with on macOS's case-insensitive file system.
 build() {   # directory, then its CMake options
-    local dir=$src/$1
+    local dir=$src/$1 out=$src/$1.out
     shift
-    cmake -S "$dir" -B "$dir/build" "${cmake_x86_64[@]}" "$@" >/dev/null
-    cmake --build "$dir/build" >/dev/null
-    cmake --install "$dir/build" >/dev/null
+    cmake -S "$dir" -B "$out" "${cmake_x86_64[@]}" "$@" >/dev/null
+    cmake --build "$out" >/dev/null
+    cmake --install "$out" >/dev/null
 }
 build libjpeg-turbo -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=ON -DCMAKE_ASM_NASM_COMPILER=nasm
 build brotli -DBROTLI_DISABLE_TESTS=ON
