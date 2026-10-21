@@ -4,10 +4,9 @@ name: Intel Mac (self-hosted)
 # Metal render tests on the Mac's own GPU, which the Rosetta CI on GitHub's virtual machines cannot run. Never on pull
 # requests: the runner is a personal computer and must not run code from forks. When the Mac is off, the run waits
 # for it (up to a day).
+# Pushes do not start it while no runner is registered: they would wait a day for one, then fail. Put the push
+# trigger back with the runner (docs/intel-runner.md); a manual run needs this file on main too.
 on:
-  push:
-    branches: [lts/macos26]
-    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 permissions:
