@@ -32,5 +32,5 @@
 
 В облачном CI ветка проверяется под Rosetta, без рендер-тестов (у виртуальных машин GitHub паравиртуальный GPU). На
 настоящем Intel Mac, подключённом как self-hosted runner, workflow *Intel Mac (self-hosted)* гоняет `scripts/test.sh
-render` и собирает приложение — на push в `lts/macos26` и вручную, никогда на pull request. Как подключить Mac:
+render` и собирает приложение — пока раннер не подключён, только вручную (запуск по push отключён), никогда на pull request. Как подключить Mac:
 [docs/intel-runner.md](https://github.com/ampire5/FrameScrub/blob/lts/macos26/docs/intel-runner.md) в FrameScrub.
