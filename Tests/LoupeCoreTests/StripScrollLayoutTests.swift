@@ -166,3 +166,17 @@ private func medianMicroseconds(_ body: () -> Void) -> Double {
     let summed = medianMicroseconds { _ = mixed.cells(offset: mixedOffset, current: 600_000, expansion: 1) }
     #expect(summed < 200, "\(summed) µs")
 }
+
+/// A playlist that grew or was re-read keeps its files' pictures and the strip's centre: each old index's place in
+/// the new list, by URL; files that went have none.
+@Test func playlistIndexMapFollowsTheFiles() {
+    let urls = (0..<6).map { URL(fileURLWithPath: "/p/\($0).jpg") }
+    let grown = StripPlaylist.indexMap(from: Array(urls.prefix(3)), to: urls)
+    #expect(grown == [0: 0, 1: 1, 2: 2])
+    let inserted = StripPlaylist.indexMap(from: [urls[0], urls[2], urls[4]], to: urls)
+    #expect(inserted == [0: 0, 1: 2, 2: 4])
+    let removed = StripPlaylist.indexMap(from: urls, to: [urls[5], urls[1]])
+    #expect(removed == [1: 1, 5: 0])
+    #expect(StripPlaylist.indexMap(from: urls, to: []).isEmpty)
+    #expect(StripPlaylist.indexMap(from: [], to: urls).isEmpty)
+}

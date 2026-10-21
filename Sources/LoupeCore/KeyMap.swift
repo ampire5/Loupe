@@ -273,7 +273,7 @@ public struct KeyMap: Sendable, Equatable {
         .toggleFullScreen: ("Toggle full screen", .view),
         .exitFullScreen: ("Leave full screen", .view),
         .cycleStats: ("Stats bar on/off", .view),
-        .toggleStrip: ("Pin or unpin the strip", .view),
+        .toggleStrip: ("Hide or show the strip", .view),
         .cheatSheet: ("Show or hide this sheet", .view),
         .toggleInfoPanel: ("Show or hide the info panel", .view),
         .cyclePanIndicators: ("Pan indicators: auto / always / off", .view),
@@ -304,10 +304,10 @@ public struct KeyMap: Sendable, Equatable {
         ("MX thumb wheel right / left", "Zoom in / out at the pointer"),
         ("Click held + two-finger swipe", "Previous / next folder"),
         ("Right button + tilt or ⇧-wheel", "Previous / next folder"),
-        ("Strip: hover", "Magnify the thumbnails"),
+        ("Strip: hover", "Number and name of the photo"),
         ("Strip: click", "Jump to that photo"),
-        ("Strip: press and drag", "Scrub through the folder"),
-        ("Strip: two-finger swipe sideways", "Scrub through the folder"),
+        ("Strip: press and drag", "Move the strip; the photo in the middle opens"),
+        ("Strip: two-finger swipe sideways", "Move the strip; the photo in the middle opens"),
         ("Strip: drag its top edge", "Resize the strip"),
     ]
 

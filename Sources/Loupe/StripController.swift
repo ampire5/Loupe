@@ -508,17 +508,23 @@ extension Notification.Name {
         rest(on: list.index, animated: step)
     }
 
-    /// Another playlist: a press or a motion over the old one ends with it (the session already ended its scrub):
-    /// its cells are other files now. Every picture goes, the strip rests on the current file.
+    /// Another playlist. The session ended its scrub with the old one. Files still in it keep their pictures at their
+    /// new places (a listing that arrives in parts, `FolderWatcher`); a motion whose centre file is still there goes
+    /// on from it, anything else (another folder) ends with the old list and the strip rests on the current file.
     private func playlistChanged(_ list: [URL], current: Int) {
-        view.cancelPress()
-        dragRest?.cancel()
-        dragging = false
+        let map = StripPlaylist.indexMap(from: files, to: list)
+        let centre = scroll.offset.flatMap(view.layout.file(atBase:)).flatMap { map[$0] }
+        let keepsMotion = isMoving && centre != nil
+        if !keepsMotion {
+            view.cancelPress()
+            dragRest?.cancel()
+            dragging = false
+            scroll.takeOver()
+            scroll.settle()
+            scrollRest?.cancel()
+            scrollRest = nil
+        }
         sessionScrubbing = false
-        scroll.takeOver()
-        scroll.settle()
-        scrollRest?.cancel()
-        scrollRest = nil
         files = list
         indices = Dictionary(list.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         aspects.setPlaylist(files)
@@ -527,12 +533,12 @@ extension Notification.Name {
         hover(nil)
         loads.values.forEach { $0.cancel() }
         loads = [:]
-        given = [:]
-        inViewSince = [:]
-        view.forgetAll()
-        shownCurrent = nil
-        relayout()
-        rest(on: current, animated: false)
+        given = Dictionary(uniqueKeysWithValues: given.compactMap { file, held in map[file].map { ($0, held) } })
+        inViewSince = Dictionary(uniqueKeysWithValues: inViewSince.compactMap { file, since in map[file].map { ($0, since) } })
+        view.remap(map)
+        shownCurrent = shownCurrent.flatMap { map[$0] }
+        relayout(keeping: keepsMotion ? centre : nil)
+        if !keepsMotion { rest(on: current, animated: false) }
     }
 
     /// The strip at rest on `file`: at the centre, expanded.
@@ -552,12 +558,12 @@ extension Notification.Name {
     }
 
     /// A layout for the view's width, the playlist and the aspects. The file at the centre stays there: the moving
-    /// strip's, or the current one.
-    private func relayout(animated: Bool = false) {
+    /// strip's (`keeping`, when the playlist changed under it), or the current one.
+    private func relayout(animated: Bool = false, keeping: Int? = nil) {
         let layout = StripScrollLayout(fileCount: files.count, width: Double(view.bounds.width),
                                        cellHeight: Double(cellHeight), maxAspect: cellMax, aspects: aspects.aspects)
-        guard layout != view.layout else { return }
-        let centre = scroll.offset.flatMap(view.layout.file(atBase:))
+        guard layout != view.layout || keeping != nil else { return }
+        let centre = keeping ?? scroll.offset.flatMap(view.layout.file(atBase:))
         view.setLayout(layout, animated: animated)
         if let centre {
             scroll.layoutChanged(keeping: centre, layout: layout)

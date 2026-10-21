@@ -334,6 +334,28 @@ import QuartzCore
         unavailable.remove(file)
     }
 
+    /// The playlist changed: each file's picture and cell move to its new index (`StripPlaylist.indexMap`); files
+    /// that went lose theirs. The cells are placed again for the layout the controller gives next.
+    func remap(_ map: [Int: Int]) {
+        pictures = Dictionary(uniqueKeysWithValues: pictures.compactMap { file, image in map[file].map { ($0, image) } })
+        unavailable = Set(unavailable.compactMap { map[$0] })
+        var moved: [Int: Cell] = [:]
+        withoutAnimation {
+            for (file, cell) in cells {
+                if let new = map[file] {
+                    moved[new] = cell
+                } else {
+                    cell.layer.isHidden = true
+                    cell.image.contents = nil
+                    pool.append(cell)
+                }
+            }
+        }
+        cells = moved
+        if let file = labelFile { labelFile = map[file] }
+        placeCells(animated: false)
+    }
+
     /// Another playlist: every picture goes, the cells show frames until the new ones come.
     func forgetAll() {
         pictures = [:]
