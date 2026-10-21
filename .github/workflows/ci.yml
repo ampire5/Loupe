@@ -36,6 +36,9 @@ jobs:
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
+      # The package revisions this run built, to compare with (or to commit as) Package.resolved.
+      - name: Package.resolved
+        run: cat Package.resolved
       - name: Build the app
         run: scripts/make-app.sh
       - name: Upload the app
