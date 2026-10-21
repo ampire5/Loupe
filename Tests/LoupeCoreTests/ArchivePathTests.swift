@@ -38,4 +38,12 @@ import Testing
         #expect(ArchivePath.displayName(URL(fileURLWithPath: "/v/G.zip/caps\u{2215}01.jpg")) == "G.zip › caps/01.jpg")
         #expect(ArchivePath.displayName(URL(fileURLWithPath: "/v/a/01.jpg")) == "01.jpg")
     }
+
+    /// Titles and labels show an entry's own name, not its inner path with "∕".
+    @Test func shortName() {
+        #expect(ArchivePath.shortName(URL(fileURLWithPath: "/v/G.zip/usr\u{2215}home\u{2215}01.jpg")) == "01.jpg")
+        #expect(ArchivePath.shortName(URL(fileURLWithPath: "/v/G.zip/01.jpg")) == "01.jpg")
+        #expect(ArchivePath.shortName(URL(fileURLWithPath: "/v/a/01.jpg")) == "01.jpg")
+        #expect(WindowTitle.text(home: nil, file: URL(fileURLWithPath: "/v/G.zip/a\u{2215}02.jpg")) == "02.jpg")
+    }
 }

@@ -668,7 +668,7 @@ extension Notification.Name {
             return
         }
         guard hoverState.set(file) else { return }
-        view.showLabel(file: file, name: files[file].lastPathComponent)
+        view.showLabel(file: file, name: ArchivePath.shortName(files[file]))
         update()
     }
 
