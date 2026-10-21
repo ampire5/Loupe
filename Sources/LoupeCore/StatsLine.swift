@@ -199,7 +199,8 @@ public enum StatsLine {
     }
 
     /// "Fit 23 %", "100 %" (actual size names itself), "Zoom 310 %". The percentage is view pixels per
-    /// image pixel (physical pixels, so 100 % is 1:1 even on a Retina display).
+    /// image pixel (physical pixels, so 100 % is 1:1 even on a Retina display). A free zoom resting on fit width,
+    /// fit height or 100 % (where a gesture halts, `ZoomStop`) is named by it.
     public static func modeText(_ transform: ViewTransform) -> String {
         let percent = percentText(transform.scale * 100)
         switch transform.mode {
@@ -208,7 +209,13 @@ public enum StatsLine {
         case .fitHeight: return "Fit height \(percent) %"
         case .fill: return "Fill \(percent) %"
         case .actual: return "\(percent) %"
-        case .free: return "Zoom \(percent) %"
+        case .free:
+            let s = transform.scale
+            func on(_ mode: ZoomMode) -> Bool { abs(transform.withMode(mode).scale - s) <= s * 1e-9 }
+            if on(.actual(1)) { return "\(percent) %" }
+            if on(.fitWidth) { return "Fit width \(percent) %" }
+            if on(.fitHeight) { return "Fit height \(percent) %" }
+            return "Zoom \(percent) %"
         }
     }
 

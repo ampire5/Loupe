@@ -146,21 +146,21 @@ private let tall = ViewTransform(imageSize: CGSize(width: 10502, height: 14000),
     #expect(ZoomStop.percent(250).mode == .actual(2.5))
 }
 
-@Test func zoomingOntoAStopSetsItsModeAndKeepsTheAnchor() {
+/// A gesture landing on a stop stays a free zoom at exactly the stop's scale, the anchor kept: a gesture gives a scale,
+/// a key a mode. The stats bar still names the stop.
+@Test func zoomingOntoAStopStaysFreeAndKeepsTheAnchor() {
     let t0 = tall.withMode(.actual(0.4))
     let anchor = CGPoint(x: 3000, y: 1700)   // away from the edges, so clamping cannot move it
     let p = t0.imagePoint(forView: anchor)
     // 100 %: the image overflows the view on both axes, so clamping leaves the anchor alone.
-    let t = t0.zoomed(toScale: 1, anchor: anchor, stop: .percent(100))
-    #expect(t.mode == .actual(1) && t.scale == 1)
+    let t = t0.zoomed(toScale: 1, anchor: anchor)
+    if case .free = t.mode {} else { Issue.record("expected .free") }
+    #expect(abs(t.scale - 1) < 1e-12)
+    #expect(StatsLine.modeText(t) == "100 %")
     let back = t.viewPoint(forImage: p)
     #expect(abs(back.x - anchor.x) < 1e-6 && abs(back.y - anchor.y) < 1e-6)
-    // Fit width: same geometry as the plain zoom, just named.
     let w = t0.withMode(.fitWidth).scale
-    let named = t0.zoomed(toScale: w, anchor: anchor, stop: .fitWidth)
-    #expect(named.mode == .fitWidth && named.scale == w)
-    #expect(named.visibleRect == t0.zoomed(toScale: w, anchor: anchor).visibleRect)
-    if case .free = t0.zoomed(toScale: 0.5, anchor: anchor, stop: nil).mode {} else { Issue.record("expected .free") }
+    #expect(StatsLine.modeText(t0.zoomed(toScale: w, anchor: anchor)).hasPrefix("Fit width"))
 }
 
 @Test func gestureForATransformUsesItsStopsAndLimits() {

@@ -1075,7 +1075,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "stash-title": ("file", "raw"),
     "rubber-band": ("no", "maybe"), "drag-inertia": ("no", "maybe"), "inertia-deceleration": ("0.99", "0.98"),
     "rmb-zoom-invert": ("yes", "maybe"),
-    "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"),
+    "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"), "keep-zoom-as": ("scale", "pixels"),
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
@@ -1141,7 +1141,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 @Test func folderKeysAreTheScalingFiltersAndColour() {
     #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"])
     #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"])
-    #expect(Config.zoomFolderKeys == ["keep-zoom-position", "default-zoom-mode"])
+    #expect(Config.zoomFolderKeys == ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"])
     #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys)
     #expect(Config.folderKeys.allSatisfy(Config.keys.contains))
 }
@@ -1289,8 +1289,9 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 
 @Test func m4bKeyOrder() throws {
     let haptics = try #require(Config.keys.firstIndex(of: "zoom-stop-haptics"))
-    #expect(Array(Config.keys[(haptics + 1)...(haptics + 5)])
-            == ["zoom-animation", "zoom-rubber-band", "keep-zoom-position", "default-zoom-mode", "fit-upscale"])
+    #expect(Array(Config.keys[(haptics + 1)...(haptics + 6)])
+            == ["zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "default-zoom-mode",
+                "fit-upscale"])
     let invert = try #require(Config.keys.firstIndex(of: "rmb-zoom-invert"))
     #expect(Array(Config.keys[(invert + 1)...(invert + 3)])
             == ["pan-indicators", "pan-indicators-hide", "pan-indicators-fade"])
@@ -1526,15 +1527,15 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 @Test func homeSidebarTreeKeysParseAndDefault() {
     let c = Config()
     #expect(c.homeSidebarCompact && c.homeSidebarIndent == .compact && c.homeSidebarReroot == 0)
-    #expect(c.text(forKey: "home-sidebar-compact") == "yes")
     #expect(c.homeSidebarFoldersFirst && c.text(forKey: "home-sidebar-folders-first") == "yes")
+    #expect(c.text(forKey: "home-sidebar-compact") == "yes")
     #expect(c.text(forKey: "home-sidebar-indent") == "compact")
     #expect(c.text(forKey: "home-sidebar-reroot") == "0")
     let (parsed, errors) = Config.parse("home-sidebar-compact=no\nhome-sidebar-indent=even\nhome-sidebar-reroot=20")
     #expect(errors.isEmpty)
     #expect(!parsed.homeSidebarCompact && parsed.homeSidebarIndent == .even && parsed.homeSidebarReroot == 20)
-    #expect(Config.parse("home-sidebar-reroot=1").1 == ["loupe.conf:1: bad option 'home-sidebar-reroot=1'"])
     #expect(!Config.parse("home-sidebar-folders-first=no").0.homeSidebarFoldersFirst)
+    #expect(Config.parse("home-sidebar-reroot=1").1 == ["loupe.conf:1: bad option 'home-sidebar-reroot=1'"])
     #expect(Config.parse("home-sidebar-reroot=21").1 == ["loupe.conf:1: bad option 'home-sidebar-reroot=21'"])
 }
 

@@ -8,8 +8,10 @@ public enum ZoomStop: Hashable, Sendable {
     /// Physical-pixel percent: 100 = one image pixel per screen pixel.
     case percent(Double)
 
-    /// The mode a gesture resting on the stop leaves the transform in, so the next photo opens the same
-    /// way (keep-zoom-position) and the stats bar names it, instead of an anonymous `.free` scale.
+    /// The mode the stop's scale is taken from. A gesture resting on the stop does not switch to it: a gesture gives a
+    /// scale, a key a mode, so a pinch that halts on fit width is carried to the next photo by `keep-zoom-as` like any
+    /// other pinch (a turned photo would otherwise jump to its own fit width); W asks for the mode itself. The stats
+    /// bar still names the stop (`StatsLine.modeText`).
     public var mode: ZoomMode {
         switch self {
         case .fitWidth: return .fitWidth
@@ -164,16 +166,6 @@ public struct ZoomStopGesture: Sendable {
     }
 }
 
-extension ViewTransform {
-    /// `zoomed(toScale:anchor:)`, ending in `stop`'s mode when the scale rests on one. The stop's scale is
-    /// the mode's own (`ZoomStops.scales`), so switching the mode keeps the geometry `zoomed` computed.
-    public func zoomed(toScale s: Double, anchor: CGPoint, stop: ZoomStop?) -> ViewTransform {
-        var t = zoomed(toScale: s, anchor: anchor)
-        if let stop { t.mode = stop.mode }
-        return t
-    }
-}
-
 /// What a `zoomStepped` step ran into, for the mouse's haptics (M4c spec §5, §12.3): a `zoom-stops` stop it landed on
 /// (`haptic-zoom-stop`) or a zoom limit it reached or pushed against (`haptic-limit`).
 public enum ZoomStepBump: Sendable { case stop, limit }
@@ -181,7 +173,7 @@ public enum ZoomStepBump: Sendable { case stop, limit }
 extension ViewTransform {
     /// One step of `zoom-step` (M4c spec §12.3; the gesture button + wheel): the zoom keys' √2 step (`zoomedStep`), at
     /// `anchor` (view pixels; the image point under it stays put), that never jumps over a stop of `stops`: a stop
-    /// between the scale and the step's target is where it lands, in the stop's mode, as a right-button zoom halts on
+    /// between the scale and the step's target is where it lands, at the stop's scale, as a right-button zoom halts on
     /// it. A scale already on a stop (within `ZoomStopGesture.startTolerance`) leaves it. At a zoom limit the step stops
     /// on the limit; one more the same way changes nothing and bumps again.
     public func zoomStepped(up: Bool, anchor: CGPoint, stops: [ZoomStop]) -> (transform: ViewTransform, bump: ZoomStepBump?) {
@@ -194,7 +186,7 @@ extension ViewTransform {
                : $0.scale < s * (1 - tolerance) && $0.scale >= target * (1 - tolerance)
         }
         if let stop = up ? between.first : between.last {   // the nearest (`scales` ascend)
-            return (zoomed(toScale: stop.scale, anchor: anchor, stop: stop.stop), .stop)
+            return (zoomed(toScale: stop.scale, anchor: anchor), .stop)
         }
         let clamped = min(max(target, limits.lowerBound), limits.upperBound)
         return (zoomed(toScale: clamped, anchor: anchor), clamped == target ? nil : .limit)

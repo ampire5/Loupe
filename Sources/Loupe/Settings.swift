@@ -259,6 +259,8 @@ extension Notification.Name {
         menu.addItem(.separator())
         menu.addItem(.viewerKey("Keep Zoom and Position", .toggleKeepZoom))
         menu.addItem(.viewerKey("Save Keep Zoom as Default", .saveKeepZoom))
+        menu.addItem(.viewerKey("Keep Scale Instead of Share", .toggleZoomCarry))
+        menu.addItem(.viewerKey("Save Share or Scale as Default", .saveZoomCarry))
         let upscale = menu.addItem(withTitle: "Upscale Small Images in Fit", action: #selector(toggleFitUpscale(_:)),
                                    keyEquivalent: "")
         upscale.target = self
@@ -371,9 +373,13 @@ extension Notification.Name {
         let viewer = NSApp.mainWindow?.windowController as? ViewerWindowController
         if menu is ZoomTopMenu {
             // The main window's folder value over loupe.conf's, like the Colour menu.
-            let keep = (viewer?.effectiveConfig ?? config).keepZoomPosition
-            for item in menu.items where (item.representedObject as? String) == KeyAction.toggleKeepZoom.rawValue {
-                item.state = keep ? .on : .off
+            let effective = viewer?.effectiveConfig ?? config
+            for item in menu.items {
+                switch item.representedObject as? String {
+                case KeyAction.toggleKeepZoom.rawValue: item.state = effective.keepZoomPosition ? .on : .off
+                case KeyAction.toggleZoomCarry.rawValue: item.state = effective.keepZoomAs == .scale ? .on : .off
+                default: break
+                }
             }
             return
         }

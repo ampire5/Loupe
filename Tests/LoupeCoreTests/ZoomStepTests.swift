@@ -32,14 +32,17 @@ import Testing
         #expect(close(trail[0].0, 2.0.squareRoot() / 3) && trail[0].1 == nil)
         #expect(close(trail[1].0, 0.5) && trail[1].1 == .stop)
         #expect(close(trail[2].0, 0.5 * 2.0.squareRoot()) && trail[2].1 == nil)
-        #expect(trail[3].0 == 1 && trail[3].1 == .stop && t.mode == .actual(1))
+        #expect(trail[3].0 == 1 && trail[3].1 == .stop && StatsLine.modeText(t) == "100 %")
     }
 
-    @Test func aStopTakesItsModeBothWays() {
+    /// A step lands on a stop either way at its scale, a free zoom the stats bar names by the stop.
+    @Test func aStopIsLandedOnBothWays() {
         let down = at(0.6).zoomStepped(up: false, anchor: centre, stops: stops)
-        #expect(close(down.transform.scale, 0.5) && down.bump == .stop && down.transform.mode == .fitWidth)
+        #expect(close(down.transform.scale, 0.5) && down.bump == .stop)
+        #expect(StatsLine.modeText(down.transform).hasPrefix("Fit width"))
         let fit = at(0.4).zoomStepped(up: false, anchor: centre, stops: stops)
-        #expect(close(fit.transform.scale, 1.0 / 3) && fit.bump == .stop && fit.transform.mode == .fitHeight)
+        #expect(close(fit.transform.scale, 1.0 / 3) && fit.bump == .stop)
+        #expect(StatsLine.modeText(fit.transform).hasPrefix("Fit height"))
     }
 
     @Test func aStartOnAStopLeavesIt() {
