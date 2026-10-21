@@ -221,6 +221,7 @@ brew install jpeg-turbo cmake ninja brotli highway libheif   # libheif: only for
 
 # Loupe links its own libjxl (v0.12.0 + the DC preview functions): clone it next to Loupe
 git clone -b loupe https://github.com/ampire5/libjxl ../libjxl
+git -C ../libjxl checkout "$(cat scripts/libjxl.commit)"   # the commit CI and releases build
 git -C ../libjxl submodule update --init --recursive
 scripts/build-libjxl.sh
 

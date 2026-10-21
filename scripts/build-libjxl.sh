@@ -8,8 +8,11 @@ set -euo pipefail
 src=${LOUPE_LIBJXL:-$(cd "$(dirname "$0")/../.." && pwd)/libjxl}
 dist=$src/dist
 [[ -d "$src/.git" ]] || { echo "no libjxl clone at $src" >&2; exit 1; }
-branch=$(git -C "$src" rev-parse --abbrev-ref HEAD)
-[[ "$branch" == loupe ]] || echo "warning: $src is on branch $branch, not loupe" >&2
+# The commit CI and releases build (scripts/libjxl.commit, on the fork's branch `loupe`); another one builds too, for
+# trying a change to the branch, with a warning.
+pinned=$(cat "$(dirname "$0")/libjxl.commit")
+[[ $(git -C "$src" rev-parse HEAD) == "$pinned" ]] \
+    || echo "warning: $src is at $(git -C "$src" rev-parse --short HEAD), not ${pinned:0:10} (scripts/libjxl.commit)" >&2
 cmake -S "$src" -B "$src/build-dist" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$dist" -DCMAKE_INSTALL_NAME_DIR="$dist/lib" -DCMAKE_MACOSX_RPATH=OFF \
     -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF \

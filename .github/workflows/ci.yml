@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 env:
   LOUPE_LIBJXL: ${{ github.workspace }}/../libjxl
@@ -18,12 +19,16 @@ jobs:
         run: swift --version
       - name: Homebrew dependencies
         run: brew install jpeg-turbo cmake ninja brotli highway libheif
-      # Loupe links its own libjxl: v0.12.0 plus the DC preview functions, branch `loupe` of the fork.
+      # Loupe links its own libjxl: v0.12.0 plus the DC preview functions, the commit of the fork's branch `loupe`
+      # named in scripts/libjxl.commit.
       - name: Clone libjxl
         run: |
-          git clone --depth 1 -b loupe https://github.com/ampire5/libjxl "$LOUPE_LIBJXL"
+          commit=$(cat scripts/libjxl.commit)
+          git init -q "$LOUPE_LIBJXL"
+          git -C "$LOUPE_LIBJXL" fetch -q --depth 1 https://github.com/ampire5/libjxl "$commit"
+          git -C "$LOUPE_LIBJXL" checkout -q FETCH_HEAD
           git -C "$LOUPE_LIBJXL" submodule update --init --depth 1 third_party/skcms third_party/lcms
-          echo "LIBJXL_SHA=$(git -C "$LOUPE_LIBJXL" rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "LIBJXL_SHA=$commit" >> "$GITHUB_ENV"
       - name: Cache libjxl build
         id: libjxl
         uses: actions/cache@v4
@@ -36,6 +41,9 @@ jobs:
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
+      # The package revisions this run built, to compare with Package.resolved.
+      - name: Package.resolved
+        run: cat Package.resolved
       - name: Build the app
         run: scripts/make-app.sh
       - name: Upload the app
