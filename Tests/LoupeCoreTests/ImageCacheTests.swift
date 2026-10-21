@@ -45,25 +45,25 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
+    /// Both shared slots held by neighbour decodes that do not finish until the end of the test: the new current
+    /// photo still gets its preview (on the reserved slot), and setFocus returns meanwhile. Held by a gate rather than
+    /// by 300 ms sleeps against a 150 ms budget, which measured the machine as much as the pool: GitHub's virtual
+    /// machines stall for hundreds of ms now and then.
     @Test func currentNotBlockedByNeighbours() async {
         let rig = Rig()
         let files = fileURLs(60)
-        rig.decoder.setLatencyForAll(files, 0.3)
-        rig.decoder.setLatency(files[0], 0)
-        rig.decoder.setLatency(files[40], 0.05)
+        let neighbours = BlockingGate()
+        for (i, url) in files.enumerated() where i != 0 && i != 40 { rig.decoder.gateDecodes(url, neighbours) }
         await rig.focus(files, 0, dwelling: true)   // neighbours read only once the user stays
         #expect(await eventually { atLeast(.preview, await rig.state(files[0])) })
-        // Both shared slots busy with 300 ms neighbour decodes.
+        // Both shared slots busy with neighbour decodes that wait for the gate.
         #expect(await eventually {
             rig.decoder.calls.filter { if case .preview = $0.kind { $0.name != "0.jpg" } else { false } }.count >= 2
         })
 
-        let start = Date()
-        await rig.focus(files, 40)
-        #expect(Date().timeIntervalSince(start) < 0.05, "setFocus must not wait for decodes")
+        await rig.focus(files, 40)   // returns although the neighbours' decodes are still held
         #expect(await eventually { atLeast(.preview, await rig.state(files[40])) })
-        let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 0.05 + 0.1, "current preview took \(elapsed) s")
+        neighbours.open()
         await rig.clear()
     }
 
@@ -675,6 +675,10 @@ struct ImageCacheTests {
         let files = fileURLs(20)
         queue.hold(files[0])
         let gap = queue.delaySubmit(files[5])
+        // The current read first, then the neighbours (as in currentReadJumpsTheQueue): asked for together, a
+        // neighbour's read could reach the free slot ahead of it.
+        await rig.focus(files, 0)
+        #expect(await eventually { queue.started == [files[0]] })
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 5 && queue.hasArrived(files[5]) })
         await rig.focus(files, 5)
