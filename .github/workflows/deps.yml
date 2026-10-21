@@ -1,0 +1,54 @@
+name: Prebuilt dependencies (x86_64)
+
+# Builds scripts/build-deps.sh's recipe from source and publishes it as the pre-release deps-x86_64-<recipe hash>, which
+# scripts/deps.sh downloads (CI, releases, local builds). Started by hand after the recipe changes; a recipe that is
+# already published is left alone.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: arch -x86_64 /bin/bash -eo pipefail {0}
+
+jobs:
+  publish:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Already published?
+        id: check
+        run: |
+          name=$(scripts/deps.sh name)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          if gh release view "$name" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "$name is already published"
+          fi
+      - name: Rosetta and Xcode 26
+        if: steps.check.outputs.published != 'true'
+        shell: bash
+        run: |
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - name: Homebrew tools
+        if: steps.check.outputs.published != 'true'
+        shell: bash
+        run: brew install cmake ninja nasm pkgconf
+      - name: Build from source
+        if: steps.check.outputs.published != 'true'
+        run: scripts/deps.sh fetch
+      - name: Publish
+        if: steps.check.outputs.published != 'true'
+        run: |
+          name=${{ steps.check.outputs.name }}
+          scripts/deps.sh pack out
+          gh release create "$name" "out/$name.tar.xz" "out/$name.tar.xz.sha256" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "Build dependencies: $name" \
+            --notes "Static x86_64 libraries for the lts/macos26 line, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."

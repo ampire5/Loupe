@@ -225,7 +225,7 @@ brew install cmake ninja nasm pkgconf
 scripts/make-app.sh --install      # → ~/Applications/Loupe.app
 ```
 
-The first build runs `scripts/build-deps.sh`: libjpeg-turbo, brotli, highway, Loupe's own libjxl (v0.12.0 + the DC preview functions, branch `loupe` of [ampire5/libjxl](https://github.com/ampire5/libjxl)) and libheif (LoupeBench only), x86_64 and static, into `.deps/x86_64`. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
+Loupe links its decoders statically: libjpeg-turbo, brotli, highway, Loupe's own libjxl (v0.12.0 + the DC preview functions, branch `loupe` of [ampire5/libjxl](https://github.com/ampire5/libjxl)) and libheif (LoupeBench only), x86_64. The first build downloads them prebuilt into `.deps/x86_64` (`scripts/deps.sh`), or builds them from source (`scripts/build-deps.sh`, with the tools above) when the recipe has no prebuilt archive yet. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
 
 ### Uninstall
 

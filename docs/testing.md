@@ -9,8 +9,8 @@
 | `scripts/test.sh full` | + матрицы сверки (`LOUPE_FULL_TESTS=1`, `TestLevel.fullOnly`), по одному, `nice` | дольше, одно ядро | перед слиянием ветки, после правок рендера |
 
 Ветка `lts/macos26` (x86_64): декодеры, включая свою libjxl (ветка `loupe` форка ampire5/libjxl), собираются статически
-в `.deps/x86_64` скриптом `scripts/build-deps.sh` — `test.sh` и `make-app.sh` запускают его сами при первой сборке и
-подключают через `scripts/libjxl-env.sh`; на Apple Silicon скрипты перезапускаются под Rosetta. Голый `swift build` без этого
+в `.deps/x86_64` (рецепт — `scripts/build-deps.sh`; `scripts/deps.sh` скачивает готовую сборку рецепта или собирает её) —
+`test.sh` и `make-app.sh` делают это сами при первой сборке и подключают через `scripts/libjxl-env.sh`; на Apple Silicon скрипты перезапускаются под Rosetta. Голый `swift build` без этого
 падает на `JxlDecoderLoupeVersion` — так и задумано.
 
 Дополнительные аргументы (`--filter X`) уходят в каждый вызов `swift test`. Повторные `--filter` объединяются по ИЛИ, поэтому

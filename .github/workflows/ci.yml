@@ -31,15 +31,13 @@ jobs:
       - name: Homebrew tools
         shell: bash
         run: brew install cmake ninja nasm pkgconf
-      - name: libjxl revision
-        run: echo "LIBJXL_SHA=$(git ls-remote https://github.com/ampire5/libjxl refs/heads/loupe | cut -f1)" >> "$GITHUB_ENV"
       - name: Cache decoders
         uses: actions/cache@v4
         with:
           path: .deps/x86_64
-          key: deps-x86_64-${{ hashFiles('scripts/build-deps.sh') }}-${{ env.LIBJXL_SHA }}
-      - name: Build decoders
-        run: scripts/build-deps.sh
+          key: deps-x86_64-${{ hashFiles('scripts/build-deps.sh') }}
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
       # The render tests compare pixels on the GPU; GitHub's virtual machines get a paravirtual one, so CI runs the core suite.
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel

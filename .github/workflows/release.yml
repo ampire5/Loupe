@@ -30,8 +30,8 @@ jobs:
       - name: Homebrew tools
         shell: bash
         run: brew install cmake ninja nasm pkgconf
-      - name: Build decoders
-        run: scripts/build-deps.sh
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
       - name: Test
         run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
       - name: Build the app

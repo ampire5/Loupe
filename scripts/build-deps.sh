@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Builds Loupe's decoders for the lts/macos26 line (LTS_POLICY.md): x86_64, static, into .deps/x86_64 (or
-# $LOUPE_DEPS). Homebrew builds no Intel bottles any more, so the Intel app links them in and bundles no dylibs:
+# The recipe of Loupe's decoders for the lts/macos26 line (LTS_POLICY.md in FrameScrub): x86_64, static, built from
+# source into .deps/x86_64 (or $LOUPE_DEPS). Homebrew builds no Intel bottles any more, so the Intel app links them in
+# and bundles no dylibs:
 #   libjpeg-turbo; brotli and highway; Loupe's libjxl (github.com/ampire5/libjxl, branch `loupe`: v0.12.0 plus the DC
-#   image functions); libde265 and libheif (LoupeBench only, HEIC without AVIF).
-# Runs on an Intel Mac and on Apple Silicon (a cross build). A finished build is kept: delete the directory, or
-# change a version below, to build again.
+#   image functions, pinned to a commit below); libde265 and libheif (LoupeBench only, HEIC without AVIF).
+# Runs on an Intel Mac and on Apple Silicon (a cross build). Builds every time: scripts/deps.sh, which the build
+# scripts call, downloads the prebuilt result of this exact recipe instead, and runs this only when there is none. A
+# change here is a new recipe (a new prebuilt archive).
 # Needs: brew install cmake ninja nasm pkgconf
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,16 +15,9 @@ brotli_version=1.2.0
 highway_version=1.4.0
 libde265_version=1.1.3
 libheif_version=1.23.6
-libjxl_branch=loupe
+libjxl_commit=8b643990a3f30a55c220386329a3c59ccf189473   # branch loupe
 min=26.0
 prefix=${LOUPE_DEPS:-$PWD/.deps/x86_64}
-libjxl_sha=$(git ls-remote https://github.com/ampire5/libjxl "refs/heads/$libjxl_branch" | cut -f1)
-[[ -n "$libjxl_sha" ]] || { echo "error: no branch $libjxl_branch in ampire5/libjxl" >&2; exit 1; }
-stamp="libjpeg-turbo $jpeg_turbo_version, brotli $brotli_version, highway $highway_version, libjxl ${libjxl_sha:0:10}, libde265 $libde265_version, libheif $libheif_version, macOS $min"
-if [[ -f "$prefix/.stamp" && $(<"$prefix/.stamp") == "$stamp" ]]; then
-    echo "Decoders ($stamp) already in $prefix"
-    exit 0
-fi
 rm -rf "$prefix"
 src=$prefix/src
 mkdir -p "$src"
@@ -37,7 +32,9 @@ clone() {   # repository tag-or-branch directory
 clone libjpeg-turbo/libjpeg-turbo "$jpeg_turbo_version" libjpeg-turbo
 clone google/brotli "v$brotli_version" brotli
 clone google/highway "$highway_version" highway
-clone ampire5/libjxl "$libjxl_branch" libjxl
+git init -q "$src/libjxl"
+git -C "$src/libjxl" fetch -q --depth 1 https://github.com/ampire5/libjxl "$libjxl_commit"
+git -C "$src/libjxl" -c advice.detachedHead=false checkout -q FETCH_HEAD
 git -C "$src/libjxl" submodule update -q --init --depth 1 third_party/skcms third_party/lcms
 clone strukturag/libde265 "v$libde265_version" libde265
 clone strukturag/libheif "v$libheif_version" libheif
@@ -95,5 +92,4 @@ for lib in turbojpeg jxl jxl_threads heif; do
         || { echo "error: lib$lib.a is not x86_64 only: $(lipo -archs "$prefix/lib/lib$lib.a")" >&2; exit 1; }
 done
 rm -rf "$src"
-echo "$stamp" >"$prefix/.stamp"
-echo "Decoders ($stamp) installed in $prefix"
+echo "Decoders (libjpeg-turbo $jpeg_turbo_version, libjxl ${libjxl_commit:0:10}, libheif $libheif_version; macOS $min) installed in $prefix"
