@@ -1,10 +1,16 @@
 /// A half float, the element of `ColorCube` and of `rgba16Float` texels. Swift's `Float16` is unavailable on Intel
 /// Macs (lts/macos26), so there it is two bytes with the IEEE 754 binary16 layout and software conversions, rounding
-/// to nearest even as the hardware does, and equality and hashing compare the bits (the cube's fingerprint); on Apple
-/// Silicon it is `Float16` itself.
+/// to nearest even as the hardware does, and comparing, equality and hashing by value as `Float16`'s (−0 equals 0, NaN
+/// equals nothing); on Apple Silicon it is `Float16` itself.
 #if arch(x86_64)
-public struct Half: Hashable, Sendable, ExpressibleByIntegerLiteral {
+public struct Half: Hashable, Comparable, Sendable, ExpressibleByIntegerLiteral {
     public var bitPattern: UInt16
+
+    public static func == (a: Half, b: Half) -> Bool { Float(a) == Float(b) }
+
+    public static func < (a: Half, b: Half) -> Bool { Float(a) < Float(b) }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(Float(self)) }
 
     public init(bitPattern: UInt16) { self.bitPattern = bitPattern }
 
