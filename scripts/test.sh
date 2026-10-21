@@ -13,24 +13,35 @@
 set -e
 cd "$(dirname "$0")/.."
 . scripts/libjxl-env.sh
-# lts/macos26: the tests are x86_64 ($LTS_TRIPLE). On Apple Silicon they are cross-built natively and only run under
-# Rosetta (the compiler under Rosetta took most of CI's time); on an Intel Mac `swift test` builds them as usual.
-if [ "$(uname -m)" = x86_64 ]; then
-    run="" build=""
-else
-    swift build --build-tests --triple "$LTS_TRIPLE"
-    run="arch -x86_64" build="--skip-build"
-fi
+# lts/macos26: the tests are x86_64 ($LTS_TRIPLE). On an Intel Mac `swift test` builds and runs them as usual. On
+# Apple Silicon they are cross-built natively and only the test bundle runs under Rosetta, through SwiftPM's own
+# swift-testing helper: the compiler under Rosetta took most of CI's time, and `swift test` itself under Rosetta spent
+# minutes compiling the manifests again. Arguments go to the testing library (`--filter`, `--skip`, `--no-parallel`).
 mode=core
 case "$1" in
     core|render|full) mode=$1; shift ;;
 esac
-$run swift test $build --triple "$LTS_TRIPLE" --skip LoupeRenderTests "$@"
+NICE=""
+if [ "$(uname -m)" = x86_64 ]; then
+    swift build --build-tests --triple "$LTS_TRIPLE"
+    tests() { $NICE swift test --skip-build --triple "$LTS_TRIPLE" "$@"; }
+else
+    swift build --build-tests --triple "$LTS_TRIPLE"
+    helper=$(dirname "$(xcrun --find swift)")/../libexec/swift/pm/swiftpm-testing-helper
+    bundle=$(swift build --triple "$LTS_TRIPLE" --show-bin-path)/LoupePackageTests.xctest
+    if [ -x "$helper" ] && [ -d "$bundle" ]; then
+        tests() { $NICE arch -x86_64 "$helper" --test-bundle-path "$bundle" --testing-library swift-testing "$@"; }
+    else
+        tests() { $NICE arch -x86_64 swift test --skip-build --triple "$LTS_TRIPLE" "$@"; }
+    fi
+fi
+tests --skip LoupeRenderTests "$@"
 render_filter="--filter LoupeRenderTests"
 for arg in "$@"; do
     case "$arg" in --filter|--filter=*) render_filter="" ;; esac
 done
+NICE="nice -n 15"
 case "$mode" in
-    render) nice -n 15 $run swift test --skip-build --triple "$LTS_TRIPLE" --no-parallel $render_filter "$@" ;;
-    full) LOUPE_FULL_TESTS=1 nice -n 15 $run swift test --skip-build --triple "$LTS_TRIPLE" --no-parallel $render_filter "$@" ;;
+    render) tests --no-parallel $render_filter "$@" ;;
+    full) LOUPE_FULL_TESTS=1; export LOUPE_FULL_TESTS; tests --no-parallel $render_filter "$@" ;;
 esac
