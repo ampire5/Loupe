@@ -105,7 +105,7 @@ struct ConfigSettingsStoreTests {
 
     @Test func validateRejectsNonFinite() throws {
         let f = try Fixture()
-        for key in ["toast-duration", "mouse-move-step", "rmb-zoom-speed", "strip-magnify"] {
+        for key in ["toast-duration", "mouse-move-step", "rmb-zoom-speed", "strip-cell-max"] {
             for bad in ["nan", "inf", "-inf", "NaN", "infinity"] {
                 #expect(f.store.validate(bad, forKey: key) == "Not a valid value", "\(key)=\(bad)")
             }

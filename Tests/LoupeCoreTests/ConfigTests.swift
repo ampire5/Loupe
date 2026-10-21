@@ -370,9 +370,7 @@ import Foundation
     let text = """
     strip-window=bar
     strip-height=96
-    strip-aspect=crop
-    strip-magnify=3.5
-    strip-magnify-reach=5
+    strip-cell-max=1
     strip-corner-radius=6.5
     strip-scroll-direction=reversed
     strip-hide-delay=3000
@@ -387,9 +385,7 @@ import Foundation
     var expected = Config()
     expected.stripWindow = .bar
     expected.stripHeight = 96
-    expected.stripAspect = .crop
-    expected.stripMagnify = 3.5
-    expected.stripMagnifyReach = 5
+    expected.stripCellMax = 1
     expected.stripCornerRadius = 6.5
     expected.stripScrollDirection = .reversed
     expected.stripHideDelayMilliseconds = 3000
@@ -406,28 +402,24 @@ import Foundation
 
 @Test func stripAndThumbDefaults() {
     let c = Config()
-    #expect(c.stripWindow == .overlay && c.stripHeight == 64 && c.stripHideDelayMilliseconds == 500)
-    #expect(c.stripAspect == .native && c.stripMagnify == 2 && c.stripMagnifyReach == 2
-            && c.stripCornerRadius == 4 && c.stripScrollDirection == .natural)
+    #expect(c.stripWindow == .bar && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 500)
+    #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 3 && c.stripScrollDirection == .natural)
     #expect(c.stripJumpPreview && !c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
 }
 
 @Test func stripAndThumbKeyRanges() {
     let defaults = Config()
-    for bad in ["strip-height=39", "strip-height=241", "strip-aspect=square", "strip-magnify=0.9", "strip-magnify=4.1",
-                "strip-magnify=big", "strip-magnify=nan", "strip-magnify-reach=-1", "strip-magnify-reach=7",
-                "strip-magnify-reach=6.5", "strip-magnify-reach=-0.1", "strip-magnify-reach=nan",
-                "strip-magnify-reach=inf", "strip-magnify-reach=wide", "strip-corner-radius=-1", "strip-corner-radius=16.5",
+    for bad in ["strip-height=39", "strip-height=241", "strip-cell-max=0.5", "strip-cell-max=1.6", "strip-cell-max=2:1",
+                "strip-cell-max=nan", "strip-cell-max=0:1", "strip-cell-max=wide", "strip-corner-radius=-1", "strip-corner-radius=16.5",
                 "strip-corner-radius=round", "strip-corner-radius=nan", "strip-hide-delay=-1", "strip-hide-delay=10001",
                 "thumb-size=255", "thumb-size=1025", "strip-window=dock", "strip-jump-preview=maybe",
                 "strip-loading-indicator=maybe", "thumb-cache-size=-1", "strip-scroll-direction=left"] {
         let (c, w) = Config.parse(bad)
         #expect(c == defaults && w.count == 1, "\(bad)")
     }
-    for good in ["strip-height=40", "strip-height=240", "strip-aspect=native", "strip-aspect=crop",
-                 "strip-magnify=1", "strip-magnify=4", "strip-magnify=2.25", "strip-magnify-reach=0",
-                 "strip-magnify-reach=6", "strip-magnify-reach=2.5", "strip-magnify-reach=0.00", "strip-corner-radius=0", "strip-corner-radius=16",
+    for good in ["strip-height=40", "strip-height=240", "strip-cell-max=0.5625", "strip-cell-max=1.5",
+                 "strip-cell-max=3:4", "strip-cell-max=1", "strip-corner-radius=0", "strip-corner-radius=16",
                  "strip-corner-radius=3.5", "strip-hide-delay=0", "strip-hide-delay=10000",
                  "thumb-size=256", "thumb-size=1024", "strip-scroll-direction=natural", "strip-scroll-direction=Reversed"] {
         #expect(Config.parse(good).1.isEmpty, "\(good)")
@@ -478,9 +470,7 @@ import Foundation
     var c = Config()
     c.stripWindow = .off
     c.stripHeight = 120
-    c.stripAspect = .crop
-    c.stripMagnify = 3
-    c.stripMagnifyReach = 0
+    c.stripCellMax = 0.75
     c.stripCornerRadius = 0
     c.stripScrollDirection = .reversed
     c.stripHideDelayMilliseconds = 250
@@ -488,27 +478,52 @@ import Foundation
     c.stripLoadingIndicator = true
     c.thumbSize = 1024
     c.thumbCacheBytes = 3 << 29
-    let keys = ["strip-window", "strip-height", "strip-aspect", "strip-magnify", "strip-magnify-reach", "strip-corner-radius",
+    let keys = ["strip-window", "strip-height", "strip-cell-max", "strip-corner-radius",
                 "strip-scroll-direction", "strip-hide-delay", "strip-jump-preview", "strip-loading-indicator", "thumb-size", "thumb-cache-size"]
     for key in keys { #expect(Config.keys.contains(key), "\(key)") }
     let text = keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
     #expect(text.contains("thumb-cache-size=1536M"))
-    #expect(text.contains("strip-magnify=3\n") && text.contains("strip-aspect=crop"))
-    #expect(text.contains("strip-magnify-reach=0\n"))
-    let magnify = try #require(Config.keys.firstIndex(of: "strip-magnify"))
-    #expect(Config.keys[magnify + 1] == "strip-magnify-reach")
-    #expect(Config.keys[magnify + 2] == "strip-magnify-limit")
-    #expect(Config.keys[magnify + 3] == "strip-corner-radius")
-    #expect(Config.keys[magnify + 4] == "strip-scroll-direction")
+    #expect(text.contains("strip-cell-max=0.75\n"))
+    let height = try #require(Config.keys.firstIndex(of: "strip-height"))
+    #expect(Config.keys[height + 1] == "strip-cell-max")
+    #expect(Config.keys[height + 2] == "strip-corner-radius")
+    #expect(Config.keys[height + 3] == "strip-scroll-direction")
     #expect(text.contains("strip-scroll-direction=reversed\n"))
     #expect(text.contains("strip-corner-radius=0\n"))
     var fractional = Config()
-    fractional.stripMagnify = 2.25
-    #expect(fractional.text(forKey: "strip-magnify") == "2.25")
     fractional.stripCornerRadius = 6.5
     #expect(fractional.text(forKey: "strip-corner-radius") == "6.5")
     let (parsed, w) = Config.parse(text)
     #expect(parsed == c && w.isEmpty)
+}
+
+@Test func stripCellMaxParsesNumberAndRatio() {
+    #expect(Config().stripCellMax == 1.5)
+    #expect(Config.stripCellMaxRange == 0.5625...1.5)
+    var c = Config()
+    #expect(c.set("strip-cell-max", "3:2") == .ok && c.stripCellMax == 1.5)
+    #expect(c.set("strip-cell-max", "9:16") == .ok && c.stripCellMax == 0.5625)
+    #expect(c.set("strip-cell-max", "1") == .ok && c.stripCellMax == 1)
+    for bad in ["0.5", "2:1", "x", "3:", ":2", "-3:-2", "inf"] {
+        #expect(c.set("strip-cell-max", bad) == .badValue, "\(bad)")
+        #expect(c.stripCellMax == 1, "\(bad)")
+    }
+    c.stripCellMax = 1.5
+    #expect(c.text(forKey: "strip-cell-max") == "1.5")
+}
+
+@Test func retiredStripKeysWarnOnce() {
+    let (c, w) = Config.parse("strip-magnify=2\nstrip-aspect=crop")
+    #expect(w == ["loupe.conf:1: 'strip-magnify' is no longer used", "loupe.conf:2: 'strip-aspect' is no longer used"])
+    #expect(c == Config())
+    #expect(Config.retiredKeys == ["strip-aspect", "strip-magnify", "strip-magnify-reach", "strip-magnify-limit"])
+    for key in Config.retiredKeys { #expect(!Config.keys.contains(key), "\(key)") }
+}
+
+@Test func stripDefaults() {
+    #expect(Config().stripWindow == .bar)
+    #expect(Config().stripHeight == 68)
+    #expect(Config().stripCornerRadius == 3)
 }
 
 @Test func dragHeightIsRoundedAndClampedToTheStripRange() {
@@ -517,40 +532,6 @@ import Foundation
     #expect(Config.clampedStripHeight(240.4) == 240 && Config.clampedStripHeight(5000) == 240)
     #expect(Config.clampedStripHeight(.nan) == 40 && Config.clampedStripHeight(.infinity) == 40)
     #expect(Config.clampedStripHeight(64) == 64)
-}
-
-/// Build 2 trial: `strip-magnify-reach=0.00` was rejected as not an integer, so the reach the user asked for never
-/// applied. Fractions are allowed now (the falloff spans reach + 1 cell widths).
-@Test func stripMagnifyReachTakesFractions() {
-    for (text, value) in [("strip-magnify-reach=0.00", 0.0), ("strip-magnify-reach=1.5", 1.5),
-                          ("strip-magnify-reach=6", 6), ("strip-magnify-reach=0", 0)] {
-        let (c, w) = Config.parse(text)
-        #expect(c.stripMagnifyReach == value && w.isEmpty, "\(text)")
-    }
-    var c = Config()
-    c.stripMagnifyReach = 1.5
-    #expect(c.text(forKey: "strip-magnify-reach") == "1.5")
-    c.stripMagnifyReach = 2
-    #expect(c.text(forKey: "strip-magnify-reach") == "2")
-}
-
-/// `strip-magnify-limit`: the magnified cell's height cap as % of the viewer (was a fixed 15 %).
-@Test func stripMagnifyLimitKey() throws {
-    #expect(Config().stripMagnifyLimit == 15)
-    #expect(Config().text(forKey: "strip-magnify-limit") == "15")
-    for (text, value) in [("strip-magnify-limit=5", 5.0), ("strip-magnify-limit=100", 100),
-                          ("strip-magnify-limit=37.5", 37.5), ("strip-magnify-limit=40", 40)] {
-        let (c, w) = Config.parse(text)
-        #expect(c.stripMagnifyLimit == value && w.isEmpty, "\(text)")
-        #expect(Config.parse("strip-magnify-limit=" + (c.text(forKey: "strip-magnify-limit") ?? "")).0 == c)
-    }
-    for bad in ["strip-magnify-limit=4.9", "strip-magnify-limit=101", "strip-magnify-limit=0", "strip-magnify-limit=nan",
-                "strip-magnify-limit=big", "strip-magnify-limit=15%"] {
-        let (c, w) = Config.parse(bad)
-        #expect(c == Config() && w.count == 1, "\(bad)")
-    }
-    let reach = try #require(Config.keys.firstIndex(of: "strip-magnify-reach"))
-    #expect(Config.keys[reach + 1] == "strip-magnify-limit")
 }
 
 // MARK: Stats bar
@@ -1092,8 +1073,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "upscale": ("mitchell", "metalfxx"), "upscale-high": ("ewa-lanczos", "ewa-x"),
     "upscale-high-from": ("500", "50"), "downscale": ("bilinear", "metalfx"), "lanczos-antiring": ("yes", "maybe"),
     "pixel-art": ("1600", "50"), "pyramid-filter": ("box", "mitchell"), "exif-orientation": ("no", "maybe"),
-    "strip-window": ("bar", "wide"), "strip-height": ("120", "10"), "strip-aspect": ("crop", "square"),
-    "strip-magnify": ("3", "9"), "strip-magnify-reach": ("3", "9"), "strip-magnify-limit": ("50", "1"),
+    "strip-window": ("overlay", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
     "strip-corner-radius": ("8", "99"), "strip-scroll-direction": ("reversed", "sideways"),
     "strip-hide-delay": ("800", "-1"), "strip-fade-in": ("100", "5000"), "strip-fade-out": ("100", "5000"),
     "strip-jump-preview": ("no", "maybe"), "strip-loading-indicator": ("yes", "maybe"),

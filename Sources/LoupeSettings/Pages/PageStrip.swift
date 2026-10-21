@@ -1,3 +1,4 @@
+import LoupeCore
 import SettingsKit
 
 extension SettingsPanel {
@@ -9,28 +10,19 @@ extension SettingsPanel {
                     (word: "overlay", title: "Overlay"), (word: "bar", title: "Bar"), (word: "off", title: "Off"),
                 ], symbol: "rectangle.bottomthird.inset.filled",
                 description: "Overlay: appears with the mouse at the bottom edge and hides itself; Bar: a fixed band "
-                    + "under the photo; Off: no strip. Full screen always has the overlay; T pins it. Default Overlay."),
+                    + "under the photo; Off: no strip. Full screen always has the overlay; T pins it. Default Bar."),
                 .number("strip-height", "Height", unit: "pt", step: 4, symbol: "arrow.up.and.down",
-                        description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 64."),
-                .choice("strip-aspect", "Thumbnail shape", [
-                    (word: "native", title: "Photo's proportions"), (word: "crop", title: "3:2, cropped"),
-                ], symbol: "aspectratio",
-                description: "Each thumbnail as wide as its photo's proportions, or all 3:2 with the photo cropped "
-                    + "to the centre. Default Photo's proportions."),
+                        description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 68."),
+                .slider("strip-cell-max", "Widest thumbnail", range: Config.stripCellMaxRange, marks: [
+                    (value: 0.5625, title: "9:16"), (value: 0.75, title: "3:4"), (value: 1, title: "1:1"),
+                    (value: 4.0 / 3, title: "4:3"), (value: 1.5, title: "3:2"),
+                ], symbol: "rectangle.portrait.arrowtriangle.2.outward",
+                description: "How wide a thumbnail may grow when the strip has room: 9:16 keeps every one narrow, "
+                    + "3:2 lets a landscape show nearly whole. Never wider than the photo. Default 3:2."),
                 .number("strip-corner-radius", "Corner radius", unit: "pt", step: 1, symbol: "app",
-                        description: "Grows with a magnified thumbnail. 0–16 pt, 0 = square corners; default 4."),
+                        description: "0–16 pt, 0 = square corners; default 3."),
             ]),
             SettingsCard([
-                .number("strip-magnify", "Magnification", unit: "×", step: 0.5, symbol: "magnifyingglass.circle",
-                        description: "The thumbnail under the cursor grows, as in the Dock. 1–4, 1 = none; default 2.",
-                        nested: [
-                            .number("strip-magnify-reach", "Reach", step: 0.5,
-                                    description: "Thumbnails on each side over which it fades out, fractions too; "
-                                        + "0 = only the one under the cursor grows. 0–6, default 2."),
-                            .number("strip-magnify-limit", "Height limit", unit: "%", step: 5,
-                                    description: "A magnified thumbnail is at most this share of the window's height, "
-                                        + "so a tall strip stops short of ×4. 5–100 %, default 15."),
-                        ], off: ["1"]),
                 .choice("strip-scroll-direction", "Scrub direction", [
                     (word: "natural", title: "Natural"), (word: "reversed", title: "Reversed"),
                 ], symbol: "arrow.left.and.right",
