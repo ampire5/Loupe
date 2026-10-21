@@ -35,3 +35,16 @@
 `metalfxGeometry`, `extremeZoom`, `orientedPathsMatchTheOrientedPicture`, `orientedEdgesHaveNoFringe`,
 `alphaCompositeMatchesReference` (~22 с по одному). Каждый путь отрисовки при этом остаётся в будничном рендер-прогоне
 с более дешёвыми проверками.
+
+## Замер ленты
+
+`LoupeBench strip [--files N]` (по умолчанию 10 000 файлов) прогоняет 2 000 событий жеста и инерции через
+`StripScroll.event` и `StripScrollLayout.cells` — то, что главный поток делает на каждое событие прокрутки ленты, —
+и печатает медиану, p99 и максимум микросекунд на событие и наибольшее число ячеек за событие:
+
+```
+. scripts/libjxl-env.sh && swift run -c release LoupeBench strip --files 1000000
+```
+
+Бюджет — 1 мс на событие на Intel-iMac (`lts/macos26`); там 2026-10-21: p99 2,5 µs и для 10 000, и для 1 000 000
+файлов, раскладка на 1 000 000 файлов — 5 мс, 49 ячеек при высоте 68 и ширине 1800.
