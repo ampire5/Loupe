@@ -15,7 +15,8 @@ public enum DecodeError: Error, Equatable {
 /// Mapped straight from the kernel (`mmap`) and unmapped on release, so a freed frame leaves the process at
 /// once: through malloc, freed 0.5 GB blocks stayed resident and counted in `phys_footprint` (M2 spec §11.3).
 public final class PageAlignedBuffer: @unchecked Sendable {
-    /// Apple Silicon VM page size; also what `makeBuffer(bytesNoCopy:)` requires on this hardware.
+    /// Apple Silicon VM page size; also what `makeBuffer(bytesNoCopy:)` requires on this hardware. On Intel (4 KiB
+    /// pages) a multiple of the page, so the same alignment and sizes serve both.
     public static let pageSize = 16 * 1024
 
     public let bytes: UnsafeMutableRawPointer
@@ -31,9 +32,15 @@ public final class PageAlignedBuffer: @unchecked Sendable {
         let (rounded, overflow) = minimumLength.addingReportingOverflow(page - 1)
         guard !overflow else { throw DecodeError.outOfMemory }
         let length = max(page, rounded / page * page)
-        guard let pointer = mmap(nil, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0),
+        // mmap aligns to the VM page, 16 KiB on Apple Silicon but 4 KiB on Intel and under Rosetta (lts/macos26):
+        // one page more is mapped and the parts before the first 16 KiB boundary and after `length` given back.
+        let (mapped, tooLarge) = length.addingReportingOverflow(page)
+        guard !tooLarge, let pointer = mmap(nil, mapped, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0),
               pointer != mapFailed else { throw DecodeError.outOfMemory }
-        self.bytes = pointer
+        let head = (page - Int(bitPattern: pointer) % page) % page
+        if head > 0 { munmap(pointer, head) }
+        munmap(pointer + head + length, page - head)
+        self.bytes = pointer + head
         self.length = length
     }
 
