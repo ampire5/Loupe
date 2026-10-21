@@ -41,3 +41,16 @@
 настоящем Intel Mac, подключённом как self-hosted runner, workflow *Intel Mac (self-hosted)* гоняет `scripts/test.sh
 render` и собирает приложение — пока раннер не подключён, только вручную (запуск по push отключён), никогда на pull request. Как подключить Mac:
 [docs/intel-runner.md](https://github.com/ampire5/FrameScrub/blob/lts/macos26/docs/intel-runner.md) в FrameScrub.
+
+## Замер ленты
+
+`LoupeBench strip [--files N]` (по умолчанию 10 000 файлов) прогоняет 2 000 событий жеста и инерции через
+`StripScroll.event` и `StripScrollLayout.cells` — то, что главный поток делает на каждое событие прокрутки ленты, —
+и печатает медиану, p99 и максимум микросекунд на событие и наибольшее число ячеек за событие:
+
+```
+. scripts/libjxl-env.sh && swift run -c release --triple "$LTS_TRIPLE" LoupeBench strip --files 1000000
+```
+
+Бюджет — 1 мс на событие на Intel-iMac; на нём 2026-10-21: p99 2,5 µs и для 10 000, и для 1 000 000 файлов, раскладка
+на 1 000 000 файлов — 5 мс, 49 ячеек при высоте 68 и ширине 1800.

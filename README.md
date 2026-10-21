@@ -76,11 +76,11 @@ While you look, the stats bar (`i`) shows the file, its place in the folder, siz
 <table>
 <tr>
 <td width="50%"><img src="docs/images/zoom100.webp" alt="100% zoom into the Cosmic Cliffs"></td>
-<td width="50%"><img src="docs/images/strip.webp" alt="The thumbnail strip with its magnifier"></td>
+<td width="50%"><img src="docs/images/strip.webp" alt="The thumbnail strip"></td>
 </tr>
 <tr>
 <td><b>Every pixel, instantly.</b> <code>1</code> for 100 %, <code>2</code>/<code>4</code> for 200/400 %, pinch, double-tap Smart zoom, or hold the right button and drag. Zoom stops at fit-width, fit-height and 100 % click under your finger.</td>
-<td><b>The strip.</b> A dock-style magnifier over the folder's thumbnails; hover, scrub with two fingers, click to jump. It hides itself when you don't need it.</td>
+<td><b>The strip.</b> A filmstrip like Photos': the current photo in the middle in its own shape, the rest narrow. Swipe with two fingers or drag it and every photo that reaches the middle opens; click to jump. How wide the thumbnails may grow is up to you (<code>strip-cell-max</code>, 9:16 … 3:2).</td>
 </tr>
 <tr>
 <td><img src="docs/images/home-recent.webp" alt="Home: Recent"></td>
@@ -133,7 +133,7 @@ The most useful defaults. `?` shows every binding, gestures included; a capital 
 | `Return` | Folder browser on this photo | `z` | Fit ↔ 100 % at the pointer |
 | `⇧⌘H` | Home | `=` `-` | Zoom in / out |
 | `⌘[` | Back to where it was opened from | `⇧` + arrows | Pan |
-| `t` | Pin or unpin the strip | `c` `v` | Auto colour / vibrance, this folder (`⇧C` `⇧V`: default) |
+| `t` | Hide or show the strip (pin it in full screen) | `c` `v` | Auto colour / vibrance, this folder (`⇧C` `⇧V`: default) |
 | `i` | Stats bar | `s` | Next scaling filter, this folder (`⇧S`: default) |
 | `⌘I` | Info panel | `f` `Esc` | Full screen / leave it |
 | `⌘T` `⌘N` `⌘W` | New tab / window, close tab | `⇧⌘T` | Reopen closed tab |
@@ -152,7 +152,7 @@ Around the picture: a checkerboard behind transparent pixels (or the background 
 
 As far as we know, no other Mac app goes this deep into Logitech hardware, and it keeps growing.
 
-- Three-finger swipes and taps, force click, two-finger scrubbing on the strip, click-and-swipe chords.
+- Three-finger swipes and taps, force click, two-finger scrolling through the strip, click-and-swipe chords.
 - Right-button drag to zoom with inertia and rubber banding.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
 - Plays well with **Mac Mouse Fix**: Loupe still hears the MX Master's back and forward buttons while Mac Mouse Fix has them (`mx-side-buttons`).
