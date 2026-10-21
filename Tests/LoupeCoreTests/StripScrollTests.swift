@@ -248,3 +248,25 @@ private func near(_ a: Double?, _ b: Double, _ tolerance: Double = 0.5) -> Bool 
     _ = StripScroll.route(precise: true, held: [], folderGesture: true, pressed: false, spent: spent())
     #expect(asked == 1)
 }
+
+/// The controller's sequence, in the model: a gesture across five files scrubs each once, in order, and its
+/// momentum's end commits once.
+@Test func gestureScrubsEachFileOnceAndCommitsOnce() {
+    var scroll = StripScroll()
+    var current = 10, files: [Int] = [], commits = 0
+    let events: [(Double, ScrollPhase, ScrollPhase)] = [(-0.5 * pitch, .began, [])]
+        + Array(repeating: (-0.25 * pitch, .changed, []), count: 8)
+        + [(0, .ended, [])]
+        + Array(repeating: (-0.25 * pitch, [], .changed), count: 10)
+        + [(0, [], .ended)]
+    for (dx, phase, momentum) in events {
+        let outcome = step(&scroll, dx, phase: phase, momentum: momentum, current: current)
+        if let file = outcome.file {
+            files.append(file)
+            current = file
+        }
+        if outcome.commit { commits += 1 }
+    }
+    #expect(files == Array(11...15))
+    #expect(commits == 1)
+}

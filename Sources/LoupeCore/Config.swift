@@ -7,11 +7,6 @@ public enum StripWindowMode: String, Sendable {
     case overlay, bar, off
 }
 
-/// `strip-aspect`: a strip cell keeps its photo's own proportions, or is a centre crop to 3:2.
-public enum StripAspect: String, Sendable {
-    case native, crop
-}
-
 /// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection. `natural`: fingers left
 /// go to the next files, as the three-finger swipe does (the strip is content that follows the fingers under the
 /// selection, so the selection's border moves against them); `reversed`: the selection moves with the fingers.
@@ -282,22 +277,7 @@ public struct Config: Equatable, Sendable {
     /// `strip-cell-max`: how wide (width : height) a strip cell may grow when the strip has room, 0.5625 (9:16, never
     /// wider than the narrow cell) ...1.5 (3:2); never wider than the cell's photo. A number or `w:h` in loupe.conf.
     public var stripCellMax = 1.5
-    /// `strip-aspect`: cell shape.
-    public var stripAspect = StripAspect.native
-    /// `strip-magnify`: the Dock-style magnification of the cell under the cursor, 1 (none) ...4; the strip caps it
-    /// so the magnified cell stays within `strip-magnify-limit` of the viewer's height
-    /// (`StripMagnifier.effectiveMagnify`).
-    public var stripMagnify = 2.0
-    /// `strip-magnify-reach`: how many cells on each side of the cursor grow too, falling off, 0...6, fractions
-    /// allowed (the falloff spans reach + 1 cell widths; 0: only within one cell of the cursor, the others just part
-    /// to make room). A number since the Build 2 trial, where `0.00` was rejected as not an integer.
-    public var stripMagnifyReach = 2.0
-    public static let stripMagnifyLimitRange = 5.0...100.0
-    /// `strip-magnify-limit`: the magnified cell's height at most this % of the viewer's, 5...100 (the fixed 15 % of
-    /// Build 1.1 until the Build 2 trial).
-    public var stripMagnifyLimit = 15.0
-    /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square); a magnified cell scales
-    /// it with its height.
+    /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square).
     public var stripCornerRadius = 3.0
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`StripScroll`).
     public var stripScrollDirection = StripScrollDirection.natural
