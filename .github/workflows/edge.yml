@@ -95,7 +95,7 @@ jobs:
           else
             gh release create "$tag" --target "$sha" --prerelease --latest=false --title "$tag (latest build)" --notes "$notes"
           fi
-          gh release upload "$tag" "$zip"
+          gh release upload "$tag" "$zip" --clobber   # a run again for the same build replaces it
           for old in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
             [[ $old == "$zip" ]] || gh release delete-asset "$tag" "$old" --yes
           done
