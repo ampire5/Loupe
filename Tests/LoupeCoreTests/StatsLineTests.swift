@@ -299,3 +299,10 @@ import Testing
                 == "Loading a.jpg…   12–13 / 380")
     }
 }
+
+/// A pair's line gives its first page's facts in reading order, whichever page is current.
+@Test func pairFactsComeFromTheFirstPage() {
+    #expect(!StatsLine.factsOfCompanion(current: 12, first: 12, companionRead: true))   // current is first
+    #expect(StatsLine.factsOfCompanion(current: 13, first: 12, companionRead: true))    // companion is first
+    #expect(!StatsLine.factsOfCompanion(current: 13, first: 12, companionRead: false))  // not read: the current's
+}

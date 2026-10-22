@@ -25,6 +25,13 @@ public enum StatsLine {
         return parts.joined(separator: "   ")
     }
 
+    /// A pair's line gives the facts of one file (W×H, MB, format, decode): its first page in reading order, whichever
+    /// page is current (spread spec, «Положение»). True when that is the companion (`first` ≠ `current`) and it is
+    /// read; else the current photo's.
+    public static func factsOfCompanion(current: Int, first: Int, companionRead: Bool) -> Bool {
+        first != current && companionRead
+    }
+
     /// `Loading name…   N / M`; the position is left out when the playlist is not known.
     public static func loading(name: String, position: (index: Int, count: Int)? = nil, companion: Int? = nil,
                                counted: Bool = true) -> String {
