@@ -698,7 +698,9 @@ extension ThumbnailStore {
     /// table's share is keyed (a symlink into it, its mount gone). A share that was offline is told of
     /// (`onVolumeAnswered`), once. One that was not, but has folders noted away on it (time outs while it answered
     /// other listings), forgives them too: their time outs in a row start again, and one already given up is tried
-    /// again (the app told, so it asks for the card) — a busy share's slow folder is not lost for the session.
+    /// again (the app told, so it asks for the card) — a busy share's slow folder is not lost for the session. A folder
+    /// that always hangs on a share that keeps answering is so retried at the cover queue's pace (its retry delay
+    /// growing to a minute), not given up.
     func noteVolumeAnswered(_ volume: String?, alias: String? = nil) {
         for key in [volume, alias].compactMap({ $0 }) {
             coverVolumeTimeouts[key] = nil
