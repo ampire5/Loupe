@@ -82,6 +82,16 @@ public struct CoverNames: Equatable, Sendable {
     }
 }
 
+/// Where the catalog keeps a folder's files, as `ThumbnailStore.folderLocation` found it.
+public enum CoverPlace: Equatable, Sendable {
+    case located(ThumbnailLocation)
+    /// The system could not say (the folder is gone, or cannot be examined): covers go without the catalog, on a
+    /// share's terms when the mount table says it is one.
+    case unknown(network: Bool)
+    /// Its resolving lane is full of hung calls, or the resolve did not answer in time: ask again later.
+    case notNow
+}
+
 extension ThumbnailLocation {
     /// On a share (`net:` volume): its covers' listings have a time limit and a lane of their own.
     public var isNetwork: Bool { volume.hasPrefix("net:") }
@@ -110,6 +120,12 @@ extension ThumbnailStore {
     /// How long a cover's listing on a share may take (and `folderLocation`): what came by then is what the photos are
     /// picked from, so a folder of thousands of files on a slow share holds its place in the queue no longer than this.
     public static let coverListingTimeout: Duration = .seconds(2)
+    /// The same on a local volume: generous (a local listing of thousands of names takes well under a second), only so
+    /// a disk that hangs (a USB drive spinning up, or failing) cannot hold the local cards' places for good.
+    public static let coverLocalListingTimeout: Duration = .seconds(10)
+    /// Listings of one folder that gave no name in time before it is given up for the session (a share alive but too
+    /// slow): with `CoverQueue`'s growing retry delay, a few seconds of the share's time per card, not one a second.
+    static let coverTimeoutsAllowed = 3
     /// Covers' reads and decodes go behind the open folders' thumbnails (`readPriority`) in the reader's queue and
     /// the decode slots.
     public static let coverReadPriority = readPriority + 1
@@ -117,53 +133,90 @@ extension ThumbnailStore {
     static let coverPhotos = 4
     /// Subfolders looked into below a folder without photos: its own, and theirs.
     static let coverDepth = 2
-    /// Threads in a cover's blocking call (a listing, a resolve) at most, per lane (local volumes, shares), those
-    /// given up on included: one hung on a dead share stays in the kernel. Past that the lane's covers are "not now"
-    /// until one returns, so a share that hangs costs a few threads, not one per card, and never the local lane's. One
-    /// more than the most `CoverQueue` runs at once in either lane.
+    /// Threads in a cover's blocking call at most, per lane (`CoverLane`: listings and resolves, each on local volumes
+    /// and on shares), those given up on included: one hung on a dead share stays in the kernel. Past that the lane's
+    /// calls are "not now" until one returns, so a share that hangs costs a few threads, not one per card, and never
+    /// another lane's. One more than the most `CoverQueue` runs at once in a listing lane.
     static let coverThreadsPerLane = 3
     /// How often a cover waiting for the viewer to go idle looks again (at most a few covers wait at once).
     static let coverIdlePoll: Duration = .milliseconds(50)
     /// The covers' threads: background work, below the viewer's and the open folders' thumbnails.
     static let coverQoS = DispatchQoS.QoSClass.utility
 
-    /// Tests: a fake listing, and the share's time limit.
-    func setCoverListing(_ lister: @escaping CoverLister, networkTimeout: Duration = coverListingTimeout) {
+    /// Tests: a fake listing, and the time limits.
+    func setCoverListing(_ lister: @escaping CoverLister, networkTimeout: Duration = coverListingTimeout,
+                         localTimeout: Duration = coverLocalListingTimeout) {
         coverLister = lister
         coverNetworkTimeout = networkTimeout
+        coverLocalTimeout = localTimeout
+    }
+
+    /// Tests: which paths are on a share, instead of the mount table.
+    func setCoverVolumes(_ isNetwork: @escaping @Sendable (URL) -> Bool) {
+        coverVolumeIsNetwork = isNetwork
     }
 
     /// Where the catalog keeps `folder`'s files (`locate(folder/_)`), for its cards' covers (`subfolder`). Resolving
-    /// asks the system (realpath, statfs), which can hang on a share: it runs on a thread of the share lane, and
-    /// after `coverListingTimeout` (or a cancel) the answer is nil and the thread is left to finish alone.
-    public func folderLocation(_ folder: URL) async -> ThumbnailLocation? {
-        let locate = self.locate
-        let outcome = await Self.onThread(coverThreads, network: true, timeout: coverNetworkTimeout) {
+    /// asks the system (realpath, statfs), which can hang on a share: it runs in a resolving lane of its own, the
+    /// share's or the local volumes' as the mount table says (which never hangs), and after the lane's time limit (or a
+    /// cancel) the answer is `.notNow` and the thread is left to finish alone. The caller asks again later.
+    public func folderLocation(_ folder: URL) async -> CoverPlace {
+        let locate = self.locate, network = coverVolumeIsNetwork(folder)
+        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
+                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             (_: @Sendable (ThumbnailLocation?) -> Bool) -> ThumbnailLocation? in
             locate(folder.appendingPathComponent("_"))
         }
-        if case .value(let location, _) = outcome { return location }
-        return nil
+        switch outcome {
+        case .value(let location?, _): return .located(location)
+        case .value(nil, _), .failed: return .unknown(network: network)
+        case .busy, .timedOut: return .notNow
+        }
+    }
+
+    /// Whether `url` is on a share, from the mount table the system keeps (`getfsstat` with `MNT_NOWAIT` asks no file
+    /// system, so it never hangs): the mount point above its path, as written (a symlink to a share counts as local,
+    /// which only costs it the local lane's time limit). True when no mount point matches.
+    @Sendable static func mountIsNetwork(_ url: URL) -> Bool {
+        let room = getfsstat(nil, 0, MNT_NOWAIT)
+        guard room > 0 else { return true }
+        let blank = statfs()
+        var mounts = Array(repeating: blank, count: Int(room) + 4)
+        let count = mounts.withUnsafeMutableBufferPointer {
+            getfsstat($0.baseAddress, Int32($0.count * MemoryLayout<statfs>.stride), MNT_NOWAIT)
+        }
+        let path = url.standardizedFileURL.path
+        var best: (length: Int, local: Bool)?
+        for index in 0..<max(0, Int(count)) {
+            let mountPoint = ThumbnailLocation.string(from: &mounts[index].f_mntonname)
+            guard path == mountPoint || path.hasPrefix(mountPoint == "/" ? "/" : mountPoint + "/") else { continue }
+            if mountPoint.count > best?.length ?? -1 {
+                best = (mountPoint.count, mounts[index].f_flags & UInt32(MNT_LOCAL) != 0)
+            }
+        }
+        return !(best?.local ?? false)
     }
 
     /// The pictures of a folder's or zip's card, at most `maxPixel` on their long side: up to four photos spread across
     /// it (the one last viewed there first). `location` is where the catalog keeps the folder's files (from the
-    /// folder Home shows: `folderLocation(shown).subfolder(name)`; nil: none, and the volume is taken for a share).
+    /// folder Home shows: `folderLocation(shown)`'s `.subfolder(name)`; nil: none). `network` says whether it is on a
+    /// share when there is no location (`CoverPlace.unknown`); nil: from the location, or a share without one.
     /// From the catalog when it has four of the folder's photos, else from a listing of names (limited to
-    /// `coverListingTimeout` on a share) whose picks are made into thumbnails and kept in the catalog, like `cover`'s.
-    /// A folder without photos shows one of each of its first four subfolders' (two levels down at most).
+    /// `coverListingTimeout` on a share, `coverLocalListingTimeout` elsewhere) whose picks are made into thumbnails and
+    /// kept in the catalog, like `cover`'s. A folder without photos shows one of each of its first four subfolders'
+    /// (two levels down at most).
     ///
-    /// Empty when there is nothing to show (a folder found empty is not listed again this session, nor one that
-    /// cannot be listed); nil for "not now": the share's lane is full of hung calls, or its listing gave no name in
-    /// time. Nothing here asks the system but the listing. New thumbnails wait while the viewer is busy; cancelling
-    /// the task stops the listing and the reads.
-    public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, maxPixel: Int,
-                            lastViewed: String? = nil) async -> [CGImage]? {
-        await folderCover(folder, archive: archive, location: location, maxPixel: maxPixel, lastViewed: lastViewed,
-                          count: Self.coverPhotos, depth: 0)
+    /// Empty when there is nothing to show; then the folder is not listed again this session: found empty, not
+    /// listable, or listed `coverTimeoutsAllowed` times without a name in time. Nil for "not now": its lane is full of
+    /// hung calls, or its listing gave no name in time. Nothing here asks the system but the listing. New thumbnails
+    /// wait while the viewer is busy; cancelling the task stops the listing and the reads.
+    public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
+                            maxPixel: Int, lastViewed: String? = nil) async -> [CGImage]? {
+        await folderCover(folder, archive: archive, location: location, network: network ?? location?.isNetwork ?? true,
+                          maxPixel: maxPixel, lastViewed: lastViewed, count: Self.coverPhotos, depth: 0)
     }
 
-    private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, maxPixel: Int,
+    private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool, maxPixel: Int,
                              lastViewed: String?, count: Int, depth: Int) async -> [CGImage]? {
         guard !emptyCovers.contains(folder.standardizedFileURL.path) else { return [] }
         guard !Task.isCancelled else { return nil }
@@ -179,17 +232,27 @@ extension ThumbnailStore {
             }
             return images
         }
-        let network = location?.isNetwork ?? true
-        let lister = coverLister
-        let outcome = await Self.onThread(coverThreads, network: network, timeout: network ? coverNetworkTimeout : nil) {
+        let lister = coverLister, key = folder.standardizedFileURL.path
+        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
+                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             part in try lister(folder, archive, part)
         }
         let names: CoverNames, complete: Bool
         switch outcome {
         case .value(let listed, let ended): (names, complete) = (listed, ended)
-        case .failed: return []
-        case .notNow: return nil
+        case .failed:
+            emptyCovers.insert(key)
+            return []
+        case .busy:
+            return nil
+        case .timedOut:
+            coverTimeouts[key, default: 0] += 1
+            guard coverTimeouts[key, default: 0] >= Self.coverTimeoutsAllowed else { return nil }
+            coverTimeouts[key] = nil
+            emptyCovers.insert(key)
+            return []
         }
+        coverTimeouts[key] = nil
         let plan = await Self.offActor(qos: Self.coverQoS) {
             CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
                                lastViewed: lastViewed)
@@ -211,8 +274,8 @@ extension ThumbnailStore {
             for name in subfolders where images.count < count && !Task.isCancelled {
                 // One picture of each: the subfolder's own card makes the rest when it is shown.
                 let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
-                                            location: location?.subfolder(name), maxPixel: maxPixel, lastViewed: nil,
-                                            count: 1, depth: depth + 1)
+                                            location: location?.subfolder(name), network: network, maxPixel: maxPixel,
+                                            lastViewed: nil, count: 1, depth: depth + 1)
                 if let sub { images += sub.prefix(1) } else { notNow = true }
             }
             if notNow, images.count < count { return nil }
@@ -271,36 +334,40 @@ extension ThumbnailStore {
         return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel) }
     }
 
-    /// Runs blocking `work` on a thread of its own in the lane's place (`threads`), and waits for it at most `timeout`
-    /// (nil: no limit) or until the task is cancelled, then gives up on it: the answer is what `work` handed to its
-    /// `part` so far, and `part` returns false from then on so it can stop; the thread keeps its place until it
-    /// returns. `.notNow` when the lane has no free place or nothing came in time.
-    static func onThread<T: Sendable>(_ threads: CoverThreads, network: Bool, timeout: Duration?,
+    /// Runs blocking `work` on a thread of its own in a place of `lane` (`threads`), and waits for it at most `timeout`
+    /// or until the task is cancelled, then gives up on it: the answer is what `work` handed to its `part` so far, and
+    /// `part` returns false from then on so it can stop; the thread keeps its place until it returns. `.busy` when the
+    /// lane has no free place (or the task was cancelled with nothing yet), `.timedOut` when nothing came in time.
+    static func onThread<T: Sendable>(_ threads: CoverThreads, lane: CoverLane, timeout: Duration,
                                       _ work: @escaping @Sendable (_ part: @escaping @Sendable (T) -> Bool) throws -> T)
         async -> ThreadAnswer<T>.Outcome {
-        guard threads.enter(network: network) else { return .notNow }
+        guard threads.enter(lane) else { return .busy }
         let answer = ThreadAnswer<T>()
         DispatchQueue.global(qos: coverQoS).async {
             let result = Result { try work { answer.part($0) } }
-            threads.leave(network: network)
+            threads.leave(lane)
             answer.finish(result)
         }
         typealias Race = ThreadAnswer<T>.Race
         return await withTaskGroup(of: Race.self, returning: ThreadAnswer<T>.Outcome.self) { group in
             group.addTask { .answered(await answer.value()) }
-            if let timeout {
-                group.addTask {
-                    try? await Task.sleep(for: timeout)
-                    return .timedOut
-                }
+            group.addTask {
+                // Cancelled (the answer came first, or the caller's task): not a time out.
+                guard (try? await Task.sleep(for: timeout)) != nil else { return .answered(.busy) }
+                return .timedOut
             }
             // Whichever comes first: the timer stops the work, whose answer is then what it had so far.
+            var timedOut = false
             while let first = await group.next() {
                 answer.stop()
                 group.cancelAll()
-                if case .answered(let outcome) = first { return outcome }
+                switch first {
+                case .timedOut: timedOut = true
+                case .answered(.busy): continue   // the cancelled timer, or the work given up on by a cancel
+                case .answered(let outcome): return outcome
+                }
             }
-            return .notNow
+            return timedOut && !Task.isCancelled ? .timedOut : .busy
         }
     }
 
@@ -330,8 +397,10 @@ final class ThreadAnswer<T: Sendable>: @unchecked Sendable {
         case value(T, complete: Bool)
         /// It threw, with nothing before.
         case failed
-        /// No free thread, or given up on with nothing yet.
-        case notNow
+        /// No free thread, or given up on (cancelled) with nothing yet.
+        case busy
+        /// Its time limit ran out with nothing yet.
+        case timedOut
     }
 
     /// What the waiter heard first: the answer, or its time limit.
@@ -395,28 +464,40 @@ final class ThreadAnswer<T: Sendable>: @unchecked Sendable {
     private func answerLocked() -> Outcome {
         if case .success(let value) = outcome { return .value(value, complete: true) }
         if let latest { return .value(latest, complete: false) }
-        return stopped ? .notNow : .failed
+        return stopped ? .busy : .failed
     }
 }
 
-/// Counts the threads in a cover's blocking call, per lane (local volumes, shares), up to `limit` in each.
+/// Where a cover's blocking call runs: listings or resolves, on local volumes or on shares. Each has its own threads, so
+/// calls hung on a share never take a local volume's, nor a listing's a resolve's.
+public struct CoverLane: Hashable, Sendable {
+    public var network: Bool
+    public var resolving: Bool
+
+    public init(network: Bool, resolving: Bool) {
+        self.network = network
+        self.resolving = resolving
+    }
+}
+
+/// Counts the threads in covers' blocking calls, per lane, up to `limit` in each.
 final class CoverThreads: @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
-    private var counts: [Bool: Int] = [:]
+    private var counts: [CoverLane: Int] = [:]
 
     init(limit: Int) { self.limit = limit }
 
-    func enter(network: Bool) -> Bool {
+    func enter(_ lane: CoverLane) -> Bool {
         lock.withLock {
-            guard counts[network, default: 0] < limit else { return false }
-            counts[network, default: 0] += 1
+            guard counts[lane, default: 0] < limit else { return false }
+            counts[lane, default: 0] += 1
             return true
         }
     }
 
-    func leave(network: Bool) { lock.withLock { counts[network, default: 0] -= 1 } }
+    func leave(_ lane: CoverLane) { lock.withLock { counts[lane, default: 0] -= 1 } }
 
     /// Threads in a lane now, for tests.
-    func count(network: Bool) -> Int { lock.withLock { counts[network, default: 0] } }
+    func count(_ lane: CoverLane) -> Int { lock.withLock { counts[lane, default: 0] } }
 }

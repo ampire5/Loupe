@@ -339,17 +339,17 @@ private final class FakeListing: @unchecked Sendable {
         }
         // The share's cards first, until its hung listings fill its lane.
         await queue.want(shares, visible: shares.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
-        #expect(await eventually { store.coverThreads.count(network: true) == ThumbnailStore.coverThreadsPerLane })
+        #expect(await eventually { store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverThreadsPerLane })
         let ids = shares + locals
         await queue.want(ids, visible: ids.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
         #expect(await eventually { locals.allSatisfy { made.count(of: $0) == 4 } })
         try? await Task.sleep(for: .milliseconds(200))   // a few retries of the share's cards
         #expect(shares.allSatisfy { made.count(of: $0) == nil })
         #expect(await queue.pendingCount >= shares.count - 1)   // one may be running its quick "not now"
-        #expect(store.coverThreads.count(network: true) == ThumbnailStore.coverThreadsPerLane)
+        #expect(store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverThreadsPerLane)
         await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
         for _ in 0..<ThumbnailStore.coverThreadsPerLane { hang.signal() }
-        #expect(await eventually { store.coverThreads.count(network: true) == 0 })
+        #expect(await eventually { store.coverThreads.count(CoverLane(network: true, resolving: false)) == 0 })
     }
 
     /// Review fix: resolving the folder Home shows is limited like a share's listing: a resolve that hangs gives nil
@@ -363,12 +363,14 @@ private final class FakeListing: @unchecked Sendable {
             return nil
         })
         await store.setCoverListing(ThumbnailStore.listCoverNames, networkTimeout: .milliseconds(100))
+        await store.setCoverVolumes { $0.path.hasPrefix("/net/") }
         let start = ContinuousClock.now
-        #expect(await store.folderLocation(URL(fileURLWithPath: "/net/share")) == nil)
-        #expect(ContinuousClock.now - start < .seconds(1))
-        #expect(store.coverThreads.count(network: true) == 1)
+        #expect(await store.folderLocation(URL(fileURLWithPath: "/net/share")) == .notNow)
+        #expect(ContinuousClock.now - start < .seconds(3))   // the limit is 100 ms; the resolve hangs for good
+        let lane = CoverLane(network: true, resolving: true)
+        #expect(store.coverThreads.count(lane) == 1)
         hang.signal()
-        #expect(await eventually { store.coverThreads.count(network: true) == 0 })
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
     }
 
     /// Review fix: a cover asks the system nothing but its listing: the subfolders' locations come from the folder's.
@@ -406,6 +408,109 @@ private final class FakeListing: @unchecked Sendable {
         #expect(reader.reads.isEmpty)
         await store.setViewerActivity(.idle)
         #expect(await task.value?.count == 2)
+    }
+
+    /// Fix round 2: a share's resolves and listings that hang fill their own lanes; a local folder still resolves
+    /// (as local) and its covers are made.
+    @Test func hungShareLeavesLocalResolvesAlone() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let hang = DispatchSemaphore(value: 0)
+        photos(reader, in: "/loc/shown/a", ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir, locate: { url in
+            if url.path.hasPrefix("/net/") { hang.wait() }
+            return ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
+        })
+        let lister: ThumbnailStore.CoverLister = { folder, _, _ in
+            if folder.path.hasPrefix("/net/") { hang.wait() }
+            return CoverNames(files: ["1.jpg", "2.jpg"], folders: [])
+        }
+        await store.setCoverListing(lister, networkTimeout: .milliseconds(50))
+        await store.setCoverVolumes { $0.path.hasPrefix("/net/") }
+        let lanes = [true, false].map { CoverLane(network: true, resolving: $0) }
+        for i in 0..<ThumbnailStore.coverThreadsPerLane {
+            #expect(await store.folderLocation(URL(fileURLWithPath: "/net/s\(i)")) == .notNow)
+            let share = ThumbnailLocation(volume: "net:share", folder: "/net/f\(i)", name: "_")
+            #expect(await store.folderCover(URL(fileURLWithPath: "/net/f\(i)"), archive: false, in: share, maxPixel: 64) == nil)
+        }
+        #expect(lanes.allSatisfy { store.coverThreads.count($0) == ThumbnailStore.coverThreadsPerLane })
+        guard case .located(let shown) = await store.folderLocation(URL(fileURLWithPath: "/loc/shown")) else {
+            Issue.record("the local folder did not resolve")
+            return
+        }
+        #expect(!shown.isNetwork)
+        let images = await store.folderCover(URL(fileURLWithPath: "/loc/shown/a"), archive: false,
+                                             in: shown.subfolder("a"), maxPixel: 64)
+        #expect(images?.count == 2)
+        for _ in 0..<(2 * ThumbnailStore.coverThreadsPerLane) { hang.signal() }
+        #expect(await eventually { lanes.allSatisfy { store.coverThreads.count($0) == 0 } })
+    }
+
+    /// Fix round 2: a share alive but too slow to give a name in time is given up after three tries (empty for the
+    /// session), not listed again and again.
+    @Test func slowShareGivenUpAfterThreeTimeouts() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let calls = TryCounter()
+        let silent: ThumbnailStore.CoverLister = { _, _, part in
+            calls.add()
+            usleep(300_000)   // alive, but nothing before the limit; then stops (nothing handed to `part`)
+            _ = part(CoverNames(files: [], folders: []))
+            throw CancellationError()
+        }
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverListing(silent, networkTimeout: .milliseconds(50))
+        let folder = URL(fileURLWithPath: "/net/slow"), share = loc("/net/slow", network: true)
+        #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)
+        #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)
+        #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
+        #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
+        // The listings' threads may start late on a loaded machine (that, too, is a time out): three in all, no more.
+        #expect(await eventually { calls.count == 3 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(calls.count == 3)
+    }
+
+    /// Fix round 2: a local disk that hangs is limited too (generously): its cover is "not now" after the local time
+    /// limit, so it gives the local lane's queue place back.
+    @Test func hungLocalDiskTimesOut() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let hang = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverListing({ _, _, _ in
+            hang.wait()
+            return CoverNames(files: [], folders: [])
+        }, localTimeout: .milliseconds(100))
+        let start = ContinuousClock.now
+        #expect(await store.folderCover(URL(fileURLWithPath: "/usb/f"), archive: false, in: loc("/usb/f"), maxPixel: 64) == nil)
+        #expect(ContinuousClock.now - start < .seconds(2))
+        let lane = CoverLane(network: false, resolving: false)
+        #expect(store.coverThreads.count(lane) == 1)
+        hang.signal()
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+    }
+
+    /// A folder that cannot be listed is empty for the session: not listed again.
+    @Test func unlistableSettled() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let calls = TryCounter()
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverListing { _, _, _ in
+            calls.add()
+            throw CocoaError(.fileReadNoPermission)
+        }
+        #expect(await store.folderCover(URL(fileURLWithPath: "/p/locked"), archive: false, in: loc("/p/locked"), maxPixel: 64) == [])
+        #expect(await store.folderCover(URL(fileURLWithPath: "/p/locked"), archive: false, in: loc("/p/locked"), maxPixel: 64) == [])
+        #expect(calls.count == 1)
+    }
+
+    /// The mount table says where a path is without asking its file system: the boot volume is local.
+    @Test func mountTableKnowsLocal() {
+        #expect(!ThumbnailStore.mountIsNetwork(URL(fileURLWithPath: "/")))
+        #expect(!ThumbnailStore.mountIsNetwork(fm.temporaryDirectory))
     }
 
     /// The time limit is the share's: a local listing runs to its end.
@@ -530,6 +635,14 @@ private final class FakeListing: @unchecked Sendable {
         #expect(Set(entries.files) == ["caps\u{2215}1.jpg", "caps\u{2215}2.jpg"])
         #expect(entries.folders.isEmpty)
     }
+}
+
+/// Calls counted from other threads.
+final class TryCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func add() { lock.withLock { value += 1 } }
+    var count: Int { lock.withLock { value } }
 }
 
 /// Pictures per folder, from other tasks.
