@@ -96,6 +96,11 @@ extension SettingsPanel {
                 ], symbol: "character.textbox",
                 description: "File names on the thumbnails, under them, or none (the selected one shows in the bar). "
                     + "⌥N in Folders. Default Off."),
+                .choice("folder-cover", "Folder covers", [
+                    (word: "grid", title: "Grid"), (word: "hero", title: "Hero"), (word: "stack", title: "Stack"),
+                    (word: "single", title: "Single"),
+                ], symbol: "rectangle.split.2x1",
+                description: "How a folder's card shows what is inside. Narrow cards always show one photo."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),
                 ], symbol: "rectangle.stack.badge.play",

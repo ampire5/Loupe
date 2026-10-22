@@ -59,6 +59,14 @@ public enum SidebarIndent: String, Sendable {
     case compact, even
 }
 
+/// `folder-cover`: how a folder's or a zip's card on Home shows what is inside (folder covers spec). `grid`: up to four
+/// photos 2 × 2; `hero` (the default): a large one on top, up to three small under it; `stack`: three prints piled with a
+/// slight turn; `single`: one photo fills the card. A card narrower than 110 pt always shows one photo. Recent's session
+/// mosaics follow it too.
+public enum FolderCoverLayout: String, Sendable, CaseIterable {
+    case grid, hero, stack, single
+}
+
 /// `session-restore`: what a launch without a file opens (Home spec §2.6). `none` (the default): Home; `last`: Last
 /// Session's windows and tabs.
 public enum SessionRestore: String, Sendable {
@@ -426,6 +434,8 @@ public struct Config: Equatable, Sendable {
     public var gridStyle = GridStyle.aspect
     /// `grid-names`: file names off (the default), on the photo, or under it.
     public var gridNames = GridNames.off
+    /// `folder-cover`: the layout of a folder's, a zip's or a session's card picture (`FolderCoverLayout`).
+    public var folderCover = FolderCoverLayout.hero
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
@@ -541,7 +551,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -684,6 +694,7 @@ public struct Config: Equatable, Sendable {
         case "browser-card-size": return String(browserCardSize)
         case "grid-style": return gridStyle.rawValue
         case "grid-names": return gridNames.rawValue
+        case "folder-cover": return folderCover.rawValue
         case "recent-count": return String(recentCount)
         case "session-restore": return sessionRestore.rawValue
         case "transparency": return transparency.rawValue
@@ -967,6 +978,8 @@ public struct Config: Equatable, Sendable {
             if let v = GridStyle(rawValue: value.lowercased()) { gridStyle = v } else { return .badValue }
         case "grid-names":
             if let v = GridNames(rawValue: value.lowercased()) { gridNames = v } else { return .badValue }
+        case "folder-cover":
+            if let v = FolderCoverLayout(rawValue: value.lowercased()) { folderCover = v } else { return .badValue }
         case "recent-count":
             if let v = Int(value), (0...200).contains(v) { recentCount = v } else { return .badValue }
         case "session-restore":

@@ -453,23 +453,97 @@ private final class FakeListing: @unchecked Sendable {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let calls = TryCounter()
+        // Alive, but nothing before the limit: each listing waits at the gate, opened only once its cover has given
+        // up on it, so what it then hands to `part` comes after the stop however late its thread runs.
+        let gate = DispatchSemaphore(value: 0)
         let silent: ThumbnailStore.CoverLister = { _, _, part in
             calls.add()
-            usleep(300_000)   // alive, but nothing before the limit; then stops (nothing handed to `part`)
-            _ = part(CoverNames(files: [], folders: []))
+            gate.wait()
+            #expect(!part(CoverNames(files: ["late.jpg"], folders: [])))
             throw CancellationError()
         }
         let store = store(ThumbReader(), dir: dir)
         await store.setCoverListing(silent, networkTimeout: .milliseconds(50))
         let folder = URL(fileURLWithPath: "/net/slow"), share = loc("/net/slow", network: true)
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)
+        gate.signal()
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)
+        gate.signal()
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
+        gate.signal()
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
         // The listings' threads may start late on a loaded machine (that, too, is a time out): three in all, no more.
         #expect(await eventually { calls.count == 3 })
         try? await Task.sleep(for: .milliseconds(100))
         #expect(calls.count == 3)
+    }
+
+    /// Task 4: the folder Home shows resolves once, as it is.
+    @Test func shownFolderResolves() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in false }
+        #expect(await store.shownFolderPlace(URL(fileURLWithPath: "/loc/shown")) == .located(loc("/loc/shown")))
+    }
+
+    /// Task 4: a local folder whose resolve hangs (a symlink into a hung share) is asked three times, then goes on as
+    /// a share without the catalog: it does not keep the local resolving lane's threads for good.
+    @Test func shownLocalFolderGivesUpAfterThreeTries() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let hang = DispatchSemaphore(value: 0), calls = TryCounter()
+        let store = store(ThumbReader(), dir: dir, locate: { _ in
+            calls.add()
+            hang.wait()
+            return nil
+        })
+        await store.setCoverListing(ThumbnailStore.listCoverNames, localTimeout: .milliseconds(50))
+        await store.setCoverVolumes { _ in false }
+        let place = await store.shownFolderPlace(URL(fileURLWithPath: "/loc/link"), retry: .milliseconds(10))
+        #expect(place == .unknown(network: true))
+        // The threads may start late on a loaded machine: three in all, no more.
+        #expect(await eventually { calls.count == ThumbnailStore.coverLocalResolveTries })
+        for _ in 0..<ThumbnailStore.coverLocalResolveTries { hang.signal() }
+        let lane = CoverLane(network: false, resolving: true)
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        #expect(calls.count == ThumbnailStore.coverLocalResolveTries)
+    }
+
+    /// Task 4: a share is asked again for as long as its folder is shown, and its place found once it answers.
+    @Test func shownShareKeepsAsking() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let calls = TryCounter(), slow = ThumbnailStore.coverLocalResolveTries + 1
+        let store = store(ThumbReader(), dir: dir, locate: { url in
+            calls.add()
+            if calls.count <= slow { usleep(100_000) }   // past the limit, then back: its thread frees its place
+            return ThumbnailLocation(volume: "net:share", folder: url.deletingLastPathComponent().path, name: "_")
+        })
+        await store.setCoverListing(ThumbnailStore.listCoverNames, networkTimeout: .milliseconds(20))
+        await store.setCoverVolumes { _ in true }
+        let place = await store.shownFolderPlace(URL(fileURLWithPath: "/net/f"), retry: .milliseconds(50))
+        #expect(place == .located(loc("/net/f", network: true)))
+        #expect(calls.count > slow)
+    }
+
+    /// Task 4: a cancelled resolve (Home left the folder) ends at once, "not now".
+    @Test func shownFolderResolveCancelled() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let hang = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir, locate: { _ in
+            hang.wait()
+            return nil
+        })
+        await store.setCoverVolumes { _ in true }
+        let task = Task { await store.shownFolderPlace(URL(fileURLWithPath: "/net/f"), retry: .milliseconds(10)) }
+        try? await Task.sleep(for: .milliseconds(50))
+        let start = ContinuousClock.now
+        task.cancel()
+        #expect(await task.value == .notNow)
+        #expect(ContinuousClock.now - start < .seconds(1))
+        hang.signal()
     }
 
     /// Fix round 2: a local disk that hangs is limited too (generously): its cover is "not now" after the local time

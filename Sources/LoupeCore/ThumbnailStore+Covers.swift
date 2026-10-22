@@ -174,6 +174,31 @@ extension ThumbnailStore {
         }
     }
 
+    /// How long Home waits before asking again where the folder it shows is, after a "not now" (`shownFolderPlace`).
+    public static let coverResolveRetry: Duration = .milliseconds(500)
+    /// How many times Home asks where a folder on a local volume is before it gives up on the catalog for it. The mount
+    /// table calls a symlink into a share local, so its resolve can hang on that share: past these tries its covers go
+    /// as a share's (`.unknown(network: true)`, the share lane's time limit and one listing at a time), and nothing more
+    /// waits in the local resolving lane for it.
+    public static let coverLocalResolveTries = 3
+
+    /// Where the catalog keeps the files of `folder`, the folder Home shows, for its cards' covers: `folderLocation`,
+    /// asked again after `retry` while it says "not now". A share is asked for as long as the task lasts (Home cancels
+    /// it when it leaves the folder); a local volume `coverLocalResolveTries` times, then `.unknown(network: true)`.
+    /// `.notNow` only once cancelled.
+    public func shownFolderPlace(_ folder: URL, retry: Duration = coverResolveRetry) async -> CoverPlace {
+        let network = coverVolumeIsNetwork(folder)
+        var tries = 0
+        while !Task.isCancelled {
+            let place = await folderLocation(folder)
+            guard place == .notNow else { return place }
+            tries += 1
+            if !network, tries >= Self.coverLocalResolveTries { return .unknown(network: true) }
+            guard (try? await Task.sleep(for: retry)) != nil else { break }
+        }
+        return .notNow
+    }
+
     /// Whether `url` is on a share, from the mount table the system keeps (`getfsstat` with `MNT_NOWAIT` asks no file
     /// system, so it never hangs): the mount point above its path, as written (a symlink to a share counts as local,
     /// which only costs it the local lane's time limit). True when no mount point matches.

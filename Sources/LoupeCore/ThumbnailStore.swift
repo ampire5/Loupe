@@ -62,7 +62,7 @@ public actor ThumbnailStore {
     let coverLimit = DecodePool(slots: 1, reserved: 0)
     /// Home's folder and archive covers in the background (`folderCover`), a few at a time; paused while the viewer is
     /// busy (`setViewerActivity`).
-    public let coverQueue = CoverQueue()
+    public nonisolated let coverQueue = CoverQueue()
     /// Diagnostics, one line per thumbnail made (the app passes `DebugLog.log` under `LOUPE_DEBUG`).
     let log: (@Sendable (String) -> Void)?
 

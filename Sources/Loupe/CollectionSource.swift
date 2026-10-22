@@ -34,6 +34,8 @@ enum SessionCardAction {
     /// Recent's and Sessions' sorts, for this run.
     private var sorts: [String: BrowserSort] = [:]
     private var pictureTask: Task<Void, Never>?
+    /// How a session's card shows its photos (`folder-cover`, as folders' cards do).
+    var coverLayout = HomeMosaic.Layout.hero
 
     init(thumbnails: ThumbnailStore, recent: @escaping () -> [RecentEntry], sessions: @escaping () -> [SavedSession],
          stashPage: @escaping () -> NSView?) {
@@ -108,7 +110,11 @@ enum SessionCardAction {
     /// four photos two by two. An unreachable share is never read.
     func wantImages(_ ids: [String], width: CGFloat) {
         pictureTask?.cancel()
-        let maxPixel = Int((width * (view?.window?.backingScaleFactor ?? 2)).rounded())
+        let scale = view?.window?.backingScaleFactor ?? 2
+        let maxPixel = Int((width * scale).rounded())
+        let layout = coverLayout
+        // A grid's cells are a half or a quarter of the card; the other layouts' first picture fills most of it.
+        let cellPixels = layout == .grid && width >= HomeMosaic.narrowWidth ? max(64, maxPixel / 2) : maxPixel
         let thumbnails = self.thumbnails
         let wanted = ids
         let reachability = self.reachability
@@ -129,11 +135,15 @@ enum SessionCardAction {
                     }.prefix(4)
                     var pictures: [CGImage] = []
                     for url in files {
-                        if let image = await thumbnails.cover(url, maxPixel: max(64, maxPixel / 2)) { pictures.append(image) }
+                        if let image = await thumbnails.cover(url, maxPixel: cellPixels) { pictures.append(image) }
                     }
                     guard !Task.isCancelled else { return }
-                    let side = CGFloat(maxPixel)
-                    if let mosaic = HomeMosaic.make(pictures, size: CGSize(width: side, height: side)) {
+                    // Drawn off the main thread.
+                    let made = await Task.detached(priority: .utility) { [pictures] in
+                        HomeMosaic.make(pictures, size: CGSize(width: width, height: width), layout: layout, scale: scale)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    if let mosaic = made {
                         self.view?.setImage(mosaic, for: id)
                     }
                 }

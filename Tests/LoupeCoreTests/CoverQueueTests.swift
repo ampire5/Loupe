@@ -108,6 +108,43 @@ private final class TryCount: @unchecked Sendable {
         #expect(log.started == ["a", "b"])
     }
 
+    /// Task 4: each window's Home is a client of the one queue: one's `want` leaves the other's cards alone, even one
+    /// with the same id.
+    @Test func clientsKeepTheirCards() async {
+        let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1)
+        let log = CoverLog()
+        await queue.want(["a"], visible: 1, client: 1, isNetwork: { _ in false }, work: Self.work(log, time: .seconds(30)))
+        #expect(await eventually { log.started == ["a"] })
+        await queue.want(["a", "b"], visible: 2, client: 2, isNetwork: { _ in false },
+                         work: Self.work(log, time: .milliseconds(1)))
+        #expect(await eventually { log.ended.count == 2 })
+        #expect(log.cancelled.isEmpty)
+        #expect(log.started.sorted() == ["a", "a", "b"])
+        // The first window left its folder: its card alone is cancelled.
+        await queue.want([], visible: 0, client: 1, isNetwork: { _ in false }, work: Self.work(log))
+        #expect(await eventually { log.cancelled == ["a"] })
+        #expect(await eventually { await queue.runningCount == 0 })
+    }
+
+    /// Task 4: the cards in view in every window go before any window's margin.
+    @Test func visibleOfEveryClientFirst() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1)
+        let log = CoverLog()
+        let gate = HoldGate()
+        let work: @Sendable (String) async -> Bool = { id in
+            log.begin(id, network: false)
+            if id == "h" { try? await gate.wait() }
+            log.end(id, network: false, cancelled: false)
+            return true
+        }
+        await queue.want(["h", "m1"], visible: 1, client: 1, isNetwork: { _ in false }, work: work)
+        #expect(await eventually { log.started == ["h"] })
+        await queue.want(["v2", "m2"], visible: 1, client: 2, isNetwork: { _ in false }, work: work)
+        gate.open()
+        #expect(await eventually { log.ended.count == 4 })
+        #expect(log.started == ["h", "v2", "m1", "m2"])
+    }
+
     /// Fast scrolling through a hundred folders: the queue keeps only the cards wanted last, and a card that left is
     /// cancelled, so what runs and waits stays bounded.
     @Test func fastScrollStaysBounded() async {
@@ -219,19 +256,34 @@ private final class TryCount: @unchecked Sendable {
 
     /// The delay stops growing at `maxRetryDelay`: five tries 100, 200, 200, 200 ms apart (700 ms), where doubling on
     /// would take 1.5 s.
-    @Test func retryDelayCapped() async {
-        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .milliseconds(100),
-                               maxRetryDelay: .milliseconds(200))
+    /// The delay after each "not now" in a row: the base, doubled each time, never past the cap.
+    @Test func retryDelayDoublesUpToTheCap() {
+        let delays = (1...6).map { CoverQueue.retryDelay(after: $0, base: .milliseconds(100), cap: .milliseconds(500)) }
+        #expect(delays == [.milliseconds(100), .milliseconds(200), .milliseconds(400), .milliseconds(500),
+                           .milliseconds(500), .milliseconds(500)])
+        #expect(CoverQueue.retryDelay(after: 0, base: .seconds(1), cap: .seconds(60)) == .seconds(1))
+        #expect(CoverQueue.retryDelay(after: 7, base: .seconds(1), cap: .seconds(60)) == .seconds(60))
+        #expect(CoverQueue.retryDelay(after: 6, base: .seconds(1), cap: .seconds(60)) == .seconds(32))
+        // A long run of "not now"s does not overflow.
+        #expect(CoverQueue.retryDelay(after: 10_000, base: .seconds(1), cap: .seconds(60)) == .seconds(60))
+    }
+
+    /// End to end, loosely (a busy machine only makes the tries later): the queue waits at least `retryDelay(after:)`
+    /// between the tries of a card that keeps saying "not now".
+    @Test func retriesWaitTheDelay() async {
+        let base: Duration = .milliseconds(40), cap: Duration = .milliseconds(80)
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: base, maxRetryDelay: cap)
         let times = TryTimes()
         await queue.want(["a"], visible: 1, isNetwork: { _ in false }) { _ in
             times.add()
             return false
         }
-        #expect(await eventually { times.all.count >= 5 })
+        #expect(await eventually { times.all.count >= 4 })
         await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
         let all = times.all
-        #expect(all[4] - all[0] >= .milliseconds(690))
-        #expect(all[4] - all[0] < .milliseconds(1300))
+        for n in 1..<4 {
+            #expect(all[n] - all[n - 1] >= CoverQueue.retryDelay(after: n, base: base, cap: cap))
+        }
     }
 
     /// A card that left and came back starts over with the shortest delay.

@@ -1094,7 +1094,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
@@ -1583,6 +1583,20 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(d.gridStyle == .aspect && d.text(forKey: "grid-style") == "aspect")
     #expect(d.gridNames == .off && d.text(forKey: "grid-names") == "off")
     #expect(d.browserCardSize == 220)
+}
+
+@Test func folderCoverKey() {
+    let d = Config()
+    #expect(d.folderCover == .hero && d.text(forKey: "folder-cover") == "hero")
+    for layout in ["grid", "hero", "stack", "single"] {
+        let (c, errors) = Config.parse("folder-cover=\(layout)")
+        #expect(errors.isEmpty && c.folderCover.rawValue == layout && c.text(forKey: "folder-cover") == layout)
+    }
+    #expect(Config.parse("folder-cover=Stack").0.folderCover == .stack)
+    #expect(Config.parse("folder-cover=mosaic").1 == ["loupe.conf:1: bad option 'folder-cover=mosaic'"])
+    var c = Config()
+    #expect(c.set("folder-cover", "single") == .ok && c.folderCover == .single)
+    #expect(c.set("folder-cover", "") == .badValue && c.folderCover == .single)
 }
 
 @Test func gridParse() {
