@@ -44,6 +44,9 @@ import QuartzCore
     /// one page: the info panel is about it (`onPointerPageChanged`).
     private(set) var pointerPage: Int?
     var onPointerPageChanged: (() -> Void)?
+    /// Where the pointer last was over the view (view pixels), nil since it left: a pair laid out anew or moved under a
+    /// still pointer finds its page from here.
+    private var lastPointer: CGPoint?
     /// `d`, `⇧D`, `⌥D` pressed (`toggleSpread`, `saveSpread`, `shiftSpread`); the window controller owns the folder's
     /// spread values.
     var onSpreadKey: ((KeyAction) -> Bool)?
@@ -267,7 +270,12 @@ import QuartzCore
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in
         // between draws the bare background retagged back to P3.
         renderLoop.expectColorSpace(session.incomingColorSpace)
-        if changed { refreshCursor() }
+        if changed {
+            refreshCursor()
+            // The picture moved under a still pointer: the page under it, told with this change (the window controller
+            // brings the info panel up to date right after this call).
+            pointerPage = lastPointer.flatMap(page(at:))
+        }
     }
 
     /// A new image object on screen. Another photo (or none) stops every motion, a zoom animation at its target (spec
@@ -859,10 +867,16 @@ import QuartzCore
 
     /// The page of the pair under `point` (view pixels; nil: the pointer left), told when it changed.
     private func updatePointerPage(at point: CGPoint?) {
-        let page = point.flatMap { p in session.shownLayout?.page(at: session.transform.imagePoint(forView: p)) }
+        lastPointer = point
+        let page = point.flatMap(page(at:))
         guard page != pointerPage else { return }
         pointerPage = page
         onPointerPageChanged?()
+    }
+
+    /// The page of the pair on screen under `point` (view pixels), nil off the pages or for one page.
+    private func page(at point: CGPoint) -> Int? {
+        session.shownLayout?.page(at: session.transform.imagePoint(forView: point))
     }
 
     /// An overlay that takes the mouse (the cheat sheet, the info panel) opened or closed: the cursor is chosen afresh, since the

@@ -399,14 +399,15 @@ import UniformTypeIdentifiers
     /// File › New Window (⌘N), the same way.
     @objc func newViewerWindow(_ sender: Any?) { registry.newWindow() }
 
-    /// File › Show in Finder (`⌘R`, M4a spec §2.5): Finder opens the photo's folder with the file selected.
+    /// File › Show in Finder (`⌘R`, M4a spec §2.5): Finder opens the photo's folder with the file selected. With two
+    /// pages on screen it is the current page (the one the last step landed on: the pair's first page after a step).
     @objc func showInFinder(_ sender: Any?) {
         guard let url = registry.current?.session.playlist?.current else { return }
         NSWorkspace.shared.activateFileViewerSelecting([ArchivePath.split(url)?.archive ?? url])
     }
 
     /// File › Copy Path (⌥⌘C, as Finder's Copy as Pathname): the photo's path; in an archive, the archive's and the
-    /// inner path.
+    /// inner path. With two pages on screen, the current page's, as Show in Finder.
     @objc func copyPath(_ sender: Any?) {
         guard let url = registry.current?.session.playlist?.current else { return }
         NSPasteboard.general.clearContents()

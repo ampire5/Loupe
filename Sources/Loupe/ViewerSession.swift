@@ -880,6 +880,14 @@ import LoupeRender
             }
         }
         let levels = levels(for: info, of: latest.url)
+        return levels.needed < levels.lfit || companionNeedsFull()
+    }
+
+    /// The pair's other page needs a level finer than its Lfit at the scale it gets (a pair at 100 % of its taller
+    /// page, the shorter page magnified more): the focus's `needsFull` covers both pages. False before its header.
+    private func companionNeedsFull() -> Bool {
+        guard let c = latestCompanion, c.url == companionURL, c.failure == nil, let info = c.info else { return false }
+        let levels = levels(for: info, of: c.url)
         return levels.needed < levels.lfit
     }
 
@@ -915,7 +923,9 @@ import LoupeRender
         spreadHeaders = [:]
         spreadAspects?.setAppliesOrientation(applies)
         updateSpread(rebuild: true)
-        shownLayout = makeLayout()
+        let made = makeLayout()
+        shownLayout = made?.layout
+        shownLayoutProvisional = made?.provisional ?? false
         if let entry, let info = entry.info, entry.failure == nil,
            layoutSize(info) != transform.imageSize || drawOrientation != before {
             transform = transform.reoriented(to: layoutSize(info))   // didSet notifies when it changed
@@ -933,14 +943,22 @@ import LoupeRender
     private func transform(showing url: URL, size: CGSize, over base: ViewTransform? = nil) -> ViewTransform {
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
-        if let saved = restore?.transform(for: url, imageSize: size, over: current, carry: rules.carry,
-                                          fitUpscale: rules.fitUpscale) {
-            return saved
-        }
+        if let saved = restored(url, size: size, over: current) { return saved }
         let arrival: PhotoSwitchView.Arrival = url == laidOut ? .laidOut : url == freshOpen ? .opened : .switched
         // The photo on screen keeps the transform it has (a frame of a zoom animation included), as before.
         return PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
                                      imageSize: size, rules: rules)
+    }
+
+    /// The saved view `url` gets at `size` over `base` (`restore`), nil when none applies.
+    private func restored(_ url: URL, size: CGSize, over base: ViewTransform) -> ViewTransform? {
+        guard let restore else { return nil }
+        let rules = zoomRules(url)
+        if let saved = restore.transform(for: url, imageSize: size, over: base, carry: rules.carry,
+                                         fitUpscale: rules.fitUpscale) {
+            return saved
+        }
+        return nil
     }
 
     /// A zoom that moves the needed level across Lfit re-plans the current photo's full resolution (otherwise
@@ -1042,7 +1060,7 @@ import LoupeRender
         if !samePhoto {
             settleZoom()   // a zoom key pressed while the photo loaded: the photo gets the mode it asked for
             shownFromCache = atNavigation
-            colorCorrector.pinned = e.url   // its cube stays while it is shown, wherever the order went
+            colorCorrector.pinned = e.url   // its cube stays while it is shown, wherever the order went (and its pair's)
             // The store's catalog has this folder by now: aspects it did not have at the playlist change are asked again.
             if folderSpread.on { spreadAspects?.cellPictureArrived(e.url) }
         }
@@ -1058,11 +1076,18 @@ import LoupeRender
             laidOut = e.url   // before the transform changes: what its observers ask of this photo keeps this view
             if freshOpen == e.url { freshOpen = nil }
             if let restore, restore.file == e.url {
-                let target = restore.target(imageSize: next.imageSize)
-                let applied = target.map { next.mode == $0.mode && next.center == $0.center } ?? false
-                DebugLog.log("saved view of \(e.url.lastPathComponent) "
-                             + (applied ? "restored (\(target?.rule.text ?? ""))" : "not restored (size or zoom changed)"))
-                self.restore = nil
+                if shownLayoutProvisional, !restore.view.applies(to: next.imageSize) {
+                    // The pair's other page has a stand-in size: the saved view (recorded at the pair's real size) is
+                    // decided once that page's size is in (`relayout`), unless the user zooms or pans meanwhile.
+                    DebugLog.log("saved view of \(e.url.lastPathComponent) waits for the pair's size")
+                    self.restore = restore.rearrived(at: next)
+                } else {
+                    let target = restore.target(imageSize: next.imageSize)
+                    let applied = target.map { next.mode == $0.mode && next.center == $0.center } ?? false
+                    DebugLog.log("saved view of \(e.url.lastPathComponent) "
+                                 + (applied ? "restored (\(target?.rule.text ?? ""))" : "not restored (size or zoom changed)"))
+                    self.restore = nil
+                }
             }
             // A level arriving for the photo on screen changes only its resolution: the transform keeps what is
             // transient in it (a zoom animation's frame, a stretch held by a gesture), which `withImageSize` drops.
@@ -1114,6 +1139,8 @@ import LoupeRender
     /// Where the pages on screen sit in the transform's (virtual) picture, nil for one page: the view draws by it and
     /// finds the page under the pointer with it. Kept, not made per frame.
     private(set) var shownLayout: SpreadLayout?
+    /// `shownLayout`'s other page has a stand-in size: a saved view of the pair waits for the real one.
+    private var shownLayoutProvisional = false
     private var sentPins: (URL?, URL?) = (nil, nil)
     private var spreadSyncPending = false
     private var spreadRebuildPending = false
@@ -1131,7 +1158,8 @@ import LoupeRender
     }
 
     /// The current photo's pages in reading order (playlist indices), `second` nil for one page: the stats bar's
-    /// `12–13 / 380` and the title's two names.
+    /// `12–13 / 380` and the title's two names. Everything else that names one file acts on the current page
+    /// (`playlist.current`): Show in Finder, Copy Path, the session tab, Recent and the folder's remembered file.
     var currentPages: (first: Int, second: Int?)? {
         guard let list = playlist else { return nil }
         guard let k = companionIndex else { return (list.index, nil) }
@@ -1244,8 +1272,9 @@ import LoupeRender
     private func companionDidChange() {
         sendColorPlan()   // its cube is built next to the current photo's
         refreshCompanion()
+        let before = shownPageRect
         adoptCompanion()
-        relayout()
+        relayout(from: before)
     }
 
     /// A page's header is in: its size joins the known ones, and when it pairs the page otherwise than the plan did (a
@@ -1276,46 +1305,80 @@ import LoupeRender
         guard url == companionURL, let e else { return }
         latestCompanion = e
         noteSpreadSize(e, at: companionIndex)
+        if lastNeedsFull != nil, needsFull() != lastNeedsFull { sendFocus() }   // its header: its own needed level
+        let before = shownPageRect
         adoptCompanion()
-        relayout()
+        relayout(from: before)
     }
 
     /// Puts the current companion beside the photo on screen when that is the current photo (a previous photo still on
     /// screen keeps the page it had, so a pair is never shown half old, half new), lays the pair out and moves the pins.
     /// The companion is shown with whatever it has: it never holds the current photo back.
     private func adoptCompanion() {
-        if entry != nil, entry?.url == playlist?.current {
+        if entry == nil {
+            shownCompanion = nil
+        } else if entry?.url == playlist?.current {
             shownCompanion = latestCompanion
             companionFirst = (companionIndex ?? 0) < (playlist?.index ?? 0)
-        } else if companionURL == nil {
-            shownCompanion = nil
         }
-        shownLayout = makeLayout()
+        let made = makeLayout()
+        shownLayout = made?.layout
+        shownLayoutProvisional = made?.provisional ?? false
         let pins = (entry?.url, shownLayout == nil ? nil : shownCompanion?.url)
+        colorCorrector.pinnedCompanion = pins.1
         guard let first = pins.0, pins != sentPins else { return }
         sentPins = pins
         let cache = self.cache, id = cacheID, companion = pins.1
         enqueue { await cache.setPinned(id, first, companion: companion) }
     }
 
-    /// The transform follows the pair on screen: a new virtual size (a page's real size replacing a substitute, a page
-    /// more or less) keeps the view as a finer level does (`PhotoSwitchView` `.laidOut`); otherwise the view redraws.
-    private func relayout() {
+    /// Where the photo on screen sits in the transform's picture (its rect in `shownLayout`; nil: the whole picture,
+    /// one page), for `relayout` to keep the view on it.
+    private var shownPageRect: CGRect? {
+        guard let layout = shownLayout else { return nil }
+        let page = companionFirst ? 1 : 0
+        return layout.order.firstIndex(of: page).map { layout.rects[$0] }
+    }
+
+    /// The transform follows the pair on screen (`from`: the photo's rect before): a new layout (two pages on or off, a
+    /// narrow view, a page's real size replacing a stand-in, the other side in `rtl`) keeps the spot of the photo under
+    /// the view's centre and a free zoom's scale on it (`SpreadZoom`); otherwise the view redraws. A saved view that
+    /// waited for the pair's real size (`show`) is decided here, once that size is in.
+    private func relayout(from before: CGRect?) {
         if let e = entry, let info = e.info, e.failure == nil, e.url == laidOut {
-            let size = layoutSize(info)
-            if size != transform.imageSize {
+            let size = layoutSize(info), now = shownPageRect
+            var next: ViewTransform?
+            if let restore, restore.file == e.url, !shownLayoutProvisional {
                 settleZoom()
-                transform = transform(showing: e.url, size: size)   // didSet notifies
+                next = restored(e.url, size: size, over: transform)
+                DebugLog.log("saved view of \(e.url.lastPathComponent) "
+                             + (next != nil ? "restored with the pair's size" : "not restored (size or zoom changed)"))
+                self.restore = nil
+            }
+            if next == nil, size != transform.imageSize || before != now {
+                settleZoom()
+                next = SpreadZoom.carried(transform, from: before, to: size, at: now)
+            }
+            if let next, next != transform {
+                transform = next   // didSet notifies
                 return
             }
         }
         onChange?()
     }
 
-    /// The layout of the photo on screen and its companion, nil for one page.
-    private func makeLayout() -> SpreadLayout? {
+    /// The layout of the photo on screen and its companion, nil for one page; `provisional` while the companion has a
+    /// stand-in size (not read yet).
+    private func makeLayout() -> (layout: SpreadLayout, provisional: Bool)? {
         guard let e = entry, let info = e.info, e.failure == nil else { return nil }
-        return layout(of: e.url, size: displaySize(info))
+        guard let layout = layout(of: e.url, size: displaySize(info)) else { return nil }
+        // Read: its header is in, or it failed (then it keeps the stand-in for good).
+        let other = entry?.url == playlist?.current ? companionURL : shownCompanion?.url
+        let read = [shownCompanion, latestCompanion].contains { page in
+            guard let page, page.url == other else { return false }
+            return page.info != nil || page.failure != nil
+        }
+        return (layout, !read)
     }
 
     /// The pair `url` (the photo on screen, or the current one about to be; `own` its size) is laid out in, nil for one
@@ -1352,15 +1415,31 @@ import LoupeRender
     /// the virtual picture's (every page is as tall as the picture), so a pair at 1:1 of its taller page asks the other
     /// page for the finer level it needs.
     private func pageScale(of url: URL, size: CGSize) -> Double {
-        let layout = url == entry?.url && shownLayout != nil ? shownLayout : layout(of: url, size: size)
+        // The photo the transform is judged with: the companion's scale is its share of the current photo's picture.
+        var anchor = url
+        var layout: SpreadLayout?
+        if url == entry?.url, shownLayout != nil {
+            layout = shownLayout
+        } else if url == companionURL, let current = playlist?.current {
+            anchor = current
+            if entry?.url == current {
+                layout = shownLayout
+            } else if let latest, latest.url == current, let info = latest.info {
+                layout = self.layout(of: current, size: displaySize(info))
+            }
+        } else {
+            layout = self.layout(of: url, size: size)
+        }
         guard let layout, layout.virtualSize.height > 0, size.height > 0 else {
             return transform(showing: url, size: size, over: judgedTransform).scale
         }
-        let t = transform(showing: url, size: layout.virtualSize, over: judgedTransform)
+        let t = transform(showing: anchor, size: layout.virtualSize, over: judgedTransform)
         return t.scale * layout.virtualSize.height / size.height
     }
 
-    /// Tells Recent of the photo on screen: its folder is entered when it is not the last one told.
+    /// Tells Recent of the photo on screen: its folder is entered when it is not the last one told. With two pages on
+    /// screen it is the current page (its index and the folder's remembered file), so reopening shows the pair
+    /// containing it.
     private func recordRecent(folder: URL, file: String) {
         guard recordsRecent, let recent, let playlist else { return }
         if folder != recentFolder {
