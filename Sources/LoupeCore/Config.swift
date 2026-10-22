@@ -283,11 +283,11 @@ public struct Config: Equatable, Sendable {
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`StripScroll`).
     public var stripScrollDirection = StripScrollDirection.natural
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
-    public var stripHideDelayMilliseconds = 500
+    public var stripHideDelayMilliseconds = 200
     /// `strip-fade-in`: milliseconds of the strip's show fade, 0...2000 (0: it appears without animation).
     public var stripFadeInMilliseconds = 150
     /// `strip-fade-out`: milliseconds of the strip's hide fade, 0...2000 (0: it disappears without animation).
-    public var stripFadeOutMilliseconds = 250
+    public var stripFadeOutMilliseconds = 150
     /// `strip-jump-preview`: show the stretched thumbnail at once on a jump or scrub (`no`: a normal
     /// transition, as `show-blurry` says).
     public var stripJumpPreview = true
