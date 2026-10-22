@@ -132,8 +132,13 @@ public actor ThumbnailStore {
 
     var coverLister: CoverLister = ThumbnailStore.listCoverNames
     var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
-    /// Folders and zips with nothing to show on a cover, for the session, by path.
+    var coverLocalTimeout = ThumbnailStore.coverLocalListingTimeout
+    var coverVolumeIsNetwork: @Sendable (URL) -> Bool = ThumbnailStore.mountIsNetwork
+    /// Folders and zips with nothing to show on a cover for the rest of the session, by path: found empty, not
+    /// listable, or never listed in time.
     var emptyCovers: Set<String> = []
+    /// Listings of a folder that gave no name in time so far, by path (`coverTimeoutsAllowed`).
+    var coverTimeouts: [String: Int] = [:]
     /// Covers' blocking calls (listings, resolves) on their own threads, per lane, those given up on included (one
     /// hung on a dead share stays).
     nonisolated let coverThreads = CoverThreads(limit: ThumbnailStore.coverThreadsPerLane)

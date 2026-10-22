@@ -28,9 +28,10 @@ public actor CoverQueue {
     /// the user steps through photos (the thumbnail generator's `idleDelay`).
     public static let defaultResumeDelay: Duration = .milliseconds(100)
     /// How long a card whose work said "not now" (a share's lane full of hung calls, a listing with no name in time)
-    /// waits before it is tried again: a dead share is then asked about once a second per card at most, and only by
-    /// cards still wanted.
+    /// waits before it is tried again, doubled at each further "not now" up to `defaultMaxRetryDelay`: a share that
+    /// hangs or crawls is asked about less and less, and only by cards still wanted.
     public static let defaultRetryDelay: Duration = .seconds(1)
+    public static let defaultMaxRetryDelay: Duration = .seconds(60)
 
     private struct Item {
         let id: String
@@ -49,6 +50,7 @@ public actor CoverQueue {
     private let networkListingLimit: Int
     private let resumeDelay: Duration
     private let retryDelay: Duration
+    private let maxRetryDelay: Duration
     /// The cards of the last `want`, in their order (visible first); those running or done are skipped.
     private var wanted: [Item] = []
     private var running: [String: Running] = [:]
@@ -58,6 +60,8 @@ public actor CoverQueue {
     private var done: Set<String> = []
     /// Cards whose work said "not now": not started again before then.
     private var retryAt: [String: ContinuousClock.Instant] = [:]
+    /// "Not now"s in a row per card still wanted, for the growing delay.
+    private var notNows: [String: Int] = [:]
     private var retryWake: Task<Void, Never>?
     private var paused = false
     /// Bumped by every `pause`: a resume scheduled before is stale.
@@ -66,11 +70,13 @@ public actor CoverQueue {
     private var nextToken: UInt64 = 0
 
     public init(listingLimit: Int = CoverQueue.listingLimit, networkListingLimit: Int = CoverQueue.networkListingLimit,
-                resumeDelay: Duration = CoverQueue.defaultResumeDelay, retryDelay: Duration = CoverQueue.defaultRetryDelay) {
+                resumeDelay: Duration = CoverQueue.defaultResumeDelay, retryDelay: Duration = CoverQueue.defaultRetryDelay,
+                maxRetryDelay: Duration = CoverQueue.defaultMaxRetryDelay) {
         self.listingLimit = max(1, listingLimit)
         self.networkListingLimit = max(1, networkListingLimit)
         self.resumeDelay = resumeDelay
         self.retryDelay = retryDelay
+        self.maxRetryDelay = max(retryDelay, maxRetryDelay)
     }
 
     /// The cards that want a cover now, in the order they start: the `visible` ones on screen first, then the margin.
@@ -78,7 +84,8 @@ public actor CoverQueue {
     /// it stays wanted. `isNetwork` must answer without touching the disk (it runs on the queue for every id;
     /// `ThumbnailLocation.isNetwork` of the folder Home shows). `work` makes and delivers the card's cover, at
     /// `.utility` for a visible card and `.background` for the margin's, should end soon once cancelled, and returns
-    /// false for "not now": the card is tried again after `retryDelay` while it stays wanted.
+    /// false for "not now": the card is tried again after `retryDelay`, twice that after the next "not now", and so on
+    /// up to `maxRetryDelay`, while it stays wanted.
     public func want(_ ids: [String], visible: Int, isNetwork: (String) -> Bool,
                      work: @escaping @Sendable (String) async -> Bool) {
         let wantedIDs = Set(ids)
@@ -89,6 +96,7 @@ public actor CoverQueue {
         }
         done.formIntersection(wantedIDs)
         retryAt = retryAt.filter { wantedIDs.contains($0.key) }
+        notNows = notNows.filter { wantedIDs.contains($0.key) }
         var seen: Set<String> = []
         // A repeated id counts once, at its first place.
         wanted = ids.enumerated().compactMap { index, id in
@@ -164,8 +172,9 @@ public actor CoverQueue {
         }
     }
 
+    /// The wake may have left its timer just before a newer `pump` replaced it: `pump` cancels and replaces the
+    /// handle it finds, so this one keeps whatever handle is there.
     private func retryWoke() {
-        retryWake = nil
         pump()
     }
 
@@ -182,7 +191,14 @@ public actor CoverQueue {
     private func finished(_ id: String, token: UInt64, made: Bool) {
         if ending.removeValue(forKey: token) == nil, running[id]?.token == token {
             running[id] = nil
-            if made { done.insert(id) } else { retryAt[id] = .now + retryDelay }
+            if made {
+                done.insert(id)
+                notNows[id] = nil
+            } else {
+                let times = notNows[id, default: 0]
+                notNows[id] = times + 1
+                retryAt[id] = .now + min(retryDelay * (1 << min(times, 16)), maxRetryDelay)
+            }
         }
         pump()
     }

@@ -184,12 +184,22 @@ extension ThumbsBench {
             let ids = subfolders.map(\.path)
             let cpu = cpuTimeMs()
             let start = ContinuousClock.now
-            let shown = await store.folderLocation(root)
-            await queue.want(ids, visible: ids.count, isNetwork: { _ in shown?.isNetwork ?? true }) { id in
+            var place = await store.folderLocation(root)
+            while place == .notNow {   // the app asks again later; a bench can wait
+                try? await Task.sleep(for: .milliseconds(100))
+                place = await store.folderLocation(root)
+            }
+            let shown: ThumbnailLocation?, network: Bool
+            switch place {
+            case .located(let location): (shown, network) = (location, location.isNetwork)
+            case .unknown(let onShare): (shown, network) = (nil, onShare)
+            case .notNow: fail("cannot resolve \(o.folder)")
+            }
+            await queue.want(ids, visible: ids.count, isNetwork: { _ in network }) { id in
                 let folder = URL(fileURLWithPath: id, isDirectory: true)
                 guard let images = await store.folderCover(folder, archive: false,
                                                            in: shown?.subfolder(folder.lastPathComponent),
-                                                           maxPixel: 256) else { return false }
+                                                           network: network, maxPixel: 256) else { return false }
                 pictures.add("\(images.count)")
                 return true
             }

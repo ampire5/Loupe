@@ -198,4 +198,68 @@ private final class TryCount: @unchecked Sendable {
         try? await Task.sleep(for: .milliseconds(300))
         #expect(log.ended.count == 6)
     }
+
+    /// Fix round 2: "not now" again and again waits longer each time (doubling), up to the cap. Lower bounds only, and
+    /// a loose upper one: a loaded machine wakes late, never early.
+    @Test func retryDelayGrows() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .milliseconds(60),
+                               maxRetryDelay: .seconds(10))
+        let times = TryTimes()
+        await queue.want(["a"], visible: 1, isNetwork: { _ in false }) { _ in
+            times.add()
+            return false
+        }
+        #expect(await eventually { times.all.count >= 4 })
+        await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
+        let gaps = zip(times.all.dropFirst(), times.all).map { $0 - $1 }
+        #expect(gaps[0] >= .milliseconds(55))
+        #expect(gaps[1] >= .milliseconds(115))
+        #expect(gaps[2] >= .milliseconds(235))
+    }
+
+    /// The delay stops growing at `maxRetryDelay`: five tries 100, 200, 200, 200 ms apart (700 ms), where doubling on
+    /// would take 1.5 s.
+    @Test func retryDelayCapped() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .milliseconds(100),
+                               maxRetryDelay: .milliseconds(200))
+        let times = TryTimes()
+        await queue.want(["a"], visible: 1, isNetwork: { _ in false }) { _ in
+            times.add()
+            return false
+        }
+        #expect(await eventually { times.all.count >= 5 })
+        await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
+        let all = times.all
+        #expect(all[4] - all[0] >= .milliseconds(690))
+        #expect(all[4] - all[0] < .milliseconds(1300))
+    }
+
+    /// A card that left and came back starts over with the shortest delay.
+    @Test func retryDelayStartsOverWhenWantedAnew() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .milliseconds(50),
+                               maxRetryDelay: .seconds(10))
+        let times = TryTimes()
+        let work: @Sendable (String) async -> Bool = { _ in
+            times.add()
+            return false
+        }
+        await queue.want(["a"], visible: 1, isNetwork: { _ in false }, work: work)
+        #expect(await eventually { times.all.count >= 6 })   // 50 + 100 + 200 + 400 + 800 ms; the next would be 1.6 s
+        await queue.want([], visible: 0, isNetwork: { _ in false }, work: work)
+        try? await Task.sleep(for: .milliseconds(20))
+        let before = times.all.count
+        await queue.want(["a"], visible: 1, isNetwork: { _ in false }, work: work)
+        #expect(await eventually { times.all.count >= before + 2 })
+        let all = times.all
+        #expect(all[before + 1] - all[before] < .milliseconds(800))
+        await queue.want([], visible: 0, isNetwork: { _ in false }, work: work)
+    }
+}
+
+/// When each try happened.
+private final class TryTimes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var times: [ContinuousClock.Instant] = []
+    func add() { lock.withLock { times.append(.now) } }
+    var all: [ContinuousClock.Instant] { lock.withLock { times } }
 }
