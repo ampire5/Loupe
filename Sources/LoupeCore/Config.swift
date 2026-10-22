@@ -1156,7 +1156,7 @@ public struct Config: Equatable, Sendable {
 
     /// The shortest exact spelling of a byte count, so a value read as `3G` is written back as `3G`
     /// (and `0` stays `0`).
-    static func memoryText(_ bytes: Int) -> String {
+    public static func memoryText(_ bytes: Int) -> String {
         if bytes == 0 { return "0" }
         if bytes % (1 << 30) == 0 { return "\(bytes >> 30)G" }
         if bytes % (1 << 20) == 0 { return "\(bytes >> 20)M" }

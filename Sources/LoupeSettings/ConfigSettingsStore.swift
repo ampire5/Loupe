@@ -12,18 +12,22 @@ public final class ConfigSettingsStore: SettingsStore {
     private let reload: () -> Void
     private let folder: () -> (url: URL, values: [String: String])?
     private let clearFolder: (String, URL) -> Void
+    private let profile: MachineProfile
 
     /// `current` is the app's live config; `reload` re-reads the file into it (and calls `configDidReload(from:)`).
     /// `folder` is the main viewer window's folder and the values it records for itself (nil without a window or a
-    /// photo); `clearFolder` drops one key from a folder's values (spec §4.3).
+    /// photo); `clearFolder` drops one key from a folder's values (spec §4.3). `profile` is the Mac the notes judge
+    /// the written values against.
     public init(fileURL: URL, current: @escaping () -> Config, reload: @escaping () -> Void,
                 folder: @escaping () -> (url: URL, values: [String: String])? = { nil },
-                clearFolder: @escaping (String, URL) -> Void = { _, _ in }) {
+                clearFolder: @escaping (String, URL) -> Void = { _, _ in },
+                profile: MachineProfile = .current) {
         self.fileURL = fileURL
         self.current = current
         self.reload = reload
         self.folder = folder
         self.clearFolder = clearFolder
+        self.profile = profile
     }
 
     /// The `Config.keys` whose file text differs between the two configs.
@@ -62,6 +66,15 @@ public final class ConfigSettingsStore: SettingsStore {
         guard Config.folderKeys.contains(key), let url = folder()?.url else { return }
         clearFolder(key, url)
         NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": [key]])
+    }
+
+    /// The note on this Mac for the key's value in the live config (as written: clamping happens where it takes
+    /// effect); nil when the value is inside the rule, which a key left out of the file always is.
+    public func machineNote(forKey key: String) -> SettingsNote? {
+        guard let written = value(forKey: key),
+              let note = HardwareAdvice.note(forKey: key, value: written, on: profile) else { return nil }
+        return SettingsNote(severity: note.severity == .harmful ? .harmful : .suboptimal, text: note.text,
+                            recommended: note.recommended)
     }
 
     public func setValue(_ value: String, forKey key: String) throws {

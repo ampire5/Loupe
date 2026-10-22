@@ -80,7 +80,7 @@ public enum HardwareAdvice {
     }
 
     /// Decimal gigabytes with one decimal, as Finder counts: 64 GiB is "68.7 GB".
-    private static func decimalGB(_ bytes: Int) -> String {
+    public static func decimalGB(_ bytes: Int) -> String {
         String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 }

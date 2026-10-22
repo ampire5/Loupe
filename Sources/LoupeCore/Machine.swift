@@ -43,5 +43,5 @@ public enum Machine {
     /// cores the threads only burn CPU. The efficiency cores are left out: they would finish their groups last.
     public static let jxlThreadsCurrent = jxlThreadsCurrent(performanceCores: performanceCores)
 
-    static func jxlThreadsCurrent(performanceCores: Int) -> Int { min(16, max(2, performanceCores)) }
+    public static func jxlThreadsCurrent(performanceCores: Int) -> Int { min(16, max(2, performanceCores)) }
 }

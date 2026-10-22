@@ -8,12 +8,23 @@ extension SettingsPanel {
         (word: "any", title: "Nothing"),
     ]
 
-    /// `cache-memory`'s default on this Mac, as the file spells it.
-    private static let cacheMemoryHere = Config().text(forKey: "cache-memory") ?? ""
-    private static let jxlThreadsHere = Config().text(forKey: "jxl-threads-current") ?? ""
-
     /// Performance (spec §5): the photo cache and how fast stepping goes.
-    static let performance = SettingsPage("performance", "Performance", symbol: "gauge.with.dots.needle.67percent",
+    static let performance = performancePage(on: .current)
+
+    /// The page with the defaults it names taken from `profile` (tests stand in other Macs); a discrete card adds
+    /// the graphics memory Loupe sets for it.
+    static func performancePage(on profile: MachineProfile) -> SettingsPage {
+        let cacheMemoryHere = Config.memoryText(HardwareAdvice.defaultCacheMemory(profile))
+        let jxlThreadsHere = String(Machine.jxlThreadsCurrent(performanceCores: profile.performanceCores))
+        let jxlThreadsOtherHere = HardwareAdvice.defaultJXLThreadsOther(profile)
+        let graphics = HardwareAdvice.graphicsMemory(profile)
+        let cacheMemoryDescription = graphics == nil
+            ? "The ceiling over all of the above; the photos on screen may briefly pass it. M or G, or bytes; "
+                + "default a fifth of this Mac's memory, 1–4G (" + cacheMemoryHere + " here)."
+            : "System memory for photos kept decoded and ready and for compressed files; graphics memory is "
+                + "Loupe's (" + GraphicsMemoryView.bytes(graphics ?? 0) + " here, below). M or G, or bytes; "
+                + "default a fifth of this Mac's memory (" + cacheMemoryHere + " here)."
+        return SettingsPage("performance", "Performance", symbol: "gauge.with.dots.needle.67percent",
                                           sections: [
         SettingsSection("Cache", [
             SettingsCard([
@@ -34,10 +45,8 @@ extension SettingsPanel {
                 .number("cache-files", "Compressed files", unit: "files", step: 1, symbol: "doc.zipper",
                         description: "Neighbours kept in memory as their files (no re-read over SMB), ~12 MB each; the "
                             + "current photo's always. 0–50, default 24."),
-                .number("cache-memory", "Memory limit", symbol: "memorychip",
-                        description: "The ceiling over all of the above; the photos on screen may briefly pass it. M "
-                            + "or G, or bytes; default a fifth of this Mac's memory, 1–4G (" + cacheMemoryHere
-                            + " here)."),
+                .number("cache-memory", "Memory limit", symbol: "memorychip", description: cacheMemoryDescription),
+            ] + graphicsRows(profile) + [
                 .number("cache-idle-trim", "Trim idle windows after", unit: "min", step: 5, symbol: "moon.zzz",
                         description: "A window or tab not active for this many minutes lets go of everything but "
                             + "its current photo; those on screen are never trimmed. 0–1440 min, 0 = never; "
@@ -73,7 +82,8 @@ extension SettingsPanel {
                         + "core (" + jxlThreadsHere + " here)."),
             .number("jxl-threads-other", "Threads, neighbours", unit: "threads", step: 1, symbol: "cpu.fill",
                     description: "libjxl threads for neighbours and thumbnails, so they leave the current photo "
-                        + "room. 1–16, default 2."),
+                        + "room. 1–16, default a quarter of the cores, 1 or 2 (" + String(jxlThreadsOtherHere)
+                        + " here)."),
         ]),
         SettingsSection("Navigation", rows: [
             .choice("wheel-step", "Wheel step waits for", stepWaits, symbol: "dial.low",
@@ -85,4 +95,13 @@ extension SettingsPanel {
                         + "Thumbnail."),
         ]),
     ])
+    }
+
+    /// The graphics memory row of a discrete card; none on unified memory.
+    private static func graphicsRows(_ profile: MachineProfile) -> [SettingsRow] {
+        guard HardwareAdvice.graphicsMemory(profile) != nil else { return [] }
+        return [.custom("Graphics memory", searchTexts: { ["Graphics memory", "GPU", "VRAM", "Video memory"] }) {
+            GraphicsMemoryView(profile: profile)
+        }]
+    }
 }
