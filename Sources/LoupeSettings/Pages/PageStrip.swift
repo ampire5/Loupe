@@ -7,10 +7,11 @@ extension SettingsPanel {
         SettingsSection("Strip", [
             SettingsCard([
                 .choice("strip-window", "In a window", [
-                    (word: "overlay", title: "Overlay"), (word: "bar", title: "Bar"), (word: "off", title: "Off"),
+                    (word: "beside", title: "Beside"), (word: "over", title: "Over"), (word: "hidden", title: "Hidden"),
                 ], symbol: "rectangle.bottomthird.inset.filled",
-                description: "Overlay: appears with the mouse at the bottom edge and hides itself; Bar: a fixed band "
-                    + "under the photo; Off: no strip. Full screen always has the overlay; T pins it. Default Bar."),
+                description: "Beside: a band under the photo; Over: appears with the mouse at the bottom edge and hides "
+                    + "itself; Hidden: no strip. ⇧T switches Beside and Over, T hides or pins. Full screen always has it "
+                    + "over. Default Beside."),
                 .number("strip-height", "Height", unit: "pt", step: 4, symbol: "arrow.up.and.down",
                         description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 68."),
                 .slider("strip-cell-max", "Widest thumbnail", range: Config.stripCellMaxRange, marks: [

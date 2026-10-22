@@ -366,9 +366,26 @@ import Foundation
 
 // MARK: Strip and thumbnails
 
+@Test func stripWindowWords() {
+    #expect(Config().stripWindow == .beside && Config().text(forKey: "strip-window") == "beside")
+    for (word, mode) in [("over", StripWindowMode.over), ("beside", .beside), ("hidden", .hidden)] {
+        let (c, w) = Config.parse("strip-window=\(word)")
+        #expect(c.stripWindow == mode && w.isEmpty)
+    }
+}
+
+@Test func stripWindowOldWordsStillWork() {
+    for (old, new, mode) in [("overlay", "over", StripWindowMode.over), ("bar", "beside", .beside), ("off", "hidden", .hidden)] {
+        let (c, w) = Config.parse("strip-window=\(old)")
+        #expect(c.stripWindow == mode)
+        #expect(w == ["loupe.conf:1: 'strip-window=\(old)' is now 'strip-window=\(new)'"])
+    }
+    var c = Config(); #expect(c.set("strip-window", "overlay") == .ok && c.stripWindow == .over)
+}
+
 @Test func stripAndThumbKeysParse() {
     let text = """
-    strip-window=bar
+    strip-window=beside
     strip-height=96
     strip-cell-max=1
     strip-corner-radius=6.5
@@ -383,7 +400,7 @@ import Foundation
     """
     let (c, w) = Config.parse(text)
     var expected = Config()
-    expected.stripWindow = .bar
+    expected.stripWindow = .beside
     expected.stripHeight = 96
     expected.stripCellMax = 1
     expected.stripCornerRadius = 6.5
@@ -396,13 +413,13 @@ import Foundation
     expected.thumbSize = 768
     expected.thumbCacheBytes = 512 << 20
     #expect(c == expected && w.isEmpty)
-    #expect(Config.parse("strip-window=off").0.stripWindow == .off)
-    #expect(Config.parse("strip-window=overlay").0.stripWindow == .overlay)
+    #expect(Config.parse("strip-window=hidden").0.stripWindow == .hidden)
+    #expect(Config.parse("strip-window=over").0.stripWindow == .over)
 }
 
 @Test func stripAndThumbDefaults() {
     let c = Config()
-    #expect(c.stripWindow == .bar && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 200)
+    #expect(c.stripWindow == .beside && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 200)
     #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 3 && c.stripScrollDirection == .natural)
     #expect(c.stripJumpPreview && !c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
@@ -470,7 +487,7 @@ import Foundation
 
 @Test func stripKeysRoundTrip() throws {
     var c = Config()
-    c.stripWindow = .off
+    c.stripWindow = .hidden
     c.stripHeight = 120
     c.stripCellMax = 0.75
     c.stripCornerRadius = 0
@@ -523,7 +540,7 @@ import Foundation
 }
 
 @Test func stripDefaults() {
-    #expect(Config().stripWindow == .bar)
+    #expect(Config().stripWindow == .beside)
     #expect(Config().stripHeight == 68)
     #expect(Config().stripCornerRadius == 3)
 }
@@ -1075,7 +1092,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "upscale": ("mitchell", "metalfxx"), "upscale-high": ("ewa-lanczos", "ewa-x"),
     "upscale-high-from": ("500", "50"), "downscale": ("bilinear", "metalfx"), "lanczos-antiring": ("yes", "maybe"),
     "pixel-art": ("1600", "50"), "pyramid-filter": ("box", "mitchell"), "exif-orientation": ("no", "maybe"),
-    "strip-window": ("overlay", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
+    "strip-window": ("over", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
     "strip-corner-radius": ("8", "99"), "strip-scroll-direction": ("reversed", "sideways"),
     "strip-hide-delay": ("800", "-1"), "strip-fade-in": ("100", "5000"), "strip-fade-out": ("100", "5000"),
     "strip-jump-preview": ("no", "maybe"), "strip-loading-indicator": ("yes", "maybe"),
