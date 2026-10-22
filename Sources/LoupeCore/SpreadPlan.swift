@@ -41,6 +41,7 @@ public struct SpreadPlan: Sendable {
     public init(sizes: [PixelSize?], options: SpreadOptions) {
         count = sizes.count
         func landscape(_ i: Int) -> Bool {
+            // `i` is in range (the caller checks `i + 1 < count` first); the guard is for the option and unknown sizes.
             guard options.landscapeAlone, let s = sizes[i] else { return false }
             return s.width > s.height
         }

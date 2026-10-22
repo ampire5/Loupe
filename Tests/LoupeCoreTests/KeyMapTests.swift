@@ -43,7 +43,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     30: ("]", "}"), 33: ("[", "{"), 44: ("/", "?"),
     29: ("0", ")"), 18: ("1", "!"), 19: ("2", "@"), 21: ("4", "$"), 82: ("0", "0"), 83: ("1", "1"), 84: ("2", "2"),
     86: ("4", "4"), 24: ("=", "+"), 27: ("-", "_"), 69: ("+", "+"), 78: ("-", "-"),
-    13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
+    2: ("d", "D"), 13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
     1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 40: ("k", "K"), 35: ("p", "P"),
 ]
 
@@ -96,6 +96,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
         .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
         .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
+        .toggleSpread: "D", .saveSpread: "⇧D", .shiftSpread: "⌥D",
     ]
     for a in KeyAction.allCases {
         #expect(map.label(a).keys == (mouseOnlyByDefault.contains(a) ? "" : expected[a]), "\(a): \(map.label(a).keys)")
@@ -218,6 +219,17 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     #expect(map.menuKey(.saveKeepZoom)?.keyEquivalent == "l" && map.menuKey(.saveKeepZoom)?.modifiers == .shift)
     #expect(map.label(.toggleKeepZoom) == (keys: "L", title: "Keep zoom and position on/off (this folder)", group: .zoom))
     #expect(map.label(.saveKeepZoom) == (keys: "⇧L", title: "Save keep zoom as default", group: .zoom))
+}
+
+/// `D` / `⇧D` / `⌥D`: two pages for the folder, saved as the default, and the pairing shifted by one page.
+@Test func dKeysForSpread() {
+    #expect(action(2, "d") == .toggleSpread)
+    #expect(action(2, "D", .shift) == .saveSpread)
+    #expect(action(2, "d", .option) == .shiftSpread)
+    #expect(map.menuKey(.toggleSpread) == nil)
+    #expect(map.label(.toggleSpread) == (keys: "D", title: "Two pages", group: .view))
+    #expect(map.label(.saveSpread) == (keys: "⇧D", title: "Two pages as default", group: .view))
+    #expect(map.label(.shiftSpread) == (keys: "⌥D", title: "Shift pages", group: .view))
 }
 
 /// `P` / `⇧P` (M4b spec §5.4): the pan indicators' mode for the session in every window, and saved as the default.

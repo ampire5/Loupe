@@ -238,6 +238,19 @@ public struct Config: Equatable, Sendable {
     /// only panning and zooming the photo on screen do (M4b spec §5.2).
     public var panIndicatorsOnSwitch = false
 
+    /// `spread`: two pages side by side (folder key; spec 2026-10-23-spread).
+    public var spread = false
+    /// `spread-shift`: the first page stands alone, pairs start from the second (folder key).
+    public var spreadShift = false
+    /// `spread-direction`: `rtl` puts the first page of a pair on the right (folder key).
+    public var spreadRightToLeft = false
+    /// `spread-landscape`: `alone` shows a landscape page by itself, `pair` pairs it like any other (folder key).
+    public var spreadLandscapeAlone = true
+    /// The pairing options the four spread keys give.
+    public var spreadOptions: SpreadOptions {
+        SpreadOptions(shift: spreadShift, rightToLeft: spreadRightToLeft, landscapeAlone: spreadLandscapeAlone)
+    }
+
     // The cache settings (spec §3.5). `CacheLimits(config:)` is what the cache reads.
     /// `cache-full`: neighbours kept at full resolution, 0...2.
     public var cacheFull = 1
@@ -504,6 +517,7 @@ public struct Config: Equatable, Sendable {
                               "rubber-band", "drag-inertia", "inertia-deceleration", "rmb-zoom-invert",
                               "pan-indicators", "pan-indicators-hide", "pan-indicators-fade",
                               "pan-indicators-on-switch",
+                              "spread", "spread-shift", "spread-direction", "spread-landscape",
                               "thumb-wheel-zoom", "thumb-zoom-speed", "thumb-zoom-stops", "thumb-zoom-invert",
                               "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "cache-idle-trim", "cache-idle-keep",
                               "jxl-threads-current", "jxl-threads-other", "jxl-dc-preview",
@@ -538,8 +552,10 @@ public struct Config: Equatable, Sendable {
                                          "vibrance-amount"]
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
     public static let zoomFolderKeys = ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"]
+    /// The two-page keys a folder sets for itself.
+    public static let spreadFolderKeys = ["spread", "spread-shift", "spread-direction", "spread-landscape"]
     /// The keys a folder may set for itself.
-    public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys
+    public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys
 
     /// This config with a folder's saved `key: text` values on top (only `folderKeys`). `rejected` lists
     /// `key=value` for every entry that is no folder key or whose value `set` refuses, sorted by key; those
@@ -585,6 +601,10 @@ public struct Config: Equatable, Sendable {
         case "pan-indicators-hide": return String(panIndicatorsHideMilliseconds)
         case "pan-indicators-fade": return String(panIndicatorsFadeMilliseconds)
         case "pan-indicators-on-switch": return panIndicatorsOnSwitch ? "yes" : "no"
+        case "spread": return spread ? "yes" : "no"
+        case "spread-shift": return spreadShift ? "yes" : "no"
+        case "spread-direction": return spreadRightToLeft ? "rtl" : "ltr"
+        case "spread-landscape": return spreadLandscapeAlone ? "alone" : "pair"
         case "toast-duration": return String(toastDurationMilliseconds)
         case "mouse-long-press": return String(mouseLongPressMilliseconds)
         case "mouse-move-step": return formatNumber(mouseMoveStep)
@@ -753,6 +773,22 @@ public struct Config: Equatable, Sendable {
             if let v = Int(value), (0...2000).contains(v) { panIndicatorsFadeMilliseconds = v } else { return .badValue }
         case "pan-indicators-on-switch":
             if let v = Self.bool(value) { panIndicatorsOnSwitch = v } else { return .badValue }
+        case "spread":
+            if let v = Self.bool(value) { spread = v } else { return .badValue }
+        case "spread-shift":
+            if let v = Self.bool(value) { spreadShift = v } else { return .badValue }
+        case "spread-direction":
+            switch value.lowercased() {
+            case "ltr": spreadRightToLeft = false
+            case "rtl": spreadRightToLeft = true
+            default: return .badValue
+            }
+        case "spread-landscape":
+            switch value.lowercased() {
+            case "alone": spreadLandscapeAlone = true
+            case "pair": spreadLandscapeAlone = false
+            default: return .badValue
+            }
         case "toast-duration":
             if let v = Int(value), (500...10_000).contains(v) { toastDurationMilliseconds = v } else { return .badValue }
         case "mouse-long-press":

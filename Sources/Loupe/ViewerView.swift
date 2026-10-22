@@ -1498,6 +1498,7 @@ import QuartzCore
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
         case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry: return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false
+        case .toggleSpread, .saveSpread, .shiftSpread: return false     // wired in a later task
         case .newTab, .newWindow, .closeTab, .nextTab, .previousTab, .openInNewTab, .openInNewWindow, .home, .back,
              .reopenTab, .closeWindow, .browse:
             onTabAction?(action)

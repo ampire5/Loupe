@@ -106,6 +106,9 @@ public enum InputConfTemplate {
     # ? cheat-sheet                                 # cheat sheet
     # p cycle-pan-indicators                        # pan indicators: auto / always / off
     # P save-pan-indicators                         # save pan indicators as default
+    # d toggle-spread                               # two pages side by side in this folder, on/off
+    # D save-spread                                 # two pages as the default for all folders
+    # Alt+d shift-spread                            # shift the pairing by one page
     #   The info panel (toggle-info-panel) has no key by default: ⌘I in the menu and the mouse buttons below.
 
     # ── Window ────────────────────────────────────────────────────────────────────────────────────────
