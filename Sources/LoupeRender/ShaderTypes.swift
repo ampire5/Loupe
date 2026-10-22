@@ -44,13 +44,14 @@ struct ResampleParams {
     var levelToViewOffset: SIMD2<Float>  // view position of oriented level px 0
     var levelSize: SIMD2<UInt32>         // TileGrid.levelSize of the level being drawn (stored)
     var extent: SIMD2<Float>             // the image's oriented extent in level px (view rect offset + extent * m)
-    var viewSize: SIMD2<UInt32>          // drawable size in pixels
+    var viewSize: SIMD2<UInt32>          // the dispatch's size: the drawable's, or a viewport's
     var columns: UInt32                  // tile columns of the level (slice = row * columns + column)
     var antiringing: UInt32              // nonzero: clamp magnified output to its 2x2 neighbourhood
     var background: SIMD4<Float>         // pixels whose centre is outside the image: `TileRenderer.background(for:)`
     var orient: SIMD4<Int32>             // ImageOrientation.matrix (a, b, c, d)
     var shift: SIMD2<Float>              // ImageOrientation.translation of the level's extent, stored level px
-    var pad1 = SIMD2<Float>(0, 0)
+    var origin = SIMD2<UInt32>(0, 0)     // where dispatch px (0, 0) is written: (0, 0), or a viewport's corner; the
+                                         // offset and the backdrop's anchor are then given less it (`encodeResample`)
 }
 
 /// Parameters of the `metalfxComposeFragment` pass (fragment buffer 0). 48 bytes, alignment 16. Input texel i is

@@ -217,7 +217,11 @@ import QuartzCore
             shownTransform = session.transform
             shownOrientation = orientation
             shownColor = color
-            renderLoop.update(image: image, orientation: orientation, transform: session.transform, color: color)
+            // One page, the whole of the transform's image: drawn as a single photo always was.
+            let transform = session.transform
+            renderLoop.update(pages: image == nil ? [] : [RenderPage(image: image, orientation: orientation, color: color,
+                                                                     rect: CGRect(origin: .zero, size: transform.imageSize))],
+                              transform: transform)
         }
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in
         // between draws the bare background retagged back to P3.
