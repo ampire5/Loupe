@@ -37,7 +37,10 @@ jobs:
         run: |
           zip="Loupe-${GITHUB_REF_NAME}-macOS-x86_64.zip"
           ditto -c -k --keepParent build/Loupe.app "$zip"
-          gh release create "$GITHUB_REF_NAME" "$zip" --latest=false --generate-notes \
+          # The app's symbols (make-app.sh strips them from the binary), for symbolicating crash reports.
+          dsym="Loupe-${GITHUB_REF_NAME}-macOS-x86_64.dSYM.zip"
+          ditto -c -k --keepParent build/Loupe.dSYM "$dsym"
+          gh release create "$GITHUB_REF_NAME" "$zip" "$dsym" --latest=false --generate-notes \
             --notes "Unsigned build for Intel Macs, macOS 26 (the LTS line). After unzipping: \`xattr -dr com.apple.quarantine Loupe.app\`, then open it."
       # Points the cask's on_intel block (the lines marked `# intel`) in ampire5/homebrew-tap at this release. Needs a
       # TAP_TOKEN secret that can push to that repo.
