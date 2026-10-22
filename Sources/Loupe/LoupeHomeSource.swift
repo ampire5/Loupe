@@ -75,6 +75,11 @@ import LoupeCore
         if case .source(let id) = location { collections.setSort(sort, for: id) } else { folders.setSort(sort, for: location) }
     }
 
+    /// Only a folder's own cards have a style (`folder-cards`); the collections are drawn as they are.
+    func cardStyle(for location: BrowserLocation) -> CardStyle { folders.cardStyle(for: location) }
+
+    func setCardStyle(_ style: CardStyle, for location: BrowserLocation) { folders.setCardStyle(style, for: location) }
+
     func info(for source: String) -> HomeSourceInfo { collections.info(for: source) }
 
     /// Recent and Sessions; the places (the home folder, the volumes, the pinned folders), each opening as a tree;

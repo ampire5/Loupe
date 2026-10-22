@@ -444,6 +444,10 @@ public struct Config: Equatable, Sendable {
     public var gridNames = GridNames.off
     /// `folder-cover`: the layout of a folder's, a zip's or a session's card picture (`FolderCoverLayout`).
     public var folderCover = FolderCoverLayout.hero
+    /// `folder-cards`: how Home's browser draws a folder's folders and archives (`CardStyle`: a poster with a band of
+    /// facts, a compact card, a list row); the default for every folder, which keeps its own choice in its settings
+    /// like its sort (`CardStyle.forFolder`; folder cards spec).
+    public var folderCards = CardStyle.posters
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
@@ -559,7 +563,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -575,14 +579,17 @@ public struct Config: Equatable, Sendable {
                                           "spread-wide-ratio"]
     /// The keys a folder may set for itself.
     public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys
+    /// Home's own keys in a folder's settings: its sort (`BrowserSort.settingKey`) and how its folders are drawn
+    /// (`CardStyle.settingKey`). The browser reads them itself; a folder's config neither takes nor refuses them.
+    public static let homeFolderKeys = ["browser-sort", "folder-cards"]
 
     /// This config with a folder's saved `key: text` values on top (only `folderKeys`). `rejected` lists
     /// `key=value` for every entry that is no folder key or whose value `set` refuses, sorted by key; those
-    /// entries are skipped.
+    /// entries are skipped. Home's keys (`homeFolderKeys`) are skipped without a word: they are Home's to read.
     public func applying(_ values: [String: String]) -> (config: Config, rejected: [String]) {
         var config = self
         var rejected: [String] = []
-        for key in values.keys.sorted() {
+        for key in values.keys.sorted() where !Self.homeFolderKeys.contains(key) {
             let value = values[key]!
             if !Self.folderKeys.contains(key) || config.set(key, value) != .ok { rejected.append("\(key)=\(value)") }
         }
@@ -705,6 +712,7 @@ public struct Config: Equatable, Sendable {
         case "grid-style": return gridStyle.rawValue
         case "grid-names": return gridNames.rawValue
         case "folder-cover": return folderCover.rawValue
+        case "folder-cards": return folderCards.rawValue
         case "recent-count": return String(recentCount)
         case "session-restore": return sessionRestore.rawValue
         case "transparency": return transparency.rawValue
@@ -993,6 +1001,8 @@ public struct Config: Equatable, Sendable {
             if let v = GridNames(rawValue: value.lowercased()) { gridNames = v } else { return .badValue }
         case "folder-cover":
             if let v = FolderCoverLayout(rawValue: value.lowercased()) { folderCover = v } else { return .badValue }
+        case "folder-cards":
+            if let v = CardStyle(rawValue: value.lowercased()) { folderCards = v } else { return .badValue }
         case "recent-count":
             if let v = Int(value), (0...200).contains(v) { recentCount = v } else { return .badValue }
         case "session-restore":

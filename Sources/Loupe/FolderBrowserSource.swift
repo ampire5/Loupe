@@ -2,10 +2,17 @@ import AppKit
 import HomeScreenKit
 import LoupeCore
 
+extension Notification.Name {
+    /// A share that was offline answered again (`ThumbnailStore.setOnVolumeAnswered`); the object is its key (`String`).
+    /// Posted on the main thread; every window's Home asks again for that share's dimmed cards.
+    static let coverVolumeAnswered = Notification.Name("local.loupe.coverVolumeAnswered")
+}
+
 /// Home's Folders tab on Loupe's data (file browser spec §4.2): listings from `BrowserListingSource` (the last eight
 /// kept in memory, so Back and Up show at once), a `FolderWatcher` on the open folder, thumbnails from the strip's
-/// store (the folder's files as one more window's request), folder and zip covers from the store's cover queue (folder
-/// covers spec), the sort in folder settings, and rename and Trash through `BrowserFileActions`.
+/// store (the folder's files as one more window's request), folder and zip cards from the store's cover queue (folder
+/// covers and folder cards specs: the cover and the facts), the sort and the card style in folder settings, and rename
+/// and Trash through `BrowserFileActions`.
 @MainActor final class FolderBrowserSource {
     weak var view: HomeBrowserView?
     /// Opens a photo, a folder or a zip in the viewer, here or in a new tab or window.
@@ -58,7 +65,20 @@ import LoupeCore
     private var coverSize: (width: CGFloat, scale: CGFloat)?
     /// The last call to the cover queue sent: each goes after it, so the queue sees them in order.
     private var coverSend: Task<Void, Never>?
-    private var observer: NSObjectProtocol?
+    /// The share the folder on screen is on (`ThumbnailStore.networkVolume`, from the mount table, off the main
+    /// thread); nil on a local volume or while it is being resolved. Which dimmed cards a share's return wakes.
+    private var coverShare: String?
+    /// What the cover queue told about the folder's cards (folder cards spec): kept while the folder is on screen, so a
+    /// card laid out again, or Home shown again after the viewer, gets its facts at once, with the visit as it is now.
+    private var facts: [String: FolderCardFacts] = [:]
+    /// Cards that have their picture but whose work is not done: the summary is still to be listed
+    /// (`FolderCard.summaryPending`), the card is offline without pictures, or its share came back. They stay in the
+    /// cover queue (after the cards waiting for a picture) until their work is done or the folder changes.
+    private var followUps: Set<String> = []
+    /// The folder and zip cards of the browser's last ask, in its order (those in view first), and those in view.
+    private var lastAsked: [String] = []
+    private var lastInView: Set<String> = []
+    private var observers: [NSObjectProtocol] = []
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
          stores: [any PathMoving]) {
@@ -70,19 +90,30 @@ import LoupeCore
         thumbnailWindow = Self.nextWindow
         Self.nextWindow += 1
         watcher.onChange = { [weak self] _ in self?.watchChanges?.yield() }
-        observer = NotificationCenter.default.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 guard let url = note.object as? URL else { return }
                 self?.thumbnailChanged(url)
             }
-        }
+        })
+        observers.append(center.addObserver(forName: .coverVolumeAnswered, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let volume = note.object as? String else { return }
+                self?.shareAnswered(volume)
+            }
+        })
     }
 
     /// The tab hid or the window closed: no polls, no thumbnails for it.
     var isPaused = false {
         didSet {
             watcher.isPaused = isPaused
-            guard isPaused else { return sendCovers() }
+            guard isPaused else {
+                // Back from the viewer: the visits and the two-page keys may have changed.
+                showSummaries()
+                return sendCovers()
+            }
             // Nothing of the browser's goes on reading while the viewer shows what was clicked.
             pictureTask?.cancel()
             waiting.removeAll()
@@ -107,7 +138,8 @@ import LoupeCore
         _ = gate.begin(nil)
         stopWatching()
         showCovers(of: nil)
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers = []
     }
 
     // MARK: Places
@@ -211,6 +243,9 @@ import LoupeCore
                             self.keep(listing, for: path)
                             self.keepSummary(of: folder, listing.entries)
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: true)
+                            // The cards now have their folders' dates: the cover queue's work gets them (a stored
+                            // summary is fresh only at its folder's date).
+                            self.sendCovers()
                             if let counted = await self.counted(listing), wanted() {
                                 deliver(counted)
                                 self.keep(counted, for: path)
@@ -289,8 +324,12 @@ import LoupeCore
     /// store counts it and keeps it in the catalog, off the main thread, so the folder's card has it when it is next
     /// shown. A zip's card has its own from the zip's directory.
     private func keepSummary(of folder: URL, _ entries: [BrowserEntry]) {
-        guard !ArchivePath.isArchive(folder) else { return }
         let thumbnails = self.thumbnails
+        guard !ArchivePath.isArchive(folder) else {
+            // A zip's listing on a share is the share's answer too (a folder's is told by its summary).
+            Task.detached(priority: .utility) { await thumbnails.volumeAnswered(folder, in: nil) }
+            return
+        }
         Task.detached(priority: .utility) { await thumbnails.putOpenFolderSummary(folder, listing: entries) }
     }
 
@@ -340,7 +379,11 @@ import LoupeCore
         let liveCards = shown.values.reduce(0) { $0 + ($1.kind == .folder || $1.kind == .archive ? 1 : 0) }
         cards.setLimit(CoverCards.limit(cards: liveCards, pixels: Int((width * scale).rounded())))
         let ask = cards.ask(cardIDs, visible: cardIDs.filter(inView.contains).count)
+        lastAsked = cardIDs
+        lastInView = Set(cardIDs.filter(inView.contains))
         for (id, image) in ask.cached { view?.setImage(image, for: id) }
+        // A card laid out again has lost its facts in the view too.
+        for id in cardIDs where facts[id] != nil { showSummary(id) }
         if !ask.forget.isEmpty {
             let forget = ask.forget
             sendToQueue { queue, client in await queue.forget(forget, client: client) }
@@ -371,40 +414,65 @@ import LoupeCore
         placeTask = nil
         coverFolder = path
         coverPlace = nil
+        coverShare = nil
         cards.reset()
+        facts = [:]
+        followUps = []
+        lastAsked = []
+        lastInView = []
         stopQueuedCovers()
         guard let folder, let path else { return }
         let thumbnails = self.thumbnails
         placeTask = Task { @MainActor [weak self] in
             let place = await thumbnails.shownFolderPlace(folder)
+            let share = await Task.detached(priority: .utility) { ThumbnailStore.networkVolume(folder) }.value
             guard let self, !Task.isCancelled, self.coverFolder == path, place != .notNow else { return }
             self.coverPlace = place
+            self.coverShare = share
             self.sendCovers()
         }
     }
 
-    /// The folder and zip cards still waiting for a cover to the store's cover queue, once the folder on screen is
-    /// resolved. Each card's work makes its cover (`ThumbnailStore.folderCover`: from the catalog or the pick
-    /// remembered when they have the photos, else from a listing of names, both off the main thread) in the chosen
-    /// layout, and gives it to the card; nil from it is "not now", and the queue tries again later.
+    /// The folder and zip cards still waiting for a cover, then those waiting for the rest of their facts
+    /// (`followUps`), to the store's cover queue, once the folder on screen is resolved. Each card's work
+    /// (`ThumbnailStore.folderCard`, off the main thread: from the catalog or the pick remembered when they have the
+    /// photos, else from a listing) makes its cover in the chosen layout and brings its facts: the summary, and the
+    /// stored summaries of its subfolders (`ThumbnailStore.childSummaries`, one catalog query). The main thread only
+    /// puts them together (`showSummary`). Nil from the store is "not now", and the queue tries again later; so is a
+    /// card whose summary is still to be listed, or that is offline without pictures (the queue asks again at its pace,
+    /// and a share that answers asks at once: `shareAnswered`).
     private func sendCovers() {
-        guard !isPaused, let place = coverPlace, let size = coverSize else { return }
+        guard !isPaused, let place = coverPlace, let size = coverSize, let folderPath = coverFolder else { return }
         let shownLocation: ThumbnailLocation?, network: Bool
         switch place {
         case .located(let location): (shownLocation, network) = (location, location.isNetwork)
         case .unknown(let onShare): (shownLocation, network) = (nil, onShare)
         case .notNow: return
         }
+        let pending = cards.pending, visiblePending = cards.visiblePending
+        let waiting = Set(pending)
+        // The follow-ups of the last ask in its order, those in view with the cards in view; then the others (cards
+        // laid out earlier, still finishing) after every card's picture.
+        let asked = lastAsked.filter { followUps.contains($0) && !waiting.contains($0) && shown[$0] != nil }
+        let askedSet = Set(asked)
+        let others = followUps.filter { !waiting.contains($0) && !askedSet.contains($0) && shown[$0] != nil }.sorted()
+        let inView = asked.filter(lastInView.contains)
+        let ids = pending.prefix(visiblePending) + inView + pending.dropFirst(visiblePending)
+            + asked.filter { !lastInView.contains($0) } + others
         // The remembered photo of each folder first (a zip's entry name is one path component already).
-        let entries = Dictionary(cards.pending.compactMap { id in shown[id].map { (id, ($0, positions.fileName(in: $0.url))) } },
+        let entries = Dictionary(ids.compactMap { id in shown[id].map { (id, ($0, positions.fileName(in: $0.url))) } },
                                  uniquingKeysWith: { a, _ in a })
-        let ids = cards.pending, visible = cards.visiblePending
+        let visible = visiblePending + inView.count
         let layout = coverLayout, side = size.width, scale = size.scale
         let cellPixels = layout.cellPixels(width: side, scale: scale)
         let thumbnails = self.thumbnails
-        let deliver: @MainActor (String, CGImage) -> Void = { [weak self] id, mosaic in
-            // A mosaic of another folder, layout or size is not kept.
-            guard let self, self.shown[id] != nil, self.coverLayout == layout, self.coverSize?.width == side,
+        // Only a card still without its picture has one made (a follow-up's is on screen, or kept).
+        let wantsPicture: @MainActor (String) -> Bool = { [weak self] id in self?.cards.pending.contains(id) ?? false }
+        let deliver: @MainActor (String, CGImage?, FolderCardFacts, Bool) -> Void = { [weak self] id, mosaic, facts, again in
+            guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
+            self.keepFacts(facts, for: id, again: again)
+            // A mosaic of another layout or size is not kept.
+            guard let mosaic, self.coverLayout == layout, self.coverSize?.width == side,
                   self.coverSize?.scale == scale else { return }
             self.cards.delivered(id, mosaic)
             self.view?.setImage(mosaic, for: id)
@@ -412,21 +480,76 @@ import LoupeCore
         let work: @Sendable (String) async -> Bool = { id in
             guard let card = entries[id] else { return true }
             let (entry, lastViewed) = card
-            guard let images = await thumbnails.folderCover(entry.url, archive: entry.kind == .archive,
-                                                            in: shownLocation?.subfolder(entry.url.lastPathComponent),
-                                                            network: network, maxPixel: cellPixels,
-                                                            lastViewed: lastViewed,
-                                                            modified: entry.date) else { return false }
+            let location = shownLocation?.subfolder(entry.url.lastPathComponent)
+            guard let made = await thumbnails.folderCard(entry.url, archive: entry.kind == .archive, in: location,
+                                                         network: network, maxPixel: cellPixels,
+                                                         lastViewed: lastViewed, modified: entry.date) else { return false }
+            guard !Task.isCancelled else { return true }
+            var inside: ChildSummaries?
+            if let location, let summary = made.summary, summary.folders > 0 {
+                inside = await thumbnails.childSummaries(of: location)
+            }
+            let facts = FolderCardFacts(summary: made.summary, inside: inside, photoDates: made.photoDates,
+                                        problem: made.problem)
             // No photos: the card keeps its symbol.
-            guard !Task.isCancelled, !images.isEmpty,
-                  let mosaic = HomeMosaic.make(images, size: CGSize(width: side, height: side), layout: layout,
-                                               scale: scale) else { return true }
-            await deliver(id, mosaic)
-            return true
+            var mosaic: CGImage?
+            if !made.images.isEmpty, await wantsPicture(id) {
+                mosaic = HomeMosaic.make(made.images, size: CGSize(width: side, height: side), layout: layout, scale: scale)
+            }
+            let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
+            guard !Task.isCancelled else { return true }
+            await deliver(id, mosaic, facts, again)
+            return !again
         }
         sendToQueue { queue, client in
             await queue.want(ids, visible: visible, client: client, isNetwork: { _ in network }, work: work)
         }
+    }
+
+    /// A card's facts from the cover queue: kept, and shown. Without this pass's dates (the summary came from the
+    /// catalog) the dates of an earlier pass at the same folder date stay, for "+N new" by date.
+    private func keepFacts(_ new: FolderCardFacts, for id: String, again: Bool) {
+        var new = new
+        if new.photoDates == nil, let old = facts[id], let date = old.summary?.folderModified,
+           date == new.summary?.folderModified {
+            new.photoDates = old.photoDates
+        }
+        facts[id] = new
+        if again { followUps.insert(id) } else { followUps.remove(id) }
+        showSummary(id)
+    }
+
+    /// The card's facts with its visit and two-page keys as they are now (folder settings and positions are in memory).
+    private func showSummary(_ id: String) {
+        guard let entry = shown[id], let facts = facts[id] else { return }
+        let config = FolderCardFacts.config(for: entry.url, base: Settings.shared.config, settings: settings)
+        view?.setSummary(facts.cardSummary(visit: positions.visit(in: entry.url), config: config), for: id)
+    }
+
+    /// Every card's facts again (back from the viewer: a visit or the two-page keys may have changed). The view keeps
+    /// only those in its listing, and redraws only those that changed.
+    private func showSummaries() {
+        for id in facts.keys { showSummary(id) }
+    }
+
+    /// A share that was offline answered (`ThumbnailStore.setOnVolumeAnswered`): the cards of the folder on screen
+    /// that are on it and dimmed, or still waiting, are asked for again at once.
+    private func shareAnswered(_ volume: String) {
+        guard !isPaused, let place = coverPlace else { return }
+        let location: ThumbnailLocation?
+        if case .located(let shown) = place { location = shown } else { location = nil }
+        func isOn(_ id: String) -> Bool {
+            guard let entry = shown[id] else { return false }
+            return ThumbnailStore.cardIsOn(volume, location: location?.subfolder(entry.url.lastPathComponent),
+                                           share: coverShare)
+        }
+        let dimmed = facts.filter { $0.value.problem == .offline }.keys.filter(isOn)
+        let waiting = (cards.pending + Array(followUps)).filter(isOn)
+        guard !dimmed.isEmpty || !waiting.isEmpty else { return }
+        followUps.formUnion(dimmed)
+        sendCovers()
+        let again = Array(Set(dimmed + waiting))
+        sendToQueue { queue, client in await queue.forget(again, client: client) }
     }
 
     /// None of this browser's cards in the cover queue: those running are cancelled, those made forgotten.
@@ -574,6 +697,19 @@ import LoupeCore
     func setSort(_ sort: BrowserSort, for location: BrowserLocation) {
         guard case .folder(let folder) = location else { return }
         settings?.set(BrowserSort.settingKey, sort.text, for: folder)
+    }
+
+    /// `folder-cards`: the folder's own or inherited style, else loupe.conf's.
+    func cardStyle(for location: BrowserLocation) -> CardStyle {
+        guard case .folder(let folder) = location else { return .posters }
+        return CardStyle.forFolder(folder, settings: settings, fallback: Settings.shared.config.folderCards)
+    }
+
+    /// The style chosen for the folder (the switch, the View menu, ⌘1–⌘3): its own from now on, its subfolders'
+    /// until they choose theirs.
+    func setCardStyle(_ style: CardStyle, for location: BrowserLocation) {
+        guard case .folder(let folder) = location else { return }
+        settings?.set(CardStyle.settingKey, style.rawValue, for: folder)
     }
 
 }

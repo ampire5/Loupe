@@ -197,6 +197,10 @@ import UniformTypeIdentifiers
             await store.setOnThumbnail { url in
                 Task { @MainActor in NotificationCenter.default.post(name: .thumbnailChanged, object: url) }
             }
+            // On the store's actor: the main thread is told asynchronously, never waited for.
+            await store.setOnVolumeAnswered { volume in
+                Task { @MainActor in NotificationCenter.default.post(name: .coverVolumeAnswered, object: volume) }
+            }
             await withCheckedContinuation { (first: CheckedContinuation<Void, Never>) in
                 Task {
                     await cache.setOnActivity { sink.yield($0) }   // yields the current activity at once
@@ -727,6 +731,14 @@ import UniformTypeIdentifiers
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
+        // How Home's browser draws a folder's folders and archives (folder cards spec, as Finder's ⌘1–⌘4): on Home on
+        // a folder only, checked at its style (ViewerWindowController validates them). ⌘1–⌘3 select a tab elsewhere
+        // (`BrowserTabKeys`); while these items are on, the keys are theirs (`WindowRegistry.tabKey`).
+        for (index, title) in ["as Posters", "as Cards", "as List"].enumerated() {
+            view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
+                         keyEquivalent: String(index + 1)).tag = index
+        }
+        view.addItem(.separator())
         // AppKit retitles this item "Exit Full Screen" while the window is in full screen.
         let fullScreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]

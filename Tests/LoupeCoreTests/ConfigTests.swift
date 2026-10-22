@@ -1108,7 +1108,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
@@ -1612,6 +1612,37 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     var c = Config()
     #expect(c.set("folder-cover", "single") == .ok && c.folderCover == .single)
     #expect(c.set("folder-cover", "") == .badValue && c.folderCover == .single)
+}
+
+/// `folder-cards`: how Home draws a folder's folders and archives (folder cards spec), posters by default; loupe.conf
+/// holds the default, a folder's settings its own (`CardStyle.forFolder`).
+@Test func folderCardsKey() {
+    let d = Config()
+    #expect(d.folderCards == .posters && d.text(forKey: "folder-cards") == "posters")
+    for style in ["posters", "cards", "list"] {
+        let (c, errors) = Config.parse("folder-cards=\(style)")
+        #expect(errors.isEmpty && c.folderCards.rawValue == style && c.text(forKey: "folder-cards") == style)
+    }
+    #expect(Config.parse("folder-cards=List").0.folderCards == .list)
+    #expect(Config.parse("folder-cards=huge").1 == ["loupe.conf:1: bad option 'folder-cards=huge'"])
+    var c = Config()
+    #expect(c.set("folder-cards", "cards") == .ok && c.folderCards == .cards)
+    #expect(c.set("folder-cards", "") == .badValue && c.folderCards == .cards)
+    #expect(Config.keys.contains("folder-cards"))
+}
+
+/// Home's own folder keys (`browser-sort`, `folder-cards`) live in folder settings beside the viewer's: a folder's
+/// config takes no part of them and reports none as ignored (the window warned "ignored browser-sort=…" once per
+/// folder).
+@Test func noIgnoredWarningForHomeKeys() {
+    #expect(Config.homeFolderKeys == ["browser-sort", "folder-cards"])
+    let (c, rejected) = Config().applying(["browser-sort": "date-", "folder-cards": "list", "spread": "yes"])
+    #expect(rejected.isEmpty)
+    #expect(c.spread && c.folderCards == .posters)
+    // A bad value of one is Home's to ignore, too.
+    #expect(Config().applying(["folder-cards": "huge"]).rejected.isEmpty)
+    // Other keys that are no folder keys are still reported.
+    #expect(Config().applying(["strip-height": "100"]).rejected == ["strip-height=100"])
 }
 
 @Test func gridParse() {

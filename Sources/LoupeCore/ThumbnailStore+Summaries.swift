@@ -11,6 +11,20 @@ extension ThumbnailStore {
         storedSummary(at: location)
     }
 
+    /// The stored summaries of the direct subfolders of the folder `location` names (R8: a card's "+N inside"): the
+    /// catalog's, and those waiting for its next batch, the newer per folder. One query, no listing; empty without a
+    /// catalog.
+    public func childSummaries(of location: ThumbnailLocation) async -> ChildSummaries {
+        var photos = perform("child summaries", { try $0.childSummaries(of: location) }) ?? [:]
+        let prefix = location.folder.hasSuffix("/") ? location.folder : location.folder + "/"
+        for (place, summary) in pendingSummaries.values where place.volume == location.volume
+            && place.folder.hasPrefix(prefix) && place.folder.count > prefix.count
+            && !place.folder.dropFirst(prefix.count).contains("/") && !place.folder.lowercased().hasSuffix(".zip") {
+            photos[place.folder] = summary.photos
+        }
+        return ChildSummaries(count: photos.count, photos: photos.values.reduce(0, +))
+    }
+
     /// Stores folder summaries in one batch, now. Failure is logged by `perform` and leaves the summaries unstored:
     /// they are made again on the next pass.
     public func putFolderSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) async {

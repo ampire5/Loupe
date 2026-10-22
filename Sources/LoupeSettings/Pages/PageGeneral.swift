@@ -102,6 +102,11 @@ extension SettingsPanel {
                 ], symbol: "rectangle.split.2x1",
                 description: "How a folder's card shows what is inside. Narrow cards always show one photo. "
                     + "Default Hero."),
+                .choice("folder-cards", "Folder cards", [
+                    (word: "posters", title: "Posters"), (word: "cards", title: "Cards"), (word: "list", title: "List"),
+                ], symbol: "rectangle.grid.1x2",
+                description: "How folders and archives show in the browser: a big cover with a line of facts below, a "
+                    + "compact card, or a list. Remembered for each folder, like its sort."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),
                 ], symbol: "rectangle.stack.badge.play",

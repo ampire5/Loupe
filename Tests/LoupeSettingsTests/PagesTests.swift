@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 126)
+        #expect(Config.keys.count == 127)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -119,6 +119,21 @@ struct PagesTests {
         #expect(row("folder-cover")?.description
                 == "How a folder's card shows what is inside. Narrow cards always show one photo. Default Hero.")
         #expect(SettingsPanel.pages().first { $0.id == "general" }?.keys.contains("folder-cover") == true)
+    }
+
+    /// Home's folder cards: posters, cards or a list, with the spec's description (folder cards spec, "Loupe").
+    @Test func folderCardsRow() {
+        guard case .choice(let items) = row("folder-cards")?.kind else {
+            Issue.record("folder-cards is not a choice")
+            return
+        }
+        #expect(items.map(\.word) == ["posters", "cards", "list"])
+        #expect(items.map(\.title) == ["Posters", "Cards", "List"])
+        #expect(row("folder-cards")?.title == "Folder cards")
+        #expect(row("folder-cards")?.description
+                == "How folders and archives show in the browser: a big cover with a line of facts below, a compact "
+                    + "card, or a list. Remembered for each folder, like its sort.")
+        #expect(SettingsPanel.pages().first { $0.id == "general" }?.keys.contains("folder-cards") == true)
     }
 
     /// The pop-ups of the enumerations offer the whole set (spec §11).

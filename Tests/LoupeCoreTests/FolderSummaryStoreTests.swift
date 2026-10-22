@@ -134,6 +134,71 @@ import SQLite3
         try db.putSummaries([])   // nothing to do, nothing thrown
     }
 
+    /// R8: the stored summaries of a folder's direct subfolders, one indexed range of the primary key: not the folder
+    /// itself, not deeper ones, not a sibling sharing the name's start, not another volume's, not a zip's.
+    @Test func childSummariesDirectOnly() throws {
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512)
+        func at(_ path: String, volume: String = "uuid:ABCD-1234") -> ThumbnailLocation {
+            ThumbnailLocation(volume: volume, folder: path, name: "_")
+        }
+        func photos(_ n: Int) -> FolderSummary { FolderSummary(photos: n, folders: 0) }
+        try db.putSummaries([(at("/A"), photos(1)), (at("/A/x"), photos(10)), (at("/A/y"), photos(20)),
+                             (at("/A/x/deep"), photos(100)), (at("/A2"), photos(1000)), (at("/A2/z"), photos(2000)),
+                             (at("/A/c.zip"), photos(5)), (at("/A/d.ZIP"), photos(6)),
+                             (at("/A/w", volume: "net:srv/x"), photos(3000)), (at("/B"), photos(7))])
+        #expect(try db.childSummaries(of: at("/A")) == ["/A/x": 10, "/A/y": 20])
+        #expect(try db.childSummaries(of: at("/A/x")) == ["/A/x/deep": 100])
+        #expect(try db.childSummaries(of: at("/A/y")).isEmpty)
+        #expect(try db.childSummaries(of: at("/")) == ["/A": 1, "/A2": 1000, "/B": 7])
+        // A decomposed name (as macOS often writes them): SQLite counts its code points, not its characters.
+        try db.putSummaries([(at("/Cafe\u{301}/x"), photos(4)), (at("/Cafe\u{301}/x/y"), photos(8))])
+        #expect(try db.childSummaries(of: at("/Cafe\u{301}")) == ["/Cafe\u{301}/x": 4])
+    }
+
+    /// The measurement behind `childSummaries`' note: `LOUPE_SUMMARY_BENCH=<report file> scripts/test.sh --filter
+    /// measureChildSummaries`. A table of 20 000 rows (`summaryCapacity`), one folder with 4 096 subfolders in it.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOUPE_SUMMARY_BENCH"] != nil))
+    func measureChildSummaries() throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let db = try ThumbnailDatabase(directory: dir, thumbSize: 512)
+        let wide = (0..<4096).map { (folder("Wide/Sub \($0) with a longish folder name"), summary($0)) }
+        let rest = (0..<(ThumbnailDatabase.summaryCapacity - 4096)).map {
+            (folder("Photos/\($0 / 100)/Trip \($0 % 100)"), summary($0))
+        }
+        for batch in stride(from: 0, to: rest.count, by: 1000) {
+            try db.putSummaries(Array(rest[batch..<min(rest.count, batch + 1000)]))
+        }
+        try db.putSummaries(wide)
+        let clock = ContinuousClock()
+        var best = Duration.seconds(1000), small = Duration.seconds(1000)
+        for _ in 0..<20 {
+            var count = 0
+            best = min(best, try clock.measure { count = try db.childSummaries(of: folder("Wide")).count })
+            #expect(count == 4096)
+            small = min(small, try clock.measure { _ = try db.childSummaries(of: folder("Photos/7")) })
+        }
+        let report = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOUPE_SUMMARY_BENCH"] ?? "/dev/null")
+        try "childSummaries: 4096 subfolders \(best), 100 subfolders \(small) (best of 20, 20 000 rows)\n"
+            .write(to: report, atomically: true, encoding: .utf8)
+    }
+
+    /// The store's: the catalog's rows and the summaries waiting for its next batch, the newer one per folder.
+    @Test func storeChildSummariesSeeTheBatch() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let store = ThumbnailStore(directory: dir, reader: ThumbReader(), thumbSize: 32, limitBytes: 1 << 30,
+                                   idleDelay: .zero, commitDelay: .seconds(3600))
+        func at(_ path: String) -> ThumbnailLocation { ThumbnailLocation(volume: "test", folder: path, name: "_") }
+        await store.putFolderSummaries([(at("/A/x"), FolderSummary(photos: 10, folders: 0)),
+                                        (at("/A/y"), FolderSummary(photos: 20, folders: 0))])
+        await store.queueSummary(FolderSummary(photos: 25, folders: 0), at: at("/A/y"))
+        await store.queueSummary(FolderSummary(photos: 30, folders: 0), at: at("/A/z"))
+        await store.queueSummary(FolderSummary(photos: 99, folders: 0), at: at("/A/z/deep"))
+        #expect(await store.childSummaries(of: at("/A")) == ChildSummaries(count: 3, photos: 65))
+        #expect(await store.childSummaries(of: at("/B")) == ChildSummaries(count: 0, photos: 0))
+    }
+
     /// The measurement behind `ThumbnailDatabase.summaryCapacity`: `LOUPE_SUMMARY_BENCH=<report file> scripts/test.sh
     /// --filter measureCapacity` (the test runner hides prints). Writes lookup time, a 50-row batch's time and the catalog's growth for several row counts.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOUPE_SUMMARY_BENCH"] != nil))

@@ -887,6 +887,18 @@ import UniformTypeIdentifiers
         return view
     }
 
+    /// View › as Posters / as Cards / as List (⌘1–⌘3, the item's tag the style's index): how Home draws this folder's
+    /// folders and archives, saved for the folder (`folder-cards`).
+    @objc func chooseCardStyle(_ sender: Any?) {
+        guard canChooseCardStyle, let tag = (sender as? NSMenuItem)?.tag, CardStyle.allCases.indices.contains(tag) else {
+            return
+        }
+        homeView?.browser.chooseCardStyle(CardStyle.allCases[tag])
+    }
+
+    /// Home is on screen on a folder: its folder cards' style can be chosen (the View items and ⌘1–⌘3 are theirs).
+    var canChooseCardStyle: Bool { isShowingHome && homeView?.browser.canChooseCardStyle == true }
+
     /// File › Larger Cards / Smaller Cards / Default Card Size: Home's ⌘= / ⌘− / ⌘0 (the keys are Home's own, not the
     /// menu's: a menu key is taken even while its item is off).
     @objc func largerCards(_ sender: Any?) { resizeBrowserCards(.larger) }
@@ -919,7 +931,11 @@ import UniformTypeIdentifiers
     /// The folder a restored session tab had in the browser, opened on Folders' next show.
     private var restoreBrowserAt: URL?
 
-    /// `browser-card-size`, `grid-style`, `grid-names`, `folder-cover`: on every show and every settings change.
+    /// loupe.conf's `folder-cards` as `applyBrowserSettings` last applied it.
+    private var shownFolderCards: CardStyle?
+
+    /// `browser-card-size`, `grid-style`, `grid-names`, `folder-cover`, `folder-cards`: on every show and every
+    /// settings change.
     private func applyBrowserSettings() {
         guard let homeView else { return }
         let config = Settings.shared.config
@@ -930,6 +946,12 @@ import UniformTypeIdentifiers
         let coverLayout = HomeMosaic.Layout(rawValue: config.folderCover.rawValue) ?? .hero
         homeSources?.folders.coverLayout = coverLayout
         homeSources?.collections.coverLayout = coverLayout
+        // `folder-cards` is the browser's style where a folder has none of its own: another default shows at once.
+        if let shown = shownFolderCards, shown != config.folderCards, view.canChooseCardStyle,
+           homeSources?.folders.cardStyle(for: view.location) != view.cardStyle {
+            view.reload()
+        }
+        shownFolderCards = config.folderCards
         homeView.sidebarWidth = CGFloat(config.homeSidebarWidth)
         homeView.sidebarCompactChains = config.homeSidebarCompact
         homeView.sidebarCompactIndent = config.homeSidebarIndent == .compact
@@ -1511,6 +1533,11 @@ import UniformTypeIdentifiers
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(chooseCardStyle(_:)):
+            let browser = isShowingHome ? homeView?.browser : nil
+            item.state = browser?.canChooseCardStyle == true && CardStyle.allCases.indices.contains(item.tag)
+                && browser?.cardStyle == CardStyle.allCases[item.tag] ? .on : .off
+            return canChooseCardStyle
         case #selector(largerCards(_:)), #selector(smallerCards(_:)), #selector(defaultCardSize(_:)):
             return isShowingHome && !isShowingStash
         case #selector(toggleHomeSidebar(_:)):

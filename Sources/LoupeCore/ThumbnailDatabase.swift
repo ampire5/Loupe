@@ -431,6 +431,28 @@ public final class ThumbnailDatabase {
         }
     }
 
+    /// The photo counts of the stored summaries of the direct subfolders of `location.folder` (R8), by path: one range
+    /// of the primary key (`volume`, then `path` from `folder/` up to `folder0`, '0' being the byte after '/'), the
+    /// deeper ones left out in the query (SQLite's `substr` counts code points, hence `unicodeScalars`: macOS writes
+    /// names decomposed), zips (their own summaries, not subfolders) after it. A plain read. Bounded by the table
+    /// (`summaryCapacity`): in a table of 20 000 rows, a folder of 4 096 subfolders with a summary each reads in 4.5 ms,
+    /// one of 100 in 0.13 ms (debug build, best of 20; 8-core i7-10700K, SSD; `measureChildSummaries`).
+    public func childSummaries(of location: ThumbnailLocation) throws -> [String: Int] {
+        let prefix = location.folder.hasSuffix("/") ? location.folder : location.folder + "/"
+        let end = String(prefix.dropLast()) + "0"
+        var found: [String: Int] = [:]
+        try catalog.query("""
+            SELECT path, photos FROM folder_summaries
+            WHERE volume = ? AND path >= ? AND path < ? AND path != ? AND instr(substr(path, ?), '/') = 0
+            """, [.text(location.volume), .text(prefix), .text(end), .text(prefix),
+                  .int(Int64(prefix.unicodeScalars.count + 1))]) { r in
+            let path = r.text(0)
+            guard !path.lowercased().hasSuffix(".zip") else { return }
+            found[path] = Int(r.int(1))
+        }
+        return found
+    }
+
     /// Rows in `folder_summaries`.
     public func summaryCount() throws -> Int {
         var count = 0
