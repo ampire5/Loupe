@@ -204,6 +204,8 @@ public enum SpreadKeys {
     public static let key = "spread"
     /// The key `⌥D` writes.
     public static let shiftKey = "spread-shift"
+    /// The key View › Right to Left writes.
+    public static let directionKey = "spread-direction"
 
     /// `D`: `spread` the other way round in `config`, as loupe.conf spells it.
     public static func toggled(_ config: Config) -> String { config.spread ? "no" : "yes" }
@@ -217,4 +219,9 @@ public enum SpreadKeys {
     public static func savedToast(on: Bool) -> String { toast(on: on) + " · saved as default" }
 
     public static func toast(shift: Bool) -> String { shift ? "Pages shifted" : "Pages not shifted" }
+
+    /// View › Right to Left: `spread-direction` the other way round in `config`.
+    public static func toggledDirection(_ config: Config) -> String { config.spreadRightToLeft ? "ltr" : "rtl" }
+
+    public static func toast(rightToLeft: Bool) -> String { rightToLeft ? "Right to left" : "Left to right" }
 }

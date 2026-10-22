@@ -273,6 +273,9 @@ import LoupeRender
         self.positions = positions
         self.navigator = navigator
         thumbnailChain = thumbnailsReady
+        stripAspects = StripAspects(fetch: { urls, applies in
+            await thumbnails.aspects(urls, applyingOrientation: applies)
+        })
         colorCorrector = ColorCorrector(thumbnails: thumbnails)
         colorCorrector.onChange = { [weak self] url in
             guard let self, url == self.entry?.url || url == self.shownCompanion?.url else { return }
@@ -284,10 +287,10 @@ import LoupeRender
             MainActor.assumeIsolated {
                 guard let url = note.object as? URL else { return }
                 self?.colorCorrector.thumbnailArrived(url)
-                if self?.folderSpread.on == true { self?.spreadAspects?.thumbnailArrived(url) }   // its aspect is known now
             }
         }
         watcher.onChange = { [weak self] isPoll in self?.rereadFolder(isPoll ? .idle : .event) }
+        stripAspects.onChange = { [weak self] in self?.stripAspectsChanged() }
         // First in the chain, so no update of the first photo is missed.
         let handler: @Sendable (URL) -> Void = { [weak self] url in
             Task { @MainActor in self?.cacheDidUpdate(url) }
@@ -922,7 +925,7 @@ import LoupeRender
         DebugLog.log("exif-orientation \(applies ? "yes" : "no")")
         // Pages planned and laid out at their old orientation's sizes are measured anew.
         spreadHeaders = [:]
-        spreadAspects?.setAppliesOrientation(applies)
+        stripAspects.setAppliesOrientation(applies)
         updateSpread(rebuild: true)
         let made = makeLayout()
         shownLayout = made?.layout
@@ -1064,7 +1067,7 @@ import LoupeRender
             shownFromCache = atNavigation
             colorCorrector.pinned = e.url   // its cube stays while it is shown, wherever the order went (and its pair's)
             // The store's catalog has this folder by now: aspects it did not have at the playlist change are asked again.
-            if folderSpread.on { spreadAspects?.cellPictureArrived(e.url) }
+            if folderSpread.on { stripAspects.cellPictureArrived(e.url) }
         }
         entry = e
         // The cache never evicts the photo on screen (spec §11.2): its levels stay while it is shown. The pin moves only
@@ -1128,9 +1131,14 @@ import LoupeRender
     private var planFiles: [URL] = []
     /// The view is at least as wide as it is tall (`SpreadLayout.showsTwo`), as of the last view size.
     private var viewShowsTwo = false
-    /// The thumbnail store's aspects of the playlist's files (its catalog and memory: no file is read), made the first
-    /// time a folder shows two pages and fed only while one does.
-    private var spreadAspects: StripAspects?
+    /// The thumbnail store's aspects of the playlist's files (its catalog and memory: no file is read): one per window,
+    /// shared with the strip, which lays its cells out by them (`StripController`), so the catalog is asked once. The
+    /// strip feeds it the playlist, `exif-orientation`, the store's thumbnail notices and its cells' pictures; the session
+    /// gives it the same playlist and orientation when it builds a plan (no-ops when they are the same) and the photo it
+    /// shows. An arrival rebuilds the plan while the folder shows two pages (`stripAspectsChanged`).
+    let stripAspects: StripAspects
+    /// New aspects arrived (`stripAspects.onChange`): the strip lays its cells out again.
+    var onStripAspectsChange: (() -> Void)?
     /// The headers' sizes (as shown) of the pages read in this folder: exact where the store has no aspect yet.
     private var spreadHeaders: [URL: PixelSize] = [:]
     /// The other page of the current photo's pair (playlist index and file), nil for one page. The current photo is
@@ -1159,6 +1167,22 @@ import LoupeRender
     var companionImage: TiledImage? {
         guard shownLayout != nil, let c = shownCompanion, c.failure == nil else { return nil }
         return c.pyramid
+    }
+
+    /// A page on screen and the scale it is drawn at, for the info panel's filter row: `url` is the companion while it is
+    /// drawn, anything else the photo on screen. In a pair the transform is the virtual picture's, and a page's scale is
+    /// the transform's times its share of that picture (every page is as tall as it), so the row names the level and
+    /// filter that page is drawn with, not the other's. Nil without a picture.
+    func drawnPage(_ url: URL?) -> (image: TiledImage, scale: Double)? {
+        let companion = url != nil && url == shownCompanion?.url
+        guard let image = companion ? companionImage : self.image, let info = (companion ? shownCompanion : entry)?.info
+        else { return nil }
+        var scale = transform.drawnScale
+        let height = displaySize(info).height
+        if let layout = shownLayout, layout.virtualSize.height > 0, height > 0 {
+            scale *= layout.virtualSize.height / height
+        }
+        return (image, scale)
     }
 
     /// The orientation `companionImage` is drawn with (as `drawOrientation`).
@@ -1227,18 +1251,15 @@ import LoupeRender
 
     /// The store's aspects of `files` as known now (an asynchronous fetch follows for the rest; its arrival rebuilds).
     private func aspectsFor(_ files: [URL]) -> [Double?] {
-        let aspects: StripAspects
-        if let made = spreadAspects {
-            aspects = made
-        } else {
-            let store = thumbnails
-            aspects = StripAspects(fetch: { urls, applies in await store.aspects(urls, applyingOrientation: applies) })
-            aspects.onChange = { [weak self] in self?.scheduleSpreadSync(rebuild: true) }
-            spreadAspects = aspects
-        }
-        aspects.setAppliesOrientation(appliesOrientation)
-        aspects.setPlaylist(files)
-        return aspects.aspects
+        stripAspects.setAppliesOrientation(appliesOrientation)
+        stripAspects.setPlaylist(files)
+        return stripAspects.aspects
+    }
+
+    /// The shared aspects changed: the strip lays out again, and a folder showing two pages pairs by them anew.
+    private func stripAspectsChanged() {
+        if folderSpread.on { scheduleSpreadSync(rebuild: true) }
+        onStripAspectsChange?()
     }
 
     /// The view's size crossed width = height: two pages give way to one, or come back (spread spec, «Узкое окно»).
@@ -1301,7 +1322,7 @@ import LoupeRender
               planFiles[index] == e.url else { return }
         let size = info.displaySize(applying: appliesOrientation)
         guard spreadHeaders[e.url] != size else { return }
-        let aspects = spreadAspects?.aspects ?? []
+        let aspects = stripAspects.aspects
         let aspect = index < aspects.count ? aspects[index] : nil
         let planned = spreadHeaders[e.url] ?? aspect.flatMap(SpreadSizes.size(aspect:))
         spreadHeaders[e.url] = size
@@ -1415,7 +1436,7 @@ import LoupeRender
         if url == playlist?.current {
             other = companionURL
             otherFirst = (companionIndex ?? 0) < (playlist?.index ?? 0)
-            if let k = companionIndex, let aspects = spreadAspects?.aspects, k < aspects.count { aspect = aspects[k] }
+            if let k = companionIndex, k < stripAspects.aspects.count { aspect = stripAspects.aspects[k] }
         } else if url == entry?.url {
             other = shownCompanion?.url
             otherFirst = companionFirst
@@ -1496,7 +1517,7 @@ import LoupeRender
     func close() {
         recordView()
         watcher.stop()
-        spreadAspects?.close()
+        stripAspects.close()
         rereads.reset()   // a listing in flight is dropped
         cancelFolderRequest()
         dwellTask?.cancel()

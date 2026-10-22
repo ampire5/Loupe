@@ -31,21 +31,25 @@ extension Notification.Name {
 /// not in full screen) and `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
 /// over) to loupe.conf; in full screen it only says the strip is always over the photo there.
 ///
-/// At rest the current file is at the centre, expanded to its photo's proportions. A step to a neighbour (the wheel,
-/// the arrows) moves the strip there with a short animation; a jump farther puts it there at once. A two-finger
+/// At rest the current file is at the centre, expanded to its photo's proportions; with two pages on screen (spread
+/// spec, «Положение») both their cells are current, each expanded to its own proportions, and the middle of the pair
+/// is at the centre (`StripPages`). A step to a neighbour (the wheel, the arrows, the next pair) moves the strip there
+/// with a short animation; a jump farther puts it there at once. A two-finger
 /// horizontal swipe (`FilmstripScroll`, `strip-scroll-direction`; momentum included) or a mouse drag over the cells
 /// moves the strip, every cell narrow: the file reaching the centre becomes current at once as its stretched thumbnail
 /// (`ViewerSession.scrub(to:)`). The end of the motion (the momentum's end, a cancel, `FilmstripScroll.restDelay`
 /// without scroll events, the mouse's release) settles the strip on the nearest file, expands it and ends the scrub
 /// (`endScrub`: the normal plan, the only full decode). A drag resting `ViewerSession.dwellDelay` on one file ends the
 /// scrub there too. A click on a cell opens that file and moves the strip to it; it also stops a momentum or a
-/// settling under way.
+/// settling under way. With two pages the file reached shows the pair containing it, and the strip settles on that
+/// pair; a page of the pair already on screen (a click on it, or the motion crossing it) scrubs to nothing.
 ///
 /// Pictures are asked for only for the visible cells while the strip is shown, at the pixel size of the cell at
 /// rest (the photo's aspect at the cell height, at most `thumb-size`); while the strip moves only for cells that
 /// stayed in view `ViewerSession.dwellDelay`, so a fling decodes nothing it passes. A store notification refreshes
-/// just that file. The aspects come from `StripAspects` (at most one relayout per 250 ms, none during a drag of the
-/// edge); a relayout keeps the file at the centre.
+/// just that file. The aspects come from the session's `StripAspects` (shared with its pairing of two pages: the
+/// catalog is asked once; at most one relayout per 250 ms, none during a drag of the edge); a relayout keeps the file
+/// at the centre.
 ///
 /// Dragging the strip's top edge resizes it live (cells relaid each move, pictures asked for again only on release,
 /// at the new pixel size) and saves `strip-height` through `Settings`.
@@ -78,6 +82,9 @@ extension Notification.Name {
     private var fadeOut: TimeInterval = 0.25
     private var thumbSize = 512
     private var isFullScreen = false
+    /// `exif-orientation` as this strip last applied it: the session sets it on the shared aspects too, so whether the
+    /// cells must turn is judged by the strip's own record, not the aspects'.
+    private var appliesOrientation = true
 
     private var pinned: Bool {
         get { UserDefaults.standard.bool(forKey: Self.pinnedKey) }
@@ -116,8 +123,11 @@ extension Notification.Name {
     private var dragRest: Task<Void, Never>?
     /// The session scrubs for this strip (from the first `scrub(to:)` to its `endScrub`).
     private var sessionScrubbing = false
-    /// The file the strip was last put at rest on.
-    private var shownCurrent: Int?
+    /// The cells the strip was last put at rest on: the current file's, or the pair's on screen.
+    private var shownPages: StripPages?
+    /// A page of the pair on screen that the motion reached without scrubbing (`reached(_:)`): the motion goes on from
+    /// it, not from the session's current page.
+    private var reachedPage: Int?
     private(set) var isShown = false
     private var hideTask: Task<Void, Never>?
     /// Set by `close()`: a settings push or a late callback must not touch the closed window's session.
@@ -157,9 +167,9 @@ extension Notification.Name {
     init(session: ViewerSession, store: ThumbnailStore) {
         self.session = session
         self.store = store
-        aspects = StripAspects(fetch: { [store] urls, applies in await store.aspects(urls, applyingOrientation: applies) })
+        aspects = session.stripAspects
         super.init()
-        aspects.onChange = { [weak self] in self?.aspectsArrived() }
+        session.onStripAspectsChange = { [weak self] in self?.aspectsArrived() }
         hoverState.onRest = { [weak self] in self?.rested() }
         view.translatesAutoresizingMaskIntoConstraints = false
         heightConstraint = view.heightAnchor.constraint(equalToConstant: bandHeight)
@@ -272,8 +282,9 @@ extension Notification.Name {
             thumbSize = config.thumbSize
             reloadAll()   // other pixel sizes
         }
-        if config.exifOrientation != aspects.appliesOrientation {
+        if config.exifOrientation != appliesOrientation {
             // Thumbnails are stored turned: with the key off the cells turn back to the stored layout, at the stored aspect.
+            appliesOrientation = config.exifOrientation
             aspects.setAppliesOrientation(config.exifOrientation)
             DebugLog.log("strip exif-orientation \(config.exifOrientation ? "yes" : "no")")
             relayout()
@@ -600,19 +611,42 @@ extension Notification.Name {
     func sessionDidChange() {
         guard let list = session.playlist else { return }
         if list.files != files {
-            playlistChanged(list.files, current: list.index)
+            playlistChanged(list.files)
             return
         }
         // While the strip moves, the files it reaches are the session's current ones already.
-        guard list.index != shownCurrent, !isMoving else { return }
-        let step = shownCurrent.map { abs($0 - list.index) == 1 } ?? false
-        rest(on: list.index, animated: step)
+        guard let pages = sessionPages, pages != shownPages, !isMoving else { return }
+        rest(on: pages, animated: pages.isStep(from: shownPages))
+    }
+
+    /// The cells of what the session shows: its current file, or both pages of its pair.
+    private var sessionPages: StripPages? {
+        session.playlist.map { StripPages(current: $0.index, pages: session.currentPages) }
+    }
+
+    /// The file `FilmstripScroll` takes as current: the session's, or the page of its pair the motion reached last
+    /// (`reachedPage`), so the motion does not jump back to the current page's cell.
+    private var motionCurrent: Int? {
+        guard let index = session.playlist?.index else { return nil }
+        if let page = reachedPage, sessionPages?.contains(page) == true { return page }
+        return index
+    }
+
+    /// The motion brought `file` to the centre: the session scrubs to it, unless it is a page on screen (the other page
+    /// of the pair, or back to the current one), which shows already.
+    private func reached(_ file: Int) {
+        if sessionPages?.contains(file) == true {
+            reachedPage = file
+            return
+        }
+        reachedPage = nil
+        scrub(to: file)
     }
 
     /// Another playlist. The session ended its scrub with the old one. Files still in it keep their pictures at their
     /// new places (a listing that arrives in parts, `FolderWatcher`); a motion whose centre file is still there goes
     /// on from it, anything else (another folder) ends with the old list and the strip rests on the current file.
-    private func playlistChanged(_ list: [URL], current: Int) {
+    private func playlistChanged(_ list: [URL]) {
         let map = FilmstripItems.indexMap(from: files, to: list)
         let centre = scroll.offset.flatMap(view.layout.item(atBase:)).flatMap { map[$0] }
         let keepsMotion = isMoving && centre != nil
@@ -637,16 +671,17 @@ extension Notification.Name {
         given = Dictionary(uniqueKeysWithValues: given.compactMap { file, held in map[file].map { ($0, held) } })
         inViewSince = Dictionary(uniqueKeysWithValues: inViewSince.compactMap { file, since in map[file].map { ($0, since) } })
         view.remap(map)
-        shownCurrent = shownCurrent.flatMap { map[$0] }
+        shownPages = shownPages.flatMap { $0.remapped(map) }
+        reachedPage = nil
         relayout(keeping: keepsMotion ? centre : nil)
-        if !keepsMotion { rest(on: current, animated: false) }
+        if !keepsMotion, let pages = sessionPages { rest(on: pages, animated: false) }
     }
 
-    /// The strip at rest on `file`: at the centre, expanded.
-    private func rest(on file: Int, animated: Bool) {
-        guard files.indices.contains(file) else { return }
-        shownCurrent = file
-        view.show(offset: view.layout.centre(of: file), current: file, expansion: 1, animated: animated)
+    /// The strip at rest on `pages`: in the middle, expanded.
+    private func rest(on pages: StripPages, animated: Bool) {
+        guard pages.items.lowerBound >= 0, pages.items.upperBound <= files.count else { return }
+        shownPages = pages
+        view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: animated)
         view.refreshHover()
     }
 
@@ -669,8 +704,8 @@ extension Notification.Name {
         if let centre {
             scroll.layoutChanged(keeping: centre, layout: layout)
             drawMotion(animated: false)
-        } else if let current = shownCurrent ?? session.playlist?.index {
-            rest(on: current, animated: animated)
+        } else if let pages = shownPages ?? sessionPages {
+            rest(on: pages, animated: animated)
         }
         if let file = hoverState.file, file >= files.count { hover(nil) }
         loadVisible()
@@ -761,7 +796,7 @@ extension Notification.Name {
 
     private func load(_ file: Int) {
         let url = files[file], store = self.store, maxPixel = maxPixel(forFile: file)
-        let applies = aspects.appliesOrientation
+        let applies = appliesOrientation
         loads[file] = Task { [weak self] in
             let image = await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies)
             let status = image == nil ? await store.status(url) : .ready
@@ -829,10 +864,13 @@ extension Notification.Name {
         dwellTask = nil
         dragging = false
         if let settled = scroll.settled(layout: view.layout), !closed {
-            if settled.item != session.playlist?.index { scrub(to: settled.item) }
-            shownCurrent = settled.item
-            view.show(offset: settled.offset, current: settled.item, expansion: 1, animated: true)
+            // The pair containing the file it settled on (a page of the pair on screen has nothing new to show).
+            if sessionPages?.contains(settled.item) != true { scrub(to: settled.item) }
+            let pages = sessionPages ?? StripPages(item: settled.item)
+            shownPages = pages
+            view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: true)
         }
+        reachedPage = nil
         scroll.settle()
         endSessionScrub()
         loadVisible()
@@ -856,13 +894,17 @@ extension Notification.Name {
         scrollRest?.cancel()
         scrollRest = nil
         DebugLog.log("strip click on \(file + 1)")
-        shownCurrent = file   // the session's change below is this move
-        if session.playlist?.index != file {
+        reachedPage = nil
+        // A page of the pair on screen (or the current file) shows already; another file shows with its pair.
+        if sessionPages?.contains(file) != true {
+            shownPages = StripPages(item: file)   // the session's change below is this move
             sessionScrubbing = true
             session.scrub(to: file)
         }
         endSessionScrub()
-        view.show(offset: view.layout.centre(of: file), current: file, expansion: 1, animated: true)
+        let pages = sessionPages ?? StripPages(item: file)
+        shownPages = pages
+        view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: true)
         scroll.settle()
         loadVisible()
         sendVisible()
@@ -871,7 +913,7 @@ extension Notification.Name {
 
     /// A mouse drag across the cells moves the strip with the cursor; it takes over a trackpad motion under way.
     private func dragged(by dx: CGFloat) {
-        guard !closed, let current = session.playlist?.index else { return }
+        guard !closed, let current = motionCurrent else { return }
         let first = !dragging
         if first {
             dragging = true
@@ -882,7 +924,7 @@ extension Notification.Name {
         }
         let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current)
         if let file = outcome.item {
-            scrub(to: file)
+            reached(file)
             armDragRest()
         }
         drawMotion(animated: first)
@@ -912,14 +954,14 @@ extension Notification.Name {
     /// file at the centre scrubs to it; the end of the momentum or a cancelled gesture finishes at once, otherwise
     /// the rest timer does. Not during a press: the press owns the strip.
     private func scrolled(_ event: NSEvent) {
-        guard !closed, !view.isPressed, let current = session.playlist?.index else { return }
+        guard !closed, !view.isPressed, let current = motionCurrent else { return }
         let wasMoving = scroll.isMoving
         let fingers = FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
         let outcome = scroll.event(fingerDelta: fingers * event.scrollingDeltaX, crossDelta: event.scrollingDeltaY,
                                    phase: ScrollPhase(rawValue: event.phase.rawValue),
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
                                    layout: view.layout, current: current, now: event.timestamp)
-        if let file = outcome.item { scrub(to: file) }
+        if let file = outcome.item { reached(file) }
         if outcome.commit {
             drawMotion(animated: false)
             finishMotion()
