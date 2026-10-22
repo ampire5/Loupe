@@ -3,6 +3,7 @@ import Foundation
 import LoupeCore
 
 // LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>
+// LoupeBench thumbs --covers [--listings N] [--decodes N] [--size PX] <folder>
 //
 // Generates the thumbnails of a folder (files `from` ..< `from + limit` in Finder order) the way the app does with
 // the viewer idle: a real ThumbnailStore with the real FileReader (4 threads, as in the app) and DecodePool, its
@@ -11,9 +12,15 @@ import LoupeCore
 // the client's page cache; to compare settings, run each on files no earlier run has read. Prints thumbnails made
 // per second (files that could not be made do not count), MB/s of whole files, and the store's per-file read and
 // decode times.
+//
+// With --covers: Home's folder covers of every subfolder of <folder> (Finder order, all of them visible cards), made
+// through a CoverQueue with `listings` covers at a time and `ThumbnailStore.folderCover` (names listed, four photos
+// picked, their thumbnails made and kept in the catalog), then once more from a fresh store on the same catalog (the
+// next session: no listing, no read). Prints covers per second and the process's CPU time for each pass.
 
 enum ThumbsBench {
-    static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>"
+    static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>\n"
+        + "       LoupeBench thumbs --covers [--listings N] [--decodes N] [--size PX] <folder>"
 
     struct Options {
         var folder = ""
@@ -22,12 +29,14 @@ enum ThumbsBench {
         var reads = ThumbnailStore.maxReads
         var decodes = ThumbnailStore.defaultDecodes
         var size = 512
+        var covers = false
+        var listings = CoverQueue.listingLimit
     }
 
     static func main(_ arguments: [String]) -> Never {
         let options = parse(arguments)
         Task {
-            await run(options)
+            if options.covers { await runCovers(options) } else { await run(options) }
             exit(0)
         }
         dispatchMain()
@@ -50,6 +59,8 @@ enum ThumbsBench {
                 guard o.reads <= ThumbnailStore.maxReads else { fail("--reads is 1 or \(ThumbnailStore.maxReads)") }
             case "--decodes": o.decodes = number(arg, min: 1)
             case "--size": o.size = number(arg, min: 16)
+            case "--covers": o.covers = true
+            case "--listings": o.listings = number(arg, min: 1)
             case _ where arg.hasPrefix("--"): fail("unknown option \(arg)\n\(usage)")
             default:
                 guard folder == nil else { fail(usage) }
@@ -140,6 +151,53 @@ enum ThumbsBench {
               + "| \(String(format: "%.2f", Double(finished) / seconds)) | \(String(format: "%.1f", mb / seconds)) "
               + "| \(f(read.median)) / \(f(read.percentile(90))) | \(f(decode.median)) / \(f(decode.percentile(90))) "
               + "| \(source.isEmpty ? "–" : source) |")
+        print()
+    }
+}
+
+extension ThumbsBench {
+    private static func runCovers(_ o: Options) async {
+        let root = URL(fileURLWithPath: o.folder)
+        let subfolders = ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey],
+                                                                       options: [.skipsHiddenFiles])) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard !subfolders.isEmpty else { fail("no subfolders in \(o.folder)") }
+
+        let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("loupe-covers-bench-\(UUID().uuidString)")
+        if cacheDir.standardizedFileURL.path.hasPrefix("/Volumes/") { fail("refusing to write under /Volumes: \(cacheDir.path)") }
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let reader = FileReader(threads: 4, chunkReader: { fd, buffer, count, offset in
+            if offset == 0 { _ = fcntl(fd, F_NOCACHE, 1) }
+            return FileReader.pread(fd, buffer, count, offset)
+        })
+
+        print("### covers: \(subfolders.count) subfolders, listings \(o.listings), decodes \(o.decodes), size \(o.size), F_NOCACHE\n")
+        print("| pass | covers | pictures | s | covers/s | CPU s | cores busy |")
+        print("|---|---|---|---|---|---|---|")
+        for pass in ["made", "catalog"] {
+            let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size, limitBytes: 2 << 30,
+                                       idleDelay: .zero, decodes: o.decodes)
+            let queue = CoverQueue(listingLimit: o.listings, resumeDelay: .zero)
+            let pictures = LockedLines()
+            let ids = subfolders.map(\.path)
+            let cpu = cpuTimeMs()
+            let start = ContinuousClock.now
+            await queue.want(ids, visible: ids.count, isNetwork: { _ in false }) { id in
+                let images = await store.folderCover(URL(fileURLWithPath: id, isDirectory: true), archive: false, maxPixel: 256)
+                pictures.add("\(images.count)")
+            }
+            let deadline = start + .seconds(60 + 5 * ids.count)
+            while pictures.all.count < ids.count, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            let seconds = msSince(start) / 1000, cpuUsed = (cpuTimeMs() - cpu) / 1000
+            let made = pictures.all.compactMap(Int.init).reduce(0, +)
+            print("| \(pass) | \(pictures.all.count) | \(made) | \(String(format: "%.2f", seconds)) "
+                  + "| \(String(format: "%.1f", Double(pictures.all.count) / seconds)) | \(String(format: "%.1f", cpuUsed)) "
+                  + "| \(String(format: "%.1f", cpuUsed / seconds)) |")
+        }
         print()
     }
 }
