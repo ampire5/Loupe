@@ -24,10 +24,6 @@ import LoupeRender
         didSet {
             // Leaving a photo (any navigation, a re-read that lost it, another folder) saves how it was looked at.
             if let left = oldValue?.current, left != playlist?.current { recordView(of: left) }
-            // The other page of the pair left, for the focus's `previousCompanion` (`navigated`).
-            if oldValue?.current != playlist?.current {
-                leftCompanion = oldValue?.files == playlist?.files ? companionIndex : nil
-            }
             // The pair the new position is in (no cache call here: the navigation that set the playlist makes them).
             updateSpread()
             // Entering another folder (open, folder switch) moves the watcher with it.
@@ -225,12 +221,10 @@ import LoupeRender
     /// The last step's sign (+1 / -1) and whether the current photo has been dwelt on.
     private var direction = 1
     /// The playlist index of the photo that was current before this one (spec §11.1.7: it keeps its full
-    /// resolution if it has it); nil after opening a file or when the playlist was replaced.
+    /// resolution if it has it); nil after opening a file or when the playlist was replaced. With two pages its pair's
+    /// other page keeps it too, taken from the plan (`SpreadNavigation.previousCompanion`): for a strip scrub this is
+    /// the scrub's origin, not the cell passed last.
     private var previousIndex: Int?
-    /// The other page of the pair `previousIndex` was in (spread), nil when it was one page.
-    private var previousCompanionIndex: Int?
-    /// The companion when the current photo last changed (`playlist`): the pair left's other page.
-    private var leftCompanion: Int?
     private var dwelling = false
     /// The current photo was opened from outside (`open`) and no other navigation came since: its full resolution is
     /// decoded with its preview, without the dwell (`CacheFocus.opened`).
@@ -580,9 +574,6 @@ import LoupeRender
         }
         // The photo before this one keeps its full resolution by URL, wherever it moved in the list.
         previousIndex = previousIndex.flatMap { old.files.indices.contains($0) ? new.files.firstIndex(of: old.files[$0]) : nil }
-        previousCompanionIndex = previousCompanionIndex.flatMap {
-            old.files.indices.contains($0) ? new.files.firstIndex(of: old.files[$0]) : nil
-        }
         sendFocus()
         if scrubEnded { startDwell(on: new.current) }
         sendThumbnailRequest()
@@ -777,7 +768,6 @@ import LoupeRender
         stepWait = wait
         self.direction = direction == 0 ? 1 : direction
         previousIndex = previous
-        previousCompanionIndex = previous == nil ? nil : leftCompanion
         dwelling = false
         self.opened = opened
         freshOpen = opened ? current : nil
@@ -841,7 +831,8 @@ import LoupeRender
         let focus = CacheFocus(count: list.files.count, current: list.index, direction: direction, dwelling: dwelling,
                                needsFull: needsFull, screen: screenSize, previous: previousIndex,
                                scrubbing: isScrubbing, appliesOrientation: appliesOrientation, opened: opened,
-                               companion: pages.companion, step: pages.step, previousCompanion: previousCompanionIndex)
+                               companion: pages.companion, step: pages.step,
+                               previousCompanion: spread.previousCompanion(of: previousIndex))
         guard focus != sentFocus || list.files != sentFiles else { return }
         sentFocus = focus
         sentFiles = list.files

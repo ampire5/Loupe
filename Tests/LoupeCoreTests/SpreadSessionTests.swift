@@ -21,6 +21,22 @@ private let six = [PixelSize?](repeating: portrait, count: 6)
     #expect(n.focus(current: 3) == (2, 2))
 }
 
+/// A strip scrub over several cells keeps its origin as the previous photo (`StripScrub`); the cache keeps that pair's
+/// other page with it, not the companion of the cell passed last.
+@Test func previousCompanionIsTheScrubOriginsOtherPage() {
+    let n = navigation([PixelSize?](repeating: portrait, count: 10))
+    var scrub = StripScrub()
+    #expect(scrub.reach(4, current: 2) == .move(previous: 2))
+    #expect(scrub.reach(6, current: 4) == .move(previous: 2))
+    #expect(scrub.reach(8, current: 6) == .move(previous: 2))
+    #expect(n.previousCompanion(of: 2) == 3)
+    #expect(n.previousCompanion(of: 3) == 2)
+    #expect(n.previousCompanion(of: nil) == nil)
+    // One page on screen (a narrow view, two pages off) or a page alone: none.
+    #expect(navigation(six, showsTwo: false).previousCompanion(of: 2) == nil)
+    #expect(navigation([portrait, portrait, landscape, portrait]).previousCompanion(of: 2) == nil)
+}
+
 @Test func singlePageHasNoCompanion() {
     let n = navigation([portrait, portrait, landscape, portrait])
     #expect(n.companion(of: 2) == nil)
