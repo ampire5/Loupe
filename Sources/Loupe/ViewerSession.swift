@@ -754,6 +754,7 @@ import LoupeRender
                            fresh: Bool = false, opened: Bool = false) {
         guard let current = playlist?.current else { return }
         settleZoom()            // the new photo inherits the mode a zoom key asked for, not a frame on the way
+        if collapseView?.url != current { collapseView = nil }
         cancelFolderRequest()   // any navigation outranks a folder switch still being resolved
         jumpedFromStrip = fromStrip
         stepWait = wait
@@ -944,6 +945,9 @@ import LoupeRender
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
         if let saved = restored(url, size: size, over: current) { return saved }
+        if let collapse = collapseView, collapse.url == url, collapse.transform.imageSize == size {
+            return collapse.transform
+        }
         let arrival: PhotoSwitchView.Arrival = url == laidOut ? .laidOut : url == freshOpen ? .opened : .switched
         // The photo on screen keeps the transform it has (a frame of a zoom animation included), as before.
         return PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
@@ -1075,12 +1079,18 @@ import LoupeRender
             let next = transform(showing: e.url, size: layoutSize(info))
             laidOut = e.url   // before the transform changes: what its observers ask of this photo keeps this view
             if freshOpen == e.url { freshOpen = nil }
+            if collapseView?.url == e.url { collapseView = nil }
             if let restore, restore.file == e.url {
-                if shownLayoutProvisional, !restore.view.applies(to: next.imageSize) {
-                    // The pair's other page has a stand-in size: the saved view (recorded at the pair's real size) is
-                    // decided once that page's size is in (`relayout`), unless the user zooms or pans meanwhile.
+                // The pair's other page has a stand-in size: the saved view (recorded at the pair's real size) is
+                // decided once that page's size is in (`relayout`), while the view stays untouched (a zoom key pressed
+                // during the load, a zoom or pan since an earlier show drop it).
+                if let waiting = restore.waiting(atShowOf: next.imageSize, provisional: shownLayoutProvisional,
+                                                 before: judgedTransform, shown: next) {
                     DebugLog.log("saved view of \(e.url.lastPathComponent) waits for the pair's size")
-                    self.restore = restore.rearrived(at: next)
+                    self.restore = waiting
+                } else if shownLayoutProvisional, !restore.view.applies(to: next.imageSize) {
+                    DebugLog.log("saved view of \(e.url.lastPathComponent) not restored (zoomed while it waited)")
+                    self.restore = nil
                 } else {
                     let target = restore.target(imageSize: next.imageSize)
                     let applied = target.map { next.mode == $0.mode && next.center == $0.center } ?? false
@@ -1141,6 +1151,8 @@ import LoupeRender
     private(set) var shownLayout: SpreadLayout?
     /// `shownLayout`'s other page has a stand-in size: a saved view of the pair waits for the real one.
     private var shownLayoutProvisional = false
+    /// The view a pair's first page gets when the pair gives way to it alone (`spreadChanged`), until it is shown.
+    private var collapseView: (url: URL, transform: ViewTransform)?
     private var sentPins: (URL?, URL?) = (nil, nil)
     private var spreadSyncPending = false
     private var spreadRebuildPending = false
@@ -1261,6 +1273,13 @@ import LoupeRender
         let shown = spread.pair(at: index)
         updateSpread(rebuild: rebuild)
         if !spread.isActive, let first = SpreadNavigation.single(after: shown, current: index) {
+            // The first page was on screen beside the current one: it keeps its spot and its drawn scale
+            // (`SpreadZoom`), as a page that stays does, rather than a switch's carried zoom.
+            if let page = shownCompanion, let files = playlist?.files, page.url == files[first],
+               entry?.url == playlist?.current, page.failure == nil, let info = page.info, let rect = companionRect {
+                settleZoom()
+                collapseView = (page.url, SpreadZoom.carried(transform, from: rect, to: displaySize(info), at: nil))
+            }
             navigate { _ = $0.move(by: first - $0.index) }
             return
         }
@@ -1334,9 +1353,14 @@ import LoupeRender
 
     /// Where the photo on screen sits in the transform's picture (its rect in `shownLayout`; nil: the whole picture,
     /// one page), for `relayout` to keep the view on it.
-    private var shownPageRect: CGRect? {
+    private var shownPageRect: CGRect? { rect(ofCompanion: false) }
+
+    /// Where the page beside it (`shownCompanion`) sits; nil for one page.
+    private var companionRect: CGRect? { rect(ofCompanion: true) }
+
+    private func rect(ofCompanion companion: Bool) -> CGRect? {
         guard let layout = shownLayout else { return nil }
-        let page = companionFirst ? 1 : 0
+        let page = companionFirst == companion ? 0 : 1   // reading order
         return layout.order.firstIndex(of: page).map { layout.rects[$0] }
     }
 
@@ -1357,7 +1381,10 @@ import LoupeRender
             }
             if next == nil, size != transform.imageSize || before != now {
                 settleZoom()
-                next = SpreadZoom.carried(transform, from: before, to: size, at: now)
+                let carried = SpreadZoom.carried(transform, from: before, to: size, at: now)
+                // A restore still waiting (another stand-in) goes on waiting from the carried view, not dropped by it.
+                if let restore, restore.file == e.url { self.restore = restore.following(from: transform, to: carried) }
+                next = carried
             }
             if let next, next != transform {
                 transform = next   // didSet notifies

@@ -791,6 +791,7 @@ import QuartzCore
     override func mouseDragged(with event: NSEvent) {
         cursorAutohide.activity()
         MouseButtons.shared.moved(event)
+        updatePointerPage(at: viewPoint(event))   // a drag moves the pointer too: the info panel follows its page
         guard rmbZoom == nil, !folderScroll.hasFired else { return }
         let p = viewPoint(event)
         guard let last = dragPoint else { dragPoint = p; return }
