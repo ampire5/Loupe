@@ -44,6 +44,25 @@ import Testing
         #expect(Set(try BrowserListingSource.full(root, archives: true).map(\.name)) == Set(names))
     }
 
+    /// Sort by date orders folders too: the full listing gives each folder its own modification date (as Finder's Date
+    /// Modified), so the newest folder leads a newest-first sort and the oldest leads an oldest-first one.
+    @Test func foldersCarryTheirModificationDate() throws {
+        let root = try tree(["a.jpg"], dirs: ["Old", "New", "Middle"])
+        defer { try? fm.removeItem(at: root) }
+        let old = Date(timeIntervalSinceReferenceDate: 600_000_000)
+        let dates = ["Old": old, "Middle": old.addingTimeInterval(86_400), "New": old.addingTimeInterval(2 * 86_400)]
+        for (name, date) in dates {
+            try fm.setAttributes([.modificationDate: date], ofItemAtPath: root.appendingPathComponent(name).path)
+        }
+        let full = try BrowserListingSource.full(root, archives: true)
+        for (name, date) in dates {
+            #expect(full.first { $0.name == name }?.date == date, "\(name)")
+        }
+        let folders = { (sort: BrowserSort) in sort.order(full).filter { $0.kind == .folder }.map(\.name) }
+        #expect(folders(BrowserSort(key: .date, ascending: false)) == ["New", "Middle", "Old"])
+        #expect(folders(BrowserSort(key: .date, ascending: true)) == ["Old", "Middle", "New"])
+    }
+
     @Test func zipHiddenWithoutArchiveFolders() throws {
         let root = try tree(["a.jpg"])
         defer { try? fm.removeItem(at: root) }

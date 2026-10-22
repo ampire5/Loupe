@@ -2,18 +2,21 @@ import Foundation
 
 /// One item of a directory listing, with the properties folder navigation needs. `stamp` (size and
 /// mtime, nil for directories and when the listing gave none) rides along so the playlist of the folder
-/// jumped to carries it, as `Playlist.relist` does.
+/// jumped to carries it, as `Playlist.relist` does. `modified` is the mtime of a directory too (the browser's sort by
+/// date), from the same listing.
 public struct DirectoryEntry: Equatable, Sendable {
     public let url: URL
     public let isDirectory: Bool
     public let isPackage: Bool
     public let stamp: FileStamp?
+    public let modified: Date?
 
-    public init(url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp? = nil) {
+    public init(url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp? = nil, modified: Date? = nil) {
         self.url = url
         self.isDirectory = isDirectory
         self.isPackage = isPackage
         self.stamp = stamp
+        self.modified = modified ?? stamp?.modified
     }
 }
 
@@ -65,8 +68,8 @@ public struct FolderSiblings: Equatable, Sendable {
             let values = try? item.resourceValues(forKeys: Set(keys))
             let isDirectory = values?.isDirectory ?? false
             let stamp = isDirectory ? nil : values.flatMap { FileStamp($0) }
-            return DirectoryEntry(url: item, isDirectory: isDirectory,
-                                  isPackage: values?.isPackage ?? false, stamp: stamp)
+            return DirectoryEntry(url: item, isDirectory: isDirectory, isPackage: values?.isPackage ?? false,
+                                  stamp: stamp, modified: values?.contentModificationDate)
         }
     }
 }
