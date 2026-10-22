@@ -13,7 +13,7 @@ struct ImageCacheTests {
     /// their result is uploaded if it fits). Nothing passed is decoded at full resolution.
     /// `cache-previews = 3` keeps files 0…7 out of the final plan (9 dwelling: 9, n1 = 10, p1 = 8).
     @Test func burstShowsOnlyLast() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.previews = 3
         let rig = Rig(limits: limits)
         let files = fileURLs(20)
@@ -99,7 +99,7 @@ struct ImageCacheTests {
     /// Spec §11.1: moving away keeps what fits under `cache-memory`; what does not is evicted farthest first.
     /// 147 MP photos, 3 GB: the old neighbourhood (91…110 with two fulls) cannot all stay next to the new one.
     @Test func evictsOutsidePlan() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.memory = 3 << 30
         limits.previews = 20
         let rig = Rig(size: CachePlan.defaultPixelSize, limits: limits)
@@ -408,7 +408,7 @@ struct ImageCacheTests {
     /// Over the limit, unplanned state goes farthest from the current photo first, degrading step by step (§3.3),
     /// and on a tie the photo behind the direction of travel goes first. Levels go before any compressed bytes.
     @Test func evictsFarthestWhenOverLimit() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.previews = 3
         limits.full = 0
         let rig = Rig(limits: limits)
@@ -541,7 +541,7 @@ struct ImageCacheTests {
 
     /// `usedBytes` counts every resident level (the pinned photo's too) plus the levels an upload is building.
     @Test func usedBytesIncludesPinnedAndInFlight() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.full = 0   // no neighbour full upload in flight next to the gated one
         let rig = Rig(limits: limits)
         let files = fileURLs(10)
@@ -580,7 +580,7 @@ struct ImageCacheTests {
     /// slot reserved for the current photo (spec §11.1.6): with the neighbours' (n1 = 6, p1 = 4 with
     /// `cache-full = 2`) held, only one of them runs, and the current photo's full still starts and finishes.
     @Test func progressiveFullDecodesLimited() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.full = 2
         let rig = Rig(limits: limits)
         let files = fileURLs(10)
@@ -797,7 +797,7 @@ struct ImageCacheTests {
     /// bytes cost an SMB re-read to get back, a level only a decode. 2 is farthest, so the old order (2's levels,
     /// then 2's bytes) would have left 1's preview alone.
     @Test func bytesOutliveLevelsUnderPressure() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.full = 0
         limits.previews = 3
         limits.files = 2
@@ -827,7 +827,7 @@ struct ImageCacheTests {
 
     /// Nine photos resident (a preview each, the current one full, all planned), `cache-memory` 1.5x what they hold, the current one pinned.
     private func pressureRig(restoreAfter: Duration = .seconds(30)) async -> (rig: Rig, files: [URL], memory: Int)? {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.full = 0
         limits.previews = 9
         limits.files = 0

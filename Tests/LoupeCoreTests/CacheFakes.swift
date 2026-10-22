@@ -377,3 +377,13 @@ final class FakeLoader: PyramidLoader, @unchecked Sendable {
     func evict(finerThan level: Int, of pyramid: FakePyramid) { pyramid.evict(finerThan: level) }
     func finestResidentLevel(of pyramid: FakePyramid) -> Int? { pyramid.finest }
 }
+
+extension CacheLimits {
+    /// The defaults with the 3 GB `cache-memory` the cache tests were worked out for: the default itself follows the
+    /// Mac (`Machine.cacheMemory`, 1–4 GB), and a CI runner with little memory would get a smaller one.
+    static var at3G: CacheLimits {
+        var limits = CacheLimits()
+        limits.memory = 3 << 30
+        return limits
+    }
+}

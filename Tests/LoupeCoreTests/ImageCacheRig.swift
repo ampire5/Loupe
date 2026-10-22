@@ -17,7 +17,7 @@ struct Rig {
     let loader = FakeLoader()
 
     /// `queueReader`: reads go through it instead of `reader` (which then sees none).
-    init(size: PixelSize = rigPhoto, limits: CacheLimits = CacheLimits(), pool: DecodePool = DecodePool(),
+    init(size: PixelSize = rigPhoto, limits: CacheLimits = CacheLimits.at3G, pool: DecodePool = DecodePool(),
          queueReader: QueueReader? = nil, pressureRestoreAfter: Duration = .seconds(30)) {
         let decoder = FakeDecoder(size: size)
         self.decoder = decoder
