@@ -30,7 +30,10 @@ jobs:
         run: |
           zip="Loupe-${GITHUB_REF_NAME}-macOS-arm64.zip"
           ditto -c -k --keepParent build/Loupe.app "$zip"
-          gh release create "$GITHUB_REF_NAME" "$zip" --generate-notes \
+          # The app's symbols (make-app.sh strips them from the binary), for symbolicating crash reports.
+          dsym="Loupe-${GITHUB_REF_NAME}-macOS-arm64.dSYM.zip"
+          ditto -c -k --keepParent build/Loupe.dSYM "$dsym"
+          gh release create "$GITHUB_REF_NAME" "$zip" "$dsym" --generate-notes \
             --notes "Unsigned build for Apple Silicon, macOS 26+. After unzipping: \`xattr -dr com.apple.quarantine Loupe.app\`, then open it."
       # Points the cask's on_arm block (the lines marked `# arm`) in ampire5/homebrew-tap at this release; the
       # lts/macos26 releases update on_intel. Needs a TAP_TOKEN secret that can push to that repo.

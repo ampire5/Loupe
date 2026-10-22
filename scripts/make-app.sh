@@ -10,7 +10,12 @@ swift build -c release --triple "$DEPS_TRIPLE" --product Loupe
 app=build/Loupe.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$(swift build -c release --triple "$DEPS_TRIPLE" --show-bin-path)/Loupe" "$app/Contents/MacOS/Loupe"
+built=$(swift build -c release --triple "$DEPS_TRIPLE" --show-bin-path)/Loupe
+cp "$built" "$app/Contents/MacOS/Loupe"
+# The symbols go to build/Loupe.dSYM, for symbolicating crash reports, not into the app (~5 MB less).
+rm -rf build/Loupe.dSYM
+dsymutil "$built" -o build/Loupe.dSYM >/dev/null 2>&1 || echo "warning: no build/Loupe.dSYM (dsymutil failed)" >&2
+strip "$app/Contents/MacOS/Loupe"
 [[ $(lipo -archs "$app/Contents/MacOS/Loupe") == "$DEPS_ARCH" ]] \
     || { echo "error: Loupe is $(lipo -archs "$app/Contents/MacOS/Loupe"), not $DEPS_ARCH" >&2; exit 1; }
 # The bundle must run on a Mac without Homebrew: every link of the binary must be a system library (or a dylib inside
