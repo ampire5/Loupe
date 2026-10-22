@@ -37,6 +37,13 @@ public struct SpreadLayout: Equatable, Sendable {
         rects.indices.first { rects[$0].contains(point) }.map { order[$0] }
     }
 
+    /// The scale a page `pageHeight` px tall is drawn at when the virtual picture is drawn at `scale`: every page is as
+    /// tall as the picture, so it is `scale` times its share of it. `scale` itself while either height is not known.
+    public func pageScale(_ scale: Double, pageHeight: Double) -> Double {
+        guard virtualSize.height > 0, pageHeight > 0 else { return scale }
+        return scale * Double(virtualSize.height) / pageHeight
+    }
+
     /// Two pages fit a view that is at least as wide as it is tall; a narrower one shows one page.
     public static func showsTwo(viewSize: CGSize) -> Bool {
         viewSize.height > 0 && viewSize.width / viewSize.height >= 1.0

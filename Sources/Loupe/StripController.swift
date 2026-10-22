@@ -632,6 +632,14 @@ extension Notification.Name {
         return index
     }
 
+    /// Where a motion starting from rest begins (`FilmstripScroll`'s anchor): where the strip rests, the middle of the
+    /// pair on screen, so it does not jump to the current page's cell first. Nil once it moves (or with nothing at
+    /// rest on `current`): the current file's centre.
+    private func motionAnchor(current: Int) -> Double? {
+        guard scroll.offset == nil, let pages = shownPages, pages.contains(current) else { return nil }
+        return pages.offset(in: view.layout)
+    }
+
     /// The motion brought `file` to the centre: the session scrubs to it, unless it is a page on screen (the other page
     /// of the pair, or back to the current one), which shows already.
     private func reached(_ file: Int) {
@@ -922,7 +930,8 @@ extension Notification.Name {
             scrollRest = nil
             dropHover()
         }
-        let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current)
+        let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current,
+                                  anchor: motionAnchor(current: current))
         if let file = outcome.item {
             reached(file)
             armDragRest()
@@ -960,7 +969,8 @@ extension Notification.Name {
         let outcome = scroll.event(fingerDelta: fingers * event.scrollingDeltaX, crossDelta: event.scrollingDeltaY,
                                    phase: ScrollPhase(rawValue: event.phase.rawValue),
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
-                                   layout: view.layout, current: current, now: event.timestamp)
+                                   layout: view.layout, current: current, now: event.timestamp,
+                                   anchor: motionAnchor(current: current))
         if let file = outcome.item { reached(file) }
         if outcome.commit {
             drawMotion(animated: false)

@@ -49,3 +49,10 @@ import Testing
     #expect(finite(SpreadLayout(first: CGSize(width: 800, height: 0), second: CGSize(width: 500, height: 750), rightToLeft: true)))
     #expect(finite(SpreadLayout(first: CGSize(width: 500, height: 750), second: CGSize(width: 800, height: 0), rightToLeft: false)))
 }
+
+/// A page's own scale is the virtual picture's times its share of it: the 750 px page of a 1500 px tall pair drawn at
+/// 0.5 is at 1.0 of its own pixels; a page without a height keeps the picture's scale.
+@Test func pageScaleIsItsShareOfThePicture() {
+    let l = SpreadLayout(first: CGSize(width: 1000, height: 1500), second: CGSize(width: 500, height: 750), rightToLeft: false)
+    #expect(l.pageScale(0.5, pageHeight: 750) == 1 && l.pageScale(0.5, pageHeight: 1500) == 0.5 && l.pageScale(0.5, pageHeight: 0) == 0.5)
+}
