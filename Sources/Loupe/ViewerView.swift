@@ -219,8 +219,8 @@ import QuartzCore
             shownColor = color
             // One page, the whole of the transform's image: drawn as a single photo always was.
             let transform = session.transform
-            renderLoop.update(pages: image == nil ? [] : [RenderPage(image: image, orientation: orientation, color: color,
-                                                                     rect: CGRect(origin: .zero, size: transform.imageSize))],
+            renderLoop.update(pages: RenderPages(first: RenderPage(image: image, orientation: orientation, color: color,
+                                                                   rect: CGRect(origin: .zero, size: transform.imageSize))),
                               transform: transform)
         }
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in

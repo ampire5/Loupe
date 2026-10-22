@@ -6,6 +6,9 @@ import Metal
 /// trilinearly. Immutable once made, so frames on the render thread may share it with the window that built it.
 public final class ColorLUT: @unchecked Sendable {
     public let texture: MTLTexture
+    /// A cube whose texture the renderer made itself (`TileRenderer.convertedCube`): never the identity.
+    static func made(_ texture: MTLTexture) -> ColorLUT { ColorLUT(texture: texture, isIdentity: false) }
+
     /// The context's shared identity cube (`identity(context:)`): a frame whose cube is it at `mix` 1 takes the
     /// pipelines without `COLOR_LUT`. A cube made by `make` is never taken for it, whatever its values (the tests draw
     /// one made from `ColorCube.identity` to measure the variant).

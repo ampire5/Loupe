@@ -349,6 +349,9 @@ enum Shaders {
         int4 orient;                // ImageOrientation.matrix
         float2 shift;               // stored level px
         float2 viewToLevelScale;    // 1 / levelToViewScale
+        float2 extent;              // the image's stored extent in level px
+        float bleed;                // > 0: corners on the image's edge move this many level px outwards (a viewport cut)
+        float pad;
     };
 
     struct TileVarying {
@@ -363,7 +366,10 @@ enum Shaders {
     //   drawPrimitives(.triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: tiles)
     //   instances [[buffer(0)]]: TileInstance array, uniforms [[buffer(1)]]: TileUniforms.
     // Instances are stored tiles; the corners go to the view through the orientation, so a turned or mirrored tile is
-    // a turned or mirrored quad, and levelPos (stored) interpolates across it exactly (the map is affine).
+    // a turned or mirrored quad, and levelPos (stored) interpolates across it exactly (the map is affine). With a bleed
+    // (a page cut by its viewport's scissor, TileRenderer.encode) the corners on the image's edge move outwards, the
+    // quad and its levelPos together, so the picture covers every px of the viewport (the fragment clamps the samples
+    // into the level: the edge texels repeat) and the scissor alone decides where it ends.
     vertex TileVarying tileVertex(uint vid [[vertex_id]],
                                   uint iid [[instance_id]],
                                   const device TileInstance* instances [[buffer(0)]],
@@ -372,6 +378,10 @@ enum Shaders {
         TileInstance t = instances[iid];
         float2 corner = float2(vid & 1, vid >> 1);
         float2 levelPos = t.contentOrigin + corner * t.contentSize;
+        if (u.bleed > 0.0) {
+            levelPos = select(levelPos, levelPos - u.bleed, levelPos <= 0.0);
+            levelPos = select(levelPos, levelPos + u.bleed, levelPos >= u.extent - 1e-3);
+        }
         float2 view = storedToOriented(u.orient, u.shift, levelPos) * u.levelToViewScale + u.levelToViewOffset;
         float2 ndc = view / u.viewSize * 2.0 - 1.0;
 
@@ -473,6 +483,11 @@ enum Shaders {
     // clamp_to_edge keeps a fetch inside its slot whatever happens.
     constexpr sampler kTexel(coord::pixel, address::clamp_to_edge, filter::nearest);
 
+    // VIEWPORT_CUT (index 6): a page of a spread (TileRenderer.encode): the picture ends at ResampleParams.cut, the
+    // page's viewport, not at its own view rect. Undefined means false: a single page's kernels are those of before.
+    constant bool VIEWPORT_CUT [[function_constant(6)]];
+    constant bool kViewportCut = is_function_constant_defined(VIEWPORT_CUT) && VIEWPORT_CUT;
+
     struct ResampleParams {
         float levelToViewScale;        // m: view px per level px
         float pad0;
@@ -486,6 +501,7 @@ enum Shaders {
         int4 orient;                   // ImageOrientation.matrix
         float2 shift;                  // stored level px
         uint2 origin;                  // where the dispatch's px (0, 0) is written: (0, 0), or a viewport's corner
+        float4 cut;                    // with VIEWPORT_CUT: the viewport, dispatch px (min x, min y, max x, max y)
     };
     // The kernels work in the dispatch's own px: a dispatch over a viewport (TileRenderer.encode, a page after the
     // first) gets levelToViewOffset and the backdrop's anchor less `origin`, and only its writes add `origin` back.
@@ -546,6 +562,10 @@ enum Shaders {
         bool drawn = all(gid < p.viewSize);   // threads past the drawable's edge still reach every barrier
         float m = p.levelToViewScale;
         float2 imageMin = p.levelToViewOffset, imageMax = imageMin + p.extent * m;
+        if (kViewportCut) {   // a viewport: px inside it are the picture (its edge repeated), the rest background
+            imageMin = p.cut.xy;
+            imageMax = p.cut.zw;
+        }
 
         // 1. A group wholly outside the image's view rect writes background without a sample. The test is the same
         //    for every thread of the group and no barrier has been reached yet, so the early return is uniform.
@@ -691,6 +711,10 @@ enum Shaders {
         bool drawn = all(gid < p.viewSize);   // threads past the drawable's edge still reach the barrier
         float m = p.levelToViewScale;
         float2 imageMin = p.levelToViewOffset, imageMax = imageMin + p.extent * m;
+        if (kViewportCut) {   // a viewport: px inside it are the picture (its edge repeated), the rest background
+            imageMin = p.cut.xy;
+            imageMax = p.cut.zw;
+        }
 
         // 1. A group wholly outside the image's view rect writes background without a sample (uniform, before the
         //    barrier, as in resample).
@@ -960,6 +984,25 @@ enum Shaders {
             return encodeOutput(colorCube(float4(upscaledSecond.sample(s, o).rgb, 1.0), lut, from, cube), inverse);
         }
         return encodeOutput(colorCube(float4(upscaled.sample(s, o).rgb, 1.0), lut, from, cube), inverse);
+    }
+
+    // ---- convertCube ----------------------------------------------------------------------
+    //
+    // A page of a spread in another colour space than the layer's (PairColorSpace): its colour cube, each node taken
+    // through the matrix from the page's linear light to the layer's, so the frame converts at no cost of its own (the
+    // cube is sampled anyway). Run once per cube and matrix (TileRenderer.convertedCube), never per frame. A node is
+    // sRGB-encoded light (ColorCube); the converted one too, clipped to 0...1 as the drawable would clip it.
+    //   src [[texture(0)]]: the page's cube (rgba16Float, n³). dst [[texture(1)]]: the converted one, the same size.
+    //   m [[buffer(0)]]: the matrix (column-major, three float4-aligned columns, as simd_float3x3).
+    //   dispatchThreads((n, n, n)).
+    kernel void convertCube(texture3d<float, access::read> src [[texture(0)]],
+                            texture3d<float, access::write> dst [[texture(1)]],
+                            constant float3x3& m [[buffer(0)]],
+                            uint3 gid [[thread_position_in_grid]])
+    {
+        if (any(gid >= uint3(dst.get_width(), dst.get_height(), dst.get_depth()))) return;
+        float3 light = srgbToLinear(src.read(gid).rgb);
+        dst.write(float4(linearToSRGB(m * light), 1.0), gid);
     }
     """
 }

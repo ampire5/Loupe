@@ -89,10 +89,11 @@ extension TileRenderer {
     /// could not be made is not retried at that view size while the stage lives (frames keep the fallback, without an
     /// ~85 MB allocation each), and the context hears of it, so the stats line names what is drawn.
     ///
-    /// With a `clip` (a page after the first, `encode`) compose and scaler run over the whole view as for any frame, and
-    /// the final pass loads `target` and draws only within the clip.
+    /// With a cut (a page of a spread, `encode`) compose and scaler run over the whole view as for any frame, and the
+    /// final pass cuts the picture to it; a region that does not clear loads `target` and draws only within the cut.
     func encodeMetalFX(_ frame: LevelFrame, commandBuffer: MTLCommandBuffer, target: MTLTexture,
-                       clip: MTLScissorRect? = nil) -> Bool {
+                       region: Region = .whole) -> Bool {
+        let clip = region.writes(target)
         let width = target.width, height = target.height
         guard width > 0, height > 0 else { return true }
         if metalFX.map({ $0.width != width || $0.height != height }) ?? true {
@@ -190,8 +191,12 @@ extension TileRenderer {
         // View position v is oriented level position (v - offset) / m, input position that plus lead minus origin,
         // output position that times output / content.
         let stretch = SIMD2(Double(width) / Double(content.x), Double(height) / Double(content.y))
-        let imageMin = frame.offset
-        let imageMax = imageMin + frame.orientedExtent * frame.levelToView
+        var imageMin = frame.offset
+        var imageMax = imageMin + frame.orientedExtent * frame.levelToView
+        if let cut = region.cut {   // the viewport ends the picture (its edge, read clamped, repeats up to it)
+            imageMin = SIMD2(Float(cut.x), Float(cut.y))
+            imageMax = SIMD2(Float(cut.x + cut.width), Float(cut.y + cut.height))
+        }
         var params = MetalFXParams(viewToOutputScale: SIMD2<Float>(stretch / m),
                                    viewToOutputOffset: SIMD2<Float>((-offset / m + lead - origin) * stretch),
                                    imageMin: imageMin, imageMax: imageMax, background: background(for: target))
