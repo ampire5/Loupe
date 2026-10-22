@@ -143,9 +143,16 @@ public actor ThumbnailStore {
     /// recently used go first): its next cover needs no listing.
     var coverPicks: [String: CoverPick] = [:]
     var coverPickUses: UInt64 = 0
-    /// What the cards of folders and zips this session have against them (a zip that cannot be read, a share that does
-    /// not answer), by `memoKey`; cleared by a listing that answers. At most `coverPickLimit` (then forgotten at once).
+    /// What the cards of folders and zips this session have against them (a malformed zip), by `memoKey`; cleared by
+    /// a listing that answers. At most `coverPickLimit` (then forgotten at once).
     var coverProblems: [String: CardProblem] = [:]
+    /// Folders (by `memoKey`) listed for their summary this session, however it ended: not again. At most
+    /// `coverPickLimit` (then forgotten at once).
+    var summaryTried: Set<String> = []
+    /// Shares' listings in a row without a name in time (or with an I/O error), and the shares offline, by
+    /// `volumeKey`; at most `coverVolumeLimit` each.
+    var coverVolumeTimeouts: [String: Int] = [:]
+    var offlineVolumes: Set<String> = []
     /// Folder summaries made by covers, waiting for the next batch (`commit`), by volume and path; read before the
     /// catalog. At most `summaryBatch`: a full batch is written at once.
     var pendingSummaries: [String: (location: ThumbnailLocation, summary: FolderSummary)] = [:]

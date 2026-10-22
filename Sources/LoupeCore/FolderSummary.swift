@@ -72,7 +72,7 @@ public struct FolderSummary: Equatable, Sendable {
     public static func of(listing entries: [BrowserEntry], folderModified: Date?) -> FolderSummary {
         var folders = 0
         var photos = 0
-        var bytes: Int64 = 0
+        var bytes: Int64?
         var dates: [Date] = []
         for entry in entries where !entry.name.hasPrefix(".") {
             switch entry.kind {
@@ -80,13 +80,18 @@ public struct FolderSummary: Equatable, Sendable {
                 folders += 1
             case .file:
                 photos += 1
-                bytes += entry.size ?? 0
+                if let size = entry.size { bytes = (bytes ?? 0) + size }
                 if let date = entry.date { dates.append(date) }
             case .archive, .collection, .place:
                 break
             }
         }
-        return dated(photos: photos, folders: folders, bytes: bytes, dates: dates, folderModified: folderModified)
+        var summary = dated(photos: photos, folders: folders, bytes: bytes ?? 0, dates: dates,
+                            folderModified: folderModified)
+        // Photos without a date or size (a listing that could not stat them): not known, rather than nothing.
+        summary.bytes = photos == 0 ? 0 : bytes
+        summary.datesKnown = !dates.isEmpty || photos == 0
+        return summary
     }
 
     /// From a names-only listing (a share): counts only, no dates, no size.

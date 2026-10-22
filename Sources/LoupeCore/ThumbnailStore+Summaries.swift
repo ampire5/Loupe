@@ -25,6 +25,8 @@ extension ThumbnailStore {
     /// its date are asked in the folder's resolving lane (`folderLocation`'s limits: nothing when it does not answer);
     /// the summary is counted off the actor and goes with the next batch.
     public func putOpenFolderSummary(_ folder: URL, listing entries: [BrowserEntry]) async {
+        // A zip's card has its summary from its directory; inside, the listing is its photos.
+        guard !ArchivePath.isArchive(folder) else { return }
         let locate = self.locate, network = coverVolumeIsNetwork(folder)
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
@@ -39,6 +41,8 @@ extension ThumbnailStore {
         let summary = await Self.offActor(qos: Self.coverQoS) {
             FolderSummary.of(listing: entries, folderModified: place.modified)
         }
+        // A relist that changed nothing (the watcher's): nothing to write.
+        guard summary != storedSummary(at: location) else { return }
         queueSummary(summary, at: location)
     }
 

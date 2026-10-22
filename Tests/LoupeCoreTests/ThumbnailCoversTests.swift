@@ -875,6 +875,7 @@ final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
     func set() { lock.withLock { value = true } }
+    func reset() { lock.withLock { value = false } }
     var isSet: Bool { lock.withLock { value } }
 }
 
@@ -928,8 +929,8 @@ private final class FakeDatedListing: @unchecked Sendable {
     private func store(_ reader: ThumbReader, dir: URL) -> ThumbnailStore {
         ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                        locate: { url in
-                           ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path,
-                                             name: url.lastPathComponent)
+                           ThumbnailLocation(volume: url.path.hasPrefix("/net/") ? "net:share" : "test",
+                                             folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
                        }, idleDelay: .zero, commitDelay: .seconds(3600))
     }
 
@@ -1207,4 +1208,268 @@ private final class FakeDatedListing: @unchecked Sendable {
         let next = try ThumbnailDatabase(directory: dir, thumbSize: 32)
         #expect(try next.summary(at: loc(folder.path)) == summary)
     }
+}
+
+/// Fix round 1 of the folder cards' task 6: the catalog's pictures never wait on a summary listing (beyond its time
+/// limit) nor depend on it; a share goes offline as a whole; only a malformed zip is broken.
+@Suite struct FolderCardFixTests {
+    private let fm = FileManager.default
+
+    private func tempDir() -> URL { fm.temporaryDirectory.appendingPathComponent("loupe-folder-card-\(UUID().uuidString)") }
+
+    private func store(_ reader: ThumbReader, dir: URL) -> ThumbnailStore {
+        ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                       locate: { url in
+                           ThumbnailLocation(volume: url.path.hasPrefix("/net/") ? "net:share" : "test",
+                                             folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
+                       }, idleDelay: .zero, commitDelay: .seconds(3600))
+    }
+
+    private func loc(_ folder: String) -> ThumbnailLocation {
+        ThumbnailLocation(volume: folder.hasPrefix("/net/") ? "net:share" : "test", folder: folder, name: "_")
+    }
+
+    /// Four thumbnails of `folder` in the catalog, as an earlier session left them.
+    private func catalogued(_ store: ThumbnailStore, _ reader: ThumbReader, in folder: String) async {
+        let names = (1...4).map { "\($0).jpg" }
+        for name in names {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent(name)
+            reader.add(url, TestJPEGs.gradient(width: 40, height: 30))
+            _ = await store.cover(url, maxPixel: 64)
+        }
+    }
+
+    private static let day = Date(timeIntervalSinceReferenceDate: 700_000_000)
+
+    /// A share that hangs: the catalog's four pictures come all the same, and the listing tried for the summary is not
+    /// tried again on the next request.
+    @Test func hungShareKeepsTheCatalogPictures() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), calls = TryCounter(), gate = DispatchSemaphore(value: 0)
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: "/net/f")
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            gate.wait()
+            throw CancellationError()
+        }, networkTimeout: .milliseconds(50))
+        await store.setCoverVolumes { _ in true }
+        let folder = URL(fileURLWithPath: "/net/f")
+        let card = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
+                                                       modified: Self.day))
+        #expect(card.images.count == 4)
+        #expect(card.summary == nil)
+        let again = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
+                                                        modified: Self.day))
+        #expect(again.images.count == 4)
+        #expect(await eventually { calls.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(calls.count == 1)
+        gate.signal()
+    }
+
+    /// A share listing only part of a big folder in time: the pictures from the catalog, no summary from a part, and
+    /// no second try this session.
+    @Test func partialListingIsNotRepeated() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), calls = TryCounter(), gate = DispatchSemaphore(value: 0)
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: "/net/big")
+        await store.setCoverListing(dated: { _, _, _, part in
+            calls.add()
+            _ = part(CoverListing(names: CoverNames(files: ["1.jpg"], folders: [])))
+            gate.wait()
+            throw CancellationError()
+        }, networkTimeout: .milliseconds(50))
+        await store.setCoverVolumes { _ in true }
+        let folder = URL(fileURLWithPath: "/net/big")
+        for _ in 0..<2 {
+            let card = try #require(await store.folderCard(folder, archive: false, in: loc("/net/big"), maxPixel: 64,
+                                                           modified: Self.day))
+            #expect(card.images.count == 4)
+            #expect(card.summary == nil)
+        }
+        // The listing's thread may start late on a loaded machine: one in all, no more.
+        #expect(await eventually { calls.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(calls.count == 1)
+        gate.signal()
+    }
+
+    /// A listing that fails keeps the stored summary (however old) and the catalog's pictures.
+    @Test func failedListingKeepsTheStoredSummary() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: "/p/f")
+        let old = FolderSummary(photos: 4, folders: 0, bytes: 40, first: Self.day, last: Self.day,
+                                histogram: [255] + Array(repeating: 0, count: 11), folderModified: Self.day,
+                                datesKnown: true)
+        await store.putFolderSummaries([(loc("/p/f"), old)])
+        await store.setCoverListing(dated: { _, _, _, _ in throw POSIXError(.EACCES) })
+        let card = try #require(await store.folderCard(URL(fileURLWithPath: "/p/f"), archive: false, in: loc("/p/f"),
+                                                       maxPixel: 64, modified: Self.day.addingTimeInterval(60)))
+        #expect(card.images.count == 4)
+        #expect(card.summary == old)
+        #expect(card.problem == nil)
+        #expect(await store.folderSummary(at: loc("/p/f")) == old)
+    }
+
+    /// Three folders on one share that hangs: after two time outs the share is offline, and every card on it says so,
+    /// those whose listing only found the lane full too; a listing that answers brings the share back.
+    @Test func shareGoesOfflineAsAWhole() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), gate = DispatchSemaphore(value: 0), hung = LockedFlag()
+        hung.set()
+        let store = store(reader, dir: dir)
+        let lister: ThumbnailStore.DatedCoverLister = { _, _, _, _ in
+            if hung.isSet {
+                gate.wait()
+                throw CancellationError()
+            }
+            return CoverListing(names: CoverNames(files: [], folders: []))
+        }
+        await store.setCoverListing(dated: lister, networkTimeout: .milliseconds(50))
+        await store.setCoverVolumes { _ in true }
+        func card(_ name: String) async -> FolderCard? {
+            await store.folderCard(URL(fileURLWithPath: "/net/\(name)"), archive: false, in: loc("/net/\(name)"),
+                                   maxPixel: 64)
+        }
+        #expect(await card("a") == nil)                     // one time out: not now
+        #expect(await card("b")?.problem == .offline)       // two in a row: the share
+        #expect(await card("c")?.problem == .offline)       // a third hangs too
+        let lane = CoverLane(network: true, resolving: false)
+        #expect(store.coverThreads.count(lane) == ThumbnailStore.coverThreadsPerLane)
+        #expect(await card("d")?.problem == .offline)       // the lane full: busy, offline all the same
+        #expect(await card("a")?.problem == .offline)
+        hung.reset()
+        for _ in 0..<ThumbnailStore.coverThreadsPerLane { gate.signal() }
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        // The share answers: a time limit no loaded machine's late thread runs out of.
+        await store.setCoverListing(dated: lister, networkTimeout: .seconds(30))
+        let back = try #require(await card("e"))
+        #expect(back.problem == nil)
+        #expect(await card("d")?.problem == nil)
+    }
+
+    /// Only a malformed zip is broken; a zip that cannot be opened has no badge; an I/O error on a share counts as a
+    /// time out towards offline.
+    @Test func brokenOnlyForArchiveErrors() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let errors = LockedErrors()
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverListing(dated: { folder, _, _, _ in throw errors.error(for: folder.lastPathComponent) })
+        await store.setCoverVolumes { _ in true }
+        errors.set("bad.zip", ArchiveError.damaged)
+        errors.set("locked.zip", POSIXError(.EACCES))
+        errors.set("x", POSIXError(.EIO))
+        errors.set("y", POSIXError(.ENOTCONN))
+        #expect(await store.folderCard(URL(fileURLWithPath: "/p/bad.zip"), archive: true, in: loc("/p/bad.zip"),
+                                       maxPixel: 64)?.problem == .broken)
+        let locked = await store.folderCard(URL(fileURLWithPath: "/p/locked.zip"), archive: true,
+                                            in: loc("/p/locked.zip"), maxPixel: 64)
+        #expect(locked != nil && locked?.problem == nil)
+        #expect(await store.folderCard(URL(fileURLWithPath: "/net/x"), archive: false, in: loc("/net/x"),
+                                       maxPixel: 64) == nil)
+        #expect(await store.folderCard(URL(fileURLWithPath: "/net/y"), archive: false, in: loc("/net/y"),
+                                       maxPixel: 64)?.problem == .offline)
+    }
+
+    /// A dated summary written while a names-only listing ran (the folder opened meanwhile) keeps its dates.
+    @Test func summaryWrittenDuringTheListingKeepsItsDates() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let started = LockedFlag(), gate = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverListing(dated: { _, _, _, _ in
+            started.set()
+            gate.wait()
+            return CoverListing(names: CoverNames(files: ["a.jpg", "b.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        await store.setCoverVolumes { _ in true }
+        let task = Task {
+            await store.folderCard(URL(fileURLWithPath: "/net/f"), archive: false, in: loc("/net/f"), maxPixel: 64,
+                                   modified: Self.day)
+        }
+        #expect(await eventually { started.isSet })
+        let visited = FolderSummary(photos: 2, folders: 0, bytes: 20, first: Self.day, last: Self.day,
+                                    histogram: [255] + Array(repeating: 0, count: 11), folderModified: Self.day,
+                                    datesKnown: true)
+        await store.putFolderSummaries([(loc("/net/f"), visited)])
+        gate.signal()
+        let card = await task.value
+        #expect(card?.summary?.datesKnown == true)
+        #expect(card?.summary?.bytes == 20)
+        #expect(await store.folderSummary(at: loc("/net/f"))?.datesKnown == true)
+    }
+
+    /// A listing's summary knows its dates only when its photos have them, and its size only when they have one.
+    @Test func listingSummaryKnowsWhatItHas() {
+        let folder = URL(fileURLWithPath: "/p")
+        let undated = [BrowserEntry(url: folder.appendingPathComponent("a.jpg"), name: "a.jpg", kind: .file)]
+        let summary = FolderSummary.of(listing: undated, folderModified: nil)
+        #expect(summary.photos == 1 && !summary.datesKnown && summary.bytes == nil)
+        let none = FolderSummary.of(listing: [BrowserEntry(url: folder.appendingPathComponent("s"), name: "s",
+                                                           kind: .folder)], folderModified: nil)
+        #expect(none.photos == 0 && none.folders == 1 && none.datesKnown)
+    }
+
+    /// The dated listing: hidden names, packages and other files left out; a symlinked photo counts but is not
+    /// followed for its date (a link into a hung mount must not hold a local listing).
+    @Test func datedListingLeavesOutHiddenPackagesAndLinks() throws {
+        let folder = tempDir()
+        defer { try? fm.removeItem(at: folder) }
+        try fm.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: folder.appendingPathComponent("Tool.app"), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 10).write(to: folder.appendingPathComponent("a.jpg"))
+        try fm.setAttributes([.modificationDate: Self.day], ofItemAtPath: folder.appendingPathComponent("a.jpg").path)
+        try Data([1]).write(to: folder.appendingPathComponent(".hidden.jpg"))
+        try Data([1]).write(to: folder.appendingPathComponent("notes.txt"))
+        try fm.createSymbolicLink(atPath: folder.appendingPathComponent("link.jpg").path,
+                                  withDestinationPath: "/nowhere/at/all.jpg")
+        let listing = try ThumbnailStore.listCover(folder, archive: false, dated: true, part: { _ in true })
+        #expect(Set(listing.names.files) == ["a.jpg", "link.jpg"])
+        #expect(listing.names.folders == ["sub"])
+        let summary = try #require(listing.summary)
+        #expect(summary.photos == 2 && summary.folders == 1)
+        #expect(summary.bytes == 10)
+        #expect(summary.first == Self.day && summary.last == Self.day && summary.datesKnown)
+        #expect(listing.photoDates == [Self.day])
+    }
+
+    /// The open folder's summary: none for a zip (its card has its own from its directory), and nothing written
+    /// again when it has not changed.
+    @Test func openFolderSummarySkipsZipsAndRepeats() async throws {
+        let dir = tempDir(), folder = tempDir()
+        defer {
+            try? fm.removeItem(at: dir)
+            try? fm.removeItem(at: folder)
+        }
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data([1]).write(to: folder.appendingPathComponent("a.jpg"))
+        let store = store(ThumbReader(), dir: dir)
+        let zip = folder.appendingPathComponent("set.zip")
+        await store.putOpenFolderSummary(zip, listing: [BrowserEntry(url: zip.appendingPathComponent("1.jpg"),
+                                                                     name: "1.jpg", kind: .file)])
+        #expect(await store.folderSummary(at: loc(zip.path)) == nil)
+        let entries = try BrowserListingSource.full(folder, archives: true)
+        await store.putOpenFolderSummary(folder, listing: entries)
+        #expect(await store.folderSummary(at: loc(folder.path))?.photos == 1)
+        await store.commit()
+        await store.putOpenFolderSummary(folder, listing: entries)
+        #expect(await store.pendingSummaries.isEmpty)
+    }
+}
+
+/// Errors handed out by folder name, from other threads.
+final class LockedErrors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var errors: [String: Error] = [:]
+    func set(_ name: String, _ error: Error) { lock.withLock { errors[name] = error } }
+    func error(for name: String) -> Error { lock.withLock { errors[name] ?? CocoaError(.fileReadUnknown) } }
 }

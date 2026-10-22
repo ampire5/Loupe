@@ -116,8 +116,9 @@ extension ThumbnailStore {
         let written = perform("write", { db -> Void in
             try db.put(batch.map(\.item))
             try db.touch(touches)
-            try db.putSummaries(summaries)
         }) != nil
+        // On their own: a summary that cannot be written never costs the thumbnails their batch.
+        if !summaries.isEmpty, databaseEpoch == epoch { _ = perform("summaries", { try $0.putSummaries(summaries) }) }
         if !batch.isEmpty { commitCount += 1 }
         touched = []
         guard written else {

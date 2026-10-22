@@ -17,8 +17,10 @@ import LoupeCore
 // margin), made through a CoverQueue with `listings` covers at a time and `ThumbnailStore.folderCard` (listed with
 // dates on a local volume, four photos picked, their thumbnails made and kept in the catalog, the folder's summary
 // with them), then once more from a fresh store on the same catalog (the next session: a fresh summary and the four
-// thumbnails, no listing, no read). Each card gets its folder's date as the parent's listing gives it. Prints covers
-// per second, the time until the first 12 cards have their cover and summary, and the process's CPU time per pass.
+// thumbnails, no listing, no read). Between the two, a pass on the catalog with its summaries removed: the first launch
+// after folder cards came (pictures from the catalog, each folder listed for its summary). Each card gets its folder's
+// date as the parent's listing gives it. Prints covers per second, the time until the first 12 cards have their cover
+// and summary, and the process's CPU time per pass.
 
 enum ThumbsBench {
     static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>\n"
@@ -180,7 +182,16 @@ extension ThumbsBench {
         print("### covers: \(subfolders.count) subfolders, listings \(o.listings), decodes \(o.decodes), size \(o.size), F_NOCACHE\n")
         print("| pass | covers | pictures | summaries | first \(firstCards) s | s | covers/s | CPU s | cores busy |")
         print("|---|---|---|---|---|---|---|---|---|")
-        for pass in ["made", "catalog"] {
+        for pass in ["made", "no summaries", "catalog"] {
+            if pass == "no summaries" {
+                // The first launch after the update: the catalog has the thumbnails, no summary yet.
+                guard let catalog = try? SQLiteConnection(path: cacheDir.appendingPathComponent("Catalog.db").path,
+                                                          pragmas: []),
+                      (try? catalog.execute("DELETE FROM folder_summaries")) != nil else {
+                    fail("cannot clear the summaries in \(cacheDir.path)")
+                }
+                catalog.close()
+            }
             let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size, limitBytes: 2 << 30,
                                        idleDelay: .zero, decodes: o.decodes)
             let queue = CoverQueue(listingLimit: o.listings, resumeDelay: .zero)

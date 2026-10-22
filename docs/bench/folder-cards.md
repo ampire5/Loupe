@@ -38,6 +38,25 @@ Reading:
 - An earlier version that counted the summary through `URL` parts (`lastPathComponent`, `pathExtension` per entry)
   cost 3.7 s of CPU on the 2000 set; counting by the listing's names brought it to 3.4–3.6.
 
+## First launch after the update: thumbnails in the catalog, no summary yet
+
+A third pass between the two (`no summaries`): the catalog of the made pass with its `folder_summaries` rows removed.
+Each card's pictures come from the catalog at once; the folder is listed once for its summary (with dates on a local
+volume), whatever that listing does to the pictures. Same machine and data, after the review fixes (the catalog's
+pictures never wait on the summary listing's outcome; a share goes offline as a whole), three runs:
+
+| data | pass | first 12 | all 24 | CPU |
+|---|---|---|---|---|
+| 200 | made | 0.28 / 0.29 / 0.30 | 0.61–0.71 | 1.8–2.0 |
+| 200 | no summaries | 0.07 / 0.08 / 0.09 | 0.16–0.20 | 0.3 |
+| 200 | catalog | 0.05 / 0.05 / 0.05 | 0.10–0.11 | 0.2 |
+| 2000 | made | 0.66 / 0.66 / 0.66 | 1.34–1.38 | 3.3 |
+| 2000 | no summaries | 0.30 / 0.30 / 0.31 | 0.61 | 1.2 |
+| 2000 | catalog | 0.05 / 0.05 / 0.05 | 0.10–0.11 | 0.2 |
+
+The first launch costs one listing per folder, once: 0.03–0.25 s more than a session with summaries for the first 12
+cards, then the summaries are in the catalog and later sessions are the `catalog` row.
+
 ## Summary batches
 
 `ThumbnailStore.summaryBatch` (64): summaries wait for the store's next batch (`commitDelay`, 1 s) and a full batch is

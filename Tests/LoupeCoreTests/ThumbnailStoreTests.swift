@@ -743,6 +743,30 @@ final class Locked<T>: @unchecked Sendable {
         #expect(ready == 100)
     }
 
+    /// Folder cards: summaries go with the thumbnails' batch, but a summary that cannot be written never costs the
+    /// thumbnails theirs.
+    @Test func summaryWriteFailureLeavesThumbnailsWritten() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(2, in: reader)
+        let first = store(reader, dir: dir)   // the 1 s timer never fires within the test
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await allReady(first, files) })
+        #expect(await first.pendingWrites == 2)
+        await first.queueSummary(FolderSummary(photos: 2, folders: 0),
+                                 at: ThumbnailLocation(volume: "test", folder: "/photos/a", name: "_"))
+        // Another connection drops the table: the summaries' write fails ("no such table"), not as damage.
+        let other = try SQLiteConnection(path: dir.appendingPathComponent("Catalog.db").path, pragmas: [])
+        try other.execute("DROP TABLE folder_summaries")
+        await first.commit()
+        #expect(await first.pendingWrites == 0)
+        #expect(await first.storedBytes > 0)
+        let second = store(reader, dir: dir)
+        await second.setViewerActivity(.neighbours)
+        await second.setRequest(window: 1, request(files), stamps: reader.stamps)
+        for url in files { #expect(await second.status(url) == .ready) }
+    }
+
     @Test func batchCommitsByTime() async throws {
         let dir = tempDir()
         let reader = ThumbReader()

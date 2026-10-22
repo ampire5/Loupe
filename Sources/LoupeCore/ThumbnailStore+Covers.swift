@@ -273,8 +273,8 @@ extension ThumbnailStore {
     }
 
     /// The pictures of a folder's or zip's card (`folderCard`'s), for callers that show no summary. Nil for "not now",
-    /// as `folderCard`'s, and also while a share that did not answer twice is still being tried (its third time out
-    /// gives it up for the session: empty).
+    /// as `folderCard`'s, and also for an offline card without pictures that is still being tried (its folder's third
+    /// time out gives it up for the session: empty).
     public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
                             maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> [CGImage]? {
         guard let card = await folderCard(folder, archive: archive, in: location, network: network, maxPixel: maxPixel,
@@ -291,60 +291,200 @@ extension ThumbnailStore {
     /// nil: none). `network` says whether it is on a share when there is no location (`CoverPlace.unknown`); nil: from
     /// the location, or a share without one. `modified` is the folder's (or zip's) date as its parent's listing gave it.
     ///
-    /// A summary in the catalog made at that date, and four of the folder's photos there: the card without a listing.
-    /// Else (or with fewer photos there) a listing (limited to `coverListingTimeout` on a share,
-    /// `coverLocalListingTimeout` elsewhere): with stat on a local volume (the summary with dates and size), names only
-    /// on a share (counts; the dates and size of a summary kept from a visit stay), a zip's directory read once. Its
-    /// picks are made into thumbnails and kept in the catalog, like `cover`'s, and its summary goes with the next batch.
-    /// A folder without photos shows one of each of its first four subfolders' (two levels down at most).
+    /// Four of the folder's photos in the catalog are its pictures whatever a listing does. A summary in the catalog
+    /// made at that date needs no listing; else the folder is listed once a session for it (limited to
+    /// `coverListingTimeout` on a share, `coverLocalListingTimeout` elsewhere; not at all while its share is offline):
+    /// with stat on a local volume (the summary with dates and size), names only on a share (counts; the dates and size
+    /// of a summary kept from a visit stay), a zip's directory read once. A listing that does not end (time out, lane
+    /// full, part only) or fails keeps the stored summary. Without four photos in the catalog the listing's picks are
+    /// made into thumbnails and kept in the catalog, like `cover`'s; a folder without photos shows one of each of its
+    /// first four subfolders' (two levels down at most).
     ///
     /// Empty pictures when there is nothing to show; then the folder is not listed again this session: found empty, not
-    /// listable, or listed `coverTimeoutsAllowed` times without a name in time. A zip that cannot be read is
-    /// `.broken`; a share whose listing gave no name in time twice in a row, or whose volume is gone, `.offline`, until
-    /// a listing answers. Nil for "not now": its lane is full of hung calls, or its listing gave no name in time (the
-    /// first time on a share, every time on a local volume). Nothing here asks the system but the listing. New
-    /// thumbnails wait while the viewer is busy; cancelling the task stops the listing and the reads.
+    /// listable, or listed `coverTimeoutsAllowed` times without a name in time. A malformed zip is `.broken`; a card on
+    /// a share that is offline (`coverOfflineTimeouts` listings on it in a row without a name in time or with an I/O
+    /// error, or its volume gone) is `.offline` until a listing on it answers. Nil for "not now": no pictures yet and
+    /// its lane full of hung calls, or its listing gave no name in time (on a share that is not offline). Nothing here
+    /// asks the system but the listing. New thumbnails wait while the viewer is busy; cancelling the task stops the
+    /// listing and the reads.
     public func folderCard(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
                            maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> FolderCard? {
         let network = network ?? location?.isNetwork ?? true
-        let key = Self.memoKey(folder, modified)
+        let key = Self.memoKey(folder, modified), volume = Self.volumeKey(folder, location)
         let stored = location.flatMap { storedSummary(at: $0) }
         let fresh = stored.map { $0.folderModified != nil && $0.folderModified == modified } ?? false
-        // Listed this session at this date already (its summary went to the catalog then): the pictures alone decide.
-        // A pick remembered from a look into it as a subfolder made no summary: that one is listed again.
-        let known = fresh || stored != nil && (emptyCovers.contains(key) || coverPicks[key] != nil)
+        // Not listed for the summary this session (at this date), nor while its share is offline.
+        let wantsListing = !fresh && !summaryTried.contains(key) && !(network && offlineVolumes.contains(volume))
+        func problem(_ own: CardProblem?) -> CardProblem? {
+            network && offlineVolumes.contains(volume) ? .offline : own
+        }
+        if emptyCovers.contains(key) {
+            return FolderCard(images: [], summary: stored, problem: problem(coverProblems[key]))
+        }
+        // The catalog's four: the pictures, whatever the listing for the summary does.
+        if let location, let images = await catalogCells(location, count: Self.coverPhotos, lastViewed: lastViewed,
+                                                         maxPixel: maxPixel) {
+            guard wantsListing, !Task.isCancelled else {
+                return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]))
+            }
+            noteSummaryTried(key)
+            let listing: CoverListing?
+            switch await coverListing(folder, archive: archive, network: network, key: key, volume: volume,
+                                      forSummary: true) {
+            case .listed(let listed, complete: true): listing = listed
+            case .listed, .settled, .notNow: listing = nil
+            }
+            return card(images, listing: listing, problem: problem(coverProblems[key]), modified: modified,
+                        location: location)
+        }
         guard let made = await folderCover(folder, archive: archive, location: location, network: network,
                                            maxPixel: maxPixel, lastViewed: lastViewed, modified: modified,
-                                           count: Self.coverPhotos, depth: 0, mustList: !known) else { return nil }
-        guard let listing = made.listing else {
-            return FolderCard(images: made.images, summary: stored, problem: made.problem)
+                                           count: Self.coverPhotos, depth: 0, catalogChecked: true,
+                                           mustList: wantsListing) else {
+            // On a share that is offline the card says so, pictures or not.
+            guard network, offlineVolumes.contains(volume) else { return nil }
+            return FolderCard(images: [], summary: stored, problem: .offline)
         }
-        let summary = Self.summary(of: listing, modified: modified, stored: stored)
-        if let location, summary != stored { queueSummary(summary, at: location) }
-        return FolderCard(images: made.images, summary: summary, problem: made.problem, photoDates: listing.photoDates)
+        if made.listed { noteSummaryTried(key) }
+        return card(made.images, listing: made.listing, problem: problem(made.problem), modified: modified,
+                    location: location)
     }
 
-    /// Two listings of a share's folder in a row without a name in time: the card says the share does not answer.
+    /// The card with a complete listing's summary, queued for the catalog when it changed, or the stored one. The
+    /// stored summary is read again here: one written while the listing ran (the folder opened meanwhile, with dates)
+    /// is what a names-only count keeps the dates of.
+    private func card(_ images: [CGImage], listing: CoverListing?, problem: CardProblem?, modified: Date?,
+                      location: ThumbnailLocation?) -> FolderCard {
+        let stored = location.flatMap { storedSummary(at: $0) }
+        guard let listing else { return FolderCard(images: images, summary: stored, problem: problem) }
+        let summary = Self.summary(of: listing, modified: modified, stored: stored)
+        if let location, summary != stored { queueSummary(summary, at: location) }
+        return FolderCard(images: images, summary: summary, problem: problem, photoDates: listing.photoDates)
+    }
+
+    /// Listings on a share in a row without a name in time (or with an I/O error) before the share is offline: every
+    /// card on it says so, and none is listed for its summary until a listing on it answers.
     static let coverOfflineTimeouts = 2
+    /// Shares whose offline state is kept at most (then forgotten at once): a few are mounted at a time.
+    static let coverVolumeLimit = 64
 
     /// What a cover pass made: its pictures, the folder's complete listing when it made one (`folderCard`'s summary;
-    /// only at the top, not a subfolder's), and what the card has against it.
+    /// only at the top, not a subfolder's), whether a listing ran to some end (`folderCard` does not list again for
+    /// the summary), and what the card has against it.
     struct CoverMade {
         var images: [CGImage]
         var listing: CoverListing?
+        var listed = false
         var problem: CardProblem?
     }
 
-    /// `mustList`: the summary needs a listing, so the catalog's four and the remembered pick do not spare it (the
-    /// pictures still come from the catalog when it has four of the folder's photos listed).
+    /// What a listing of a cover came to (`coverListing`).
+    enum CoverListingResult {
+        /// All of it, or what came before its time limit.
+        case listed(CoverListing, complete: Bool)
+        /// It failed: nothing to show for the session (but for the summary's listing), and what the card has against it.
+        case settled(CardProblem?)
+        /// Its lane full, or no name in time: ask again later.
+        case notNow
+    }
+
+    /// Lists `folder` in its lane, with its time limit, and keeps the session's notes of how it went: a share's time
+    /// outs and I/O errors in a row towards offline (`coverOfflineTimeouts`), cleared by any listing on it that
+    /// answers; a share's volume gone makes it offline; a malformed zip is broken. `forSummary`: the pictures came from
+    /// the catalog, so a failure or a time out leaves the folder's own notes (empty for the session, time outs)
+    /// alone.
+    private func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String,
+                              forSummary: Bool) async -> CoverListingResult {
+        let lister = coverLister, dated = !network
+        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
+                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
+            part in try lister(folder, archive, dated, part)
+        }
+        func timedOut() -> CoverListingResult {
+            if network { noteVolumeTimeout(volume) }
+            guard !forSummary else { return .notNow }
+            coverTimeouts[key, default: 0] += 1
+            guard coverTimeouts[key, default: 0] >= Self.coverTimeoutsAllowed else { return .notNow }
+            coverTimeouts[key] = nil
+            emptyCovers.insert(key)
+            return .settled(nil)
+        }
+        switch outcome {
+        case .value(let listed, let complete):
+            if network { noteVolumeAnswered(volume) }
+            if !forSummary { coverTimeouts[key] = nil }
+            setProblem(nil, for: key)
+            return .listed(listed, complete: complete)
+        case .failed(let error):
+            if network, !coverVolumeIsNetwork(folder) {
+                // The mount table no longer puts the path on a share: its volume is gone.
+                markVolumeOffline(volume)
+            } else if network, Self.isConnectionError(error) {
+                return timedOut()
+            }
+            let problem: CardProblem? = error is ArchiveError ? .broken : nil
+            setProblem(problem, for: key)
+            if !forSummary { emptyCovers.insert(key) }
+            return .settled(problem)
+        case .busy:
+            return .notNow
+        case .timedOut:
+            return timedOut()
+        }
+    }
+
+    /// An error of a share's connection rather than of the folder (gone, no permission): it counts as a time out.
+    nonisolated static func isConnectionError(_ error: Error) -> Bool {
+        let code: Int32?
+        if let posix = error as? POSIXError {
+            code = posix.code.rawValue
+        } else {
+            let ns = error as NSError
+            code = ns.domain == NSPOSIXErrorDomain ? Int32(ns.code)
+                : (ns.userInfo[NSUnderlyingErrorKey] as? NSError).flatMap { $0.domain == NSPOSIXErrorDomain ? Int32($0.code) : nil }
+        }
+        guard let code else { return false }
+        return [EIO, ENOTCONN, ETIMEDOUT, ENETDOWN, ENETUNREACH, ENETRESET, ECONNRESET, ECONNABORTED, EHOSTDOWN,
+                EHOSTUNREACH, ESTALE].contains(code)
+    }
+
+    /// The key of a card's volume for its offline state: the catalog's volume, else the folder Home shows.
+    nonisolated static func volumeKey(_ folder: URL, _ location: ThumbnailLocation?) -> String {
+        location?.volume ?? "path:" + folder.standardizedFileURL.deletingLastPathComponent().path
+    }
+
+    private func noteVolumeTimeout(_ volume: String) {
+        if coverVolumeTimeouts.count >= Self.coverVolumeLimit { coverVolumeTimeouts.removeAll() }
+        coverVolumeTimeouts[volume, default: 0] += 1
+        if coverVolumeTimeouts[volume, default: 0] >= Self.coverOfflineTimeouts { markVolumeOffline(volume) }
+    }
+
+    private func markVolumeOffline(_ volume: String) {
+        if offlineVolumes.count >= Self.coverVolumeLimit { offlineVolumes.removeAll() }
+        offlineVolumes.insert(volume)
+    }
+
+    private func noteVolumeAnswered(_ volume: String) {
+        coverVolumeTimeouts[volume] = nil
+        offlineVolumes.remove(volume)
+    }
+
+    /// The folder was listed for its summary this session (at this date): not again, whatever came of it.
+    private func noteSummaryTried(_ key: String) {
+        if summaryTried.count >= Self.coverPickLimit { summaryTried.removeAll() }
+        summaryTried.insert(key)
+    }
+
+    /// `catalogChecked`: the caller found fewer than `count` photos of the folder in the catalog. `mustList`: the
+    /// summary needs a listing, so the remembered pick does not spare it.
     private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool, maxPixel: Int,
-                             lastViewed: String?, modified: Date?, count: Int, depth: Int,
+                             lastViewed: String?, modified: Date?, count: Int, depth: Int, catalogChecked: Bool = false,
                              mustList: Bool = false) async -> CoverMade? {
         let key = Self.memoKey(folder, modified)
         guard !emptyCovers.contains(key) else { return CoverMade(images: [], problem: coverProblems[key]) }
         guard !Task.isCancelled else { return nil }
-        if !mustList, let location, let images = await catalogCells(location, count: count, lastViewed: lastViewed,
-                                                                    maxPixel: maxPixel) {
+        if !catalogChecked, let location,
+           let images = await catalogCells(location, count: count, lastViewed: lastViewed, maxPixel: maxPixel) {
             return CoverMade(images: images)
         }
         // The pick of an earlier complete listing: the pictures from the catalog, no listing.
@@ -362,38 +502,13 @@ extension ThumbnailStore {
                     .map { CoverMade(images: $0) }
             }
         }
-        let lister = coverLister, dated = !network
-        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
-                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
-            part in try lister(folder, archive, dated, part)
-        }
         let listed: CoverListing, complete: Bool
-        switch outcome {
-        case .value(let value, let ended): (listed, complete) = (value, ended)
-        case .failed:
-            emptyCovers.insert(key)
-            // On a share whose volume is gone (the mount table no longer puts the path on a share) offline; else a
-            // zip that cannot be read is broken, and a folder that cannot be listed only empty (no permission, say).
-            let problem: CardProblem? = network && !coverVolumeIsNetwork(folder) ? .offline
-                : archive || ArchivePath.isArchive(folder) ? .broken : nil
-            setProblem(problem, for: key)
-            return CoverMade(images: [], problem: problem)
-        case .busy:
-            return nil
-        case .timedOut:
-            coverTimeouts[key, default: 0] += 1
-            let times = coverTimeouts[key, default: 0]
-            let offline = network && times >= Self.coverOfflineTimeouts
-            if offline { setProblem(.offline, for: key) }
-            guard times >= Self.coverTimeoutsAllowed else {
-                return offline ? CoverMade(images: [], problem: .offline) : nil
-            }
-            coverTimeouts[key] = nil
-            emptyCovers.insert(key)
-            return CoverMade(images: [], problem: offline ? .offline : nil)
+        switch await coverListing(folder, archive: archive, network: network, key: key,
+                                  volume: Self.volumeKey(folder, location), forSummary: false) {
+        case .listed(let value, let ended): (listed, complete) = (value, ended)
+        case .settled(let problem): return CoverMade(images: [], listed: true, problem: problem)
+        case .notNow: return nil
         }
-        coverTimeouts[key] = nil
-        setProblem(nil, for: key)
         let names = listed.names
         let plan = await Self.offActor(qos: Self.coverQoS) {
             CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
@@ -409,12 +524,6 @@ extension ThumbnailStore {
         let summarized = complete && depth == 0 ? listed : nil
         switch plan {
         case .photos(let picked):
-            // Listed for the summary alone: the catalog's four of the photos still there, as without a listing.
-            if mustList, let location,
-               let images = await catalogCells(location, count: count, lastViewed: lastViewed, maxPixel: maxPixel,
-                                               among: Set(names.files)) {
-                return CoverMade(images: images, listing: summarized)
-            }
             var images: [CGImage] = []
             for name in picked.prefix(count) {
                 guard await idleViewer() else { break }
@@ -423,27 +532,26 @@ extension ThumbnailStore {
                     images.append(image)
                 }
             }
-            return CoverMade(images: images, listing: summarized)
+            return CoverMade(images: images, listing: summarized, listed: true)
         case .subfolders(let subfolders):
             guard let images = await subfolderCover(folder, Array(subfolders), location: location, network: network,
                                                     maxPixel: maxPixel, count: count, depth: depth, complete: complete,
                                                     modified: modified) else { return nil }
-            return CoverMade(images: images, listing: summarized)
+            return CoverMade(images: images, listing: summarized, listed: true)
         case .empty:
             if complete { emptyCovers.insert(key) }
-            return CoverMade(images: [], listing: summarized)
+            return CoverMade(images: [], listing: summarized, listed: true)
         }
     }
 
-    /// `count` photos of the folder at `location` with a thumbnail in the catalog (those `among` the listed names when
-    /// given), spread across them as Finder sorts them, the one last viewed first, decoded; nil when there are fewer.
-    private func catalogCells(_ location: ThumbnailLocation, count: Int, lastViewed: String?, maxPixel: Int,
-                              among listed: Set<String>? = nil) async -> [CGImage]? {
-        guard var names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }) else { return nil }
-        if let listed { names = names.filter(listed.contains) }
-        guard names.count >= count else { return nil }
+    /// `count` photos of the folder at `location` with a thumbnail in the catalog, spread across them as Finder sorts
+    /// them, the one last viewed first, decoded; nil when there are fewer.
+    private func catalogCells(_ location: ThumbnailLocation, count: Int, lastViewed: String?,
+                              maxPixel: Int) async -> [CGImage]? {
+        guard let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
+              names.count >= count else { return nil }
         // Sorting thousands of names takes a while: not on the actor.
-        let picked = await Self.offActor(qos: Self.coverQoS) { [names] in
+        let picked = await Self.offActor(qos: Self.coverQoS) {
             CoverSampling.pick(Self.finderSorted(names), count: count, lastViewed: lastViewed)
         }
         var images: [CGImage] = []
@@ -474,13 +582,7 @@ extension ThumbnailStore {
             let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
                                         location: location?.subfolder(name), network: network, maxPixel: maxPixel,
                                         lastViewed: nil, modified: nil, count: 1, depth: depth + 1)
-            // A subfolder's share that does not answer yet: "not now" for the picture, as before cards had problems.
-            if let sub, !(sub.problem == .offline && sub.images.isEmpty
-                          && !emptyCovers.contains(Self.memoKey(folder.appendingPathComponent(name), nil))) {
-                images += sub.images.prefix(1)
-            } else {
-                notNow = true
-            }
+            if let sub { images += sub.images.prefix(1) } else { notNow = true }
         }
         if notNow, images.count < count { return nil }
         let keys = subfolders.map { Self.memoKey(folder.appendingPathComponent($0), nil) }
@@ -648,7 +750,7 @@ final class ThreadAnswer<T: Sendable>: @unchecked Sendable {
         /// All of it (`complete`), or what came before the waiter gave up.
         case value(T, complete: Bool)
         /// It threw, with nothing before.
-        case failed
+        case failed(any Error)
         /// No free thread, or given up on (cancelled) with nothing yet.
         case busy
         /// Its time limit ran out with nothing yet.
@@ -716,7 +818,8 @@ final class ThreadAnswer<T: Sendable>: @unchecked Sendable {
     private func answerLocked() -> Outcome {
         if case .success(let value) = outcome { return .value(value, complete: true) }
         if let latest { return .value(latest, complete: false) }
-        return stopped ? .busy : .failed
+        if !stopped, case .failure(let error) = outcome { return .failed(error) }
+        return .busy
     }
 }
 

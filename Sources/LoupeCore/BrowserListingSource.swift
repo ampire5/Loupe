@@ -16,8 +16,8 @@ public enum BrowserListingSource {
     /// Names only: kinds from `d_type` (an unknown one by the extension), no dates or sizes. Every `partEvery` names,
     /// at most every `partAfter`, `part` gets all the names so far; false from it stops the listing
     /// (`CancellationError`): a folder left gives the share back at the next part rather than at the end.
-    /// `stat`: each photo's date and size too (one `fstatat` each, nothing for folders and other files; a local
-    /// volume's folder card): `LoupeBench thumbs --covers` on 2000-file folders, see docs/bench/folder-cards.md.
+    /// `stat`: each photo's date and size too (one `fstatat` each, nothing for folders, other files and symlinks; a
+    /// local volume's folder card): `LoupeBench thumbs --covers` on 2000-file folders, see docs/bench/folder-cards.md.
     public static func names(_ folder: URL, archives: Bool, stat: Bool = false, partEvery: Int = partSize,
                              partAfter: Duration = partInterval,
                              part: ([BrowserEntry]) -> Bool = { _ in true }) throws -> [BrowserEntry] {
@@ -36,9 +36,12 @@ public enum BrowserListingSource {
             let isDirectory = type == DT_DIR || (type == DT_UNKNOWN && ext.isEmpty)
             let url = folder.appendingPathComponent(name, isDirectory: isDirectory)
             var stamp: FileStamp?
-            if stat, !isDirectory, Playlist.imageExtensions.contains(ext) {
+            // A symlink is not followed: one into a share that hangs would hold the local listing.
+            if stat, !isDirectory, type != DT_LNK, Playlist.imageExtensions.contains(ext) {
                 var st = Darwin.stat()
-                if fstatat(dirfd(dir), name, &st, 0) == 0 { stamp = FileStamp(st) }
+                if fstatat(dirfd(dir), name, &st, AT_SYMLINK_NOFOLLOW) == 0, st.st_mode & S_IFMT == S_IFREG {
+                    stamp = FileStamp(st)
+                }
             }
             if let entry = entry(url, isDirectory: isDirectory, isPackage: isDirectory && isPackageExtension(ext),
                                  stamp: stamp, modified: nil, archives: archives) {
