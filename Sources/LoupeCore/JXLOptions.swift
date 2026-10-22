@@ -8,7 +8,7 @@ public struct JXLOptions: Equatable, Sendable {
     public var threadsOther: Int
     public var dcPreview: Bool
 
-    public init(threadsCurrent: Int = Machine.jxlThreadsCurrent, threadsOther: Int = 2, dcPreview: Bool = true) {
+    public init(threadsCurrent: Int = Machine.jxlThreadsCurrent, threadsOther: Int = HardwareAdvice.defaultJXLThreadsOther(.current), dcPreview: Bool = true) {
         self.threadsCurrent = threadsCurrent
         self.threadsOther = threadsOther
         self.dcPreview = dcPreview

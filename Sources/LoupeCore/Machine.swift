@@ -28,7 +28,8 @@ public enum Machine {
     /// `cache-memory` by default: a fifth of the memory, down to a 256 MB step, 1 to 4 GB. 16 GB keeps the 3 GB Loupe
     /// always had; 8 GB gets 1.5 GB, leaving the system and the user's other apps room; more than 4 GB buys nothing
     /// at the other cache defaults, whose plan at 147 MP (the current and next photo in full, ≈ 0.85 GB each, and 20
-    /// previews of 48–100 MB) stays within it.
+    /// previews of 48–100 MB) stays within it. This is the unified-memory rule; `HardwareAdvice` is where defaults are
+    /// chosen for the Mac at hand (a discrete card has no upper bound).
     public static let cacheMemory = cacheMemory(memoryBytes: memoryBytes)
 
     static func cacheMemory(memoryBytes: Int) -> Int {

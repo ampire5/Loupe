@@ -12,7 +12,7 @@ import Testing
     let gb = 1 << 30
     #expect([4, 8, 16, 18, 24, 36, 64, 128].map { Machine.cacheMemory(memoryBytes: $0 * gb) }
             == [gb, 1536 << 20, 3 * gb, 3584 << 20, 4 * gb, 4 * gb, 4 * gb, 4 * gb])
-    #expect(Config().cacheMemory == Machine.cacheMemory(memoryBytes: Machine.memoryBytes))
+    #expect(Config().cacheMemory == HardwareAdvice.defaultCacheMemory(.current))
 }
 
 /// One per performance core, 2 to 16.

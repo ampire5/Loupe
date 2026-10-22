@@ -274,7 +274,7 @@ public struct Config: Equatable, Sendable {
     /// `cache-files`: neighbours kept as compressed bytes, 0...50.
     public var cacheFiles = 24
     /// `cache-memory`: ceiling over all planned levels, in bytes; by default by the Mac's memory (`Machine`).
-    public var cacheMemory = Machine.cacheMemory
+    public var cacheMemory = HardwareAdvice.defaultCacheMemory(.current)
     /// `cache-idle-trim`: minutes without use after which a tab's cache is trimmed, 0...1440 (0: never).
     public var cacheIdleTrimMinutes = 30
     /// `cache-idle-keep`: what an idle tab's current photo keeps when it is trimmed (`CacheIdleKeep`).
@@ -286,7 +286,7 @@ public struct Config: Equatable, Sendable {
     public var jxlThreadsCurrent = Machine.jxlThreadsCurrent
     /// `jxl-threads-other`: libjxl worker threads for neighbours and thumbnails, 1...16 (2 measured best,
     /// docs/bench/2026-10-20-jxl-tuning.md).
-    public var jxlThreadsOther = 2
+    public var jxlThreadsOther = HardwareAdvice.defaultJXLThreadsOther(.current)
     /// `jxl-dc-preview`: first looks, coarse previews and thumbnails of JPEG XL from the 1:8 DC image.
     public var jxlDCPreview = true
     /// `wheel-step`: what a notched-wheel step waits for before the next notch may step (`StepGate`).
@@ -1144,7 +1144,7 @@ public struct Config: Equatable, Sendable {
     }
 
     /// `512M`, `3G` (either case) or plain bytes → bytes; zero, negative, fractional or overflowing is nil.
-    private static func memoryBytes(_ value: String) -> Int? {
+    static func memoryBytes(_ value: String) -> Int? {
         var digits = value.lowercased()
         var unit = 1
         if digits.hasSuffix("g") { unit = 1 << 30; digits.removeLast() }
@@ -1156,7 +1156,7 @@ public struct Config: Equatable, Sendable {
 
     /// The shortest exact spelling of a byte count, so a value read as `3G` is written back as `3G`
     /// (and `0` stays `0`).
-    private static func memoryText(_ bytes: Int) -> String {
+    static func memoryText(_ bytes: Int) -> String {
         if bytes == 0 { return "0" }
         if bytes % (1 << 30) == 0 { return "\(bytes >> 30)G" }
         if bytes % (1 << 20) == 0 { return "\(bytes >> 20)M" }

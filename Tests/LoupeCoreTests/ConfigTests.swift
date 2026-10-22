@@ -222,7 +222,7 @@ import Foundation
 @Test func cacheKeys() {
     let d = Config()
     #expect(d.cacheFull == 1 && d.cachePreviews == 20 && d.cacheFarPreviewsCoarse && d.cacheFiles == 24)
-    #expect(d.cacheMemory == Machine.cacheMemory && d.showBlurry == .no)
+    #expect(d.cacheMemory == HardwareAdvice.defaultCacheMemory(.current) && d.showBlurry == .no)
 
     var (c, w) = Config.parse("cache-memory=512M\ncache-full=2\ncache-previews=50\ncache-far-previews=full\ncache-files=0\nshow-blurry=fit")
     #expect(w.isEmpty)
