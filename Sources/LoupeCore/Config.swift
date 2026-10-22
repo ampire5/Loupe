@@ -3,9 +3,9 @@ import Foundation
 import HomeScreenModel
 import LogiHIDPP
 
-/// `strip-window`: the thumbnail strip in a window (fullscreen always shows the overlay).
+/// `strip-window`: the thumbnail strip in a window (fullscreen always shows it over the photo).
 public enum StripWindowMode: String, Sendable {
-    case overlay, bar, off
+    case over, beside, hidden
 }
 
 /// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection (the kit's
@@ -260,8 +260,8 @@ public struct Config: Equatable, Sendable {
     public var cursorAutohideMilliseconds: Int? = 1000
 
     // The thumbnail strip and thumbnail cache (M2.5 spec §7).
-    /// `strip-window`: how the strip shows in a window; fullscreen always uses the overlay.
-    public var stripWindow = StripWindowMode.bar
+    /// `strip-window`: how the strip shows in a window; fullscreen always uses `over`.
+    public var stripWindow = StripWindowMode.beside
     public static let stripHeightRange = 40...240
 
     /// A requested strip height (a drag's raw value, say) as a whole number of points inside `stripHeightRange`.
@@ -829,7 +829,8 @@ public struct Config: Equatable, Sendable {
             else if let v = Int(value), (1...600_000).contains(v) { cursorAutohideMilliseconds = v }
             else { return .badValue }
         case "strip-window":
-            if let v = StripWindowMode(rawValue: value.lowercased()) { stripWindow = v } else { return .badValue }
+            let word = value.lowercased()
+            if let v = StripWindowMode(rawValue: Self.renamedValues["strip-window"]?[word] ?? word) { stripWindow = v } else { return .badValue }
         case "strip-height":
             if let v = Int(value), Self.stripHeightRange.contains(v) { stripHeight = v } else { return .badValue }
         case "strip-cell-max":
@@ -1006,6 +1007,9 @@ public struct Config: Equatable, Sendable {
             let bad = "\(location): bad option '\(key)=\(value)'"
             switch config.set(key, value) {
             case .ok:
+                if let new = renamedValues[key]?[value.lowercased()] {
+                    warnings.append("\(location): '\(key)=\(value.lowercased())' is now '\(key)=\(new)'")
+                }
                 if key == "zoom-stops" {
                     let resolved = resolve(config.zoomStopTokens)
                     warnings += resolved.unknown.map { "\(location): unknown zoom stop '\($0)'" }
@@ -1084,6 +1088,12 @@ public struct Config: Equatable, Sendable {
     /// Keys loupe.conf may still hold from earlier versions: each line gets one warning and its value is ignored.
     public static let retiredKeys: Set<String> = ["strip-aspect", "strip-magnify", "strip-magnify-reach",
                                                   "strip-magnify-limit"]
+
+    /// Values loupe.conf may still hold from earlier versions, by key: old word to new word. `set` reads the old word,
+    /// `parse` warns about it.
+    public static let renamedValues: [String: [String: String]] = [
+        "strip-window": ["overlay": "over", "bar": "beside", "off": "hidden"],
+    ]
 
     /// `1.5` or `3:2` (both sides positive) → width / height; nil for anything else or a non-finite result.
     private static func aspect(_ value: String) -> Double? {

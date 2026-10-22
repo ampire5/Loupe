@@ -103,7 +103,7 @@ struct PagesTests {
         #expect(set("transparency") == Set(TransparencyMode.allCases.map(\.rawValue)))
         #expect(set("default-zoom-mode").isSuperset(of: ["fit", "fit-width", "fit-height", "fill", "100%"]))
         #expect(set("auto-color-method") == Set(AutoColorMethod.allCases.map(\.rawValue)))
-        #expect(set("strip-window") == ["overlay", "bar", "off"])
+        #expect(set("strip-window") == ["beside", "over", "hidden"])
         #expect(set("strip-scroll-direction") == ["natural", "reversed"])
         #expect(set("wheel-direction") == Set(WheelDirection.allCases.map(\.rawValue)))
         #expect(set("mx-side-buttons") == Set(SideButtonsMode.allCases.map(\.rawValue)))

@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// One viewer window: owns its `ViewerSession` and lays out the stats bar, the viewer and the thumbnail strip
 /// inside it. Windowed, the bar is a strip above the viewer (the viewer shrinks to make room); in native full
 /// screen the viewer fills the window and the bar floats over its top edge. The thumbnail strip floats over the
-/// viewer's bottom edge, except windowed with `strip-window=bar`, where the viewer ends at the strip's top. The info
+/// viewer's bottom edge, except windowed with `strip-window=beside`, where the viewer ends at the strip's top. The info
 /// panel (`⌘I`, M4a spec §3) floats at the viewer's top right while it is open.
 @MainActor final class ViewerWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let session: ViewerSession

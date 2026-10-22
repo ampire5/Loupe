@@ -15,7 +15,7 @@ extension Notification.Name {
 /// in step with the session's playlist and position, moves the strip under its fixed centre and fills its cells from
 /// the `ThumbnailStore`.
 ///
-/// Showing: with `strip-window=bar` (the default) the strip is a band of its own under the picture (the window
+/// Showing: with `strip-window=beside` (the default) the strip is a band of its own under the picture (the window
 /// controller anchors the viewer to its top), shown until `T` or the chevron hides it (`stripBarHidden`). In full
 /// screen, and in a window with `overlay`, it floats over the bottom of the picture and is visible while it is
 /// pinned (`T`, persisted as `stripPinned`), while the mouse is within the strip's whole height of the window's
@@ -57,7 +57,7 @@ extension Notification.Name {
     private var chevronAboveStrip: NSLayoutConstraint?
     private var chevronAtBottom: NSLayoutConstraint?
 
-    private var mode = StripWindowMode.bar
+    private var mode = StripWindowMode.beside
     private var cellHeight: CGFloat = 68
     private var cellMax = 1.5
     private var hideDelay: Duration = .milliseconds(500)
@@ -125,7 +125,7 @@ extension Notification.Name {
     var isScrollSpent: (NSEvent) -> Bool = { _ in false }
 
     /// Whether the viewer must end at the strip's top instead of the window's bottom.
-    var reservesSpace: Bool { !isFullScreen && mode == .bar && !barHidden }
+    var reservesSpace: Bool { !isFullScreen && mode == .beside && !barHidden }
 
     /// The band's height: cells plus padding.
     var bandHeight: CGFloat { cellHeight + 2 * FilmstripView.padding }
@@ -323,7 +323,7 @@ extension Notification.Name {
 
     /// `T`, View › Thumbnail Strip and the chevron: a bar hides or comes back, an overlay is pinned or let go.
     func togglePin() {
-        if placement == .bar {
+        if placement == .beside {
             barHidden.toggle()
             DebugLog.log("strip bar \(barHidden ? "hidden" : "shown")")
             onReservesSpaceChange?()
@@ -336,7 +336,7 @@ extension Notification.Name {
     }
 
     /// Whether `T` holds the strip on screen: a bar not hidden, a pinned overlay.
-    var isPinned: Bool { placement == .bar ? !barHidden : pinned }
+    var isPinned: Bool { placement == .beside ? !barHidden : pinned }
 
     @objc private func chevronClicked() { togglePin() }
 
@@ -348,17 +348,17 @@ extension Notification.Name {
 
     // MARK: Showing
 
-    private var placement: StripWindowMode { isFullScreen ? .overlay : mode }
+    private var placement: StripWindowMode { isFullScreen ? .over : mode }
 
     /// Shows the strip when something holds it, otherwise hides it after the delay (at once for `hideAtOnce`).
     private func update(hideAtOnce: Bool = false) {
         guard !closed else { return }
-        view.isOverlay = placement == .overlay
+        view.isOverlay = placement == .over
         let holds: Bool
         switch placement {
-        case .off: holds = false
-        case .bar: holds = !barHidden || resizing
-        case .overlay:
+        case .hidden: holds = false
+        case .beside: holds = !barHidden || resizing
+        case .over:
             holds = pinned || mouseNearBottom || hoverState.file != nil || resizing || isMoving
                 || (staysShown && isShown)
         }
@@ -366,7 +366,7 @@ extension Notification.Name {
             hideTask?.cancel()
             hideTask = nil
             show()
-        } else if placement != .overlay || hideAtOnce {
+        } else if placement != .over || hideAtOnce {
             hideTask?.cancel()
             hideTask = nil
             hide()
@@ -432,10 +432,10 @@ extension Notification.Name {
     }
 
     /// The chevron: over the strip while it is on screen, at the bottom edge while not, down or up as `T` would go;
-    /// shown while the mouse is over the window's bottom third, never with `strip-window=off` in a window.
+    /// shown while the mouse is over the window's bottom third, never with `strip-window=hidden` in a window.
     private func updateChevron() {
         guard container != nil else { return }
-        let wanted = mouseInLowerThird && placement != .off
+        let wanted = mouseInLowerThird && placement != .hidden
         let symbol = isShown ? "chevron.down" : "chevron.up"
         if chevron.image?.accessibilityDescription != symbol {
             chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol)
@@ -455,7 +455,7 @@ extension Notification.Name {
             chevron.animator().alphaValue = wanted ? 1 : 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, !(self.mouseInLowerThird && self.placement != .off) else { return }
+                guard let self, !(self.mouseInLowerThird && self.placement != .hidden) else { return }
                 self.chevron.isHidden = true
             }
         })
