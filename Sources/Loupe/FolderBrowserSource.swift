@@ -392,8 +392,8 @@ extension Notification.Name {
         let files = wanted.filter { $0.kind == .file }
         sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
         let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
-        // The folder cards' picture: a poster's slot, a compact card's 76 pt square (one picture: narrower than
-        // `HomeMosaic.narrowWidth`), a row's cover; with photos in the grid too, `width` is theirs.
+        // The folder cards' picture: a poster's slot, a compact card's 76 pt square (its layout kept there, as board B
+        // draws it), a row's cover; with photos in the grid too, `width` is theirs.
         let coverWidth = view?.coverWidth ?? width
         // Another card size or screen: the mosaics kept and those being made are the wrong size.
         if let size = coverSize, size.width != coverWidth || size.scale != scale { dropCovers() }
@@ -482,6 +482,7 @@ extension Notification.Name {
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
         let layout = shownCoverLayout, side = size.width, scale = size.scale
+        let compact = view?.shownStyle == .cards   // board B: the layout kept at 76 pt
         let cellPixels = layout.cellPixels(width: side, scale: scale)
         let thumbnails = self.thumbnails
         /// The card as it is when its work starts (a want sent before the complete listing runs after it too): its
@@ -525,7 +526,8 @@ extension Notification.Name {
             // No photos: the card keeps its symbol.
             var mosaic: CGImage?
             if card.picture, !made.images.isEmpty {
-                mosaic = HomeMosaic.make(made.images, size: CGSize(width: side, height: side), layout: layout, scale: scale)
+                mosaic = HomeMosaic.make(made.images, size: CGSize(width: side, height: side), layout: layout, scale: scale,
+                                         compact: compact)
             }
             let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
             guard !Task.isCancelled else { return true }
