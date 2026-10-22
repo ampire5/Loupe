@@ -100,7 +100,7 @@ struct PagesTests {
         #expect(items.map(\.word) == ["grid", "hero", "stack", "single"])
         #expect(items.map(\.title) == ["Grid", "Hero", "Stack", "Single"])
         #expect(row("folder-cover")?.description
-                == "How a folder's card shows what is inside. Narrow cards always show one photo.")
+                == "How a folder's card shows what is inside. Narrow cards always show one photo. Default Hero.")
         #expect(SettingsPanel.pages().first { $0.id == "general" }?.keys.contains("folder-cover") == true)
     }
 

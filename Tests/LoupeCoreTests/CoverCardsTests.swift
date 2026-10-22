@@ -85,4 +85,25 @@ import Testing
         #expect(cards.bytes == 0)
         #expect(cards.ask(["a"], visible: 1).forget == ["a"])
     }
+
+    /// The budget follows the card count, between a floor and a ceiling.
+    @Test func limitFollowsCardCount() {
+        let each = 704 * 704 * 4
+        #expect(CoverCards.limit(cards: 30, pixels: 704) == 30 * each)
+        #expect(CoverCards.limit(cards: 1, pixels: 704) == 32 << 20)
+        #expect(CoverCards.limit(cards: 0, pixels: 0) == 32 << 20)
+        #expect(CoverCards.limit(cards: 100_000, pixels: 704) == CoverCards.maxLimitBytes)
+        #expect(CoverCards.limit(cards: Int.max, pixels: 704) == CoverCards.maxLimitBytes)
+    }
+
+    /// A smaller budget lets the least recently used go at once.
+    @Test func shrinkingTheLimitEvicts() {
+        var cards = CoverCards(limitBytes: 1 << 20)
+        _ = cards.ask(["a", "b"], visible: 2)
+        cards.delivered("a", image(16))
+        cards.delivered("b", image(16))
+        cards.setLimit(16 * 16 * 4)
+        #expect(cards.bytes == 16 * 16 * 4)
+        #expect(cards.ask(["a", "b"], visible: 2).cached.map(\.id) == ["b"])
+    }
 }

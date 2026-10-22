@@ -100,7 +100,8 @@ extension SettingsPanel {
                     (word: "grid", title: "Grid"), (word: "hero", title: "Hero"), (word: "stack", title: "Stack"),
                     (word: "single", title: "Single"),
                 ], symbol: "rectangle.split.2x1",
-                description: "How a folder's card shows what is inside. Narrow cards always show one photo."),
+                description: "How a folder's card shows what is inside. Narrow cards always show one photo. "
+                    + "Default Hero."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),
                 ], symbol: "rectangle.stack.badge.play",

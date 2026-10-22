@@ -34,6 +34,10 @@ enum SessionCardAction {
     /// Recent's and Sessions' sorts, for this run.
     private var sorts: [String: BrowserSort] = [:]
     private var pictureTask: Task<Void, Never>?
+    private var currentPass: PicturePass?
+    /// Cards of the pass running not started yet, in order, and those started.
+    private var pendingPictures: [String] = []
+    private var startedPictures: Set<String> = []
     /// How a session's card shows its photos (`folder-cover`, as folders' cards do).
     var coverLayout = HomeMosaic.Layout.hero
 
@@ -99,6 +103,8 @@ enum SessionCardAction {
     func stopPictures() {
         pictureTask?.cancel()
         pictureTask = nil
+        startedPictures = []
+        pendingPictures = []
     }
 
     func sort(for id: String) -> BrowserSort { sorts[id] ?? BrowserSort(key: .date, ascending: false) }
@@ -109,44 +115,68 @@ enum SessionCardAction {
     /// The cards' pictures, in the order asked (those in view first): a recent folder's last photo, a session's first
     /// four photos two by two. An unreachable share is never read.
     func wantImages(_ ids: [String], width: CGFloat) {
-        pictureTask?.cancel()
         let scale = view?.window?.backingScaleFactor ?? 2
-        let maxPixel = Int((width * scale).rounded())
-        let layout = coverLayout
-        let cellPixels = layout.cellPixels(width: width, scale: scale)
+        let pass = PicturePass(width: width, scale: scale, layout: coverLayout)
+        // The same ask again with a margin added (the browser sends the view first, its margin a moment later): the
+        // pass running goes on with the covers in progress, and takes the new ones after them.
+        if let running = pictureTask, !running.isCancelled, pass == currentPass {
+            pendingPictures = ids.filter { !startedPictures.contains($0) }
+            return
+        }
+        pictureTask?.cancel()
+        currentPass = pass
+        startedPictures = []
+        pendingPictures = ids
         let thumbnails = self.thumbnails
-        let wanted = ids
         let reachability = self.reachability
+        let wanted = ids
         pictureTask = Task { @MainActor [weak self] in
             // Recent's covers wait for its reachability check (a second at most): a gone share is never read.
             let gone = wanted.contains { $0.hasPrefix("recent:") } ? await reachability?.unreachable ?? [] : []
-            for id in wanted {
-                guard let self, !Task.isCancelled else { return }
-                if let e = self.shownRecent[id] {
-                    guard !gone.contains(e.path), let file = e.file else { continue }
-                    let image = await thumbnails.cover(e.url.appendingPathComponent(file), maxPixel: maxPixel)
-                    guard !Task.isCancelled else { return }
-                    if let image { self.view?.setImage(image, for: id) }
-                } else if let s = self.shownSessions[id] {
-                    let files = s.snapshot.windows.flatMap(\.tabs).compactMap { tab -> URL? in
-                        if case .file(let path, _) = tab { return URL(fileURLWithPath: path) }
-                        return nil
-                    }.prefix(4)
-                    var pictures: [CGImage] = []
-                    for url in files {
-                        if let image = await thumbnails.cover(url, maxPixel: cellPixels) { pictures.append(image) }
-                    }
-                    guard !Task.isCancelled else { return }
-                    // Drawn off the main thread.
-                    let made = await Task.detached(priority: .utility) { [pictures] in
-                        HomeMosaic.make(pictures, size: CGSize(width: width, height: width), layout: layout, scale: scale)
-                    }.value
-                    guard !Task.isCancelled else { return }
-                    if let mosaic = made {
-                        self.view?.setImage(mosaic, for: id)
-                    }
-                }
+            while let self, !Task.isCancelled, !self.pendingPictures.isEmpty {
+                let id = self.pendingPictures.removeFirst()
+                guard self.startedPictures.insert(id).inserted else { continue }
+                await self.makePicture(id, pass: pass, gone: gone, thumbnails: thumbnails)
             }
+            guard let self, !Task.isCancelled else { return }
+            // Done: a later ask starts afresh (Home may have dropped the pictures meanwhile).
+            self.pictureTask = nil
+            self.startedPictures = []
+        }
+    }
+
+    /// The width, screen scale and layout the covers in progress are made for.
+    private struct PicturePass: Equatable {
+        var width: CGFloat
+        var scale: CGFloat
+        var layout: HomeMosaic.Layout
+    }
+
+    private func makePicture(_ id: String, pass: PicturePass, gone: Set<String>, thumbnails: ThumbnailStore) async {
+        let maxPixel = Int((pass.width * pass.scale).rounded())
+        let cellPixels = pass.layout.cellPixels(width: pass.width, scale: pass.scale)
+        if let e = shownRecent[id] {
+            guard !gone.contains(e.path), let file = e.file else { return }
+            let image = await thumbnails.cover(e.url.appendingPathComponent(file), maxPixel: maxPixel)
+            guard !Task.isCancelled else { return }
+            if let image { view?.setImage(image, for: id) }
+        } else if let s = shownSessions[id] {
+            let files = s.snapshot.windows.flatMap(\.tabs).compactMap { tab -> URL? in
+                if case .file(let path, _) = tab { return URL(fileURLWithPath: path) }
+                return nil
+            }.prefix(4)
+            var pictures: [CGImage] = []
+            for url in files {
+                if let image = await thumbnails.cover(url, maxPixel: cellPixels) { pictures.append(image) }
+            }
+            guard !Task.isCancelled else { return }
+            let (width, scale, layout) = (pass.width, pass.scale, pass.layout)
+            // Drawn off the main thread.
+            let made = await Task.detached(priority: .utility) { [pictures] in
+                HomeMosaic.make(pictures, size: CGSize(width: width, height: width), layout: layout, scale: scale)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let mosaic = made { view?.setImage(mosaic, for: id) }
         }
     }
 

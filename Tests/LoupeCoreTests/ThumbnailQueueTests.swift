@@ -108,4 +108,11 @@ import Foundation
         #expect(order.count == 80_000)
         #expect(ContinuousClock.now - start < .seconds(2))
     }
+
+    /// A browser's photos: those in view first, then the margin, each in its order; with none in view, the margin.
+    @Test func inViewFirstKeepsTheMargin() {
+        let f = (0..<6).map { URL(fileURLWithPath: "/p/\($0).jpg") }
+        #expect(ThumbnailRequest.inViewFirst(f, inView: [f[3], f[4]]) == [f[3], f[4], f[0], f[1], f[2], f[5]])
+        #expect(ThumbnailRequest.inViewFirst(f, inView: []) == f)
+    }
 }
