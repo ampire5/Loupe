@@ -75,7 +75,7 @@ private final class TryCount: @unchecked Sendable {
         #expect(log.peak(network: true) == 1)
         // A slow share does not hold up the local cards: both kinds run side by side.
         #expect(log.peakTogether == 3)
-        #expect(await queue.runningCount == 0)
+        #expect(await eventually { await queue.runningCount == 0 })   // a work ends just before the queue hears of it
     }
 
     @Test func visibleFirst() async {
@@ -143,6 +143,23 @@ private final class TryCount: @unchecked Sendable {
         gate.open()
         #expect(await eventually { log.ended.count == 4 })
         #expect(log.started == ["h", "v2", "m1", "m2"])
+    }
+
+    /// Review fix: a card whose picture the browser dropped (a sort, a filter, a quick scroll out and back) is asked
+    /// for again: once forgotten, its cover is made again; without that, done stays done.
+    @Test func forgottenCardIsMadeAgain() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1)
+        let log = CoverLog()
+        await queue.want(["a", "b"], visible: 2, client: 3, isNetwork: { _ in false }, work: Self.work(log, time: .milliseconds(1)))
+        #expect(await eventually { log.ended.count == 2 })
+        await queue.want(["a", "b"], visible: 2, client: 3, isNetwork: { _ in false }, work: Self.work(log, time: .milliseconds(1)))
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(log.started == ["a", "b"])
+        await queue.forget(["a"], client: 3)
+        await queue.forget(["a"], client: 4)   // another client's: nothing of client 3's
+        #expect(await eventually { log.ended.count == 3 })
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(log.started == ["a", "b", "a"])
     }
 
     /// Fast scrolling through a hundred folders: the queue keeps only the cards wanted last, and a card that left is

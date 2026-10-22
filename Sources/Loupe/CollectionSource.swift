@@ -113,8 +113,7 @@ enum SessionCardAction {
         let scale = view?.window?.backingScaleFactor ?? 2
         let maxPixel = Int((width * scale).rounded())
         let layout = coverLayout
-        // A grid's cells are a half or a quarter of the card; the other layouts' first picture fills most of it.
-        let cellPixels = layout == .grid && width >= HomeMosaic.narrowWidth ? max(64, maxPixel / 2) : maxPixel
+        let cellPixels = layout.cellPixels(width: width, scale: scale)
         let thumbnails = self.thumbnails
         let wanted = ids
         let reachability = self.reachability

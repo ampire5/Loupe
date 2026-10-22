@@ -546,6 +546,87 @@ private final class FakeListing: @unchecked Sendable {
         hang.signal()
     }
 
+    /// Review fix: a local folder whose resolving lane is full of another folder's hung resolves is not timed out
+    /// three times for it: it goes on as a local folder without the catalog, on its own volume's terms.
+    @Test func shownLocalFolderBusyLaneGoesOnLocally() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let hang = DispatchSemaphore(value: 0), calls = TryCounter()
+        let store = store(ThumbReader(), dir: dir, locate: { url in
+            if url.path.hasPrefix("/loc/hung") { hang.wait() } else { calls.add() }
+            return ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path, name: "_")
+        })
+        await store.setCoverListing(ThumbnailStore.listCoverNames, localTimeout: .milliseconds(30))
+        await store.setCoverVolumes { _ in false }
+        let lane = CoverLane(network: false, resolving: true)
+        for i in 0..<ThumbnailStore.coverThreadsPerLane {
+            #expect(await store.folderLocation(URL(fileURLWithPath: "/loc/hung\(i)")) == .notNow)
+        }
+        #expect(store.coverThreads.count(lane) == ThumbnailStore.coverThreadsPerLane)
+        let place = await store.shownFolderPlace(URL(fileURLWithPath: "/loc/ok"), retry: .milliseconds(10))
+        #expect(place == .unknown(network: false))
+        #expect(calls.count == 0)   // never got a thread: busy each time, not timed out
+        for _ in 0..<ThumbnailStore.coverThreadsPerLane { hang.signal() }
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        // The lane free again: it resolves.
+        #expect(await store.shownFolderPlace(URL(fileURLWithPath: "/loc/ok")) == .located(loc("/loc/ok")))
+    }
+
+    /// Review fix (spec: a return is instant): a folder with fewer photos than a cover takes is listed once a
+    /// session; its next cover comes from the pick remembered and the catalog's thumbnails.
+    @Test func smallFolderListedOnce() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/p/two", ["1.jpg", "2.jpg"])
+        listing.set("/p/two", files: ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/p/two")
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64)?.count == 2)
+        #expect(listing.calls == ["/p/two"])
+        let reads = reader.reads.count
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64)?.count == 2)
+        #expect(listing.calls == ["/p/two"])
+        #expect(reader.reads.count == reads)
+    }
+
+    /// Review fix: a folder of folders is listed once a session too; its subfolders' pictures come from the catalog.
+    @Test func containerFolderListedOnce() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        listing.set("/p/box", folders: ["s1", "s2"])
+        listing.set("/p/box/s1", files: ["a.jpg"])
+        listing.set("/p/box/s2", files: ["b.jpg"])
+        photos(reader, in: "/p/box/s1", ["a.jpg"])
+        photos(reader, in: "/p/box/s2", ["b.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/p/box")
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/box"), maxPixel: 64)?.count == 2)
+        let listed = listing.calls.count
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/box"), maxPixel: 64)?.count == 2)
+        #expect(listing.calls.count == listed)
+    }
+
+    /// Review fix: a pick remembered for another last-viewed photo is not used: the folder is listed again, so the
+    /// photo last viewed leads.
+    @Test func rememberedPickForAnotherLastViewedListsAgain() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/p/two", ["1.jpg", "2.jpg"])
+        listing.set("/p/two", files: ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/p/two")
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64)?.count == 2)
+        // Another photo last viewed: the remembered pick was made without it.
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, lastViewed: "2.jpg")?.count == 2)
+        #expect(listing.calls == ["/p/two", "/p/two"])
+    }
+
     /// Fix round 2: a local disk that hangs is limited too (generously): its cover is "not now" after the local time
     /// limit, so it gives the local lane's queue place back.
     @Test func hungLocalDiskTimesOut() async {

@@ -121,6 +121,18 @@ public actor CoverQueue {
         pump()
     }
 
+    /// Cards of `client` whose cover is no longer shown (the browser dropped the picture and has none kept): made again
+    /// while they are wanted, not counted as done.
+    public func forget(_ ids: [String], client: Int = 0) {
+        for id in ids {
+            let key = Key(client: client, id: id)
+            done.remove(key)
+            retryAt[key] = nil
+            notNows[key] = nil
+        }
+        pump()
+    }
+
     /// True while the viewer is busy: covers wait. Back to false, they start again after `resumeDelay`, unless the
     /// viewer is busy again by then.
     public func pause(_ on: Bool) {
