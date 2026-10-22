@@ -754,7 +754,7 @@ import LoupeRender
                            fresh: Bool = false, opened: Bool = false) {
         guard let current = playlist?.current else { return }
         settleZoom()            // the new photo inherits the mode a zoom key asked for, not a frame on the way
-        if collapseView?.url != current { collapseView = nil }
+        if collapseView?.page != current { collapseView = nil }
         cancelFolderRequest()   // any navigation outranks a folder switch still being resolved
         jumpedFromStrip = fromStrip
         stepWait = wait
@@ -945,9 +945,7 @@ import LoupeRender
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
         if let saved = restored(url, size: size, over: current) { return saved }
-        if let collapse = collapseView, collapse.url == url, collapse.transform.imageSize == size {
-            return collapse.transform
-        }
+        if let collapsed = collapseView?.transform(for: url, size: size, over: current) { return collapsed }
         let arrival: PhotoSwitchView.Arrival = url == laidOut ? .laidOut : url == freshOpen ? .opened : .switched
         // The photo on screen keeps the transform it has (a frame of a zoom animation included), as before.
         return PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
@@ -1079,7 +1077,7 @@ import LoupeRender
             let next = transform(showing: e.url, size: layoutSize(info))
             laidOut = e.url   // before the transform changes: what its observers ask of this photo keeps this view
             if freshOpen == e.url { freshOpen = nil }
-            if collapseView?.url == e.url { collapseView = nil }
+            if collapseView?.page == e.url { collapseView = nil }
             if let restore, restore.file == e.url {
                 // The pair's other page has a stand-in size: the saved view (recorded at the pair's real size) is
                 // decided once that page's size is in (`relayout`), while the view stays untouched (a zoom key pressed
@@ -1152,7 +1150,7 @@ import LoupeRender
     /// `shownLayout`'s other page has a stand-in size: a saved view of the pair waits for the real one.
     private var shownLayoutProvisional = false
     /// The view a pair's first page gets when the pair gives way to it alone (`spreadChanged`), until it is shown.
-    private var collapseView: (url: URL, transform: ViewTransform)?
+    private var collapseView: SpreadCollapse?
     private var sentPins: (URL?, URL?) = (nil, nil)
     private var spreadSyncPending = false
     private var spreadRebuildPending = false
@@ -1278,7 +1276,7 @@ import LoupeRender
             if let page = shownCompanion, let files = playlist?.files, page.url == files[first],
                entry?.url == playlist?.current, page.failure == nil, let info = page.info, let rect = companionRect {
                 settleZoom()
-                collapseView = (page.url, SpreadZoom.carried(transform, from: rect, to: displaySize(info), at: nil))
+                collapseView = SpreadCollapse(page: page.url, rect: rect, pageSize: displaySize(info), from: transform)
             }
             navigate { _ = $0.move(by: first - $0.index) }
             return

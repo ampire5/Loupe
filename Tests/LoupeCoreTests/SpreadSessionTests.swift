@@ -221,3 +221,22 @@ private let arrived = ViewTransform(imageSize: CGSize(width: 900, height: 600), 
             == .actual(2))
     #expect(waiting.following(from: first.withMode(.free(3)), to: carried) == nil)
 }
+
+/// The first page alone after its pair: carried at the show from the window of then, so a resize meanwhile keeps the
+/// current view size; a zoom key meanwhile, another photo or size drop it.
+@Test func collapseFollowsTheWindowAndYieldsToAZoomKey() {
+    let first = URL(fileURLWithPath: "/f/12.jpg")
+    let page = CGSize(width: 1000, height: 1500)
+    let layout = SpreadLayout(first: page, second: page, rightToLeft: false)
+    let pair = ViewTransform(imageSize: layout.virtualSize, viewSize: CGSize(width: 2400, height: 1200), mode: .free(4),
+                             center: CGPoint(x: 0.25, y: 0.5))
+    let collapse = SpreadCollapse(page: first, rect: layout.rects[0], pageSize: page, from: pair)
+    let resized = pair.withViewSize(CGSize(width: 1000, height: 1200))   // narrower than tall: the collapse's cause
+    let shown = collapse.transform(for: first, size: page, over: resized)
+    #expect(shown?.viewSize == resized.viewSize)
+    #expect(shown?.center == CGPoint(x: 0.5, y: 0.5))
+    #expect(shown.map { abs($0.scale - resized.scale) < 1e-9 } == true)
+    #expect(collapse.transform(for: first, size: page, over: pair.withMode(.actual(1))) == nil)   // a zoom key
+    #expect(collapse.transform(for: first, size: CGSize(width: 999, height: 1500), over: pair) == nil)
+    #expect(collapse.transform(for: URL(fileURLWithPath: "/f/13.jpg"), size: page, over: pair) == nil)
+}
