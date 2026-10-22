@@ -322,8 +322,8 @@ extension ThumbnailStore {
     /// the location, or from the mount table without one. `modified` is the folder's (or zip's) date as its parent's
     /// listing gave it.
     ///
-    /// Four of the folder's photos in the catalog, or the pick of this session's complete listing, are its pictures,
-    /// at once, without a listing. A summary in the catalog made at that date needs none either; else the card goes
+    /// Four of the folder's photos in the catalog (every one of a folder whose stored summary counts fewer:
+    /// `catalogCount`), or the pick of this session's complete listing, are its pictures, at once, without a listing. A summary in the catalog made at that date needs none either; else the card goes
     /// out with `summaryPending` and the next call for the folder lists it (limited to `coverListingTimeout` on a
     /// share, `coverLocalListingTimeout` elsewhere), until a listing answers, once a session (`summaryFollowUp`; while
     /// its share is offline only a call that may take the share's probe of `coverOfflineProbeInterval` lists): with
@@ -352,9 +352,10 @@ extension ThumbnailStore {
         let wantsSummary = !fresh && !summaryTried.contains(key)
         let place = CardPlace(folder: folder, archive: archive, network: network, key: key, volume: volume,
                               modified: modified)
-        // The catalog's four: the pictures at once, whatever becomes of the summary's listing.
-        if let location, let images = await catalogCells(location, count: Self.coverPhotos, lastViewed: lastViewed,
-                                                         maxPixel: maxPixel) {
+        // The catalog's four (or all of a smaller folder's): the pictures at once, whatever becomes of the summary's
+        // listing.
+        if let location, let images = await catalogCells(location, count: Self.catalogCount(stored),
+                                                         lastViewed: lastViewed, maxPixel: maxPixel) {
             return await summaryFollowUp(images, place, location: location, stored: stored, wants: wantsSummary)
         }
         if emptyCovers.contains(key) {
@@ -386,6 +387,17 @@ extension ThumbnailStore {
         if made.listed, !Task.isCancelled { noteSummaryTried(key) }
         return card(made.images, listing: made.listing, problem: isOffline(volume) ? .offline : made.problem,
                     modified: modified, location: location)
+    }
+
+    /// How many of a folder's photos the catalog must have for its card's pictures to come from there, without a
+    /// listing: four, or every photo of a folder whose stored summary counts fewer (however old the summary: the
+    /// catalog's four are as old). Without it a folder of one or three photos was listed for its pictures whenever its
+    /// remembered pick no longer served (another photo last viewed there, the folder's date not yet known), and a
+    /// listing that failed on a busy share gave the card up for the session (`emptyCovers`, which a smaller folder met
+    /// before its catalog): the cover vanished though the catalog had it.
+    nonisolated static func catalogCount(_ stored: FolderSummary?) -> Int {
+        guard let photos = stored?.photos, photos > 0 else { return coverPhotos }
+        return min(coverPhotos, photos)
     }
 
     /// A card's folder as `folderCard` was asked for it, for the summary's follow-up.

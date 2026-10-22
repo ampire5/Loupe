@@ -635,21 +635,25 @@ private final class FakeListing: @unchecked Sendable {
         #expect(listing.calls.count == listed)
     }
 
-    /// Review fix: a pick remembered for another last-viewed photo is not used: the folder is listed again, so the
-    /// photo last viewed leads.
-    @Test func rememberedPickForAnotherLastViewedListsAgain() async {
+    /// Another photo last viewed in a small folder whose photos are all in the catalog: it leads the cover, from the
+    /// catalog, without a listing (final fix wave: a small folder is covered from the catalog like a bigger one).
+    @Test func smallFolderLastViewedLeadsFromTheCatalog() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let reader = ThumbReader(), listing = FakeListing()
-        photos(reader, in: "/p/two", ["1.jpg", "2.jpg"])
+        reader.add(URL(fileURLWithPath: "/p/two/1.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        reader.add(URL(fileURLWithPath: "/p/two/2.jpg"), TestJPEGs.gradient(width: 30, height: 40))
         listing.set("/p/two", files: ["1.jpg", "2.jpg"])
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
         let folder = URL(fileURLWithPath: "/p/two")
-        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64)?.count == 2)
-        // Another photo last viewed: the remembered pick was made without it.
-        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, lastViewed: "2.jpg")?.count == 2)
-        #expect(listing.calls == ["/p/two", "/p/two"])
+        let first = try #require(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64))
+        #expect(first.count == 2 && first[0].width > first[0].height)
+        // Another photo last viewed: the remembered pick was made without it, the catalog has both.
+        let viewed = try #require(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64,
+                                                          lastViewed: "2.jpg"))
+        #expect(viewed.count == 2 && viewed[0].width < viewed[0].height)
+        #expect(listing.calls == ["/p/two"])
     }
 
     /// Fix round 2: a local disk that hangs is limited too (generously): its cover is "not now" after the local time
@@ -705,7 +709,8 @@ private final class FakeListing: @unchecked Sendable {
         #expect(await store.folderCover(folder, archive: false, in: loc("/p/fill"), maxPixel: 64, modified: after)?.count == 2)
     }
 
-    /// A pick remembered is dropped when the folder's date changed (emptied or changed in the Finder).
+    /// A folder whose date changed (emptied or changed in the Finder) is looked at again: its pictures from the
+    /// catalog at once (a small folder's as a bigger one's), its listing on the next call, for the summary.
     @Test func pickMemoFollowsTheFolderDate() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -720,7 +725,9 @@ private final class FakeListing: @unchecked Sendable {
         #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: before)?.count == 2)
         #expect(listing.calls == ["/p/two"])            // same date: from the pick
         #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: after)?.count == 2)
-        #expect(listing.calls == ["/p/two", "/p/two"])  // another date: listed again
+        #expect(listing.calls == ["/p/two"])            // another date: the catalog's pictures at once
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: after)?.count == 2)
+        #expect(listing.calls == ["/p/two", "/p/two"])  // and listed again for the summary
     }
 
     /// The mount table says where a path is without asking its file system: the boot volume is local.
@@ -2148,5 +2155,71 @@ final class LockedErrors: @unchecked Sendable {
                                     networkTimeout: .seconds(30))
         _ = await store.folderCard(URL(fileURLWithPath: "/net/e"), archive: false, in: loc("/net/e"), maxPixel: 64)
         #expect(asked.count == 1)
+    }
+}
+
+/// The final fix wave of the folder cards: a folder of fewer than four photos is covered from the catalog as a bigger
+/// one is, so a share that is busy (or fails) when its card is asked for again cannot blank it.
+@Suite struct FolderCardSmallFolderTests {
+    private let fm = FileManager.default
+
+    private func tempDir() -> URL { fm.temporaryDirectory.appendingPathComponent("loupe-folder-card-\(UUID().uuidString)") }
+
+    private func store(_ reader: ThumbReader, dir: URL) async -> ThumbnailStore {
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: { url in
+                                       ThumbnailLocation(volume: url.path.hasPrefix("/net/") ? "net:share" : "test",
+                                                         folder: url.deletingLastPathComponent().path,
+                                                         name: url.lastPathComponent)
+                                   }, idleDelay: .zero, commitDelay: .seconds(3600))
+        await store.setCoverNetworkVolumes { _ in nil }
+        await store.setCoverVolumes { $0.path.hasPrefix("/net/") }
+        return store
+    }
+
+    private func loc(_ folder: String) -> ThumbnailLocation {
+        ThumbnailLocation(volume: folder.hasPrefix("/net/") ? "net:share" : "test", folder: folder, name: "_")
+    }
+
+    private static let day = Date(timeIntervalSinceReferenceDate: 700_000_000)
+
+    /// The vanish seen on a share: a folder of one photo was covered (its thumbnail and summary in the catalog), then
+    /// viewed (its last-viewed photo changes, so the pick remembered for the card no longer serves). Asked for again
+    /// while the share is busy, its card listed the folder for the pictures; three listings without a name in time
+    /// (with other cards' listings answering in between, so the share never went offline and came back) gave it up
+    /// for the session, and from then on it was empty, though the catalog had its photo. Before the complete listing
+    /// (no folder date) and after.
+    @Test(arguments: [nil, FolderCardSmallFolderTests.day])
+    func smallFolderKeepsItsCoverWhileTheShareIsBusy(_ modified: Date?) async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), busy = LockedFlag(), calls = TryCounter(), gate = DispatchSemaphore(value: 0)
+        let store = await store(reader, dir: dir)
+        reader.add(URL(fileURLWithPath: "/net/p/one/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            if busy.isSet { gate.wait() }
+            return CoverListing(names: CoverNames(files: ["a.jpg"], folders: []))
+        }, networkTimeout: .milliseconds(50))
+        let folder = URL(fileURLWithPath: "/net/p/one")
+        func card(_ lastViewed: String?) async -> FolderCard? {
+            await store.folderCard(folder, archive: false, in: loc("/net/p/one"), maxPixel: 64, lastViewed: lastViewed,
+                                   modified: modified)
+        }
+        let first = try #require(await card(nil))
+        #expect(first.images.count == 1 && first.summary?.photos == 1)
+        let listed = calls.count
+        busy.set()
+        for _ in 0..<ThumbnailStore.coverTimeoutsAllowed {
+            let again = await card("a.jpg")
+            #expect(again?.images.count == 1)
+            // Another card's listing on the share answers: it is not offline.
+            await store.volumeAnswered(URL(fileURLWithPath: "/net/p/other"), in: loc("/net/p/other"))
+        }
+        busy.reset()
+        for _ in 0..<ThumbnailStore.coverTimeoutsAllowed { gate.signal() }
+        let back = try #require(await card("a.jpg"))
+        #expect(back.images.count == 1)
+        #expect(calls.count == listed)   // from the catalog: the folder is not listed for its picture again
     }
 }
