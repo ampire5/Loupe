@@ -83,8 +83,8 @@ enum StashOpenError: LocalizedError, Equatable {
             barBox.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -48),
             bar.leadingAnchor.constraint(equalTo: barBox.leadingAnchor, constant: Chrome.Space.xl),
             bar.trailingAnchor.constraint(equalTo: barBox.trailingAnchor, constant: -Chrome.Space.xl),
-            bar.topAnchor.constraint(equalTo: barBox.topAnchor, constant: 10),
-            bar.bottomAnchor.constraint(equalTo: barBox.bottomAnchor, constant: -10),
+            bar.topAnchor.constraint(equalTo: barBox.topAnchor, constant: Chrome.Space.m),
+            bar.bottomAnchor.constraint(equalTo: barBox.bottomAnchor, constant: -Chrome.Space.m),
         ])
     }
 

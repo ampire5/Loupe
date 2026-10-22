@@ -49,6 +49,8 @@ import LoupeCore
         addSubview(panel)
         scrim.wantsLayer = true
         scrim.layer?.backgroundColor = Chrome.Palette.overMedia.scrim.cgColor
+        scrim.layer?.cornerRadius = Chrome.Radius.panel   // the glass's own corners
+        scrim.layer?.masksToBounds = true
         panel.contentView.addSubview(scrim)
     }
 
@@ -98,8 +100,8 @@ import LoupeCore
         let y = size.height <= room.height ? ((bounds.height - size.height) / 2).rounded()
             : bounds.height - Self.margin - size.height   // the top edge at the margin (y up)
         panel.frame = NSRect(x: x, y: y, width: size.width.rounded(.up), height: size.height.rounded(.up))
-        scrim.frame = panel.contentView.bounds
-        content.frame = panel.contentView.bounds
+        scrim.frame = panel.bounds
+        content.frame = panel.bounds
     }
 
     private func build(scale: CGFloat) {
