@@ -55,6 +55,10 @@ import LoupeCore
         if entry.kind == .collection { collections.perform(item, on: entry) } else { folders.perform(item, on: entry, in: location) }
     }
 
+    /// A folder's, a place's or a zip's row in the sidebar: Show in Finder and Copy Path, as their cards.
+    func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] { folders.sidebarMenu(for: row) }
+    func performSidebar(_ item: String, on row: HomeSidebarRow) { folders.performSidebar(item, on: row) }
+
     func open(_ entry: BrowserEntry, in location: BrowserLocation, sort: BrowserSort, how: HomeClick) {
         if entry.kind == .collection {
             collections.open(entry, how: how)

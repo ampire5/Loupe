@@ -646,10 +646,8 @@ extension Notification.Name {
         case "open": open(entry, how: .open)
         case "openNewTab": open(entry, how: .openNewTab)
         case "openNewWindow": open(entry, how: .openNewWindow)
-        case "reveal": NSWorkspace.shared.activateFileViewerSelecting([ArchivePath.split(entry.url)?.archive ?? entry.url])
-        case "copyPath":
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(ArchivePath.copyText(entry.url), forType: .string)
+        case "reveal": reveal(entry.url)
+        case "copyPath": copyPath(entry.url)
         case "pin", "unpin":
             if item == "pin" { places.pin(entry.url) } else { places.unpin(entry.url) }
             view?.reloadPlaces()
@@ -658,6 +656,31 @@ extension Notification.Name {
         case "trash": view?.trashSelected()
         default: break
         }
+    }
+
+    /// A sidebar row of a folder, a place or a zip (`.folder` rows): the cards' Show in Finder and Copy Path.
+    func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] {
+        guard case .folder = row.location else { return [] }
+        return [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
+    }
+
+    func performSidebar(_ item: String, on row: HomeSidebarRow) {
+        guard case .folder(let url) = row.location else { return }
+        switch item {
+        case "reveal": reveal(url)
+        case "copyPath": copyPath(url)
+        default: break
+        }
+    }
+
+    /// The Finder shows `url` selected (a zip's entry: the zip).
+    private func reveal(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([ArchivePath.split(url)?.archive ?? url])
+    }
+
+    private func copyPath(_ url: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ArchivePath.copyText(url), forType: .string)
     }
 
     func open(_ entry: BrowserEntry, in location: BrowserLocation, sort: BrowserSort, how: HomeClick) {
