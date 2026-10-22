@@ -1175,14 +1175,13 @@ import LoupeRender
     /// filter that page is drawn with, not the other's. Nil without a picture.
     func drawnPage(_ url: URL?) -> (image: TiledImage, scale: Double)? {
         let companion = url != nil && url == shownCompanion?.url
+        // The pair's other page while it is not drawn (not read yet, failed): nothing to describe, not the photo beside it.
+        if !companion, url != nil, url == companionURL, url != entry?.url { return nil }
         guard let image = companion ? companionImage : self.image, let info = (companion ? shownCompanion : entry)?.info
         else { return nil }
-        var scale = transform.drawnScale
-        let height = displaySize(info).height
-        if let layout = shownLayout, layout.virtualSize.height > 0, height > 0 {
-            scale *= layout.virtualSize.height / height
-        }
-        return (image, scale)
+        let scale = transform.drawnScale
+        guard let layout = shownLayout else { return (image, scale) }
+        return (image, layout.pageScale(scale, pageHeight: Double(displaySize(info).height)))
     }
 
     /// The orientation `companionImage` is drawn with (as `drawOrientation`).
@@ -1480,7 +1479,7 @@ import LoupeRender
             return transform(showing: url, size: size, over: judgedTransform).scale
         }
         let t = transform(showing: anchor, size: layout.virtualSize, over: judgedTransform)
-        return t.scale * layout.virtualSize.height / size.height
+        return layout.pageScale(t.scale, pageHeight: Double(size.height))
     }
 
     /// Tells Recent of the photo on screen: its folder is entered when it is not the last one told. With two pages on
