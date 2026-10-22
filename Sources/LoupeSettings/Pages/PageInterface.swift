@@ -22,7 +22,7 @@ extension SettingsPanel {
                         + "portraits. Both pages share one height and zoom and pan as one picture; arrows and the wheel "
                         + "step by pairs. A window taller than wide shows one page. D switches it for the folder (its "
                         + "toast says why a page stays alone), ⇧D saves. Default off."),
-            .toggle("spread-shift", "First page alone", symbol: "book.closed",
+            .toggle("spread-shift", "Shift pages (first page alone)", symbol: "book.closed",
                     description: "The first page stands alone, as a cover, and the pairs start from the second: 1, "
                         + "2–3, 4–5…; off: 1–2, 3–4… ⌥D switches it for the folder, when the pairs come out one page "
                         + "off. Default off."),

@@ -60,6 +60,11 @@ struct PagesTests {
         }
     }
 
+    /// The two-page rows say what their menu items and toasts say: Shift Pages (⌥D, «Pages shifted»).
+    @Test func spreadShiftNamedAsItsMenuItem() {
+        #expect(rows.first { $0.id == "spread-shift" }?.title == "Shift pages (first page alone)")
+    }
+
     @Test func everyRowHasTitleAndDescription() {
         for row in rows {
             if case .custom = row.kind { continue }            // a table: no title or description shown
