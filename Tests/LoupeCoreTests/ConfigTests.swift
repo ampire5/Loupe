@@ -304,10 +304,16 @@ import Foundation
 }
 
 @Test func cacheLimitsFollowConfig() {
-    #expect(CacheLimits(config: Config()) == CacheLimits())
+    // A unified-memory Mac: one budget, which is what `CacheLimits()` is.
+    let unified = MachineProfile(physicalCores: 8, performanceCores: 8, memoryBytes: 16 << 30,
+                                 gpu: GPUProfile(unifiedMemory: true, workingSetBytes: 12 << 30, name: "Apple GPU"))
+    #expect(CacheLimits(config: Config(), profile: .current).graphicsMemory == HardwareAdvice.graphicsMemory(.current))
+    var plain = CacheLimits(config: Config())
+    plain.graphicsMemory = nil
+    #expect(plain == CacheLimits())
     var c = Config()
     c.cacheFull = 2; c.cachePreviews = 7; c.cacheFarPreviewsCoarse = false; c.cacheFiles = 3; c.cacheMemory = 1 << 30; c.showBlurry = .fit
-    let l = CacheLimits(config: c)
+    let l = CacheLimits(config: c, profile: unified)
     #expect(l.full == 2 && l.previews == 7 && !l.farPreviewsCoarse && l.files == 3 && l.memory == 1 << 30 && l.showBlurry == .fit)
 }
 
@@ -1638,7 +1644,9 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(JXLOptions(config: Config()) == JXLOptions())
     var o = Config()
     o.jxlThreadsCurrent = 8; o.jxlThreadsOther = 3; o.jxlDCPreview = false
-    #expect(JXLOptions(config: o) == JXLOptions(threadsCurrent: 8, threadsOther: 3, dcPreview: false))
+    let roomy = MachineProfile(physicalCores: 16, performanceCores: 12, memoryBytes: 64 << 30,
+                               gpu: GPUProfile(unifiedMemory: true, workingSetBytes: 48 << 30, name: "Apple GPU"))
+    #expect(JXLOptions(config: o, profile: roomy) == JXLOptions(threadsCurrent: 8, threadsOther: 3, dcPreview: false))
 }
 
 @Test func spreadKeys() {

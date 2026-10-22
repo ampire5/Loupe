@@ -63,3 +63,15 @@ private let intelIGPU = MachineProfile(physicalCores: 4, performanceCores: 4, me
         #expect(HardwareAdvice.note(forKey: key, value: Config().text(forKey: key)!, on: .current) == nil)
     }
 }
+
+@Test func limitsCarryTheGraphicsTier() {
+    #expect(CacheLimits(config: Config(), profile: imac).graphicsMemory == 4_286_578_688)
+    #expect(CacheLimits(config: Config(), profile: m4max).graphicsMemory == nil)
+    #expect(CacheLimits().graphicsMemory == nil)
+}
+
+@Test func neighbourThreadsTakeEffectClamped() {
+    let (config, _) = Config.parse("jxl-threads-other=8\n")
+    #expect(JXLOptions(config: config, profile: imac).threadsOther == 2)
+    #expect(JXLOptions(config: config, profile: m4max).threadsOther == 4)
+}

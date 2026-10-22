@@ -29,15 +29,18 @@ public struct CacheLimits: Equatable, Sendable {
     /// `cache-idle-keep`: what the trim leaves.
     public var idleKeep = CacheIdleKeep.full
     public var showBlurry = ShowBlurry.no
+    /// The card's own budget on a Mac with a discrete GPU (half its working set); nil: one budget, `memory`.
+    public var graphicsMemory: Int?
 
     public init() {}
 
-    public init(config: Config) {
+    public init(config: Config, profile: MachineProfile = .current) {
         full = config.cacheFull
         previews = config.cachePreviews
         farPreviewsCoarse = config.cacheFarPreviewsCoarse
         files = config.cacheFiles
         memory = config.cacheMemory
+        graphicsMemory = HardwareAdvice.graphicsMemory(profile)
         idleTrim = config.cacheIdleTrimMinutes == 0 ? nil : .seconds(config.cacheIdleTrimMinutes * 60)
         idleKeep = config.cacheIdleKeep
         showBlurry = config.showBlurry

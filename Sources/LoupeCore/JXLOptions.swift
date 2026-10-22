@@ -8,14 +8,19 @@ public struct JXLOptions: Equatable, Sendable {
     public var threadsOther: Int
     public var dcPreview: Bool
 
-    public init(threadsCurrent: Int = Machine.jxlThreadsCurrent, threadsOther: Int = HardwareAdvice.defaultJXLThreadsOther(.current), dcPreview: Bool = true) {
+    public init(threadsCurrent: Int = Machine.jxlThreadsCurrent,
+                threadsOther: Int = HardwareAdvice.defaultJXLThreadsOther(.current),
+                dcPreview: Bool = true) {
         self.threadsCurrent = threadsCurrent
         self.threadsOther = threadsOther
         self.dcPreview = dcPreview
     }
 
-    public init(config: Config) {
-        self.init(threadsCurrent: config.jxlThreadsCurrent, threadsOther: config.jxlThreadsOther,
+    /// `threadsOther` takes effect clamped to what the Mac can spare (`HardwareAdvice`); the file keeps the value
+    /// as written.
+    public init(config: Config, profile: MachineProfile = .current) {
+        self.init(threadsCurrent: config.jxlThreadsCurrent,
+                  threadsOther: HardwareAdvice.effectiveJXLThreadsOther(config.jxlThreadsOther, profile),
                   dcPreview: config.jxlDCPreview)
     }
 }

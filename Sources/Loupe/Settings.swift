@@ -86,7 +86,7 @@ extension Notification.Name {
         config = loaded
         let (lines, inputWarnings) = Self.loadInput(from: inputFileURL)
         inputMap = InputMap(lines: lines)
-        let found = configWarnings + inputWarnings
+        let found = configWarnings + HardwareAdvice.warnings(for: loaded, on: .current) + inputWarnings
         if found != warnings {
             for w in found { FileHandle.standardError.write(Data("loupe: \(w)\n".utf8)) }
             warnings = found
