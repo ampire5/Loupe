@@ -286,3 +286,16 @@ import Testing
                                           minimum: 40) == nil)
     }
 }
+
+@Suite struct StatsLinePairTests {
+    private let info = ImageInfo(pixelSize: PixelSize(width: 100, height: 100), typeIdentifier: "public.jpeg",
+                                 isProgressive: false, fileSize: 1_000_000, colorSpaceName: nil)
+
+    @Test func statsRange() {
+        let t = ViewTransform(imageSize: CGSize(width: 100, height: 100), viewSize: CGSize(width: 50, height: 50))
+        let line = StatsLine.loaded(name: "a.jpg", index: 11, companion: 12, count: 380, info: info, transform: t, decodeMs: nil)
+        #expect(line.contains("   12–13 / 380   "))
+        #expect(StatsLine.loading(name: "a.jpg", position: (index: 11, count: 380), companion: 12)
+                == "Loading a.jpg…   12–13 / 380")
+    }
+}

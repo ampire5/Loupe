@@ -12,7 +12,9 @@ public enum ShowBlurry: String, Sendable {
 
 /// The `cache-*` and `show-blurry` settings the cache plan works to (spec §3.5), validated.
 public struct CacheLimits: Equatable, Sendable {
-    /// `cache-full`: 0 the current photo only, 1 also the next, 2 also the previous.
+    /// `cache-full`: 0 the current photo only, 1 also the next, 2 also the previous. While a pair is shown
+    /// (`CacheFocus.companion`) both its pages are current, so up to 2 photos are full whatever this says; the
+    /// next and previous counts then apply to the neighbouring pairs, page by page.
     public var full = 1
     /// `cache-previews`: photos kept at least at preview resolution, the current one included.
     public var previews = 20

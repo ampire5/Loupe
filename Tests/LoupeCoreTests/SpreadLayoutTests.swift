@@ -39,3 +39,13 @@ import Testing
     #expect(SpreadLayout.showsTwo(viewSize: CGSize(width: 1000, height: 800)))
     #expect(SpreadLayout.showsTwo(viewSize: CGSize(width: 1000, height: 1000)))
 }
+
+@Test func zeroSizePagesStayFinite() {
+    func finite(_ l: SpreadLayout) -> Bool {
+        let v = [l.virtualSize.width, l.virtualSize.height] + l.rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height] }
+        return v.allSatisfy { $0.isFinite }
+    }
+    #expect(finite(SpreadLayout(first: .zero, second: .zero, rightToLeft: false)))
+    #expect(finite(SpreadLayout(first: CGSize(width: 800, height: 0), second: CGSize(width: 500, height: 750), rightToLeft: true)))
+    #expect(finite(SpreadLayout(first: CGSize(width: 500, height: 750), second: CGSize(width: 800, height: 0), rightToLeft: false)))
+}
