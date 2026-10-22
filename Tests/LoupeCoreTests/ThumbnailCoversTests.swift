@@ -1249,8 +1249,8 @@ private final class FakeDatedListing: @unchecked Sendable {
 
     private static let day = Date(timeIntervalSinceReferenceDate: 700_000_000)
 
-    /// A share that hangs: the catalog's four pictures come all the same, and the listing tried for the summary is not
-    /// tried again on the next request.
+    /// A share that hangs: the catalog's four pictures come all the same; a summary's listing that does not answer
+    /// keeps the summary due, asked again on the next request, until the share is offline and waits for its probe.
     @Test func hungShareKeepsTheCatalogPictures() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -1270,15 +1270,19 @@ private final class FakeDatedListing: @unchecked Sendable {
         #expect(store.coverThreads.count(lane) == 0)   // not listed: the pictures went out at once
         let again = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
                                                         modified: Self.day))
-        #expect(again.images.count == 4 && !again.summaryPending && again.summary == nil)
-        #expect(store.coverThreads.count(lane) == 1)   // the summary's listing, hung
+        #expect(again.images.count == 4 && again.summaryPending && again.summary == nil)
+        #expect(store.coverThreads.count(lane) == 1)   // the summary's listing, hung: no answer, the try kept
         let third = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
                                                         modified: Self.day))
-        #expect(third.images.count == 4 && !third.summaryPending)
-        #expect(store.coverThreads.count(lane) == 1)   // tried once this session: no second listing
-        gate.signal()
+        #expect(third.images.count == 4 && third.summaryPending && third.problem == .offline)
+        #expect(store.coverThreads.count(lane) == 2)   // asked again; two time outs in a row: the share offline
+        let fourth = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
+                                                         modified: Self.day))
+        #expect(fourth.images.count == 4 && fourth.summaryPending)
+        #expect(store.coverThreads.count(lane) == 2)   // offline, its probe not due: nothing listed
+        for _ in 0..<2 { gate.signal() }
         #expect(await eventually { store.coverThreads.count(lane) == 0 })
-        #expect(calls.count == 1)
+        #expect(calls.count == 2)
     }
 
     /// A share listing only part of a big folder in time: the pictures from the catalog, no summary from a part, and
@@ -1956,5 +1960,157 @@ final class LockedErrors: @unchecked Sendable {
         #expect(ThumbnailStore.networkVolume(of: "/Volumes/Photos-1/2024", in: again) == key)
         #expect(ThumbnailStore.networkVolume(of: "/Library/Photos", in: mounts) == nil)
         #expect(ThumbnailStore.networkVolume(of: "/Volumes/Photos2/a", in: mounts) == nil)
+    }
+
+    /// A remembered pick for "/net/top/s" (looked into as a subfolder of "/net/top", so no summary made for it).
+    private func picked(_ store: ThumbnailStore, _ reader: ThumbReader) async {
+        reader.add(URL(fileURLWithPath: "/net/top/s/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        await store.setCoverListing(dated: { folder, _, _, _ in
+            folder.path == "/net/top" ? CoverListing(names: CoverNames(files: [], folders: ["s"]))
+                : CoverListing(names: CoverNames(files: ["a.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        _ = await store.folderCard(URL(fileURLWithPath: "/net/top"), archive: false, in: loc("/net/top"), maxPixel: 64)
+    }
+
+    /// A card with a remembered pick on an offline share whose probe gets no name in time keeps the pick's picture,
+    /// stays pending, and the folder's own notes (time outs, empty for the session) are left alone.
+    @Test func pickCardOutlastsATimedOutProbe() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), gate = DispatchSemaphore(value: 0), probeGate = DispatchSemaphore(value: 0)
+        let calls = TryCounter()
+        let store = await store(reader, dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await picked(store, reader)
+        await offline(store, gate: gate)
+        await store.setCoverProbeInterval(.zero)
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            probeGate.wait()
+            throw CancellationError()
+        }, networkTimeout: .milliseconds(50))
+        let folder = URL(fileURLWithPath: "/net/top/s"), key = ThumbnailStore.memoKey(folder, nil)
+        for _ in 0..<2 {
+            let card = try #require(await store.folderCard(folder, archive: false, in: loc("/net/top/s"), maxPixel: 64))
+            #expect(card.images.count == 1 && card.summaryPending && card.problem == .offline)
+        }
+        #expect(calls.count == 1)   // the probe, timed out
+        #expect(await store.coverTimeouts[key] == nil)
+        #expect(await !store.emptyCovers.contains(key))
+        for _ in 0..<2 { gate.signal() }
+        probeGate.signal()
+    }
+
+    /// A card with a remembered pick whose share's volume is gone during its summary's listing keeps the pick's
+    /// picture and stays pending (offline), not given up for the session.
+    @Test func pickCardOutlastsAGoneVolume() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), calls = TryCounter()
+        let store = await store(reader, dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await picked(store, reader)
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            throw POSIXError(.ENOENT)
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/net/top/s"), key = ThumbnailStore.memoKey(folder, nil)
+        func card() async throws -> FolderCard {
+            try #require(await store.folderCard(folder, archive: false, in: loc("/net/top/s"), maxPixel: 64))
+        }
+        #expect(try await card().summaryPending)
+        await store.setCoverVolumes { $0.path != "/net/top/s" }   // the mount table no longer has it on a share
+        let gone = try await card()
+        #expect(gone.images.count == 1 && gone.summaryPending && gone.problem == .offline)
+        #expect(calls.count == 1)
+        #expect(await !store.emptyCovers.contains(key))
+        let later = try await card()   // its probe not due: the pick's picture, nothing listed
+        #expect(later.images.count == 1 && later.summaryPending)
+        #expect(calls.count == 1)
+    }
+
+    /// On a local volume a summary's listing that times out, or finds its lane full, spends no try: the card stays
+    /// pending, and once the disk answers the summary comes.
+    @Test func busyLaneOrTimeOutLeavesTheTryDue() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), gate = DispatchSemaphore(value: 0), calls = TryCounter()
+        let store = await store(reader, dir: dir)
+        await catalogued(store, reader, in: "/p/f")
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            gate.wait()
+            throw CancellationError()
+        }, localTimeout: .milliseconds(50))
+        let folder = URL(fileURLWithPath: "/p/f"), lane = CoverLane(network: false, resolving: false)
+        func card() async throws -> FolderCard {
+            try #require(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64))
+        }
+        #expect(try await card().summaryPending)   // at once
+        for _ in 0..<ThumbnailStore.coverThreadsPerLane {
+            let timedOut = try await card()
+            #expect(timedOut.summaryPending && timedOut.images.count == 4 && timedOut.problem == nil)
+        }
+        #expect(store.coverThreads.count(lane) == ThumbnailStore.coverThreadsPerLane)
+        let busy = try await card()
+        #expect(busy.summaryPending)
+        #expect(calls.count == ThumbnailStore.coverThreadsPerLane)
+        for _ in 0..<ThumbnailStore.coverThreadsPerLane { gate.signal() }
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        await store.setCoverListing(dated: { _, _, _, _ in
+            CoverListing(names: CoverNames(files: (1...4).map { "\($0).jpg" }, folders: []))
+        }, localTimeout: .seconds(30))
+        let lit = try await card()
+        #expect(!lit.summaryPending && lit.summary?.photos == 4)
+    }
+
+    /// Folders given up while their share did not answer (time outs, connection errors) are tried again once the
+    /// share comes back: their cards, asked for again on hearing it, get their pictures.
+    @Test func givenUpFoldersComeBackWithTheShare() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), failing = LockedFlag(), calls = TryCounter()
+        failing.set()
+        let store = await store(reader, dir: dir)
+        await store.setCoverVolumes { _ in true }
+        reader.add(URL(fileURLWithPath: "/net/f/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            if failing.isSet { throw POSIXError(.EIO) }
+            return CoverListing(names: CoverNames(files: ["a.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/net/f"), key = ThumbnailStore.memoKey(folder, nil)
+        func card() async -> FolderCard? {
+            await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64)
+        }
+        #expect(await card() == nil)   // one connection error: not now
+        #expect(await card()?.problem == .offline)
+        #expect(await card()?.images.isEmpty == true)   // the third: given up for the session
+        #expect(await store.emptyCovers.contains(key))
+        failing.reset()
+        #expect(await card()?.images.isEmpty == true)
+        #expect(calls.count == ThumbnailStore.coverTimeoutsAllowed)
+        await store.volumeAnswered(URL(fileURLWithPath: "/net/shown"), in: loc("/net/shown"))
+        #expect(await !store.emptyCovers.contains(key))
+        #expect(await store.coverTimeouts[key] == nil)
+        let back = try #require(await card())
+        #expect(back.images.count == 1 && back.problem == nil)
+    }
+
+    /// A card's share is looked up in the mount table once per call.
+    @Test func shareLookedUpOncePerCard() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let asked = TryCounter()
+        let store = await store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverNetworkVolumes { _ in
+            asked.add()
+            return "net:share"
+        }
+        await store.setCoverListing(dated: { _, _, _, _ in CoverListing(names: CoverNames(files: [], folders: [])) },
+                                    networkTimeout: .seconds(30))
+        _ = await store.folderCard(URL(fileURLWithPath: "/net/e"), archive: false, in: loc("/net/e"), maxPixel: 64)
+        #expect(asked.count == 1)
     }
 }

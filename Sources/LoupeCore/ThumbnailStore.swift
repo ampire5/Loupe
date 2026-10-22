@@ -161,6 +161,9 @@ public actor ThumbnailStore {
     var coverVolumeTimeouts: [String: Int] = [:]
     var offlineVolumes: [String: ContinuousClock.Instant] = [:]
     var coverProbeInterval = ThumbnailStore.coverOfflineProbeInterval
+    /// Folders (by `memoKey`) given up or timing out because their share did not answer, with the share's key: their
+    /// notes go when it comes back. At most `coverPickLimit` (then forgotten at once).
+    var awayFolders: [String: String] = [:]
     /// Folder summaries made by covers, waiting for the next batch (`commit`), by volume and path; read before the
     /// catalog. At most `summaryBatch`: a full batch is written at once.
     var pendingSummaries: [String: (location: ThumbnailLocation, summary: FolderSummary)] = [:]
