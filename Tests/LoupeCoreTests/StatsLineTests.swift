@@ -85,7 +85,7 @@ import Testing
             InfoRow(label: "Colour space", value: "Display P3"),
             InfoRow(label: "Load", value: "read 98 · preview 112 · full 171 · upload 40 ms"),
             InfoRow(label: "Cache", value: "full"),
-            InfoRow(label: "Cache use", value: "20 previews · 2 full · 2.7 / 3.0 GB"),
+            InfoRow(label: "Cache use", value: "20 previews · 2 full · 2.9 / 3.2 GB"),
             InfoRow(label: "Memory", value: "RAM 3.4 GB · GPU 2.8 GB"),
             InfoRow(label: "Frame", value: "GPU 1.2/1.9 ms · 0 dropped"),
         ])
@@ -161,7 +161,7 @@ import Testing
                                  evictedInactive: (count: 3, bytes: 412 << 20))
         let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: timings, fromCache: false, state: .full,
                                          cache: evicted, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
-        #expect(value(rows, "Cache use") == "20 previews · 2 full · 2.7 / 3.0 GB · other windows −3 (412 MB)")
+        #expect(value(rows, "Cache use") == "20 previews · 2 full · 2.9 / 3.2 GB · other windows −3 (412 MB)")
     }
 
     /// Spec windows-and-tabs §3.8: the debug log's line for an activation.
@@ -178,7 +178,7 @@ import Testing
     @Test func hidesZero() {
         let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: timings, fromCache: false, state: .full,
                                          cache: cache, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
-        #expect(value(rows, "Cache use") == "20 previews · 2 full · 2.7 / 3.0 GB")
+        #expect(value(rows, "Cache use") == "20 previews · 2 full · 2.9 / 3.2 GB")
     }
 
     @Test func diagnosticsFrameRow() {
@@ -229,7 +229,7 @@ import Testing
                                   limitBytes: 3 << 30, effectiveLimitBytes: 3 << 29)
         let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: LoadTimings(), fromCache: false,
                                          state: .full, cache: squeezed, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
-        #expect(value(rows, "Cache use") == "3 previews · 0 full · 2.1 / 1.5 GB (pressure)")
+        #expect(value(rows, "Cache use") == "3 previews · 0 full · 2.3 / 1.6 GB (pressure)")
     }
 
     /// On a discrete card the row's figures are the system tier's (`cache-memory`), followed by the graphics tier's.
@@ -241,11 +241,11 @@ import Testing
         let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: LoadTimings(), fromCache: false,
                                          state: .full, cache: tiers, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
         #expect(value(rows, "Cache use")
-                == "20 previews · 2 full · 2.7 / 3.0 GB · GPU 3.5 / 4.0 GB · other windows −3 (412 MB)")
+                == "20 previews · 2 full · 2.9 / 3.2 GB · GPU 3.8 / 4.3 GB · other windows −3 (412 MB)")
         // Unified memory: one budget, no GPU figure.
         let one = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: LoadTimings(), fromCache: false,
                                         state: .full, cache: cache, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
-        #expect(value(one, "Cache use") == "20 previews · 2 full · 2.7 / 3.0 GB")
+        #expect(value(one, "Cache use") == "20 previews · 2 full · 2.9 / 3.2 GB")
     }
 
     /// The stats bar's fill (Task 17b): the folder position `(index + 1) / count`, so the last photo fills the bar.

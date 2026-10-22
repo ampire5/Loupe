@@ -1027,7 +1027,8 @@ struct ImageCacheTests {
     }
 
     /// Memory pressure divides the system tier only: the compressed files go down to half of it, the pyramids (in
-    /// graphics memory, which pressure does not free) all stay, and nothing is decoded again.
+    /// graphics memory, which pressure does not free) all stay, and nothing is decoded again. Both tiers are set
+    /// 1.5x what they hold, so halving either would evict from it.
     @Test func pressureLeavesTheGraphicsTier() async {
         var limits = CacheLimits.at3G
         limits.full = 0
@@ -1042,13 +1043,17 @@ struct ImageCacheTests {
         await rig.focus(files, 10, dwelling: true)
         await rig.cache.setPinned(files[10])
         #expect(await rig.settle())
-        let system = await rig.cache.usedSystemBytes()
-        let memory = system * 3 / 2
-        await rig.setMemory(memory)
+        let memory = await rig.cache.usedSystemBytes() * 3 / 2
+        let graphicsLimit = await rig.cache.usedGraphicsBytes() * 3 / 2
+        limits.memory = memory
+        limits.graphicsMemory = graphicsLimit
+        await rig.cache.setLimits(limits)
         #expect(await rig.settle())
         let before = await rig.cache.stats()
         let graphics = await rig.cache.usedGraphicsBytes()
+        let pyramids = await rig.pyramidBytes(files)
         #expect(before.usedBytes > memory / 2, "fixture: the pressure limit must bite")
+        #expect(graphics > graphicsLimit / 2, "fixture: halving the graphics tier would bite")
         let calls = rig.decoder.calls.count
 
         await rig.cache.setMemoryPressure(.warning)
@@ -1057,8 +1062,9 @@ struct ImageCacheTests {
         #expect(stats.limitBytes == memory)
         #expect(stats.effectiveLimitBytes == memory / 2)
         #expect(stats.usedBytes <= memory / 2, "system \(stats.usedBytes) over \(memory / 2)")
-        #expect(stats.graphicsLimitBytes == 1 << 30)
+        #expect(stats.graphicsLimitBytes == graphicsLimit)
         #expect(await rig.cache.usedGraphicsBytes() == graphics)
+        #expect(await rig.pyramidBytes(files) == pyramids, "pyramids evicted under pressure")
         #expect(stats.previewCount == before.previewCount)
         #expect(rig.decoder.calls.count == calls, "re-decoded under pressure")
         await rig.clear()

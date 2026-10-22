@@ -467,7 +467,8 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
 
 /// On a discrete card the pyramids fill the graphics tier and the compressed files the system tier: a graphics
 /// tier of two full 147 MP pyramids leaves the 24 neighbours' files (`cache-files`) all planned in 4 GiB of system
-/// memory, and the pyramids planned stay within the two.
+/// memory, and the pyramids planned stay within the two. With `cache-memory` just above the 25 files (the current
+/// photo's and 24 neighbours', 12 MB each) they are all still planned: no pyramid cost reaches the system tier.
 @Test func filesStayWhenPyramidsFillTheGraphicsTier() {
     let graphics = 2 * Costs(big).all
     let items = plan(focus(), limits { $0.graphicsMemory = graphics; $0.memory = 4 << 30; $0.files = 24 })
@@ -475,6 +476,12 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     #expect(items.filter { $0.goal != .bytes }.reduce(0) { $0 + $1.cost } <= graphics)
     #expect(items.filter { $0.goal == .bytes }.reduce(0) { $0 + $1.cost } <= 4 << 30)
     #expect(items.contains { $0.index == 101 && $0.goal == .preview })
+
+    let filesOnly = 25 * 12 * mb + 1 * mb
+    let tight = plan(focus(), limits { $0.graphicsMemory = graphics; $0.memory = filesOnly; $0.files = 24 })
+    #expect(tight.filter { $0.goal == .bytes && $0.index != 100 }.count == 24)
+    #expect(tight.filter { $0.goal != .bytes }.reduce(0) { $0 + $1.cost } <= graphics)
+    #expect(tight.contains { $0.index == 101 && $0.goal == .preview })
 }
 
 /// The current photo's full resolution is planned even when it is bigger than the whole graphics tier (a 147 MP
