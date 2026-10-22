@@ -1276,7 +1276,7 @@ import LoupeRender
     private func spreadChanged(rebuild: Bool) {
         guard !closed, let index = playlist?.index else { return }
         let shown = spread.pair(at: index)
-        updateSpread(rebuild: rebuild)
+        let changed = updateSpread(rebuild: rebuild)
         if shown?.second != nil, companionIndex == nil, let refusal = spreadRefusal { onSpreadRefusal?(refusal) }
         if !spread.isActive, let first = SpreadNavigation.single(after: shown, current: index) {
             // The first page was on screen beside the current one: it keeps its spot and its drawn scale
@@ -1290,7 +1290,15 @@ import LoupeRender
             return
         }
         sendFocus()
-        companionDidChange()
+        if changed {
+            companionDidChange()
+        } else if makeLayout()?.layout != shownLayout {
+            // The same companion in another layout (`spread-direction`, a stand-in's aspect): laid out again, not read.
+            let before = shownPageRect
+            adoptCompanion()
+            relayout(from: before)
+        }
+        // Otherwise (an aspect batch that pairs the same, the usual case) nothing changed on screen.
     }
 
     /// The companion may be another page: it is read, and the pair on screen laid out again.

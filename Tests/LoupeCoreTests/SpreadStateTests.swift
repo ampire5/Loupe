@@ -105,3 +105,18 @@ private func pressD(_ s: inout SpreadState, at index: Int = 0) {
     #expect(SpreadKeys.toast(landscapeAlone: true) == "Landscape pages alone")
     #expect(SpreadKeys.toast(landscapeAlone: false) == "Landscape pages in pairs")
 }
+
+/// The store's aspects arriving in batches rebuild the plan; one that pairs the current photo the same is no
+/// change of companion, so the session neither reads the page again nor lays it out anew.
+@Test func aspectBatchThatPairsTheSameIsNoChange() {
+    var s = freshFolder()
+    pressD(&s)
+    let portraits: ([URL]) -> [Double?] = { $0.map { _ in 0.75 } }
+    let changed = s.update(files: files, index: 0, rebuild: true, rules: { _ in on }, aspects: portraits)
+    #expect(!changed)
+    #expect(s.companionURL == files[1])
+    let wideSecond: ([URL]) -> [Double?] = { $0.indices.map { $0 == 1 ? 1.5 : 0.75 } }
+    let changedAgain = s.update(files: files, index: 0, rebuild: true, rules: { _ in on }, aspects: wideSecond)
+    #expect(changedAgain)
+    #expect(s.companionURL == nil)
+}
