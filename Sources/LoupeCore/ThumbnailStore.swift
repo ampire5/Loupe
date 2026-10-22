@@ -134,6 +134,7 @@ public actor ThumbnailStore {
     var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
     var coverLocalTimeout = ThumbnailStore.coverLocalListingTimeout
     var coverVolumeIsNetwork: @Sendable (URL) -> Bool = ThumbnailStore.mountIsNetwork
+    var coverMountPoint: @Sendable (URL) -> String? = ThumbnailStore.networkMountPoint
     /// Folders and zips with nothing to show on a cover for the rest of the session, by path: found empty, not
     /// listable, or never listed in time.
     var emptyCovers: Set<String> = []

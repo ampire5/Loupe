@@ -28,6 +28,8 @@ extension ThumbnailStore {
         // A zip's card has its summary from its directory; inside, the listing is its photos.
         guard !ArchivePath.isArchive(folder) else { return }
         let locate = self.locate, network = coverVolumeIsNetwork(folder)
+        // Its entries are the share's answer, whatever its resolve below does.
+        if network { noteVolumeAnswered(volumeKey(folder, nil)) }
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             (_: @Sendable (OpenFolderPlace) -> Bool) -> OpenFolderPlace in
@@ -39,7 +41,7 @@ extension ThumbnailStore {
         }
         guard case .value(let place, _) = outcome else { return }
         // The folder's share answered.
-        if network { noteVolumeAnswered(Self.volumeKey(folder, place.location)) }
+        if network { noteVolumeAnswered(volumeKey(folder, place.location), alias: place.location?.volume) }
         guard let location = place.location else { return }
         let summary = await Self.offActor(qos: Self.coverQoS) {
             FolderSummary.of(listing: entries, folderModified: place.modified)
