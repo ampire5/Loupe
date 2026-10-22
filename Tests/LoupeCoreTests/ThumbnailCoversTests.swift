@@ -2267,3 +2267,44 @@ final class LockedErrors: @unchecked Sendable {
         #expect(again.images.first.map { min($0.width, $0.height) >= 64 } == true)
     }
 }
+
+/// The final fix wave, parked from Task 6: a folder without photos given up because each of its subfolders was (their
+/// share not answering) is tried again with them when the share comes back.
+@Suite struct FolderCardParentAwayTests {
+    private let fm = FileManager.default
+
+    @Test func parentGivenUpViaItsSubfoldersComesBackWithTheShare() async throws {
+        let dir = fm.temporaryDirectory.appendingPathComponent("loupe-folder-card-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), failing = LockedFlag()
+        failing.set()
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: { url in
+                                       ThumbnailLocation(volume: "net:share", folder: url.deletingLastPathComponent().path,
+                                                         name: url.lastPathComponent)
+                                   }, idleDelay: .zero, commitDelay: .seconds(3600))
+        await store.setCoverNetworkVolumes { _ in nil }
+        await store.setCoverVolumes { _ in true }
+        for name in ["s1", "s2"] {
+            reader.add(URL(fileURLWithPath: "/net/top/\(name)/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        }
+        await store.setCoverListing(dated: { folder, _, _, _ in
+            if folder.path == "/net/top" { return CoverListing(names: CoverNames(files: [], folders: ["s1", "s2"])) }
+            if failing.isSet { throw POSIXError(.EIO) }
+            return CoverListing(names: CoverNames(files: ["a.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        let top = URL(fileURLWithPath: "/net/top"), key = ThumbnailStore.memoKey(top, nil)
+        let location = ThumbnailLocation(volume: "net:share", folder: "/net/top", name: "_")
+        func card() async -> FolderCard? { await store.folderCard(top, archive: false, in: location, maxPixel: 64) }
+        // Its subfolders' listings fail with the share's errors until each is given up; then so is the folder.
+        for _ in 0..<ThumbnailStore.coverTimeoutsAllowed + 1 { _ = await card() }
+        #expect(await store.emptyCovers.contains(key))
+        #expect(await card()?.images.isEmpty == true)
+        // The share answers again (the browser's own listing, say).
+        failing.reset()
+        await store.volumeAnswered(URL(fileURLWithPath: "/net/shown"), in: location)
+        #expect(await !store.emptyCovers.contains(key))
+        let back = try #require(await card())
+        #expect(back.images.count == 2)
+    }
+}

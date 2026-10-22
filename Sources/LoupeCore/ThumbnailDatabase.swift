@@ -16,12 +16,13 @@ public final class ThumbnailDatabase {
     public static let formatVersion = 2
 
     /// Rows `folder_summaries` keeps; beyond it the least recently used go (`putSummaries`).
-    /// Measured (FolderSummaryStoreTests.measureCapacity, Intel Core i7 desktop, 8 physical cores, SSD, rows with ~55
-    /// character paths and a 12-byte histogram, WAL included in the size): a lookup (which also stamps `last_used`)
-    /// takes 0.17 ms at 10 000 rows and 0.20 ms at 50 000 and 100 000 (flat: it is a primary-key probe); a 50-row batch
-    /// with its eviction 3-28 ms at any size; the catalog grows about 2.4 MB per 10 000 rows (6 MB at 10 000, 12 MB at
-    /// 50 000, 26 MB at 100 000). 20 000 folders is far more than anyone browses and costs about 5 MB, small next to
-    /// the file rows of the folders it describes.
+    /// Measured (FolderSummaryStoreTests.measureCapacity, `LOUPE_SUMMARY_BENCH`, debug build, Intel Core i7-10700K,
+    /// 8 physical cores, SSD, rows with ~55 character paths and a 12-byte histogram, WAL included in the size; two
+    /// runs): a lookup, a read only (its `last_used` restamp is batched, `summaryStampWindow`), takes 0.018-0.020 ms
+    /// at 10 000, 50 000 and 100 000 rows (flat: a primary-key probe); a 50-row batch with its eviction 2.7-3.9 ms at
+    /// any size; the catalog grows about 2.3 MB per 10 000 rows (3 MB at 10 000, 12 MB at 50 000, 22 MB at 100 000).
+    /// 20 000 folders is far more than anyone browses and costs about 5 MB, small next to the file rows of the
+    /// folders it describes.
     public static let summaryCapacity = 20_000
 
     /// A read restamps a row's `last_used` only when the stored stamp is older than this: eviction by least recent use

@@ -827,7 +827,13 @@ extension ThumbnailStore {
         }
         if notNow, images.count < count { return nil }
         let keys = subfolders.map { Self.memoKey(folder.appendingPathComponent($0), nil) }
-        if complete, keys.allSatisfy(emptyCovers.contains) { emptyCovers.insert(Self.memoKey(folder, modified)) }
+        if complete, keys.allSatisfy(emptyCovers.contains) {
+            let key = Self.memoKey(folder, modified)
+            emptyCovers.insert(key)
+            // Given up with a subfolder its share did not answer for (or while it is offline): tried again with them
+            // when the share comes back.
+            if isOffline(volume) || keys.contains(where: { awayFolders[$0] != nil }) { noteAway(key, on: volume) }
+        }
         return images
     }
 
