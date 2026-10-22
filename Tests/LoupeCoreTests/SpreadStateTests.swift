@@ -120,3 +120,31 @@ private func pressD(_ s: inout SpreadState, at index: Int = 0) {
     #expect(changedAgain)
     #expect(s.companionURL == nil)
 }
+
+/// `spread-wide-ratio` is read per folder with the other spread keys: a 1.2:1 page pairs in a folder set to 1.25 and
+/// stands alone in one at 1.15, and a change of the key rebuilds the plan, as `spread-landscape` does.
+@Test func wideRatioIsReadPerFolderAndRebuildsThePlan() {
+    let other = (1...4).map { URL(fileURLWithPath: "/g/\($0).jpg") }
+    let page = PixelSize(width: 1200, height: 1000)
+    func rules(_ ratio: Double) -> SpreadRules {
+        SpreadRules(on: true, options: SpreadOptions(shift: false, rightToLeft: false, landscapeAlone: true,
+                                                     wideRatio: ratio))
+    }
+    let byFolder: (URL) -> SpreadRules = { $0.deletingLastPathComponent() == folder ? rules(1.25) : rules(1.15) }
+    let aspects: ([URL]) -> [Double?] = { $0.map { _ in 1.2 } }
+    var s = SpreadState()
+    _ = s.setViewSize(CGSize(width: 3584, height: 1660))
+    s.update(files: files, index: 0, rules: byFolder, aspects: aspects)
+    #expect(s.rules.options.wideRatio == 1.25 && s.companionIndex == 1)
+    s.update(files: other, index: 0, rules: byFolder, aspects: aspects)
+    #expect(s.rules.options.wideRatio == 1.15 && s.companionIndex == nil)
+    #expect(s.navigation.refusal(at: 0) == .widePage)
+    // The key changed for the folder (Settings, a reload): new rules, the plan rebuilt.
+    let changed = s.setRules(rules(1.25), folder: other[0].deletingLastPathComponent())
+    #expect(changed)
+    s.update(files: other, index: 0, rebuild: true, rules: { _ in rules(1.25) }, aspects: aspects)
+    #expect(s.companionIndex == 1)
+    // A header read at 1.2:1 pairs the same at 1.25: no rebuild.
+    let rebuilds = s.note(other[1], size: page, at: 1, aspects: [1.2, 1.2, 1.2, 1.2])
+    #expect(!rebuilds)
+}

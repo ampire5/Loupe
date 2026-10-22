@@ -6,11 +6,14 @@ public struct SpreadOptions: Equatable, Sendable {
     public var rightToLeft: Bool
     /// A landscape page is shown alone instead of sharing a spread.
     public var landscapeAlone: Bool
+    /// A page is landscape (`landscapeAlone`) when wider than this times its height (`spread-wide-ratio`).
+    public var wideRatio: Double
 
-    public init(shift: Bool, rightToLeft: Bool, landscapeAlone: Bool) {
+    public init(shift: Bool, rightToLeft: Bool, landscapeAlone: Bool, wideRatio: Double = SpreadPlan.landscapeAspect) {
         self.shift = shift
         self.rightToLeft = rightToLeft
         self.landscapeAlone = landscapeAlone
+        self.wideRatio = wideRatio
     }
 }
 
@@ -44,13 +47,14 @@ public struct SpreadPlan: Sendable {
     /// A page stands alone (`landscapeAlone`) only when it is clearly wide: wider than this times its height. Square
     /// and near-square pages pair: scans keep a margin of their own (a portrait page scanned with the glass's edge comes
     /// out 1.0–1.1), and 1:1 photos are not landscape. 5:4 (1.25), 4:3 (1.33) and 3:2 (1.5) photos and a magazine's
-    /// double page (~1.4) stay alone. Not measured: chosen between the widest near-square scans (~1.1) and 5:4.
+    /// double page (~1.4) stay alone. Not measured: chosen between the widest near-square scans (~1.1) and 5:4. The
+    /// default of `spread-wide-ratio` (`SpreadOptions.wideRatio`), which a folder may move.
     public static let landscapeAspect = 1.15
 
-    /// Whether a page of `size` stands alone as landscape (nil: unknown, portrait).
-    public static func isLandscape(_ size: PixelSize?) -> Bool {
+    /// Whether a page of `size` stands alone as landscape, wider than `ratio` times its height (nil: unknown, portrait).
+    public static func isLandscape(_ size: PixelSize?, ratio: Double = landscapeAspect) -> Bool {
         guard let size, size.height > 0 else { return false }
-        return Double(size.width) > Double(size.height) * landscapeAspect
+        return Double(size.width) > Double(size.height) * ratio
     }
 
     private let count: Int
@@ -67,7 +71,7 @@ public struct SpreadPlan: Sendable {
     public init(sizes: [PixelSize?], options: SpreadOptions) {
         count = sizes.count
         shift = options.shift
-        let wide = options.landscapeAlone ? sizes.map(Self.isLandscape) : []
+        let wide = options.landscapeAlone ? sizes.map { Self.isLandscape($0, ratio: options.wideRatio) } : []
         self.wide = wide
         // `i` is in range (the caller checks `i + 1 < count` first).
         func landscape(_ i: Int) -> Bool { !wide.isEmpty && wide[i] }

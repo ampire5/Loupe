@@ -1091,6 +1091,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"), "keep-zoom-as": ("scale", "pixels"),
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
     "spread": ("yes", "maybe"), "spread-shift": ("yes", "maybe"), "spread-direction": ("rtl", "up"), "spread-landscape": ("pair", "both"),
+    "spread-wide-ratio": ("1.25", "2.1"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
@@ -1155,7 +1156,8 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"])
     #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"])
     #expect(Config.zoomFolderKeys == ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"])
-    #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape"])
+    #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape",
+                                        "spread-wide-ratio"])
     #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys + Config.spreadFolderKeys)
     #expect(Config.folderKeys.allSatisfy(Config.keys.contains))
 }
@@ -1646,4 +1648,28 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(bad == Config() && warnings.count == 1)
     let (folder, rejected) = Config().applying(["spread": "yes", "spread-direction": "rtl"])
     #expect(folder.spread && folder.spreadRightToLeft && rejected.isEmpty)
+}
+
+/// `spread-wide-ratio`: from how wide a page stands alone with `spread-landscape=alone`, 1.0…2.0 (a number or `w:h`),
+/// 1.15 by default (`SpreadPlan.landscapeAspect`); a folder key, carried by the pairing options.
+@Test func spreadWideRatioKey() {
+    let d = Config()
+    #expect(d.spreadWideRatio == 1.15 && d.spreadWideRatio == SpreadPlan.landscapeAspect)
+    #expect(d.spreadOptions.wideRatio == 1.15)
+    #expect(d.text(forKey: "spread-wide-ratio") == "1.15")
+    #expect(Config.spreadWideRatioRange == 1.0...2.0)
+    let spread = try! #require(Config.keys.firstIndex(of: "spread-landscape"))
+    #expect(Config.keys[spread + 1] == "spread-wide-ratio")
+    var c = Config()
+    #expect(c.set("spread-wide-ratio", "1.25") == .ok && c.spreadWideRatio == 1.25)
+    #expect(c.spreadOptions.wideRatio == 1.25 && c.text(forKey: "spread-wide-ratio") == "1.25")
+    #expect(c.set("spread-wide-ratio", "4:3") == .ok && abs(c.spreadWideRatio - 4.0 / 3) < 1e-12)
+    #expect(c.set("spread-wide-ratio", "1") == .ok && c.spreadWideRatio == 1)
+    #expect(c.set("spread-wide-ratio", "2") == .ok && c.spreadWideRatio == 2)
+    for bad in ["0.99", "2.01", "3:1", "nan", "wide", ""] {
+        #expect(c.set("spread-wide-ratio", bad) == .badValue, "\(bad)")
+        #expect(c.spreadWideRatio == 2, "\(bad)")
+    }
+    let (folder, rejected) = Config().applying(["spread-wide-ratio": "1.4"])
+    #expect(rejected.isEmpty && folder.spreadWideRatio == 1.4 && SpreadRules(config: folder).options.wideRatio == 1.4)
 }
