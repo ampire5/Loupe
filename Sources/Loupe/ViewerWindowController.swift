@@ -136,8 +136,8 @@ import UniformTypeIdentifiers
         appliedResampling = ResampleSettings(config: Settings.shared.config)
         viewerView = ViewerView(session: session, resampling: appliedResampling)
         strip = StripController(session: session, store: thumbnails)
-        let window = NSWindow(contentRect: Self.initialFrame(), styleMask: [.titled, .resizable, .closable, .miniaturizable],
-                              backing: .buffered, defer: false)
+        let window = ViewerWindow(contentRect: Self.initialFrame(), styleMask: [.titled, .resizable, .closable, .miniaturizable],
+                                  backing: .buffered, defer: false)
         window.title = "Loupe"
         window.collectionBehavior = .fullScreenPrimary
         window.tabbingMode = .preferred
@@ -253,7 +253,7 @@ import UniformTypeIdentifiers
             self?.infoPanel.place()
             self?.updateIndicatorInset()
         }
-        container.onWindowKey = { [weak self] in self?.windowKey($0) ?? false }
+        window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
         strip.view.isScrollSpent = { [weak viewerView] in viewerView?.stripScrollIsSpent($0) ?? false }
@@ -2017,16 +2017,20 @@ import UniformTypeIdentifiers
 
 /// The window's content view; it tells the window controller when it lays out (a resize, full screen), so the info
 /// panel, which is placed by frame rather than by constraints, keeps to its corner.
+/// The viewer's window. It offers every key press to `onKeyDown` before any view sees it (true: taken), so a key Home's
+/// grid would take as the first letter of a name can be the window's (`ViewerWindowController.windowKey`). A view's
+/// `performKeyEquivalent` is no place for that: AppKit offers it only keys with ⌘ or ⌃.
+private final class ViewerWindow: NSWindow {
+    var onKeyDown: ((NSEvent) -> Bool)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, onKeyDown?(event) == true { return }
+        super.sendEvent(event)
+    }
+}
+
 private final class ViewerContainerView: NSView {
     var onLayout: (() -> Void)?
-    /// Offered every key press before the views under it (true: taken), so a key Home would take as typing a name can
-    /// be the window's (`ViewerWindowController.windowKey`).
-    var onWindowKey: ((NSEvent) -> Bool)?
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.type == .keyDown, onWindowKey?(event) == true { return true }
-        return super.performKeyEquivalent(with: event)
-    }
 
     override func layout() {
         super.layout()
