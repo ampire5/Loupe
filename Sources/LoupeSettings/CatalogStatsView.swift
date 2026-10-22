@@ -2,10 +2,15 @@ import LoupeCore
 import SwiftUI
 
 /// Settings › Performance › Catalog: what the thumbnail catalog holds, by volume, read off the main thread each time
-/// the card is shown.
+/// the card is shown and again after «Clear Thumbnails…».
 struct CatalogStatsView: View {
     let directory: URL?
+    /// File › Clear Thumbnail Cache…'s confirmation and clear; nil: no button.
+    let clear: (@MainActor () async -> Bool)?
     @State private var stats: CatalogStats?
+    /// Bumped after a clear, so the stats are read again.
+    @State private var generation = 0
+    @State private var clearing = false
     @State private var names: [String: String] = [:]
     @State private var loaded = false
 
@@ -29,9 +34,22 @@ struct CatalogStatsView: View {
                     row("All", stats.total).fontWeight(.semibold)
                 }
                 .monospacedDigit()
-                Text("On disk: \(bytes(stats.diskBytes)) (Caches/Loupe)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("On disk: \(bytes(stats.diskBytes)) (Caches/Loupe)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let clear {
+                        Button("Clear Thumbnails…") {
+                            clearing = true
+                            Task {
+                                if await clear() { generation += 1 }
+                                clearing = false
+                            }
+                        }
+                        .disabled(clearing || stats.total.thumbnails == 0)
+                    }
+                }
             } else {
                 Text(loaded ? "No catalog yet: thumbnails are kept only in memory." : "Counting…")
                     .foregroundStyle(.secondary)
@@ -39,7 +57,7 @@ struct CatalogStatsView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task {
+        .task(id: generation) {
             let directory = directory
             let result = await Task.detached(priority: .userInitiated) {
                 (directory.flatMap(CatalogStats.read), CatalogStats.mountedLocalNames())
