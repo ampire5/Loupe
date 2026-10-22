@@ -88,7 +88,11 @@ extension TileRenderer {
     /// fails after the first run: those passes only fill the stage's textures. A scaler, textures or second output that
     /// could not be made is not retried at that view size while the stage lives (frames keep the fallback, without an
     /// ~85 MB allocation each), and the context hears of it, so the stats line names what is drawn.
-    func encodeMetalFX(_ frame: LevelFrame, commandBuffer: MTLCommandBuffer, target: MTLTexture) -> Bool {
+    ///
+    /// With a `clip` (a page after the first, `encode`) compose and scaler run over the whole view as for any frame, and
+    /// the final pass loads `target` and draws only within the clip.
+    func encodeMetalFX(_ frame: LevelFrame, commandBuffer: MTLCommandBuffer, target: MTLTexture,
+                       clip: MTLScissorRect? = nil) -> Bool {
         let width = target.width, height = target.height
         guard width > 0, height > 0 else { return true }
         if metalFX.map({ $0.width != width || $0.height != height }) ?? true {
@@ -103,8 +107,12 @@ extension TileRenderer {
         // Over the checkerboard, the second run's output; a solid backdrop or an opaque photo lets it go.
         let colors = transparency.colors
         let twoRuns = frame.hasAlpha && colors.0 != colors.1
+        if twoRuns {
+            if clip == nil { metalFXFirst.secondOutput = true } else { metalFXOthers.secondOutput = true }
+        }
         if !twoRuns {
-            stage.secondOutput = nil
+            // Kept while another page of the frame (or of the frame before, for the first page) runs twice.
+            if !(clip == nil ? metalFXOthersBefore.secondOutput : metalFXFirst.secondOutput) { stage.secondOutput = nil }
         } else if stage.secondOutput == nil {
             guard metalFXSecondFailedSize != SIMD2(width, height) else {
                 // Still failed at this size: this frame falls back too, even if a frame between drew MetalFX.
@@ -189,13 +197,15 @@ extension TileRenderer {
                                    imageMin: imageMin, imageMax: imageMax, background: background(for: target))
         let draw = stage.drawPass.colorAttachments[0]!
         draw.texture = target
+        draw.loadAction = clip == nil ? .dontCare : .load   // the full-view triangle writes every pixel, or the clip's
         let made = commandBuffer.makeRenderCommandEncoder(descriptor: stage.drawPass)
         draw.texture = nil   // do not keep the drawable alive until the next frame
         guard let encoder = made else {   // the scaler ran, nothing drew its output: at least clear the drawable
-            encodeTiles(nil, nearest: false, commandBuffer: commandBuffer, target: target)
+            if clip == nil { encodeTiles(nil, nearest: false, commandBuffer: commandBuffer, target: target) }
             return true
         }
         encoder.label = "metalfx draw"
+        if let clip { encoder.setScissorRect(clip) }
         encoder.setRenderPipelineState(context.metalFXPipeline(pixelFormat: target.pixelFormat, alpha: frame.hasAlpha,
                                                                curveTable: frame.inverseCurve != nil,
                                                                colorLUT: frame.color != nil))

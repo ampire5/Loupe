@@ -6,6 +6,23 @@ import Metal
 import os
 import QuartzCore
 
+/// One page of what `RenderLoop` shows: its image, turned by `orientation`, with its photo's colour cube (`ShownColor`, nil:
+/// none), drawn into `rect`, a rectangle of the shared transform's image (`SpreadLayout.rects`). A single page's rect is
+/// the transform's whole image; two pages of a spread share one virtual picture (`SpreadLayout.virtualSize`).
+struct RenderPage: @unchecked Sendable {   // TiledImage is Sendable, ShownColor holds immutable cubes
+    var image: TiledImage?
+    var orientation: ImageOrientation
+    var color: ShownColor<ColorLUT>?
+    var rect: CGRect
+
+    init(image: TiledImage?, orientation: ImageOrientation, color: ShownColor<ColorLUT>?, rect: CGRect) {
+        self.image = image
+        self.orientation = orientation
+        self.color = color
+        self.rect = rect
+    }
+}
+
 /// Draws frames on a dedicated thread, driven by a `CAMetalDisplayLink`, and only while something
 /// changes: the main thread hands over what to show with `update`, the next display-link callback
 /// draws it, and once nothing has changed for `IdlePolicy.grace` the link pauses (spec §3: idle ≈ 0 % CPU).
@@ -29,13 +46,12 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// What the main thread wants on screen, swapped atomically. `generation` counts updates, so the
     /// render thread can tell "changed since my last frame" without comparing images or transforms.
     private struct Snapshot: @unchecked Sendable {   // TiledImage is Sendable; CFRunLoop is safe to pass
-        var image: TiledImage?
-        /// How `image` is turned for the view (`TileRenderer.encode`): `transform` is in its oriented size.
-        var orientation = ImageOrientation.up
+        /// Up to two pages, left to right, each with its image, orientation and colour cube (`RenderPage`); empty: no
+        /// photo. A page's cube is set in the same change as its image, so a frame never draws a photo with another
+        /// photo's cube.
+        var pages: [RenderPage] = []
+        /// Laid out at the size of the picture the pages make: one page's oriented size, or a spread's virtual one.
         var transform = ViewTransform(imageSize: .zero, viewSize: .zero)
-        /// The colour cube of `image`'s photo and the fade into it (`ShownColor`); set in the same change as `image`, so a
-        /// frame never draws a photo with another photo's cube. Nil: no photo, or none known.
-        var color: ShownColor<ColorLUT>?
         /// `background`, in linear light (the `_srgb` drawable encodes it).
         var background = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         /// The resampling keys (`upscale`, `downscale`, `lanczos-antiring`, `pixel-art`).
@@ -124,13 +140,14 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         thread.start()
     }
 
-    /// Shows `image` turned by `orientation` with `transform` (laid out at the oriented size) and the colour cube `color`
-    /// of its photo (with the fade into it; nil: none) from the next display refresh on. Image and colour are one change,
-    /// so no frame pairs a photo with another photo's cube. `transform.viewSize` must be the layer's `drawableSize` (set both together); a frame whose drawable
-    /// still has the old size is skipped rather than drawn misregistered. Cheap and non-blocking: a lock-protected
-    /// store plus, when the link is paused, one block queued on the render thread's run loop to resume it.
-    func update(image: TiledImage?, orientation: ImageOrientation, transform: ViewTransform,
-                color: ShownColor<ColorLUT>?) {
+    /// Shows `pages` (up to two, left to right; empty: none) with `transform`, laid out at the size of the picture they
+    /// make (one page: its oriented size and a rect of all of it, which draws as a single photo always has; two: the
+    /// spread's virtual size), each page turned by its orientation and through its photo's colour cube (with the fade
+    /// into it; nil: none), from the next display refresh on. Images and colours are one change, so no frame pairs a
+    /// photo with another photo's cube. `transform.viewSize` must be the layer's `drawableSize` (set both together); a
+    /// frame whose drawable still has the old size is skipped rather than drawn misregistered. Cheap and non-blocking: a
+    /// lock-protected store plus, when the link is paused, one block queued on the render thread's run loop to resume it.
+    func update(pages: [RenderPage], transform: ViewTransform) {
         let now = CACurrentMediaTime()
         let wake: CFRunLoop? = state.withLock { s in
             guard !s.stopped else { return nil }
@@ -138,17 +155,15 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
             // Motion for the pan indicators: the visible part, the drawn zoom or the picture's size changed; another
             // picture (a switch with a kept zoom) only with `pan-indicators-on-switch` (M4b spec §5.2).
             let old = s.transform
-            if PanIndicators.isMotion(sameImage: image === s.image,
+            if PanIndicators.isMotion(sameImage: Self.samePictures(pages, s.pages),
                                       imageSizeChanged: transform.imageSize != old.imageSize,
                                       scaleChanged: transform.drawnScale != old.drawnScale,
                                       visibleChanged: transform.visibleRect != old.visibleRect,
                                       onSwitch: s.panOnSwitch) {
                 s.lastMotion = now
             }
-            s.image = image
-            s.orientation = orientation
+            s.pages = pages
             s.transform = transform
-            s.color = color
             s.generation += 1
             s.inputTime = now
             guard s.paused, !s.wakeQueued, let runLoop = s.runLoop else { return nil }
@@ -159,6 +174,17 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         guard let wake else { return }
         CFRunLoopPerformBlock(wake, CFRunLoopMode.defaultMode.rawValue) { [self] in resume() }
         CFRunLoopWakeUp(wake)
+    }
+
+    /// Whether two page lists show the same images (by identity), page for page.
+    private static func samePictures(_ a: [RenderPage], _ b: [RenderPage]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { $0.image === $1.image }
+    }
+
+    /// The first page's image, else the second's: the photo the layer is tagged for (one colour space per layer).
+    private static func leadImage(_ pages: [RenderPage]) -> TiledImage? {
+        for page in pages { if let image = page.image { return image } }
+        return nil
     }
 
     /// Draws only the background while `on`, the image kept for when it is let go (`launch-reveal`: a launch into
@@ -185,7 +211,7 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         let wake: CFRunLoop? = state.withLock { s in
             guard !s.stopped, s.expected != space else { return nil }
             s.expected = space
-            guard s.image == nil else { return nil }   // ignored while an image is drawn: no new frame needed
+            guard Self.leadImage(s.pages) == nil else { return nil }   // ignored while an image is drawn: no new frame
             s.generation += 1
             guard s.paused, !s.wakeQueued, let runLoop = s.runLoop else { return nil }
             s.wakeQueued = true
@@ -262,8 +288,8 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         let onScreen = state.withLock { s -> Bool in
             guard !s.stopped else { return false }
             // Its levels may have been evicted in place since that frame (the cache's `evict(finerThan:)`).
-            if s.sharpGeneration == s.generation, let image = s.image, !s.held,
-               Self.isSharp(image, s.transform) {
+            if s.sharpGeneration == s.generation, Self.leadImage(s.pages) != nil, !s.held,
+               Self.isSharp(s.pages, s.transform) {
                 s.sharpWatch = nil
                 return true
             }
@@ -279,6 +305,22 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         image.finestResidentLevel.map {
             $0 <= TileGrid.level(forScale: transform.drawnScale, levelCount: image.grid.levelCount)
         } ?? false
+    }
+
+    /// `isSharp` of every page with an image, each at its own scale.
+    private static func isSharp(_ pages: [RenderPage], _ transform: ViewTransform) -> Bool {
+        pages.allSatisfy { page in
+            guard let image = page.image else { return true }
+            return isSharp(image, placement(page, image, transform)?.transform ?? transform)
+        }
+    }
+
+    /// Where a page of a spread is drawn (`PagePlacement`); nil for a page whose rect is the transform's whole image,
+    /// drawn with the transform itself, as a single photo always was.
+    private static func placement(_ page: RenderPage, _ image: TiledImage, _ transform: ViewTransform) -> PagePlacement? {
+        guard page.rect != CGRect(origin: .zero, size: transform.imageSize) else { return nil }
+        let size = page.orientation.orientedSize(image.grid.imageSize)
+        return PagePlacement(rect: page.rect, pageSize: CGSize(width: size.width, height: size.height), shared: transform)
     }
 
     /// Starts or stops recording per-frame GPU time and presentation intervals (`frameStats()`); the window
@@ -301,8 +343,7 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         let runLoop: CFRunLoop? = state.withLock { s in
             guard !s.stopped else { return nil }
             s.stopped = true
-            s.image = nil
-            s.color = nil
+            s.pages = []
             return s.runLoop   // nil: the thread has not reached its loop yet and sees `stopped` there
         }
         guard let runLoop else { return }
@@ -343,8 +384,7 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         link = nil
         renderer = nil
         state.withLock { s in
-            s.image = nil
-            s.color = nil
+            s.pages = []
             s.runLoop = nil
         }
         finished = true
@@ -455,7 +495,8 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
             return
         }
         // Before anything else: a retag defers this callback (see `retagIfNeeded`).
-        guard retagIfNeeded(for: snapshot.image?.colorSpace ?? snapshot.expected ?? Self.noImageColorSpace) else { return }
+        guard retagIfNeeded(for: Self.leadImage(snapshot.pages)?.colorSpace ?? snapshot.expected ?? Self.noImageColorSpace)
+        else { return }
         let target = drawable.texture
         guard target.width == Int(viewSize.width), target.height == Int(viewSize.height) else {
             // A resize is in flight: this drawable predates the new drawableSize. Stay dirty; the next
@@ -470,14 +511,13 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         renderer.transparency = snapshot.transparency
         renderer.backingScale = snapshot.backingScale
         let drawTime = CACurrentMediaTime()
-        renderer.color = colorFrame(snapshot.color, at: drawTime)
-        let image = snapshot.held ? nil : snapshot.image   // tagged for the image above all the same: no retag on reveal
-        renderer.encode(image: image, transform: snapshot.transform, orientation: snapshot.orientation,
-                        into: commands, target: target)
+        // Held: tagged for the image above all the same, so no retag on reveal; only the background is drawn.
+        let shown = snapshot.held ? nil : Self.leadImage(snapshot.pages)
+        drawPages(snapshot, at: drawTime, into: commands, target: target)
         // The pan indicators over the finished frame, in the drawable itself (M4b spec §5.3); nothing encoded at 0.
         let panAlpha = PanIndicators.alpha(mode: snapshot.panMode, now: drawTime, lastMotion: snapshot.lastMotion,
                                            hide: snapshot.panHide, fade: snapshot.panFade)
-        let pills = panAlpha > 0 && image != nil
+        let pills = panAlpha > 0 && shown != nil
             ? PanIndicators.pills(for: snapshot.transform, backingScale: snapshot.backingScale,
                                   bottomInsetPoints: snapshot.panBottomInset)
             : []
@@ -486,7 +526,7 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         if DebugLog.isEnabled {
             // The first frame at the level the zoom wants after an activation (`watchSharp`).
             let generation = snapshot.generation
-            let sharp = image.map { Self.isSharp($0, snapshot.transform) } ?? false
+            let sharp = shown != nil && Self.isSharp(snapshot.pages, snapshot.transform)
             // The watch as it is now, under the same lock: one set since this snapshot was taken is not missed.
             let watch = state.withLock { s in
                 s.sharpGeneration = sharp ? generation : nil
@@ -550,12 +590,38 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         commands.present(drawable)
         commands.commit()
         drawnGeneration = snapshot.generation
-        drawnColorRunning = snapshot.color?.isRunning(at: drawTime) ?? false
+        drawnColorRunning = snapshot.pages.contains { $0.color?.isRunning(at: drawTime) ?? false }
         drawnPanAlpha = pills.isEmpty ? 0 : panAlpha
         let t = snapshot.transform
         DebugLog.log("frame \(snapshot.generation): \(target.width)x\(target.height) scale \(t.scale) mode \(t.mode) "
                      + String(format: "center %.4f,%.4f", t.center.x, t.center.y)
                      + " image \(Int(t.imageSize.width))x\(Int(t.imageSize.height))" + (snapshot.held ? " held" : ""))
+    }
+
+    /// The pages into `target`, each through its own colour cube: the first clears it to the background and draws as a
+    /// single photo always has; a page after it draws only into its viewport (`PagePlacement`), the target loaded, so a
+    /// page off screen or without an image leaves its part to the background. No pages, or held: just the background.
+    private func drawPages(_ snapshot: Snapshot, at now: Double, into commands: MTLCommandBuffer, target: MTLTexture) {
+        guard let renderer else { return }
+        guard !snapshot.held, !snapshot.pages.isEmpty else {
+            renderer.color = nil
+            renderer.encode(image: nil, transform: snapshot.transform, into: commands, target: target)
+            return
+        }
+        for (index, page) in snapshot.pages.enumerated() {
+            let first = index == 0
+            var transform = snapshot.transform, viewport: CGRect?
+            if let image = page.image, let place = Self.placement(page, image, snapshot.transform) {
+                transform = place.transform
+                viewport = place.viewport
+                if !first, place.viewport.isEmpty { continue }   // off screen
+            } else if !first, page.image == nil {
+                continue   // nothing to draw: its part keeps the first page's background
+            }
+            renderer.color = colorFrame(page.color, at: now)
+            renderer.encode(image: page.image, transform: transform, orientation: page.orientation, into: commands,
+                            target: target, viewport: first ? nil : viewport, clears: first)
+        }
     }
 
     /// The cube of one frame at `now`: nil when the photo is shown uncorrected (no cube and no fade out running), the

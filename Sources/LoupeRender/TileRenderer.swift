@@ -68,6 +68,16 @@ public final class TileRenderer {
     var holdsMetalFXSecondOutput: Bool { metalFX?.secondOutput != nil }
     /// What this renderer last told the context about MetalFX (`noteMetalFXStage`), for tests: false after a failure.
     var lastMetalFXNote: Bool?
+    /// What a frame of two pages needs of the MetalFX stage, so that pages on different paths do not let it (or its
+    /// second output) go and remake it for each other every frame (`encode`'s `clears` starts a frame): the first page's
+    /// needs in this frame, the other pages' in this frame and in the frame before.
+    struct MetalFXUse {
+        var stage = false
+        var secondOutput = false
+    }
+    var metalFXFirst = MetalFXUse()
+    var metalFXOthers = MetalFXUse()
+    var metalFXOthersBefore = MetalFXUse()
     private var loggedMetalFXFallback = false
     private var loggedEWAFallback = false
     private var loggedCurveFallback = false
@@ -133,15 +143,38 @@ public final class TileRenderer {
     /// so `target` needs `.shaderWrite` usage (a drawable has it when its layer is not `framebufferOnly`).
     /// `commandBuffer` must be committed: when a frame's instances do not fit inline, the ring slot it uses
     /// is released by the buffer's completed handler, and a fourth such frame waits for that release.
+    ///
+    /// Two pages in one frame (spread spec, «Архитектура»): the first page's call clears (`clears`, the default) and
+    /// writes all of `target`, as a single page does, its picture confined to its own view rect anyway; each further
+    /// page's call passes `clears: false` and its `viewport` (drawable px, `PagePlacement.viewport`), and writes nothing
+    /// outside it: the tile passes load the target and scissor to it, the compute kernels are dispatched over it alone,
+    /// MetalFX's final pass loads and scissors. Within the viewport such a call draws the picture; around it the target
+    /// keeps what the first call put there, the background (the kernels and MetalFX write it there again, the tile pass
+    /// does not), and without an image or a resident level it encodes nothing. `transform` is the page's own
+    /// (`PagePlacement.transform`): its `viewSize` is the target's like any frame's. MetalFX keeps its view-sized
+    /// stage, and each page runs it over the whole view (its final pass then cuts it to the viewport): twice the
+    /// scaler's work in a frame of two MetalFX pages, and no stage per page.
     public func encode(image: TiledImage?, transform: ViewTransform, orientation: ImageOrientation = .up,
-                       into commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+                       into commandBuffer: MTLCommandBuffer, target: MTLTexture,
+                       viewport: CGRect? = nil, clears: Bool = true) {
         lastMode = nil
         lastLevel = nil
         lastHasAlpha = false
         lastCurveTable = false
         lastColorLUT = false
+        if clears {
+            metalFXOthersBefore = metalFXOthers
+            metalFXOthers = MetalFXUse()
+            metalFXFirst = MetalFXUse()
+        }
+        // Nil: the call clears and may write all of target. Otherwise the px it may write; none, nothing to draw.
+        var clip: MTLScissorRect?
+        if !clears {
+            guard let c = Self.scissor(viewport, target: target) else { return }
+            clip = c
+        }
         guard let image, var frame = LevelFrame(image: image, transform: transform, orientation: orientation) else {
-            encodeTiles(nil, nearest: false, commandBuffer: commandBuffer, target: target)
+            if clears { encodeTiles(nil, nearest: false, commandBuffer: commandBuffer, target: target) }
             return
         }
         var target = target
@@ -170,7 +203,13 @@ public final class TileRenderer {
             }
             mode = MetalContext.metalFXFallback
         }
-        if mode != .metalfx { metalFX = nil }   // ~85 MB each on 6K: held only while frames use them
+        // ~85 MB each on 6K: held only while frames use them (a page of the same frame, or the next page of a spread
+        // as the frame before had it, counts as using it).
+        if mode == .metalfx {
+            if clears { metalFXFirst.stage = true } else { metalFXOthers.stage = true }
+        } else if !(clears ? metalFXOthersBefore.stage : metalFXFirst.stage) {
+            metalFX = nil
+        }
         if let color, !color.isIdentity { frame.color = color }
         lastMode = mode
         lastLevel = frame.level
@@ -179,20 +218,37 @@ public final class TileRenderer {
         lastColorLUT = frame.color != nil
         switch mode {
         case .kernel(let kernel, let upscale):
-            encodeResample(frame, kernel: kernel, upscale: upscale, commandBuffer: commandBuffer, target: target)
+            encodeResample(frame, kernel: kernel, upscale: upscale, commandBuffer: commandBuffer, target: target, clip: clip)
         case .ewaLanczos:
-            encodeResample(frame, kernel: nil, upscale: true, commandBuffer: commandBuffer, target: target)
+            encodeResample(frame, kernel: nil, upscale: true, commandBuffer: commandBuffer, target: target, clip: clip)
         case .bilinear:
-            encodeTiles(frame, nearest: false, commandBuffer: commandBuffer, target: target)
+            encodeTiles(frame, nearest: false, commandBuffer: commandBuffer, target: target, clip: clip)
         case .nearest:
-            encodeTiles(frame, nearest: true, commandBuffer: commandBuffer, target: target)
+            encodeTiles(frame, nearest: true, commandBuffer: commandBuffer, target: target, clip: clip)
         case .metalfx:
-            if !encodeMetalFX(frame, commandBuffer: commandBuffer, target: target) {
+            if !encodeMetalFX(frame, commandBuffer: commandBuffer, target: target, clip: clip) {
                 let size = "\(target.width)x\(target.height)"
                 lastMode = metalFXFallback(because: "no MetalFX spatial scaler or textures could be made for \(size)")
-                encodeResample(frame, kernel: .lanczos3, upscale: true, commandBuffer: commandBuffer, target: target)
+                encodeResample(frame, kernel: .lanczos3, upscale: true, commandBuffer: commandBuffer, target: target,
+                               clip: clip)
             }
         }
+    }
+
+    /// `viewport` as whole px of `target` (rounded outwards, clipped to it); nil when that leaves none. Nil `viewport`:
+    /// all of target.
+    static func scissor(_ viewport: CGRect?, target: MTLTexture) -> MTLScissorRect? {
+        guard let viewport else {
+            return target.width > 0 && target.height > 0
+                ? MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height) : nil
+        }
+        guard !viewport.isNull, viewport.minX.isFinite, viewport.maxX.isFinite, viewport.minY.isFinite,
+              viewport.maxY.isFinite else { return nil }
+        let x0 = Int(max(viewport.minX.rounded(.down), 0)), y0 = Int(max(viewport.minY.rounded(.down), 0))
+        let x1 = Int(min(viewport.maxX.rounded(.up), Double(target.width)))
+        let y1 = Int(min(viewport.maxY.rounded(.up), Double(target.height)))
+        guard x1 > x0, y1 > y0 else { return nil }
+        return MTLScissorRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 
     /// The path a MetalFX frame takes when MetalFX cannot draw it, logged the first time.
@@ -205,11 +261,17 @@ public final class TileRenderer {
     }
 
     /// The compute path: one `resample` dispatch (or `resampleEWA` when `kernel` is nil, `upscale = ewa-lanczos`)
-    /// writes every pixel of `target`, background included, so there is no render pass and no clear. Needs no tile
-    /// instances: each threadgroup finds its texels' slots itself.
+    /// writes every pixel of `target` (of `clip`, when given), background included, so there is no render pass and no
+    /// clear. Needs no tile instances: each threadgroup finds its texels' slots itself.
     private func encodeResample(_ frame: LevelFrame, kernel: ResampleKernel?, upscale: Bool,
-                                commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+                                commandBuffer: MTLCommandBuffer, target: MTLTexture, clip: MTLScissorRect? = nil) {
         guard target.width > 0, target.height > 0 else { return }
+        // The dispatch covers view px x0 ..< x0 + w, y0 ..< y0 + h: the whole target, or the clip. The kernels work in
+        // the dispatch's own px, so the view geometry is given less (x0, y0) (whole px, exact in Float for offsets under
+        // 2^21 px) and only their writes add it back. Without a clip it is the dispatch of before, to the bit.
+        let x0 = clip?.x ?? 0, y0 = clip?.y ?? 0
+        let w = clip?.width ?? target.width, h = clip?.height ?? target.height
+        let shift = SIMD2(Float(x0), Float(y0))
         // A GPU that cannot write _srgb textures from a shader (Intel and AMD Macs) gets the target's unorm view and
         // the ENCODE_SRGB variant, which encodes itself; background(for:) then gives the background encoded too. A
         // `.table` frame's target is that view already, written through the inverse table.
@@ -225,13 +287,13 @@ public final class TileRenderer {
         // lanczos-antiring is a Lanczos option (spec §5), EWA Lanczos included; the separable shader applies it only
         // when magnifying, EWA only ever magnifies.
         let antiringing = resample.antiringing && (kernel == nil || kernel == .lanczos3 || kernel == .lanczos2)
-        var params = ResampleParams(levelToViewScale: frame.levelToView, levelToViewOffset: frame.offset,
+        var params = ResampleParams(levelToViewScale: frame.levelToView, levelToViewOffset: frame.offset - shift,
                                     levelSize: SIMD2(UInt32(size.width), UInt32(size.height)),
                                     extent: frame.orientedExtent,
-                                    viewSize: SIMD2(UInt32(target.width), UInt32(target.height)),
+                                    viewSize: SIMD2(UInt32(w), UInt32(h)),
                                     columns: UInt32(frame.grid.columns(frame.level)),
                                     antiringing: antiringing ? 1 : 0, background: background(for: target),
-                                    orient: frame.orient, shift: frame.shift)
+                                    orient: frame.orient, shift: frame.shift, origin: SIMD2(UInt32(x0), UInt32(y0)))
         let table = frame.inverseCurve != nil, cube = frame.color != nil
         if let kernel {
             encoder.setComputePipelineState(context.resamplePipeline(kernel: kernel, upscale: upscale, alpha: frame.hasAlpha,
@@ -250,6 +312,7 @@ public final class TileRenderer {
         encoder.setBytes(&params, length: MemoryLayout<ResampleParams>.stride, index: 0)
         if frame.hasAlpha {
             var backdrop = transparencyParams(frame)
+            backdrop.anchor -= shift
             encoder.setBytes(&backdrop, length: MemoryLayout<TransparencyParams>.stride, index: 2)
         }
         if let color = frame.color {
@@ -259,8 +322,7 @@ public final class TileRenderer {
             encoder.setBytes(&params, length: MemoryLayout<ColorLUTParams>.stride, index: 3)
         }
         let group = 16   // the kernels' threadgroup side; their threadgroup arrays are sized for exactly this
-        encoder.dispatchThreadgroups(MTLSize(width: (target.width + group - 1) / group,
-                                             height: (target.height + group - 1) / group, depth: 1),
+        encoder.dispatchThreadgroups(MTLSize(width: (w + group - 1) / group, height: (h + group - 1) / group, depth: 1),
                                      threadsPerThreadgroup: MTLSize(width: group, height: group, depth: 1))
         encoder.endEncoding()
     }
@@ -302,15 +364,19 @@ public final class TileRenderer {
 
     /// The tile fragment pass: clears `target` and draws `frame`'s visible tiles, if any, bilinear or (`nearest`,
     /// pixel art) as hard level px. Tiles are stored ones, chosen by the stored rect under the view; the vertex shader
-    /// turns their corners into the view.
-    func encodeTiles(_ frame: LevelFrame?, nearest: Bool, commandBuffer: MTLCommandBuffer, target: MTLTexture) {
+    /// turns their corners into the view. With a `clip` (a page after the first, `encode`) the pass loads `target`
+    /// instead of clearing it and draws only within the clip.
+    func encodeTiles(_ frame: LevelFrame?, nearest: Bool, commandBuffer: MTLCommandBuffer, target: MTLTexture,
+                     clip: MTLScissorRect? = nil) {
         let attachment = pass.colorAttachments[0]!
         attachment.texture = target
+        attachment.loadAction = clip == nil ? .clear : .load
         attachment.clearColor = clearColor(for: target)
         let made = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
         attachment.texture = nil   // the encoder has its copy; do not keep the drawable alive until the next frame
         guard let encoder = made else { return }
         encoder.label = "tiles"
+        if let clip { encoder.setScissorRect(clip) }
         if let frame { drawTiles(frame, nearest: nearest, encoder: encoder, commandBuffer: commandBuffer, target: target) }
         encoder.endEncoding()
     }

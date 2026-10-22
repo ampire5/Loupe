@@ -479,14 +479,16 @@ enum Shaders {
         float2 levelToViewOffset;      // view px of oriented level px 0
         uint2 levelSize;               // stored
         float2 extent;                 // the image's oriented extent in level px (its view rect: offset + extent·m)
-        uint2 viewSize;
+        uint2 viewSize;                // the dispatch's size: the drawable's, or a viewport's
         uint columns;                  // tile columns of the level (slice = row * columns + column)
         uint antiringing;
         float4 background;             // linear, alpha 1 (CURVE_TABLE: sRGB-encoded)
         int4 orient;                   // ImageOrientation.matrix
         float2 shift;                  // stored level px
-        float2 pad1;
+        uint2 origin;                  // where the dispatch's px (0, 0) is written: (0, 0), or a viewport's corner
     };
+    // The kernels work in the dispatch's own px: a dispatch over a viewport (TileRenderer.encode, a page after the
+    // first) gets levelToViewOffset and the backdrop's anchor less `origin`, and only its writes add `origin` back.
 
     // The kernel's weight at distance x (already compressed by k = min(1, m)).
     static float resampleWeight(float x) {
@@ -549,7 +551,7 @@ enum Shaders {
         //    for every thread of the group and no barrier has been reached yet, so the early return is uniform.
         float2 groupMin = float2(tg * kGroup), groupMax = groupMin + float(kGroup);
         if (any(groupMax <= imageMin) || any(groupMin >= imageMax)) {
-            if (drawn) out.write(p.background, gid);
+            if (drawn) out.write(p.background, gid + p.origin);
             return;
         }
 
@@ -614,7 +616,7 @@ enum Shaders {
         if (!drawn) return;
         float2 centre = float2(gid) + 0.5;
         if (any(centre < imageMin) || any(centre >= imageMax)) {
-            out.write(p.background, gid);
+            out.write(p.background, gid + p.origin);
             return;
         }
         int by = bV[tid.y] - row0;
@@ -631,10 +633,10 @@ enum Shaders {
         }
         acc = colorCube(acc, lut, from, cube);
         if (kAlpha) {
-            out.write(encodeOutput(composite(acc, t, centre), inverse), gid);
+            out.write(encodeOutput(composite(acc, t, centre), inverse), gid + p.origin);
             return;
         }
-        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid);   // opaque
+        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid + p.origin);   // opaque
     }
 
     // ---- resampleEWA / ewaWeightProbe -----------------------------------------------------
@@ -694,7 +696,7 @@ enum Shaders {
         //    barrier, as in resample).
         float2 groupMin = float2(tg * kGroup), groupMax = groupMin + float(kGroup);
         if (any(groupMax <= imageMin) || any(groupMin >= imageMax)) {
-            if (drawn) out.write(p.background, gid);
+            if (drawn) out.write(p.background, gid + p.origin);
             return;
         }
 
@@ -725,7 +727,7 @@ enum Shaders {
         if (!drawn) return;
         float2 centre = float2(gid) + 0.5;
         if (any(centre < imageMin) || any(centre >= imageMax)) {
-            out.write(p.background, gid);
+            out.write(p.background, gid + p.origin);
             return;
         }
         float2 c = orientedToStored(p.orient, p.shift, (centre - p.levelToViewOffset) / m) - 0.5;
@@ -780,10 +782,10 @@ enum Shaders {
         }
         acc = colorCube(acc, lut, from, cube);
         if (kAlpha) {
-            out.write(encodeOutput(composite(acc, t, centre), inverse), gid);
+            out.write(encodeOutput(composite(acc, t, centre), inverse), gid + p.origin);
             return;
         }
-        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid);   // opaque
+        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid + p.origin);   // opaque
     }
 
     // Tests: the weight resampleEWA uses at r2[i] (level px^2, below cutoff2), as it looks it up.

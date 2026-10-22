@@ -49,6 +49,7 @@ import Testing
     #expect(MemoryLayout<ResampleParams>.offset(of: \.background) == 48)
     #expect(MemoryLayout<ResampleParams>.offset(of: \.orient) == 64)
     #expect(MemoryLayout<ResampleParams>.offset(of: \.shift) == 80)
+    #expect(MemoryLayout<ResampleParams>.offset(of: \.origin) == 88)
     #expect(MemoryLayout<MetalFXParams>.size == 48 && MemoryLayout<MetalFXParams>.alignment == 16)
     #expect(MemoryLayout<MetalFXParams>.offset(of: \.background) == 32)
     #expect(MemoryLayout<MetalFXComposeParams>.size == 48 && MemoryLayout<MetalFXComposeParams>.stride == 48)
@@ -309,7 +310,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
     #expect(resample.bufferDataSize == MemoryLayout<ResampleParams>.stride)
     #expect(members(resample) == ["levelToViewScale": 0, "pad0": 4, "levelToViewOffset": 8, "levelSize": 16, "extent": 24,
                                   "viewSize": 32, "columns": 40, "antiringing": 44, "background": 48, "orient": 64,
-                                  "shift": 80, "pad1": 88])
+                                  "shift": 80, "origin": 88])
 
     let fx = MTLRenderPipelineDescriptor()
     fx.vertexFunction = c.library.makeFunction(name: "metalfxVertex")
