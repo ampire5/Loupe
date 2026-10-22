@@ -402,7 +402,7 @@ import Foundation
 
 @Test func stripAndThumbDefaults() {
     let c = Config()
-    #expect(c.stripWindow == .bar && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 500)
+    #expect(c.stripWindow == .bar && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 200)
     #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 3 && c.stripScrollDirection == .natural)
     #expect(c.stripJumpPreview && !c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
@@ -426,9 +426,11 @@ import Foundation
     }
 }
 
-@Test func stripHideDelayDefault500() {
-    #expect(Config().stripHideDelayMilliseconds == 500)
-    #expect(Config().text(forKey: "strip-hide-delay") == "500")
+@Test func stripHidesQuicklyByDefault() {
+    #expect(Config().stripHideDelayMilliseconds == 200)
+    #expect(Config().text(forKey: "strip-hide-delay") == "200")
+    #expect(Config().stripFadeOutMilliseconds == 150)
+    #expect(Config().text(forKey: "strip-fade-out") == "150")
 }
 
 @Test func stripHideDelayAcceptsZero() {
@@ -439,7 +441,7 @@ import Foundation
 
 @Test func stripFadeKeysParseAndRoundTrip() throws {
     let defaults = Config()
-    #expect(defaults.stripFadeInMilliseconds == 150 && defaults.stripFadeOutMilliseconds == 250)
+    #expect(defaults.stripFadeInMilliseconds == 150 && defaults.stripFadeOutMilliseconds == 150)
     let (c, w) = Config.parse("strip-fade-in=0\nstrip-fade-out=2000")
     #expect(c.stripFadeInMilliseconds == 0 && c.stripFadeOutMilliseconds == 2000 && w.isEmpty)
     #expect(c.text(forKey: "strip-fade-in") == "0" && c.text(forKey: "strip-fade-out") == "2000")
