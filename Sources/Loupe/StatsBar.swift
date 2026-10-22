@@ -189,7 +189,7 @@ import LoupeCore
     private static let startupVolumeName: String? =
         (try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeLocalizedNameKey]))?.volumeLocalizedName
 
-    /// The fill lightens the bar with white at `stats-progress-opacity` (default 0.15: the 0.1 grey reads ≈ 0.24), the
+    /// The fill lightens the bar with white at `stats-progress-opacity` (default 0.15), the
     /// same over the picture and on the solid bar: no new hue, visible at a glance.
     private func applyBackground() {
         let tint = Chrome.Palette.overMedia.glassTint
