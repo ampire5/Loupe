@@ -33,6 +33,10 @@ extension SettingsPanel {
                 .color("background", "Background", names: backgroundNames, symbol: "square.fill",
                        description: "The colour around the photo, in a window and in full screen: black, dark-gray, "
                         + "medium-gray, light-gray, white, #RRGGBB or #RGB. Default #2a2a2a."),
+                .choice("appearance", "Appearance", [
+                    (word: "system", title: "System"), (word: "light", title: "Light"), (word: "dark", title: "Dark"),
+                ], symbol: "circle.lefthalf.filled",
+                description: "Light or dark windows and Home. The photo and everything over it stay dark."),
                 .number("cursor-autohide", "Hide the cursor after", unit: "ms", step: 100, symbol: "cursorarrow",
                         description: "Without mouse movement over the photo (never over the strip); keys and scrolling "
                             + "do not bring it back. 1–600000 ms, or no; default 1000."),

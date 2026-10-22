@@ -94,6 +94,7 @@ extension Notification.Name {
         pyramidFilter?.set(config.pyramidFilter)
         JXLSetting.shared.options = JXLOptions(config: config)
         pushThumbnailSettings()
+        applyAppearance()
         if applyingIcon { applyAppIcon() }
         if pushToStrips { pushToAllStrips() }
         settingsStore?.configDidReload(from: previous)
@@ -123,6 +124,12 @@ extension Notification.Name {
         guard pushedThumbnailSettings.map({ $0 != settings }) ?? true else { return }
         pushedThumbnailSettings = settings
         Task { await thumbnails.setSettings(thumbSize: settings.size, limitBytes: settings.limit) }
+    }
+
+    /// `appearance`: the whole app's light or dark look (`nil`: follow macOS). Cheap when unchanged.
+    func applyAppearance() {
+        let appearance = config.appearance.prefersDark.flatMap { NSAppearance(named: $0 ? .darkAqua : .aqua) }
+        if NSApp.appearance != appearance { NSApp.appearance = appearance }
     }
 
     /// `app-icon`: a picture from ~/.config/loupe/icons, a bundled alternate (`AppIcons/<name>.icns`, compiled by
@@ -555,6 +562,7 @@ extension Notification.Name {
         // `reload` set the file's old `pyramid-filter`; a menu pick of it must reach the loader too.
         pyramidFilter?.set(config.pyramidFilter)
         JXLSetting.shared.options = JXLOptions(config: config)
+        applyAppearance()
         pushToAllStrips()
         do {
             try config.write(keys: keys, to: fileURL)
