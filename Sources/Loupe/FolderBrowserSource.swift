@@ -209,6 +209,7 @@ import LoupeCore
                         deliver(listing)
                         if listing.complete {
                             self.keep(listing, for: path)
+                            self.keepSummary(of: folder, listing.entries)
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: true)
                             if let counted = await self.counted(listing), wanted() {
                                 deliver(counted)
@@ -228,6 +229,7 @@ import LoupeCore
                             let listing = BrowserListing(entries: entries, complete: true)
                             deliver(listing)
                             self.keep(listing, for: path)
+                            self.keepSummary(of: folder, entries)
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: true)
                         } catch {
                             guard wanted() else { return }
@@ -281,6 +283,15 @@ import LoupeCore
     private func forget(_ folder: URL) {
         let path = folder.standardizedFileURL.path
         memory.removeAll { $0.path == path }
+    }
+
+    /// The open folder's summary from its complete listing (which has the photos' dates and sizes, on a share too): the
+    /// store counts it and keeps it in the catalog, off the main thread, so the folder's card has it when it is next
+    /// shown. A zip's card has its own from the zip's directory.
+    private func keepSummary(of folder: URL, _ entries: [BrowserEntry]) {
+        guard !ArchivePath.isArchive(folder) else { return }
+        let thumbnails = self.thumbnails
+        Task.detached(priority: .utility) { await thumbnails.putOpenFolderSummary(folder, listing: entries) }
     }
 
     /// The listing with the photo counts the catalog knows for its folders; nil when it knows none.

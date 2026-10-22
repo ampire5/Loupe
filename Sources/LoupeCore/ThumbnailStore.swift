@@ -130,7 +130,7 @@ public actor ThumbnailStore {
 
     // MARK: Folder covers
 
-    var coverLister: CoverLister = ThumbnailStore.listCoverNames
+    var coverLister: DatedCoverLister = ThumbnailStore.listCover
     var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
     var coverLocalTimeout = ThumbnailStore.coverLocalListingTimeout
     var coverVolumeIsNetwork: @Sendable (URL) -> Bool = ThumbnailStore.mountIsNetwork
@@ -143,6 +143,12 @@ public actor ThumbnailStore {
     /// recently used go first): its next cover needs no listing.
     var coverPicks: [String: CoverPick] = [:]
     var coverPickUses: UInt64 = 0
+    /// What the cards of folders and zips this session have against them (a zip that cannot be read, a share that does
+    /// not answer), by `memoKey`; cleared by a listing that answers. At most `coverPickLimit` (then forgotten at once).
+    var coverProblems: [String: CardProblem] = [:]
+    /// Folder summaries made by covers, waiting for the next batch (`commit`), by volume and path; read before the
+    /// catalog. At most `summaryBatch`: a full batch is written at once.
+    var pendingSummaries: [String: (location: ThumbnailLocation, summary: FolderSummary)] = [:]
     /// Covers' blocking calls (listings, resolves) on their own threads, per lane, those given up on included (one
     /// hung on a dead share stays).
     nonisolated let coverThreads = CoverThreads(limit: ThumbnailStore.coverThreadsPerLane)

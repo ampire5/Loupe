@@ -13,10 +13,12 @@ import LoupeCore
 // per second (files that could not be made do not count), MB/s of whole files, and the store's per-file read and
 // decode times.
 //
-// With --covers: Home's folder covers of every subfolder of <folder> (Finder order, all of them visible cards), made
-// through a CoverQueue with `listings` covers at a time and `ThumbnailStore.folderCover` (names listed, four photos
-// picked, their thumbnails made and kept in the catalog), then once more from a fresh store on the same catalog (the
-// next session: no listing, no read). Prints covers per second and the process's CPU time for each pass.
+// With --covers: Home's folder cards of every subfolder of <folder> (Finder order, the first 12 visible, the rest the
+// margin), made through a CoverQueue with `listings` covers at a time and `ThumbnailStore.folderCard` (listed with
+// dates on a local volume, four photos picked, their thumbnails made and kept in the catalog, the folder's summary
+// with them), then once more from a fresh store on the same catalog (the next session: a fresh summary and the four
+// thumbnails, no listing, no read). Each card gets its folder's date as the parent's listing gives it. Prints covers
+// per second, the time until the first 12 cards have their cover and summary, and the process's CPU time per pass.
 
 enum ThumbsBench {
     static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>\n"
@@ -158,11 +160,13 @@ enum ThumbsBench {
 extension ThumbsBench {
     private static func runCovers(_ o: Options) async {
         let root = URL(fileURLWithPath: o.folder)
-        let subfolders = ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey],
-                                                                       options: [.skipsHiddenFiles])) ?? [])
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        // As Home's listing of the folder gives them: each subfolder with its date.
+        let listed = ((try? FolderSiblings.listEntries(root)) ?? []).filter { $0.isDirectory && !$0.isPackage }
+            .sorted { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }
+        let subfolders = listed.map(\.url)
+        let dates = Dictionary(listed.map { ($0.url.path, $0.modified) }, uniquingKeysWith: { a, _ in a })
         guard !subfolders.isEmpty else { fail("no subfolders in \(o.folder)") }
+        let firstCards = min(12, subfolders.count)
 
         let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("loupe-covers-bench-\(UUID().uuidString)")
         if cacheDir.standardizedFileURL.path.hasPrefix("/Volumes/") { fail("refusing to write under /Volumes: \(cacheDir.path)") }
@@ -174,14 +178,15 @@ extension ThumbsBench {
         })
 
         print("### covers: \(subfolders.count) subfolders, listings \(o.listings), decodes \(o.decodes), size \(o.size), F_NOCACHE\n")
-        print("| pass | covers | pictures | s | covers/s | CPU s | cores busy |")
-        print("|---|---|---|---|---|---|---|")
+        print("| pass | covers | pictures | summaries | first \(firstCards) s | s | covers/s | CPU s | cores busy |")
+        print("|---|---|---|---|---|---|---|---|---|")
         for pass in ["made", "catalog"] {
             let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size, limitBytes: 2 << 30,
                                        idleDelay: .zero, decodes: o.decodes)
             let queue = CoverQueue(listingLimit: o.listings, resumeDelay: .zero)
-            let pictures = LockedLines()
+            let pictures = LockedLines(), summaries = LockedLines()
             let ids = subfolders.map(\.path)
+            let firstIDs = Set(ids.prefix(firstCards)), firstDone = LockedLines()
             let cpu = cpuTimeMs()
             let start = ContinuousClock.now
             var place = await store.folderLocation(root)
@@ -198,12 +203,15 @@ extension ThumbsBench {
             case .unknown(let onShare): (shown, network) = (nil, onShare)
             case .notNow: fail("cannot resolve \(o.folder)")
             }
-            await queue.want(ids, visible: ids.count, isNetwork: { _ in network }) { id in
+            await queue.want(ids, visible: firstCards, isNetwork: { _ in network }) { id in
                 let folder = URL(fileURLWithPath: id, isDirectory: true)
-                guard let images = await store.folderCover(folder, archive: false,
-                                                           in: shown?.subfolder(folder.lastPathComponent),
-                                                           network: network, maxPixel: 256) else { return false }
-                pictures.add("\(images.count)")
+                guard let card = await store.folderCard(folder, archive: false,
+                                                        in: shown?.subfolder(folder.lastPathComponent),
+                                                        network: network, maxPixel: 256,
+                                                        modified: dates[id] ?? nil) else { return false }
+                if card.summary != nil { summaries.add(id) }
+                if firstIDs.contains(id) { firstDone.add(String(msSince(start))) }
+                pictures.add("\(card.images.count)")
                 return true
             }
             let deadline = start + .seconds(60 + 5 * ids.count)
@@ -212,9 +220,15 @@ extension ThumbsBench {
             }
             let seconds = msSince(start) / 1000, cpuUsed = (cpuTimeMs() - cpu) / 1000
             let made = pictures.all.compactMap(Int.init).reduce(0, +)
-            print("| \(pass) | \(pictures.all.count) | \(made) | \(String(format: "%.2f", seconds)) "
+            let first = firstDone.all.count == firstCards ? firstDone.all.compactMap(Double.init).max().map {
+                String(format: "%.2f", $0 / 1000)
+            } ?? "–" : "–"
+            print("| \(pass) | \(pictures.all.count) | \(made) | \(summaries.all.count) | \(first) "
+                  + "| \(String(format: "%.2f", seconds)) "
                   + "| \(String(format: "%.1f", Double(pictures.all.count) / seconds)) | \(String(format: "%.1f", cpuUsed)) "
                   + "| \(String(format: "%.1f", cpuUsed / seconds)) |")
+            // The summaries go to the catalog with the store's next batch (`commitDelay`, 1 s): before the next session.
+            try? await Task.sleep(for: .seconds(1.5))
         }
         print()
     }

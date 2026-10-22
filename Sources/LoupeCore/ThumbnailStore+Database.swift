@@ -82,6 +82,7 @@ extension ThumbnailStore {
         stored = []
         uncommitted = []
         touched = []
+        pendingSummaries = [:]
         storedBytes = 0
     }
 
@@ -101,17 +102,21 @@ extension ThumbnailStore {
     func commit() {
         commitTimer?.cancel()
         commitTimer = nil
-        guard case .open = disk, !uncommitted.isEmpty || !touched.isEmpty else { return }
+        guard case .open = disk, !uncommitted.isEmpty || !touched.isEmpty || !pendingSummaries.isEmpty else { return }
         _ = checkReopen()
         let batch = uncommitted.compactMap { url -> (url: URL, item: (id: Int64, stamp: FileStamp, jpeg: Data, info: ImageInfo))? in
             guard let thumbnail = made[url], let id = ids[url] else { return nil }
             return (url, (id, thumbnail.stamp, thumbnail.jpeg, thumbnail.info))
         }
         let touches = Array(touched)
+        // Summaries a failed write loses are made again on the cards' next pass.
+        let summaries = Array(pendingSummaries.values)
+        pendingSummaries = [:]
         let epoch = databaseEpoch
         let written = perform("write", { db -> Void in
             try db.put(batch.map(\.item))
             try db.touch(touches)
+            try db.putSummaries(summaries)
         }) != nil
         if !batch.isEmpty { commitCount += 1 }
         touched = []

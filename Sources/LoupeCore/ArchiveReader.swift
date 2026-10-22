@@ -29,14 +29,21 @@ public final class ArchiveReader: @unchecked Sendable {
     /// The archive's photos as entry URLs with their stamps, in directory order: entries whose last name has an image
     /// extension; not directories, `__MACOSX/…`, `._*` names, or names with "∕" (`ArchivePath.url` refuses them).
     public func entries(of archive: URL) throws -> [(url: URL, stamp: FileStamp)] {
+        try listing(of: archive).entries
+    }
+
+    /// `entries`, with the archive's own stamp (its size and date) from the same open: a zip card's summary.
+    public func listing(of archive: URL) throws -> (stamp: FileStamp, entries: [(url: URL, stamp: FileStamp)]) {
         try withOpen(archive) { fd, stamp in
-            try directory(fd: fd, stamp: stamp, path: archive.path, io: IO(pread)).entries.compactMap { entry in
+            let entries = try directory(fd: fd, stamp: stamp, path: archive.path, io: IO(pread)).entries.compactMap {
+                entry -> (url: URL, stamp: FileStamp)? in
                 let last = entry.name.split(separator: "/").last.map(String.init) ?? ""
                 guard !entry.isDirectory, !entry.name.hasPrefix("__MACOSX/"), !last.hasPrefix("._"),
                       Playlist.imageExtensions.contains((last as NSString).pathExtension.lowercased()),
                       let url = ArchivePath.url(archive: archive, entry: entry.name) else { return nil }
                 return (url, FileStamp(modified: stamp.modified, size: entry.size))
             }
+            return (stamp, entries)
         }
     }
 

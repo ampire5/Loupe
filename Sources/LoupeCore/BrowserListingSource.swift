@@ -16,7 +16,10 @@ public enum BrowserListingSource {
     /// Names only: kinds from `d_type` (an unknown one by the extension), no dates or sizes. Every `partEvery` names,
     /// at most every `partAfter`, `part` gets all the names so far; false from it stops the listing
     /// (`CancellationError`): a folder left gives the share back at the next part rather than at the end.
-    public static func names(_ folder: URL, archives: Bool, partEvery: Int = partSize, partAfter: Duration = partInterval,
+    /// `stat`: each photo's date and size too (one `fstatat` each, nothing for folders and other files; a local
+    /// volume's folder card): `LoupeBench thumbs --covers` on 2000-file folders, see docs/bench/folder-cards.md.
+    public static func names(_ folder: URL, archives: Bool, stat: Bool = false, partEvery: Int = partSize,
+                             partAfter: Duration = partInterval,
                              part: ([BrowserEntry]) -> Bool = { _ in true }) throws -> [BrowserEntry] {
         var last = ContinuousClock.now
         if ArchivePath.isArchive(folder) { return try archiveEntries(folder) }
@@ -32,8 +35,13 @@ public enum BrowserListingSource {
             let type = item.pointee.d_type
             let isDirectory = type == DT_DIR || (type == DT_UNKNOWN && ext.isEmpty)
             let url = folder.appendingPathComponent(name, isDirectory: isDirectory)
+            var stamp: FileStamp?
+            if stat, !isDirectory, Playlist.imageExtensions.contains(ext) {
+                var st = Darwin.stat()
+                if fstatat(dirfd(dir), name, &st, 0) == 0 { stamp = FileStamp(st) }
+            }
             if let entry = entry(url, isDirectory: isDirectory, isPackage: isDirectory && isPackageExtension(ext),
-                                 stamp: nil, modified: nil, archives: archives) {
+                                 stamp: stamp, modified: nil, archives: archives) {
                 entries.append(entry)
                 if entries.count % max(1, partEvery) == 0, ContinuousClock.now - last >= partAfter {
                     last = ContinuousClock.now

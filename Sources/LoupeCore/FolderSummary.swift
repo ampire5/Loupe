@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 
 /// What a folder card says about its folder, from one directory listing: how many photos and subfolders, how big, the
 /// span of the photos' dates and a twelve-bin histogram of them. Pure: the listing is read elsewhere (the cover queue).
@@ -54,9 +55,38 @@ public struct FolderSummary: Equatable, Sendable {
             if let stamp = entry.stamp { bytes += Int64(stamp.size) }
             if let date = entry.modified { dates.append(date) }
         }
+        return dated(photos: photos, folders: folders, bytes: bytes, dates: dates, folderModified: folderModified)
+    }
+
+    private static func dated(photos: Int, folders: Int, bytes: Int64, dates: [Date],
+                              folderModified: Date?) -> FolderSummary {
         let span = (dates.min(), dates.max())
         return FolderSummary(photos: photos, folders: folders, bytes: bytes, first: span.0, last: span.1,
                              histogram: histogram(of: dates), folderModified: folderModified, datesKnown: true)
+    }
+
+    /// From a listing as the browser has it (`BrowserListingSource.full`, the open folder's, which has stat on a share
+    /// too; or `names` with stat, a local card's): its photos with their dates and sizes, its subfolders (packages are
+    /// already left out); zips are not photos. Names, not URLs: a URL's parts cost microseconds each, which thousands
+    /// of entries feel.
+    public static func of(listing entries: [BrowserEntry], folderModified: Date?) -> FolderSummary {
+        var folders = 0
+        var photos = 0
+        var bytes: Int64 = 0
+        var dates: [Date] = []
+        for entry in entries where !entry.name.hasPrefix(".") {
+            switch entry.kind {
+            case .folder:
+                folders += 1
+            case .file:
+                photos += 1
+                bytes += entry.size ?? 0
+                if let date = entry.date { dates.append(date) }
+            case .archive, .collection, .place:
+                break
+            }
+        }
+        return dated(photos: photos, folders: folders, bytes: bytes, dates: dates, folderModified: folderModified)
     }
 
     /// From a names-only listing (a share): counts only, no dates, no size.

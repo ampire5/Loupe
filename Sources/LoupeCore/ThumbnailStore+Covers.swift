@@ -50,14 +50,64 @@ extension ThumbnailStore {
 
     /// The stored summary of the folder `location` names (`ThumbnailLocation.subfolder`), from the catalog alone. Nil
     /// when there is none or the catalog cannot say: a summary never gets in the way of thumbnails.
+    /// One waiting for the next batch first.
     public func folderSummary(at location: ThumbnailLocation) async -> FolderSummary? {
-        perform("summary", { try $0.summary(at: location) }) ?? nil
+        storedSummary(at: location)
     }
 
-    /// Stores folder summaries in one batch (the cover queue's, as they are made). Failure is logged by `perform` and
-    /// leaves the summaries unstored: they are made again on the next pass.
+    /// Stores folder summaries in one batch, now. Failure is logged by `perform` and leaves the summaries unstored:
+    /// they are made again on the next pass.
     public func putFolderSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) async {
+        // A newer summary of the same folder waiting for the batch would be written over this one.
+        for (location, _) in items { pendingSummaries[Self.summaryKey(location)] = nil }
         _ = perform("summaries", { try $0.putSummaries(items) })
+    }
+
+    /// The open folder's summary from its full listing (`BrowserListingSource.full`, which has the photos' dates and
+    /// sizes on a share too: a share's folder gets them once visited), kept in the catalog with the folder's own date,
+    /// as its parent's listing gives it, so the folder's card finds it fresh. Where the catalog keeps the folder and
+    /// its date are asked in the folder's resolving lane (`folderLocation`'s limits: nothing when it does not answer);
+    /// the summary is counted off the actor and goes with the next batch.
+    public func putOpenFolderSummary(_ folder: URL, listing entries: [BrowserEntry]) async {
+        let locate = self.locate, network = coverVolumeIsNetwork(folder)
+        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
+                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
+            (_: @Sendable (OpenFolderPlace) -> Bool) -> OpenFolderPlace in
+            // A URL of its own: one handed over may hold resource values cached before the listing.
+            let fresh = URL(fileURLWithPath: folder.path, isDirectory: true)
+            return OpenFolderPlace(location: locate(folder.appendingPathComponent("_")),
+                                   modified: try? fresh.resourceValues(forKeys: [.contentModificationDateKey])
+                                       .contentModificationDate)
+        }
+        guard case .value(let place, _) = outcome, let location = place.location else { return }
+        let summary = await Self.offActor(qos: Self.coverQoS) {
+            FolderSummary.of(listing: entries, folderModified: place.modified)
+        }
+        queueSummary(summary, at: location)
+    }
+
+    /// Summaries waiting for the next batch at most: a full batch is written at once, else with the thumbnails'
+    /// batch (`commitDelay`). Covers finish a few a second, so a batch is mostly what a second of covers made; the
+    /// bound keeps a burst (a folder of hundreds of zips from the catalog) to one transaction per this many, each
+    /// short on the store's actor. `putSummaries` into a table of 10 000 rows (Intel iMac, 8-core i7, SSD; best of 10):
+    /// 1 / 16 / 64 / 256 rows in 0.28 / 0.45 / 1.15 / 3.35 ms (docs/bench/folder-cards.md).
+    static let summaryBatch = 64
+
+    /// A summary for the next batch (nothing without a database).
+    func queueSummary(_ summary: FolderSummary, at location: ThumbnailLocation) {
+        guard database() != nil else { return }
+        pendingSummaries[Self.summaryKey(location)] = (location, summary)
+        if pendingSummaries.count >= Self.summaryBatch { commit() } else { scheduleCommit() }
+    }
+
+    /// The summary of the folder `location` names, waiting for the batch or from the catalog.
+    func storedSummary(at location: ThumbnailLocation) -> FolderSummary? {
+        if let pending = pendingSummaries[Self.summaryKey(location)] { return pending.summary }
+        return perform("summary", { try $0.summary(at: location) }) ?? nil
+    }
+
+    nonisolated static func summaryKey(_ location: ThumbnailLocation) -> String {
+        location.volume + "\u{0}" + location.folder
     }
 
     /// A folder card's mosaic (file browser, second round): up to `limit` photos of the folder that already have a
@@ -92,6 +142,65 @@ public struct CoverNames: Equatable, Sendable {
         self.files = files
         self.folders = folders
     }
+}
+
+/// A cover's listing of a folder (or a zip's directory): its names, and on a local volume (a listing with stat) or for a
+/// zip also its summary (without the folder's date, which the caller has) and its photos' dates.
+public struct CoverListing: Equatable, Sendable {
+    public var names: CoverNames
+    public var summary: FolderSummary?
+    /// The photos' modification dates (folder cards' "+N new"); nil from a names-only listing and for a zip.
+    public var photoDates: [Date]?
+
+    public init(names: CoverNames, summary: FolderSummary? = nil, photoDates: [Date]? = nil) {
+        self.names = names
+        self.summary = summary
+        self.photoDates = photoDates
+    }
+
+    /// From a listing (`BrowserListingSource.names`, with stat on a local volume: the summary and the photos' dates
+    /// then; a names-only listing gives neither, its summary is the caller's from the names).
+    public init(listing entries: [BrowserEntry], dated: Bool) {
+        let files = entries.filter { $0.kind == .file }, folders = entries.filter { $0.kind == .folder }
+        self.init(names: CoverNames(files: files.map(\.name), folders: folders.map(\.name)),
+                  summary: dated ? .of(listing: entries, folderModified: nil) : nil,
+                  photoDates: dated ? files.compactMap(\.date) : nil)
+    }
+}
+
+/// What a folder card has against it (folder cards spec, "Значки").
+public enum CardProblem: Equatable, Sendable {
+    /// The zip's directory cannot be read: the card says so but is not dimmed (it opens, with the viewer's message).
+    case broken
+    /// The share does not answer (the cover's listing gave no name in time twice in a row) or its volume is gone: the
+    /// card is dimmed, like a place that does not answer.
+    case offline
+}
+
+/// A folder's or zip's card from the cover queue (`ThumbnailStore.folderCard`): its pictures and the facts of its band.
+public struct FolderCard: Sendable {
+    public var images: [CGImage]
+    /// Made from this pass's listing, else the catalog's (kept even when the folder changed since, until a listing
+    /// counts it again); nil when there is none.
+    public var summary: FolderSummary?
+    public var problem: CardProblem?
+    /// The photos' modification dates from this pass's listing with stat (a local volume); nil when the card came
+    /// from the catalog, on a share and for a zip.
+    public var photoDates: [Date]?
+
+    public init(images: [CGImage], summary: FolderSummary? = nil, problem: CardProblem? = nil,
+                photoDates: [Date]? = nil) {
+        self.images = images
+        self.summary = summary
+        self.problem = problem
+        self.photoDates = photoDates
+    }
+}
+
+/// Where the catalog keeps the open folder and its date (`putOpenFolderSummary`), from one blocking call.
+struct OpenFolderPlace: Sendable {
+    var location: ThumbnailLocation?
+    var modified: Date?
 }
 
 /// A folder's pick from a complete listing (`ThumbnailStore.coverPicks`): its photos (spread across it, the one last
@@ -141,6 +250,9 @@ extension ThumbnailStore {
     /// from it stops the listing (thrown or returned, either will do).
     typealias CoverLister = @Sendable (_ folder: URL, _ archive: Bool,
                                        _ part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames
+    /// `CoverLister` with stat when `dated` (a local volume): the listing's summary and dates come too.
+    typealias DatedCoverLister = @Sendable (_ folder: URL, _ archive: Bool, _ dated: Bool,
+                                            _ part: @escaping @Sendable (CoverListing) -> Bool) throws -> CoverListing
 
     /// How long a cover's listing on a share may take (and `folderLocation`): what came by then is what the photos are
     /// picked from, so a folder of thousands of files on a slow share holds its place in the queue no longer than this.
@@ -171,8 +283,16 @@ extension ThumbnailStore {
     /// The covers' threads: background work, below the viewer's and the open folders' thumbnails.
     static let coverQoS = DispatchQoS.QoSClass.utility
 
-    /// Tests: a fake listing, and the time limits.
+    /// Tests: a fake listing of names only (dated or not), and the time limits.
     func setCoverListing(_ lister: @escaping CoverLister, networkTimeout: Duration = coverListingTimeout,
+                         localTimeout: Duration = coverLocalListingTimeout) {
+        setCoverListing(dated: { folder, archive, _, part in
+            CoverListing(names: try lister(folder, archive) { part(CoverListing(names: $0)) })
+        }, networkTimeout: networkTimeout, localTimeout: localTimeout)
+    }
+
+    /// Tests: a fake listing, and the time limits.
+    func setCoverListing(dated lister: @escaping DatedCoverLister, networkTimeout: Duration = coverListingTimeout,
                          localTimeout: Duration = coverLocalListingTimeout) {
         coverLister = lister
         coverNetworkTimeout = networkTimeout
@@ -273,78 +393,145 @@ extension ThumbnailStore {
         return !(best?.local ?? false)
     }
 
-    /// The pictures of a folder's or zip's card, at most `maxPixel` on their long side: up to four photos spread across
-    /// it (the one last viewed there first). `location` is where the catalog keeps the folder's files (from the
-    /// folder Home shows: `folderLocation(shown)`'s `.subfolder(name)`; nil: none). `network` says whether it is on a
-    /// share when there is no location (`CoverPlace.unknown`); nil: from the location, or a share without one.
-    /// From the catalog when it has four of the folder's photos, else from a listing of names (limited to
-    /// `coverListingTimeout` on a share, `coverLocalListingTimeout` elsewhere) whose picks are made into thumbnails and
-    /// kept in the catalog, like `cover`'s. A folder without photos shows one of each of its first four subfolders'
-    /// (two levels down at most).
-    ///
-    /// Empty when there is nothing to show; then the folder is not listed again this session: found empty, not
-    /// listable, or listed `coverTimeoutsAllowed` times without a name in time. Nil for "not now": its lane is full of
-    /// hung calls, or its listing gave no name in time. Nothing here asks the system but the listing. New thumbnails
-    /// wait while the viewer is busy; cancelling the task stops the listing and the reads.
+    /// The pictures of a folder's or zip's card (`folderCard`'s), for callers that show no summary. Nil for "not now",
+    /// as `folderCard`'s, and also while a share that did not answer twice is still being tried (its third time out
+    /// gives it up for the session: empty).
     public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
                             maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> [CGImage]? {
-        await folderCover(folder, archive: archive, location: location, network: network ?? location?.isNetwork ?? true,
-                          maxPixel: maxPixel, lastViewed: lastViewed, modified: modified, count: Self.coverPhotos,
-                          depth: 0)
+        guard let card = await folderCard(folder, archive: archive, in: location, network: network, maxPixel: maxPixel,
+                                          lastViewed: lastViewed, modified: modified) else { return nil }
+        if card.problem == .offline, card.images.isEmpty, !emptyCovers.contains(Self.memoKey(folder, modified)) {
+            return nil
+        }
+        return card.images
     }
 
-    private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool, maxPixel: Int,
-                             lastViewed: String?, modified: Date?, count: Int, depth: Int) async -> [CGImage]? {
+    /// A folder's or zip's card: its pictures, at most `maxPixel` on their long side (up to four photos spread across
+    /// it, the one last viewed there first), and its summary (folder cards spec, "Сводка папки"). `location` is where
+    /// the catalog keeps the folder's files (from the folder Home shows: `folderLocation(shown)`'s `.subfolder(name)`;
+    /// nil: none). `network` says whether it is on a share when there is no location (`CoverPlace.unknown`); nil: from
+    /// the location, or a share without one. `modified` is the folder's (or zip's) date as its parent's listing gave it.
+    ///
+    /// A summary in the catalog made at that date, and four of the folder's photos there: the card without a listing.
+    /// Else (or with fewer photos there) a listing (limited to `coverListingTimeout` on a share,
+    /// `coverLocalListingTimeout` elsewhere): with stat on a local volume (the summary with dates and size), names only
+    /// on a share (counts; the dates and size of a summary kept from a visit stay), a zip's directory read once. Its
+    /// picks are made into thumbnails and kept in the catalog, like `cover`'s, and its summary goes with the next batch.
+    /// A folder without photos shows one of each of its first four subfolders' (two levels down at most).
+    ///
+    /// Empty pictures when there is nothing to show; then the folder is not listed again this session: found empty, not
+    /// listable, or listed `coverTimeoutsAllowed` times without a name in time. A zip that cannot be read is
+    /// `.broken`; a share whose listing gave no name in time twice in a row, or whose volume is gone, `.offline`, until
+    /// a listing answers. Nil for "not now": its lane is full of hung calls, or its listing gave no name in time (the
+    /// first time on a share, every time on a local volume). Nothing here asks the system but the listing. New
+    /// thumbnails wait while the viewer is busy; cancelling the task stops the listing and the reads.
+    public func folderCard(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
+                           maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> FolderCard? {
+        let network = network ?? location?.isNetwork ?? true
         let key = Self.memoKey(folder, modified)
-        guard !emptyCovers.contains(key) else { return [] }
+        let stored = location.flatMap { storedSummary(at: $0) }
+        let fresh = stored.map { $0.folderModified != nil && $0.folderModified == modified } ?? false
+        // Listed this session at this date already (its summary went to the catalog then): the pictures alone decide.
+        // A pick remembered from a look into it as a subfolder made no summary: that one is listed again.
+        let known = fresh || stored != nil && (emptyCovers.contains(key) || coverPicks[key] != nil)
+        guard let made = await folderCover(folder, archive: archive, location: location, network: network,
+                                           maxPixel: maxPixel, lastViewed: lastViewed, modified: modified,
+                                           count: Self.coverPhotos, depth: 0, mustList: !known) else { return nil }
+        guard let listing = made.listing else {
+            return FolderCard(images: made.images, summary: stored, problem: made.problem)
+        }
+        let summary = Self.summary(of: listing, modified: modified, stored: stored)
+        if let location, summary != stored { queueSummary(summary, at: location) }
+        return FolderCard(images: made.images, summary: summary, problem: made.problem, photoDates: listing.photoDates)
+    }
+
+    /// A complete listing's summary at the folder's date (the parent listing's, which freshness compares; a zip's own
+    /// without it). Names only (a share): the dates and size of a stored summary that has them stay, as the folder was
+    /// when it was open.
+    nonisolated static func summary(of listing: CoverListing, modified: Date?, stored: FolderSummary?) -> FolderSummary {
+        var summary = listing.summary ?? FolderSummary.of(names: listing.names, folderModified: modified)
+        if let modified { summary.folderModified = modified }
+        if !summary.datesKnown, let stored, stored.datesKnown {
+            summary.bytes = stored.bytes
+            summary.first = stored.first
+            summary.last = stored.last
+            summary.histogram = stored.histogram
+            summary.datesKnown = true
+        }
+        return summary
+    }
+
+    /// Two listings of a share's folder in a row without a name in time: the card says the share does not answer.
+    static let coverOfflineTimeouts = 2
+
+    /// What a cover pass made: its pictures, the folder's complete listing when it made one (`folderCard`'s summary;
+    /// only at the top, not a subfolder's), and what the card has against it.
+    struct CoverMade {
+        var images: [CGImage]
+        var listing: CoverListing?
+        var problem: CardProblem?
+    }
+
+    /// `mustList`: the summary needs a listing, so the catalog's four and the remembered pick do not spare it (the
+    /// pictures still come from the catalog when it has four of the folder's photos listed).
+    private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool, maxPixel: Int,
+                             lastViewed: String?, modified: Date?, count: Int, depth: Int,
+                             mustList: Bool = false) async -> CoverMade? {
+        let key = Self.memoKey(folder, modified)
+        guard !emptyCovers.contains(key) else { return CoverMade(images: [], problem: coverProblems[key]) }
         guard !Task.isCancelled else { return nil }
-        if let location, let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
-           names.count >= count {
-            // Sorting thousands of names takes a while: not on the actor.
-            let picked = await Self.offActor(qos: Self.coverQoS) {
-                CoverSampling.pick(Self.finderSorted(names), count: count, lastViewed: lastViewed)
-            }
-            var images: [CGImage] = []
-            for name in picked where !Task.isCancelled {
-                if let image = await storedCell(at: location.sibling(name), maxPixel: maxPixel) { images.append(image) }
-            }
-            return images
+        if !mustList, let location, let images = await catalogCells(location, count: count, lastViewed: lastViewed,
+                                                                    maxPixel: maxPixel) {
+            return CoverMade(images: images)
         }
         // The pick of an earlier complete listing: the pictures from the catalog, no listing.
-        if let location, let pick = coverPick(key, lastViewed: lastViewed) {
+        if !mustList, let location, let pick = coverPick(key, lastViewed: lastViewed) {
             switch pick {
             case .photos(let names):
                 if let images = await knownCells(folder, names.prefix(count), at: location, maxPixel: maxPixel) {
-                    return images
+                    return CoverMade(images: images)
                 }
                 guard !Task.isCancelled else { return nil }
                 coverPicks[key] = nil   // a thumbnail left the catalog: listed again
             case .subfolders(let names):
                 return await subfolderCover(folder, names, location: location, network: network, maxPixel: maxPixel,
                                             count: count, depth: depth, complete: true, modified: modified)
+                    .map { CoverMade(images: $0) }
             }
         }
-        let lister = coverLister
+        let lister = coverLister, dated = !network
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
-            part in try lister(folder, archive, part)
+            part in try lister(folder, archive, dated, part)
         }
-        let names: CoverNames, complete: Bool
+        let listed: CoverListing, complete: Bool
         switch outcome {
-        case .value(let listed, let ended): (names, complete) = (listed, ended)
+        case .value(let value, let ended): (listed, complete) = (value, ended)
         case .failed:
             emptyCovers.insert(key)
-            return []
+            // On a share whose volume is gone (the mount table no longer puts the path on a share) offline; else a
+            // zip that cannot be read is broken, and a folder that cannot be listed only empty (no permission, say).
+            let problem: CardProblem? = network && !coverVolumeIsNetwork(folder) ? .offline
+                : archive || ArchivePath.isArchive(folder) ? .broken : nil
+            setProblem(problem, for: key)
+            return CoverMade(images: [], problem: problem)
         case .busy:
             return nil
         case .timedOut:
             coverTimeouts[key, default: 0] += 1
-            guard coverTimeouts[key, default: 0] >= Self.coverTimeoutsAllowed else { return nil }
+            let times = coverTimeouts[key, default: 0]
+            let offline = network && times >= Self.coverOfflineTimeouts
+            if offline { setProblem(.offline, for: key) }
+            guard times >= Self.coverTimeoutsAllowed else {
+                return offline ? CoverMade(images: [], problem: .offline) : nil
+            }
             coverTimeouts[key] = nil
             emptyCovers.insert(key)
-            return []
+            return CoverMade(images: [], problem: offline ? .offline : nil)
         }
         coverTimeouts[key] = nil
+        setProblem(nil, for: key)
+        let names = listed.names
         let plan = await Self.offActor(qos: Self.coverQoS) {
             CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
                                lastViewed: lastViewed)
@@ -356,8 +543,15 @@ extension ThumbnailStore {
             case .empty: break
             }
         }
+        let summarized = complete && depth == 0 ? listed : nil
         switch plan {
         case .photos(let picked):
+            // Listed for the summary alone: the catalog's four of the photos still there, as without a listing.
+            if mustList, let location,
+               let images = await catalogCells(location, count: count, lastViewed: lastViewed, maxPixel: maxPixel,
+                                               among: Set(names.files)) {
+                return CoverMade(images: images, listing: summarized)
+            }
             var images: [CGImage] = []
             for name in picked.prefix(count) {
                 guard await idleViewer() else { break }
@@ -366,15 +560,44 @@ extension ThumbnailStore {
                     images.append(image)
                 }
             }
-            return images
+            return CoverMade(images: images, listing: summarized)
         case .subfolders(let subfolders):
-            return await subfolderCover(folder, Array(subfolders), location: location, network: network,
-                                        maxPixel: maxPixel, count: count, depth: depth, complete: complete,
-                                        modified: modified)
+            guard let images = await subfolderCover(folder, Array(subfolders), location: location, network: network,
+                                                    maxPixel: maxPixel, count: count, depth: depth, complete: complete,
+                                                    modified: modified) else { return nil }
+            return CoverMade(images: images, listing: summarized)
         case .empty:
             if complete { emptyCovers.insert(key) }
-            return []
+            return CoverMade(images: [], listing: summarized)
         }
+    }
+
+    /// `count` photos of the folder at `location` with a thumbnail in the catalog (those `among` the listed names when
+    /// given), spread across them as Finder sorts them, the one last viewed first, decoded; nil when there are fewer.
+    private func catalogCells(_ location: ThumbnailLocation, count: Int, lastViewed: String?, maxPixel: Int,
+                              among listed: Set<String>? = nil) async -> [CGImage]? {
+        guard var names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }) else { return nil }
+        if let listed { names = names.filter(listed.contains) }
+        guard names.count >= count else { return nil }
+        // Sorting thousands of names takes a while: not on the actor.
+        let picked = await Self.offActor(qos: Self.coverQoS) { [names] in
+            CoverSampling.pick(Self.finderSorted(names), count: count, lastViewed: lastViewed)
+        }
+        var images: [CGImage] = []
+        for name in picked where !Task.isCancelled {
+            if let image = await storedCell(at: location.sibling(name), maxPixel: maxPixel) { images.append(image) }
+        }
+        return images
+    }
+
+    /// Notes (or, nil, clears) what a folder's card has against it, keeping the notes bounded.
+    private func setProblem(_ problem: CardProblem?, for key: String) {
+        guard let problem else {
+            coverProblems[key] = nil
+            return
+        }
+        if coverProblems.count >= Self.coverPickLimit { coverProblems.removeAll() }
+        coverProblems[key] = problem
     }
 
     /// A folder without photos of its own: one picture of each of its first subfolders with one (`count` at most).
@@ -388,7 +611,13 @@ extension ThumbnailStore {
             let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
                                         location: location?.subfolder(name), network: network, maxPixel: maxPixel,
                                         lastViewed: nil, modified: nil, count: 1, depth: depth + 1)
-            if let sub { images += sub.prefix(1) } else { notNow = true }
+            // A subfolder's share that does not answer yet: "not now" for the picture, as before cards had problems.
+            if let sub, !(sub.problem == .offline && sub.images.isEmpty
+                          && !emptyCovers.contains(Self.memoKey(folder.appendingPathComponent(name), nil))) {
+                images += sub.images.prefix(1)
+            } else {
+                notNow = true
+            }
         }
         if notNow, images.count < count { return nil }
         let keys = subfolders.map { Self.memoKey(folder.appendingPathComponent($0), nil) }
@@ -524,21 +753,28 @@ extension ThumbnailStore {
         }
     }
 
-    /// The real listing: a folder's names without a stat (`BrowserListingSource.names`), a zip's photo entries from
-    /// one read of its directory. Photos (by extension) and folders; hidden names left out.
-    @Sendable static func listCoverNames(_ folder: URL, archive: Bool,
-                                         part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames {
+    /// The real listing: a folder's names (`BrowserListingSource.names`, as `listCoverNames`), on a local volume
+    /// (`dated`) with each photo's date and size from the same pass (no file opened); a zip's photo entries and its
+    /// own size and date from one read of its directory.
+    @Sendable static func listCover(_ folder: URL, archive: Bool, dated: Bool,
+                                    part: @escaping @Sendable (CoverListing) -> Bool) throws -> CoverListing {
         if archive || ArchivePath.isArchive(folder) {
-            let entries = try ArchiveReader.shared.entries(of: folder)
-            return CoverNames(files: entries.map(\.url.lastPathComponent), folders: [])
-        }
-        func names(_ entries: [BrowserEntry]) -> CoverNames {
-            CoverNames(files: entries.filter { $0.kind == .file }.map(\.name),
-                       folders: entries.filter { $0.kind == .folder }.map(\.name))
+            let (stamp, entries) = try ArchiveReader.shared.listing(of: folder)
+            return CoverListing(names: CoverNames(files: entries.map(\.url.lastPathComponent), folders: []),
+                                summary: .ofArchive(photos: entries.count, bytes: Int64(stamp.size),
+                                                    modified: stamp.modified))
         }
         // Parts every 100 ms at most: what a time limit finds is never older than that.
-        return names(try BrowserListingSource.names(folder, archives: false, partEvery: 64,
-                                                    partAfter: .milliseconds(100)) { part(names($0)) })
+        return CoverListing(listing: try BrowserListingSource.names(folder, archives: false, stat: dated, partEvery: 64,
+                                                                    partAfter: .milliseconds(100)) {
+            part(CoverListing(listing: $0, dated: false))
+        }, dated: dated)
+    }
+
+    /// `listCover`'s names alone, never with stat.
+    @Sendable static func listCoverNames(_ folder: URL, archive: Bool,
+                                         part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames {
+        try listCover(folder, archive: archive, dated: false) { part($0.names) }.names
     }
 }
 
