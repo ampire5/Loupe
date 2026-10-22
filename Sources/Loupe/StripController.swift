@@ -368,8 +368,13 @@ extension Notification.Name {
             return
         }
         DebugLog.log("strip-window \(mode.rawValue) -> \(next.rawValue)")
+        // Out of `hidden` the strip must appear, whatever T left in the beside flag.
+        if StripPlacement.clearsBarHidden(from: mode, to: next) { barHidden = false }
         Settings.shared.setStripWindow(next)
     }
+
+    /// Whether `T` does anything now (not in a window's `hidden` mode): View › Thumbnail Strip's enabling.
+    var canTogglePin: Bool { StripPlacement.flag(mode, fullScreen: isFullScreen) != nil }
 
     /// Whether `T` holds the strip on screen (View › Thumbnail Strip's checkmark): beside not hidden, a float pinned.
     var isPinned: Bool { StripPlacement.holds(mode, fullScreen: isFullScreen, hidden: barHidden, pinned: pinned) }
@@ -499,6 +504,8 @@ extension Notification.Name {
     private func setToolsShown(_ shown: Bool) {
         guard shown != toolsShown else { return }
         toolsShown = shown
+        // The hover label keeps clear of the capsule: its width, the gap and the trailing padding.
+        view.labelTrailingInset = shown ? tools.fittingSize.width + Self.capsuleGap + FilmstripView.padding : 0
         let from = tools.alphaValue
         tools.setShown(shown, animated: false)   // its hit test; the fade is ours, from where it was
         let duration = shown ? fadeIn : fadeOut
@@ -533,8 +540,16 @@ extension Notification.Name {
         let p = container.convert(event.locationInWindow, from: nil)
         let inside = container.bounds.contains(p)
         let height = p.y - container.bounds.minY
-        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && tools.frame.contains(p)))
+        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && capsuleArea.contains(p)))
         pointer(nearBottom: inside && height <= bandHeight, nearEdge: inside && height <= Self.revealZone, overStrip: over)
+    }
+
+    /// The capsule with the gap down to the strip's top edge: crossing it is still "over the strip", so a short
+    /// `strip-hide-delay` does not drop the capsule (or an over strip) on the way from the strip to its buttons.
+    private var capsuleArea: CGRect {
+        let gap = CGRect(x: tools.frame.minX, y: view.frame.maxY, width: tools.frame.width,
+                         height: tools.frame.minY - view.frame.maxY).standardized
+        return tools.frame.union(gap)
     }
 
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
