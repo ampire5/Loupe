@@ -24,6 +24,13 @@ public final class ThumbnailDatabase {
     /// the file rows of the folders it describes.
     public static let summaryCapacity = 20_000
 
+    /// A read restamps a row's `last_used` only when the stored stamp is older than this: eviction by least recent use
+    /// needs only a coarse clock (days), and a read must not cost a commit per folder card on the store's actor.
+    public static let summaryStampWindow: TimeInterval = 24 * 3600
+    /// Stale stamps collected from reads before they are written in a transaction of their own (otherwise they ride
+    /// with the next `putSummaries`).
+    private static let pendingStampLimit = 64
+
     /// What `reopenIfDeleted` had to recreate.
     public enum Reopened: Equatable, Sendable {
         /// Both files were still in place; nothing happened.
@@ -40,6 +47,11 @@ public final class ThumbnailDatabase {
     private let thumbSize: Int
     private let now: () -> Date
     private let summaryCapacity: Int
+    private let summaryStampWindow: TimeInterval
+    /// Rows read after their `last_used` went stale, waiting to be restamped with the next write (bounded by
+    /// `pendingStampLimit`).
+    private var pendingStamps: [SummaryKey: Double] = [:]
+    private struct SummaryKey: Hashable { let volume: String; let path: String }
     private var catalog: SQLiteConnection
     private var thumbs: SQLiteConnection
     private var catalogID: String
@@ -48,11 +60,13 @@ public final class ThumbnailDatabase {
     /// another catalog, thumbnail size or format is emptied; a corrupt file is set aside and made anew.
     /// `now` stamps `last_access` (tests pass a clock).
     public init(directory: URL, thumbSize: Int, now: @escaping () -> Date = Date.init,
-                summaryCapacity: Int = ThumbnailDatabase.summaryCapacity) throws {
+                summaryCapacity: Int = ThumbnailDatabase.summaryCapacity,
+                summaryStampWindow: TimeInterval = ThumbnailDatabase.summaryStampWindow) throws {
         self.directory = directory
         self.thumbSize = thumbSize
         self.now = now
         self.summaryCapacity = summaryCapacity
+        self.summaryStampWindow = summaryStampWindow
         (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize)
     }
 
@@ -335,30 +349,63 @@ public final class ThumbnailDatabase {
 
     // MARK: - Folder summaries
 
-    /// The stored summary of the folder `location.folder` on `location.volume` (`name` is not used), and it counts as
-    /// used now. Whether it is still fresh is the caller's to say (`folderModified` against the listing).
+    /// The stored summary of the folder `location.folder` on `location.volume` (`name` is not used): a plain read, no
+    /// write. A row whose `last_used` is older than `summaryStampWindow` is queued for restamping, written with the
+    /// next `putSummaries` or when `pendingStampLimit` are waiting. Whether the summary is still fresh is the caller's
+    /// to say (`folderModified` against the listing).
     public func summary(at location: ThumbnailLocation) throws -> FolderSummary? {
         var found: FolderSummary?
+        var lastUsed = 0.0
         try catalog.query("""
-            UPDATE folder_summaries SET last_used = ? WHERE volume = ? AND path = ?
-            RETURNING folder_mtime, photos, folders, bytes, first, last, histogram, dates_known
-            """, [.double(now().timeIntervalSinceReferenceDate), .text(location.volume), .text(location.folder)]) { r in
+            SELECT folder_mtime, photos, folders, bytes, first, last, histogram, dates_known, last_used
+            FROM folder_summaries WHERE volume = ? AND path = ?
+            """, [.text(location.volume), .text(location.folder)]) { r in
             func date(_ column: Int) -> Date? {
                 r.isNull(column) ? nil : Date(timeIntervalSinceReferenceDate: r.double(column))
             }
             found = FolderSummary(photos: Int(r.int(1)), folders: Int(r.int(2)), bytes: r.isNull(3) ? nil : r.int(3),
                                   first: date(4), last: date(5), histogram: [UInt8](r.blob(6)),
                                   folderModified: date(0), datesKnown: r.int(7) != 0)
+            lastUsed = r.double(8)
+        }
+        let time = now().timeIntervalSinceReferenceDate
+        if found != nil, time - lastUsed > summaryStampWindow {
+            pendingStamps[SummaryKey(volume: location.volume, path: location.folder)] = time
+            if pendingStamps.count >= Self.pendingStampLimit { try catalog.transaction { try flushStamps() } }
         }
         return found
     }
 
+    /// Writes the queued stamps (inside a transaction); a stamp never moves a row back in time.
+    private func flushStamps() throws {
+        guard !pendingStamps.isEmpty else { return }
+        for (key, time) in pendingStamps {
+            try catalog.run("UPDATE folder_summaries SET last_used = ? WHERE volume = ? AND path = ? AND last_used < ?",
+                            [.double(time), .text(key.volume), .text(key.path), .double(time)])
+        }
+        pendingStamps.removeAll()
+    }
+
+    /// Reads waiting for a restamp (tests).
+    var pendingStampCount: Int { pendingStamps.count }
+
+    /// A row's `last_used` (tests).
+    func summaryLastUsed(at location: ThumbnailLocation) throws -> Double? {
+        var value: Double?
+        try catalog.query("SELECT last_used FROM folder_summaries WHERE volume = ? AND path = ?",
+                          [.text(location.volume), .text(location.folder)]) { value = $0.double(0) }
+        return value
+    }
+
     /// Stores summaries (a folder's again replaces its row) in one transaction, then drops the least recently used
     /// rows beyond `summaryCapacity`, in the same transaction: one commit and one eviction per batch, not per row.
+    /// Stamps queued by reads go in the same transaction, before the eviction. In a batch larger than the cap the
+    /// earlier rows of the batch are the ones dropped.
     public func putSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) throws {
         guard !items.isEmpty else { return }
         let time = SQLiteValue.double(now().timeIntervalSinceReferenceDate)
         try catalog.transaction {
+            try flushStamps()
             for (location, summary) in items {
                 func date(_ value: Date?) -> SQLiteValue {
                     value.map { .double($0.timeIntervalSinceReferenceDate) } ?? .null

@@ -79,12 +79,45 @@ import SQLite3
     }
 
     @Test func evictsLeastUsed() throws {
-        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: Clock().now, summaryCapacity: 3)
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: Clock().now, summaryCapacity: 3,
+                                    summaryStampWindow: 0)
         for name in ["A", "B", "C"] { try db.putSummaries([(folder(name), summary(1))]) }
         _ = try db.summary(at: folder("A"))   // a read counts as use: B is now the oldest
         try db.putSummaries([(folder("D"), summary(2))])
         #expect(try db.summary(at: folder("B")) == nil)
         for name in ["A", "C", "D"] { #expect(try db.summary(at: folder(name)) != nil) }
+    }
+
+    @Test func readingDoesNotWrite() throws {
+        final class Ticker { var t = 800_000_000.0; func now() -> Date { Date(timeIntervalSinceReferenceDate: t) } }
+        let ticker = Ticker()
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: ticker.now, summaryStampWindow: 100)
+        try db.putSummaries([(folder("A"), summary(1))])
+        let stamped = try #require(try db.summaryLastUsed(at: folder("A")))
+        ticker.t += 50   // inside the window: no write, nothing queued
+        _ = try db.summary(at: folder("A"))
+        _ = try db.summary(at: folder("A"))
+        #expect(db.pendingStampCount == 0)
+        #expect(try db.summaryLastUsed(at: folder("A")) == stamped)
+        ticker.t += 200   // beyond it: queued, still no write by the read itself
+        _ = try db.summary(at: folder("A"))
+        _ = try db.summary(at: folder("A"))
+        #expect(db.pendingStampCount == 1)
+        #expect(try db.summaryLastUsed(at: folder("A")) == stamped)
+        try db.putSummaries([(folder("B"), summary(2))])   // the next write restamps it
+        #expect(db.pendingStampCount == 0)
+        #expect(try db.summaryLastUsed(at: folder("A")) == stamped + 250)
+    }
+
+    @Test func staleStampsFlushAtTheBound() throws {
+        final class Ticker { var t = 800_000_000.0; func now() -> Date { Date(timeIntervalSinceReferenceDate: t) } }
+        let ticker = Ticker()
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: ticker.now, summaryStampWindow: 10)
+        try db.putSummaries((0..<70).map { (folder("F\($0)"), summary($0)) })
+        ticker.t += 100
+        for n in 0..<70 { _ = try db.summary(at: folder("F\(n)")) }
+        #expect(db.pendingStampCount == 6)   // 64 were written when the bound was reached
+        #expect(try db.summaryLastUsed(at: folder("F0")) == 800_000_100)
     }
 
     @Test func batchWritesOnce() throws {
@@ -127,16 +160,16 @@ import SQLite3
             }
             let clock = ContinuousClock()
             let lookups = 2000
-            let read = clock.measure {
+            let read = try clock.measure {
                 for i in 0..<lookups {
-                    _ = try? db.summary(at: ThumbnailLocation(volume: "uuid:ABCD-1234",
+                    _ = try db.summary(at: ThumbnailLocation(volume: "uuid:ABCD-1234",
                                                               folder: path((i * 7919) % filled), name: "_"))
                 }
             }
             let batch50 = (0..<50).map {
                 (ThumbnailLocation(volume: "uuid:ABCD-1234", folder: path(($0 * 131) % filled), name: "_"), summary($0))
             }
-            let write = clock.measure { try? db.putSummaries(batch50) }
+            let write = try clock.measure { try db.putSummaries(batch50) }
             lines += ("\(filled) rows: lookup \(read / lookups), 50-row batch \(write), "
                   + "catalog +\((size() - baseline) / 1024) KiB (\((size() - baseline) * 10_000 / filled / 1024) KiB per 10 000)\n")
             try lines.write(to: report, atomically: true, encoding: .utf8)
