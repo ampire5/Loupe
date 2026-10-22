@@ -167,6 +167,28 @@ public struct ViewRestore: Equatable, Sendable {
         ViewRestore(file: file, view: view, ofSamePhoto: ofSamePhoto, arrival: t)
     }
 
+    /// The user has not zoomed or panned since the arrival: `t` (the transform of now, a running zoom animation's
+    /// target) has the arrival's mode and centre.
+    public func isUntouched(by t: ViewTransform) -> Bool { t.mode == arrivalMode && t.center == arrivalCenter }
+
+    /// At a show of `file` laid out at `imageSize` (`provisional`: the size holds a stand-in for a page not read yet,
+    /// spread spec): the restore that goes on waiting, rearrived at `shown` (what the show puts on screen), or nil when
+    /// it is decided now (applied with the show, or dropped). It waits only while the size is a stand-in the saved view
+    /// does not fit and the view is untouched since the arrival (`before`: the transform the show replaces); a zoom key
+    /// pressed while the photo loaded, or a zoom or pan after an earlier show, drops it, so it never overrides the
+    /// user's own zoom.
+    public func waiting(atShowOf imageSize: CGSize, provisional: Bool, before: ViewTransform,
+                        shown: ViewTransform) -> ViewRestore? {
+        guard provisional, !view.applies(to: imageSize), isUntouched(by: before) else { return nil }
+        return rearrived(at: shown)
+    }
+
+    /// The layout changed under a waiting restore (another stand-in, `SpreadZoom.carried` moved the view from `before`
+    /// to `after`): it goes on waiting from `after` when the view was untouched, else nil (dropped).
+    public func following(from before: ViewTransform, to after: ViewTransform) -> ViewRestore? {
+        isUntouched(by: before) ? rearrived(at: after) : nil
+    }
+
     /// What the photo laid out at `imageSize` gets: the saved mode with the saved or the middle centre, and the rule;
     /// nil when the view does not apply (the saved file at another size).
     public func target(imageSize: CGSize) -> (mode: ZoomMode, center: CGPoint, rule: Rule)? {

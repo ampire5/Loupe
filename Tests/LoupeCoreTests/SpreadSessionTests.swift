@@ -169,3 +169,55 @@ private let six = [PixelSize?](repeating: portrait, count: 6)
     #expect(waiting.transform(for: url, imageSize: size, over: provisional.withImageSize(size))?.mode == .actual(2))
     #expect(waiting.transform(for: url, imageSize: size, over: provisional.withMode(.fit).withImageSize(size)) == nil)
 }
+
+private let waitURL = URL(fileURLWithPath: "/f/w.jpg")
+private let realSize = CGSize(width: 2000, height: 1500)
+private let standIn = CGSize(width: 1990, height: 1500)
+private let viewSize = CGSize(width: 1600, height: 1000)
+private let savedPair = SavedView(mode: .actual(2), center: CGPoint(x: 0.3, y: 0.6), imageSize: realSize)
+private let arrived = ViewTransform(imageSize: CGSize(width: 900, height: 600), viewSize: viewSize)
+
+/// A zoom key pressed while the photo loaded: the show carries the key's mode, and the restore is dropped, not re-armed.
+@Test func zoomKeyWhileLoadingDropsTheWaitingRestore() {
+    let r = ViewRestore(file: waitURL, view: savedPair, arrival: arrived)
+    let keyed = arrived.withMode(.actual(1))
+    let shown = keyed.withImageSize(standIn)
+    #expect(r.waiting(atShowOf: standIn, provisional: true, before: keyed, shown: shown) == nil)
+    // Untouched: it waits, and applies once the real size is in.
+    let waiting = r.waiting(atShowOf: standIn, provisional: true, before: arrived, shown: arrived.withImageSize(standIn))
+    #expect(waiting != nil)
+    #expect(waiting?.transform(for: waitURL, imageSize: realSize, over: arrived.withImageSize(standIn))?.mode == .actual(2))
+    // Not provisional, or a stand-in the view already fits: decided now.
+    #expect(r.waiting(atShowOf: standIn, provisional: false, before: arrived, shown: arrived) == nil)
+    #expect(r.waiting(atShowOf: realSize, provisional: true, before: arrived, shown: arrived) == nil)
+}
+
+/// A zoom or pan after the first show, then a finer level shown: the restore is dropped.
+@Test func zoomAfterTheFirstShowDropsTheWaitingRestore() {
+    let first = arrived.withImageSize(standIn)
+    let waiting = ViewRestore(file: waitURL, view: savedPair, arrival: arrived)
+        .waiting(atShowOf: standIn, provisional: true, before: arrived, shown: first)
+    let zoomed = first.withMode(.free(2))
+    #expect(waiting?.waiting(atShowOf: standIn, provisional: true, before: zoomed, shown: zoomed) == nil)
+    let panned = ViewTransform(imageSize: standIn, viewSize: viewSize, mode: .fit, center: CGPoint(x: 0.4, y: 0.5))
+    #expect(waiting?.waiting(atShowOf: standIn, provisional: true, before: panned, shown: panned) == nil)
+    // Untouched, a finer level keeps it waiting.
+    #expect(waiting?.waiting(atShowOf: standIn, provisional: true, before: first, shown: first) != nil)
+}
+
+/// Another stand-in moves the view (`SpreadZoom.carried` shifts the centre even in Fit): the restore follows it and
+/// still applies with the real size; after the user's own zoom it is dropped.
+@Test func standInChangeKeepsTheRestoreWaiting() {
+    let first = arrived.withImageSize(standIn)
+    let waiting = ViewRestore(file: waitURL, view: savedPair, arrival: arrived)
+        .waiting(atShowOf: standIn, provisional: true, before: arrived, shown: first)!
+    let other = CGSize(width: 2400, height: 1500)
+    let carried = SpreadZoom.carried(first, from: CGRect(x: 0, y: 0, width: 1000, height: 1500), to: other,
+                                     at: CGRect(x: 0, y: 0, width: 1000, height: 1500))
+    #expect(carried.center != first.center)
+    #expect(!waiting.isUntouched(by: carried))
+    let followed = waiting.following(from: first, to: carried)
+    #expect(followed?.transform(for: waitURL, imageSize: realSize, over: carried.withImageSize(realSize))?.mode
+            == .actual(2))
+    #expect(waiting.following(from: first.withMode(.free(3)), to: carried) == nil)
+}
