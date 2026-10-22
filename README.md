@@ -204,8 +204,6 @@ Loupe needs macOS 26 or later and an Apple Silicon Mac. Intel Macs on macOS 26 g
 brew install --cask ampire5/tap/loupe
 ```
 
-The latest build that passed CI, not a release: `brew install --cask ampire5/tap/loupe@edge` (instead of `loupe`; `brew upgrade` brings every new build).
-
 Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). Builds are not signed with an Apple Developer ID yet; the cask clears the quarantine flag for you.
 
 **macOS won't open the downloaded app?** That is Gatekeeper refusing an unsigned build. Try to open Loupe once, then click **Open Anyway** in **System Settings → Privacy & Security**. Or clear the flag yourself:
@@ -213,6 +211,42 @@ Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Loupe.app
 ```
+
+### Edge builds
+
+The latest build that passed CI, not a release: unsigned, for testing. On Apple Silicon these are `main`'s builds, on Intel `lts/macos26`'s. The `loupe@edge` cask replaces `loupe` and back; your settings and data stay.
+
+```sh
+brew uninstall --cask loupe                       # the release, if installed: the two casks conflict
+brew install --cask ampire5/tap/loupe@edge
+brew update && brew upgrade --cask loupe@edge     # every new build
+brew list --cask --versions loupe@edge            # the build you have
+```
+
+The version says which commit it is: `0.1.0-22-g5e5cd47` is 22 commits after 0.1.0, at commit `5e5cd47`. Back to the
+release: `brew uninstall --cask loupe@edge && brew install --cask ampire5/tap/loupe`.
+
+**If something goes wrong:**
+
+- **`brew upgrade` finds nothing new.** Homebrew updates the tap only now and then: `brew update` first.
+- **`404 Not Found` while downloading.** Only the newest edge zip is kept, so your copy of the tap points at one that is
+  gone (or a build is being published right now, which takes a minute): `brew update`, then install or upgrade again.
+- **`SHA256 mismatch`.** The same build was published again with a new zip. `brew update`, delete the stale download,
+  try again:
+
+  ```sh
+  rm -f "$(brew --cache --cask loupe@edge)"
+  brew upgrade --cask loupe@edge
+  ```
+
+- **`Cask 'loupe' conflicts with 'loupe@edge'`.** Only one of the two can be installed: uninstall the other first.
+- **A half-installed or broken app.** `brew reinstall --cask loupe@edge`. If Homebrew insists it is installed while the
+  app is gone: `brew uninstall --force --cask loupe@edge`, then install again.
+- **The build itself is broken** (crashes, something stopped working). Go back to the release and wait for the next
+  build; older edge builds are not kept. Please [report it](https://github.com/ampire5/Loupe/issues/new?template=bug_report.yml)
+  with the version from `brew list --cask --versions loupe@edge`.
+- **It misbehaves even on the release.** Your settings may be the cause. Quit Loupe and move them aside, and it starts
+  with the defaults: `mv ~/.config/loupe ~/.config/loupe.bak`. To remove all its data, see Uninstall below.
 
 ### Build from source
 
