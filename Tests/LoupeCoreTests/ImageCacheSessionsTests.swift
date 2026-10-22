@@ -21,9 +21,10 @@ private final class Updates: @unchecked Sendable {
 
 extension Rig {
     func focus(_ session: CacheSessionID, _ files: [URL], _ current: Int, dwelling: Bool = false,
-               needsFull: Bool = false) async {
+               needsFull: Bool = false, companion: Int? = nil) async {
         let focus = CacheFocus(count: files.count, current: current, direction: 1, dwelling: dwelling,
-                               needsFull: needsFull, screen: rigScreen)
+                               needsFull: needsFull, screen: rigScreen, companion: companion,
+                               step: companion == nil ? 1 : 2)
         await cache.setFocus(session, files: files, focus: focus)
     }
 
@@ -408,6 +409,27 @@ struct ImageCacheSessionsTests {
             #expect(await rig.cache.entry(a[i])?.pyramid == nil, "\(i) kept levels")
         }
         #expect(await rig.states(b) == heldB)
+    }
+
+    /// A trimmed window showing two pages keeps both: the pair's other page is as current as the photo.
+    @Test func idleTrimKeepsTheCompanion() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 2, dwelling: true, needsFull: true, companion: 3)
+        #expect(await eventually {
+            let first = await rig.state(a[2]), second = await rig.state(a[3])
+            return first == .full && second == .full
+        })
+        #expect(await rig.settle())
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 0, dwelling: true)
+        #expect(await rig.settle())
+        await rig.cache.trimIdle(now: .now + .seconds(31 * 60))
+        #expect(await rig.state(a[2]) == .full)
+        #expect(await rig.state(a[3]) == .full)
+        #expect(await rig.state(a[4]) == nil)
     }
 
     /// `cache-idle-keep=preview`: the trimmed window's current photo goes down to its preview (Lfit).

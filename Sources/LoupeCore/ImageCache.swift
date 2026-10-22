@@ -193,7 +193,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         var neighbours = false
         for (url, e) in entries {
             let busy = e.read != nil || !e.jobs.isEmpty
-            if busy && url == currentURL { return .current }
+            if busy && isCurrent(url) { return .current }
             if e.jobs.values.contains(where: { $0.phase.forCurrent }) { return .current }
             neighbours = neighbours || busy
         }
@@ -297,7 +297,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         // that fits `cache-memory` and starts no further stage (spec §11.1).
         for (url, e) in entries {
             for (goal, job) in e.jobs where job.phase.isWaiting {
-                if wants[url]?[goal] == nil || job.phase.forCurrent != (url == currentURL) {
+                if wants[url]?[goal] == nil || job.phase.forCurrent != isCurrent(url) {
                     job.task.cancel()
                     e.jobs[goal] = nil
                     emit(url, .jobCancelled, goal)
@@ -306,11 +306,12 @@ public actor ImageCache<Loader: PyramidLoader> {
         }
         // While flipping (not dwelling) a neighbour starts no read: it would only queue ahead of the photo the user
         // lands on. A read already in flight goes on (re-ranked); a neighbour whose bytes are resident may still
-        // decode. The current photo always reads at once, and so does a visible session's.
+        // decode. The current photo (and its pair's other page, `isCurrent`) always reads at once, and so does a
+        // visible session's.
         let dwelling = focus?.dwelling == true
         for item in plan {
             let url = files[item.index]
-            start(url, item.goal, mayRead: url == currentURL || dwelling)
+            start(url, item.goal, mayRead: isCurrent(url) || dwelling)
         }
         for (url, goal) in short { start(url, goal, mayRead: true) }
         for (url, e) in entries {

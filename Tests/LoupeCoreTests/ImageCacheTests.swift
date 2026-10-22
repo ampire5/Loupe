@@ -460,6 +460,26 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
+    /// The pair's other page (spread) is as current as the photo: it reads at once while the user flips (not after the
+    /// dwell, as a neighbour), at the front of the read queue, and its busy read reports `.current`.
+    @Test func companionReadsAtOnceAsCurrent() async {
+        let rig = Rig()
+        let files = fileURLs(10)
+        let gate = AsyncGate()
+        rig.reader.hang(files[1], on: gate)
+        await rig.cache.setFocus(files: files, focus: CacheFocus(count: files.count, current: 0, direction: 1,
+                                                                 dwelling: false, needsFull: false, screen: rigScreen,
+                                                                 companion: 1, step: 2))
+        #expect(await eventually { rig.reader.readCount(files[1]) == 1 })
+        #expect(rig.reader.priorities(files[1]) == [0])
+        #expect(await rig.cache.isCurrent(files[1]))
+        #expect(await rig.cache.currentActivity() == .current)
+        #expect(rig.reader.readCount(files[2]) == 0)   // a neighbour still waits for the dwell
+        gate.open()
+        #expect(await eventually { await rig.state(files[1]) == .preview })
+        await rig.clear()
+    }
+
     /// The second page of a pair on screen (spread) is pinned like the first: it keeps its levels whatever the limit.
     @Test func pinnedCompanionNeverEvicted() async {
         let rig = Rig()
