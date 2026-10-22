@@ -82,8 +82,9 @@ import UniformTypeIdentifiers
         if let sessions { pathStores.append(sessions) }
         registry.pathStores = pathStores
         let config = Settings.shared.config
-        // One reader and one decode pool for photos and thumbnails: the generator's lowest priority then really
-        // yields to the viewer (spec §3.6). Four threads: the viewer's two, and two only background reads may use.
+        // One reader for photos and thumbnails: the generator's lowest priority then really yields to the viewer
+        // (spec §3.6). Four threads: the viewer's two, and two only background reads may use. The thumbnails decode
+        // in a pool of their own, at utility QoS.
         let reader = FileReader(threads: 4), pool = DecodePool()
         // pyramid-filter: read by the loader at each upload, set again on every reload (Settings).
         let pyramidFilter = PyramidFilterSetting(config.pyramidFilter)
@@ -95,7 +96,7 @@ import UniformTypeIdentifiers
         pressureMonitor = MemoryPressureMonitor(cache: cache)
         var thumbnailLog: (@Sendable (String) -> Void)?
         if DebugLog.isEnabled { thumbnailLog = { line in DebugLog.log(line) } }
-        let thumbnails = ThumbnailStore(directory: Self.thumbnailDirectory(), reader: reader, pool: pool,
+        let thumbnails = ThumbnailStore(directory: Self.thumbnailDirectory(), reader: reader,
                                         thumbSize: config.thumbSize, limitBytes: config.thumbCacheBytes,
                                         cachedBytes: { await cache.cachedBytes($0, stamp: $1) }, log: thumbnailLog)
         self.thumbnails = thumbnails

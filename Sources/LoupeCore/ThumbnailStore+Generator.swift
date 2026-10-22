@@ -6,8 +6,9 @@ import Foundation
 // back through `finish`; its slot stays taken until its task really ends, cancelled or not.
 
 extension ThumbnailStore {
-    /// One job beyond the reads: a finished read decodes while the next two run, and no more bytes than that wait.
-    var jobLimit: Int { readLimit + 1 }
+    /// One job beyond the reads or the decodes, whichever are more: on a share a finished read decodes while the next
+    /// two run, on a local disk one file waits read for a free decode; no more bytes than that wait.
+    var jobLimit: Int { max(readLimit, decodeLimit.slotCount) + 1 }
 
     var readsInFlight: Int { jobs.values.reduce(0) { $0 + ($1.reading ? 1 : 0) } }
 
@@ -65,7 +66,7 @@ extension ThumbnailStore {
     func start(_ url: URL, listedStamp: FileStamp) {
         nextToken += 1
         let token = nextToken
-        let recipe = Recipe(url: url, listedStamp: listedStamp, maxSide: thumbSize, reader: reader, pool: pool,
+        let recipe = Recipe(url: url, listedStamp: listedStamp, maxSide: thumbSize, reader: reader,
                             decodeLimit: decodeLimit, decoder: decoder, cachedBytes: cachedBytes,
                             readEnded: { await self.readEnded(token) }, readAgain: { await self.readAgain(token) })
         // Isolated to the store (it uses `self`): `generate` runs off it, `finish` back on it.
@@ -168,7 +169,6 @@ extension ThumbnailStore {
         let listedStamp: FileStamp
         let maxSide: Int
         let reader: any FileReading
-        let pool: DecodePool
         let decodeLimit: DecodePool
         let decoder: @Sendable (Data) -> any ImageDecoder
         let cachedBytes: @Sendable (URL, FileStamp) async -> Data?
@@ -240,13 +240,11 @@ extension ThumbnailStore {
         return made.map { .made(jpeg: $0.0, info: $0.1, stamp: stamp) }
     }
 
-    /// In the shared pool at the lowest rank, behind the store's own one-at-a-time limit.
+    /// In the store's own decode pool, apart from the viewer's.
     static func decode<T: Sendable>(_ r: Recipe, _ t: inout Timing, _ work: @escaping @Sendable () throws -> T) async throws -> T {
         let start = ContinuousClock.now
         defer { t.decode += ContinuousClock.now - start }
-        try await r.decodeLimit.acquireSlot(forCurrent: false, rank: readPriority)
-        defer { r.decodeLimit.releaseSlot(forCurrent: false) }
-        return try await r.pool.run(forCurrent: false, rank: readPriority, work)
+        return try await r.decodeLimit.run(forCurrent: false, rank: readPriority, work)
     }
 
     static func ms(_ d: Duration) -> Int {

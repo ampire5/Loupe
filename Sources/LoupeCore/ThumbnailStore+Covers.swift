@@ -19,7 +19,7 @@ extension ThumbnailStore {
         }
         try? await coverLimit.acquireSlot(forCurrent: false, rank: Self.readPriority)
         defer { coverLimit.releaseSlot(forCurrent: false) }
-        let recipe = Recipe(url: url, listedStamp: stamp, maxSide: thumbSize, reader: reader, pool: pool,
+        let recipe = Recipe(url: url, listedStamp: stamp, maxSide: thumbSize, reader: reader,
                             decodeLimit: decodeLimit, decoder: decoder, cachedBytes: cachedBytes,
                             readEnded: {}, readAgain: {})
         var timing = Timing()

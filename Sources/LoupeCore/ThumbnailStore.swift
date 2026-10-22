@@ -18,8 +18,8 @@ public enum ThumbnailStatus: Sendable, Equatable {
 /// `ReadPriority.isBackground`, which `FileReader` runs only on threads beyond the viewer's two (so even reads stuck
 /// on a dead share never hold up the viewer's); new ones start only once the viewer cache has been idle for
 /// `idleDelay` (its idle signal flickers between jobs), none start while neighbours are being read, and those still
-/// reading are cancelled when the current photo needs I/O. A finished read is decoded, one at a time in a shared `DecodePool`
-/// slot, while the next one runs. A new thumbnail lands in memory at once and reaches the database in batches
+/// reading are cancelled when the current photo needs I/O. A finished read is decoded in the store's own `DecodePool`
+/// (`decodes` at once, at utility QoS, so the viewer's decodes win the cores) while the next one runs. A new thumbnail lands in memory at once and reaches the database in batches
 /// (every `commitDelay` or 100 thumbnails), so the writer costs a few ms per second at most.
 ///
 /// What is known per file lives in a few maps keyed by URL, all limited to the folders some window shows
@@ -32,6 +32,23 @@ public actor ThumbnailStore {
     /// (docs/bench/2026-10-15-m2.5-thumb-speed.md) and the server gives little more to four; `FileReader` has two
     /// threads for background reads, so a third would only wait in its queue.
     public static let maxReads = 2
+    /// Thumbnail decodes at once, by the machine: half its physical cores less one, 1 to 4 (3 on an 8-core i7 or an
+    /// M1, 1 on 4 cores). Thumbnails come fast but leave most of the machine to the viewer and the user's other apps:
+    /// on a local SSD folder of progressive 3456 x 2160 JPEGs (i7-10700K) 1/2/3/4/6 decodes make
+    /// 7.0/13.8/20.3/26.3/36.2 files/s for the same ~30 s of CPU per 200 files, so each slot is one busy core for as
+    /// long as the folder takes.
+    public static let defaultDecodes = decodes(physicalCores: physicalCores)
+
+    static func decodes(physicalCores: Int) -> Int { min(4, max(1, physicalCores / 2 - 1)) }
+
+    private static var physicalCores: Int {
+        var count: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("hw.physicalcpu", &count, &size, nil, 0) == 0, count > 0 else {
+            return ProcessInfo.processInfo.activeProcessorCount
+        }
+        return Int(count)
+    }
     static let batchSize = 100
     static let cellCapacity = 300
 
@@ -39,7 +56,6 @@ public actor ThumbnailStore {
 
     let directory: URL?
     let reader: any FileReading
-    let pool: DecodePool
     var thumbSize: Int
     var limitBytes: Int
     let decoder: @Sendable (Data) -> any ImageDecoder
@@ -48,9 +64,9 @@ public actor ThumbnailStore {
     let idleDelay: Duration
     let commitDelay: Duration
     let readLimit: Int
-    /// One thumbnail decode at a time: ~90 ms each keeps up with ~11 files/s, and the other shared decode slot
-    /// stays free for the viewer's neighbours.
-    let decodeLimit = DecodePool(slots: 1, reserved: 0)
+    /// The thumbnails' own decode slots, apart from the viewer's: on a local disk reads cost nothing and the decodes
+    /// are the limit (a progressive 3456 x 2160 JPEG under 4096 px decodes whole, ~125 ms on an i7-10700K).
+    let decodeLimit: DecodePool
     /// Home's covers are made one at a time (`cover`).
     let coverLimit = DecodePool(slots: 1, reserved: 0)
     /// Diagnostics, one line per thumbnail made (the app passes `DebugLog.log` under `LOUPE_DEBUG`).
@@ -184,17 +200,16 @@ public actor ThumbnailStore {
     /// `cachedBytes` hands over the viewer cache's bytes of a photo if they were read at the given (listing)
     /// stamp, a thumbnail without a read; `locate` is `ThumbnailLocation.resolve` but for tests, like `idleDelay`,
     /// `commitDelay` and `memoryCap`; `readLimit` other than `maxReads` only for the bench, which compares one read
-    /// with two.
-    public init(directory: URL?, reader: any FileReading, pool: DecodePool, thumbSize: Int, limitBytes: Int,
+    /// with two, and `decodes` other than `defaultDecodes` for the bench and the tests.
+    public init(directory: URL?, reader: any FileReading, thumbSize: Int, limitBytes: Int,
                 decoder: @escaping @Sendable (Data) -> any ImageDecoder = DecoderRegistry.decoder(for:),
                 cachedBytes: @escaping @Sendable (URL, FileStamp) async -> Data? = { _, _ in nil },
                 locate: @escaping @Sendable (URL) -> ThumbnailLocation? = { ThumbnailLocation.resolve($0) },
                 idleDelay: Duration = .milliseconds(100), commitDelay: Duration = .seconds(1),
-                readLimit: Int = maxReads, memoryCap: Int = defaultMemoryCap,
+                readLimit: Int = maxReads, decodes: Int = defaultDecodes, memoryCap: Int = defaultMemoryCap,
                 log: (@Sendable (String) -> Void)? = nil) {
         self.directory = directory
         self.reader = reader
-        self.pool = pool
         self.thumbSize = thumbSize
         self.limitBytes = limitBytes
         self.decoder = decoder
@@ -203,6 +218,7 @@ public actor ThumbnailStore {
         self.idleDelay = idleDelay
         self.commitDelay = commitDelay
         self.readLimit = max(1, readLimit)
+        decodeLimit = DecodePool(slots: max(1, decodes), reserved: 0, qos: .utility)
         self.memoryCap = memoryCap
         self.log = log
         // `thumb-cache-size=0` means no traces: what an earlier session with a cache left goes now. Two

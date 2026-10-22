@@ -531,7 +531,7 @@ enum Replay {
         let reader = TracingReader(log: log, noCache: noCache)
         let pool = DecodePool()
         let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: pool, limits: limits)
-        let seedStore = await seeds?.store(cache: cache, reader: reader, pool: pool)
+        let seedStore = await seeds?.store(cache: cache, reader: reader)
         let driver = ReplayDriver(cache: cache, files: files, zoom: script.zoom, screen: screen, box: box,
                                   showBlurry: limits.showBlurry, seeds: seedStore?.store)
         await cache.setOnUpdate { url in Task { await driver.update(url) } }

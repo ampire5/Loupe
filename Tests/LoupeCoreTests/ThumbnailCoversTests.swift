@@ -14,7 +14,7 @@ import Testing
     }
 
     private func store(_ reader: ThumbReader, dir: URL) -> ThumbnailStore {
-        ThumbnailStore(directory: dir, reader: reader, pool: DecodePool(), thumbSize: 32, limitBytes: 1 << 30,
+        ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                        locate: Self.locate, idleDelay: .zero, commitDelay: .seconds(3600))
     }
 
@@ -93,7 +93,7 @@ import Testing
         let locate: @Sendable (URL) -> ThumbnailLocation? = { url in
             ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
         }
-        let store = ThumbnailStore(directory: dir, reader: reader, pool: DecodePool(), thumbSize: 32, limitBytes: 1 << 30,
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                                    locate: locate, idleDelay: .zero, commitDelay: .seconds(3600))
         for name in ["1.jpg", "2.jpg"] {
             let url = URL(fileURLWithPath: "/photos/a/\(name)")
@@ -118,7 +118,7 @@ import Testing
         let locate: @Sendable (URL) -> ThumbnailLocation? = { url in
             ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
         }
-        let store = ThumbnailStore(directory: dir, reader: reader, pool: DecodePool(), thumbSize: 32, limitBytes: 1 << 30,
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                                    locate: locate, idleDelay: .zero, commitDelay: .seconds(3600))
         for name in ["b.jpg", "a.jpg", "c.jpg", "d.jpg", "e.jpg"] {
             let url = URL(fileURLWithPath: "/photos/a/\(name)")
@@ -130,7 +130,7 @@ import Testing
         #expect(samples.map(\.lastPathComponent) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
         #expect(await store.folderSamples(URL(fileURLWithPath: "/photos/none"), limit: 4).isEmpty)
         // A fresh store (no window lists the folder) still decodes them, from the catalog, reading no file.
-        let fresh = ThumbnailStore(directory: dir, reader: reader, pool: DecodePool(), thumbSize: 32, limitBytes: 1 << 30,
+        let fresh = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                                    locate: locate, idleDelay: .zero, commitDelay: .seconds(3600))
         let reads = reader.readCount(samples[0])
         #expect(await fresh.catalogThumbnail(samples[0], maxPixel: 64) != nil)

@@ -10,6 +10,7 @@ import Foundation
 public final class DecodePool: @unchecked Sendable {
     private let slots: Int
     private let sharedSlots: Int
+    private let qos: DispatchQoS.QoSClass
 
     private struct Waiter {
         let id: UInt64
@@ -32,10 +33,11 @@ public final class DecodePool: @unchecked Sendable {
     private var nextID: UInt64 = 0
 
     /// `reserved` slots only ever serve current jobs; at least one slot is always shared so
-    /// neighbours still make progress when there is no current job.
-    public init(slots: Int = 3, reserved: Int = 1) {
+    /// neighbours still make progress when there is no current job. `run` works at `qos`.
+    public init(slots: Int = 3, reserved: Int = 1, qos: DispatchQoS.QoSClass = .userInitiated) {
         self.slots = max(1, slots)
         self.sharedSlots = max(1, self.slots - max(0, reserved))
+        self.qos = qos
     }
 
     /// Runs blocking `work` on a pool thread once a slot is free. `forCurrent` jobs may take any slot,
@@ -50,7 +52,7 @@ public final class DecodePool: @unchecked Sendable {
             throw CancellationError()
         }
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: qos).async {
                 let result = Result { try work() }
                 // Free the slot before the caller resumes, so a follow-up job sees it free.
                 self.release(forCurrent: forCurrent)
@@ -71,6 +73,9 @@ public final class DecodePool: @unchecked Sendable {
     }
 
     func releaseSlot(forCurrent: Bool) { release(forCurrent: forCurrent) }
+
+    /// Jobs it runs at once at most.
+    var slotCount: Int { slots }
 
     // MARK: Test hooks
 
