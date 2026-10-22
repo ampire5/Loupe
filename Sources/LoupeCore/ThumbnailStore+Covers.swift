@@ -48,68 +48,6 @@ extension ThumbnailStore {
         return counts
     }
 
-    /// The stored summary of the folder `location` names (`ThumbnailLocation.subfolder`), from the catalog alone. Nil
-    /// when there is none or the catalog cannot say: a summary never gets in the way of thumbnails.
-    /// One waiting for the next batch first.
-    public func folderSummary(at location: ThumbnailLocation) async -> FolderSummary? {
-        storedSummary(at: location)
-    }
-
-    /// Stores folder summaries in one batch, now. Failure is logged by `perform` and leaves the summaries unstored:
-    /// they are made again on the next pass.
-    public func putFolderSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) async {
-        // A newer summary of the same folder waiting for the batch would be written over this one.
-        for (location, _) in items { pendingSummaries[Self.summaryKey(location)] = nil }
-        _ = perform("summaries", { try $0.putSummaries(items) })
-    }
-
-    /// The open folder's summary from its full listing (`BrowserListingSource.full`, which has the photos' dates and
-    /// sizes on a share too: a share's folder gets them once visited), kept in the catalog with the folder's own date,
-    /// as its parent's listing gives it, so the folder's card finds it fresh. Where the catalog keeps the folder and
-    /// its date are asked in the folder's resolving lane (`folderLocation`'s limits: nothing when it does not answer);
-    /// the summary is counted off the actor and goes with the next batch.
-    public func putOpenFolderSummary(_ folder: URL, listing entries: [BrowserEntry]) async {
-        let locate = self.locate, network = coverVolumeIsNetwork(folder)
-        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
-                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
-            (_: @Sendable (OpenFolderPlace) -> Bool) -> OpenFolderPlace in
-            // A URL of its own: one handed over may hold resource values cached before the listing.
-            let fresh = URL(fileURLWithPath: folder.path, isDirectory: true)
-            return OpenFolderPlace(location: locate(folder.appendingPathComponent("_")),
-                                   modified: try? fresh.resourceValues(forKeys: [.contentModificationDateKey])
-                                       .contentModificationDate)
-        }
-        guard case .value(let place, _) = outcome, let location = place.location else { return }
-        let summary = await Self.offActor(qos: Self.coverQoS) {
-            FolderSummary.of(listing: entries, folderModified: place.modified)
-        }
-        queueSummary(summary, at: location)
-    }
-
-    /// Summaries waiting for the next batch at most: a full batch is written at once, else with the thumbnails'
-    /// batch (`commitDelay`). Covers finish a few a second, so a batch is mostly what a second of covers made; the
-    /// bound keeps a burst (a folder of hundreds of zips from the catalog) to one transaction per this many, each
-    /// short on the store's actor. `putSummaries` into a table of 10 000 rows (Intel iMac, 8-core i7, SSD; best of 10):
-    /// 1 / 16 / 64 / 256 rows in 0.28 / 0.45 / 1.15 / 3.35 ms (docs/bench/folder-cards.md).
-    static let summaryBatch = 64
-
-    /// A summary for the next batch (nothing without a database).
-    func queueSummary(_ summary: FolderSummary, at location: ThumbnailLocation) {
-        guard database() != nil else { return }
-        pendingSummaries[Self.summaryKey(location)] = (location, summary)
-        if pendingSummaries.count >= Self.summaryBatch { commit() } else { scheduleCommit() }
-    }
-
-    /// The summary of the folder `location` names, waiting for the batch or from the catalog.
-    func storedSummary(at location: ThumbnailLocation) -> FolderSummary? {
-        if let pending = pendingSummaries[Self.summaryKey(location)] { return pending.summary }
-        return perform("summary", { try $0.summary(at: location) }) ?? nil
-    }
-
-    nonisolated static func summaryKey(_ location: ThumbnailLocation) -> String {
-        location.volume + "\u{0}" + location.folder
-    }
-
     /// A folder card's mosaic (file browser, second round): up to `limit` photos of the folder that already have a
     /// thumbnail, by name, from the catalog alone — no listing and no read of the folder, which on a slow share would
     /// queue in front of what the user clicked.
@@ -142,65 +80,6 @@ public struct CoverNames: Equatable, Sendable {
         self.files = files
         self.folders = folders
     }
-}
-
-/// A cover's listing of a folder (or a zip's directory): its names, and on a local volume (a listing with stat) or for a
-/// zip also its summary (without the folder's date, which the caller has) and its photos' dates.
-public struct CoverListing: Equatable, Sendable {
-    public var names: CoverNames
-    public var summary: FolderSummary?
-    /// The photos' modification dates (folder cards' "+N new"); nil from a names-only listing and for a zip.
-    public var photoDates: [Date]?
-
-    public init(names: CoverNames, summary: FolderSummary? = nil, photoDates: [Date]? = nil) {
-        self.names = names
-        self.summary = summary
-        self.photoDates = photoDates
-    }
-
-    /// From a listing (`BrowserListingSource.names`, with stat on a local volume: the summary and the photos' dates
-    /// then; a names-only listing gives neither, its summary is the caller's from the names).
-    public init(listing entries: [BrowserEntry], dated: Bool) {
-        let files = entries.filter { $0.kind == .file }, folders = entries.filter { $0.kind == .folder }
-        self.init(names: CoverNames(files: files.map(\.name), folders: folders.map(\.name)),
-                  summary: dated ? .of(listing: entries, folderModified: nil) : nil,
-                  photoDates: dated ? files.compactMap(\.date) : nil)
-    }
-}
-
-/// What a folder card has against it (folder cards spec, "Значки").
-public enum CardProblem: Equatable, Sendable {
-    /// The zip's directory cannot be read: the card says so but is not dimmed (it opens, with the viewer's message).
-    case broken
-    /// The share does not answer (the cover's listing gave no name in time twice in a row) or its volume is gone: the
-    /// card is dimmed, like a place that does not answer.
-    case offline
-}
-
-/// A folder's or zip's card from the cover queue (`ThumbnailStore.folderCard`): its pictures and the facts of its band.
-public struct FolderCard: Sendable {
-    public var images: [CGImage]
-    /// Made from this pass's listing, else the catalog's (kept even when the folder changed since, until a listing
-    /// counts it again); nil when there is none.
-    public var summary: FolderSummary?
-    public var problem: CardProblem?
-    /// The photos' modification dates from this pass's listing with stat (a local volume); nil when the card came
-    /// from the catalog, on a share and for a zip.
-    public var photoDates: [Date]?
-
-    public init(images: [CGImage], summary: FolderSummary? = nil, problem: CardProblem? = nil,
-                photoDates: [Date]? = nil) {
-        self.images = images
-        self.summary = summary
-        self.problem = problem
-        self.photoDates = photoDates
-    }
-}
-
-/// Where the catalog keeps the open folder and its date (`putOpenFolderSummary`), from one blocking call.
-struct OpenFolderPlace: Sendable {
-    var location: ThumbnailLocation?
-    var modified: Date?
 }
 
 /// A folder's pick from a complete listing (`ThumbnailStore.coverPicks`): its photos (spread across it, the one last
@@ -443,22 +322,6 @@ extension ThumbnailStore {
         let summary = Self.summary(of: listing, modified: modified, stored: stored)
         if let location, summary != stored { queueSummary(summary, at: location) }
         return FolderCard(images: made.images, summary: summary, problem: made.problem, photoDates: listing.photoDates)
-    }
-
-    /// A complete listing's summary at the folder's date (the parent listing's, which freshness compares; a zip's own
-    /// without it). Names only (a share): the dates and size of a stored summary that has them stay, as the folder was
-    /// when it was open.
-    nonisolated static func summary(of listing: CoverListing, modified: Date?, stored: FolderSummary?) -> FolderSummary {
-        var summary = listing.summary ?? FolderSummary.of(names: listing.names, folderModified: modified)
-        if let modified { summary.folderModified = modified }
-        if !summary.datesKnown, let stored, stored.datesKnown {
-            summary.bytes = stored.bytes
-            summary.first = stored.first
-            summary.last = stored.last
-            summary.histogram = stored.histogram
-            summary.datesKnown = true
-        }
-        return summary
     }
 
     /// Two listings of a share's folder in a row without a name in time: the card says the share does not answer.
