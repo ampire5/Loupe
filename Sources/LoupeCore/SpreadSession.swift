@@ -141,6 +141,15 @@ public enum SpreadSizes {
         if let aspect, aspect.isFinite, aspect > 0 { return CGSize(width: other.height * aspect, height: other.height) }
         return failed ? other : nil
     }
+
+    /// Whether the photo on screen is laid out at a size its pair does not keep, so a saved view of the pair waits for
+    /// the real one (`ViewRestore.waiting`): the other page has a stand-in size (`standIn`), or a page is planned beside
+    /// it (`companionPlanned`) and not read yet (`companionRead`: its header is in, or it failed), which with no store
+    /// aspect leaves the photo alone until the header comes (`pageSize`). A page that failed keeps its stand-in for
+    /// good, and a wide one takes the pair back (no page planned): either way the size on screen is final.
+    public static func isProvisional(standIn: Bool, companionPlanned: Bool, companionRead: Bool) -> Bool {
+        standIn || (companionPlanned && !companionRead)
+    }
 }
 
 /// How the view follows a page whose layout changed under it (spread spec, «Раскладка пары»): two pages on or off, a
