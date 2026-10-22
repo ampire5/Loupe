@@ -47,6 +47,18 @@ import Testing
         #expect(stale.insidePhotos == 1_300 && stale.insideIncomplete)
     }
 
+    /// B2: read to the end at 248, then 12 came: "248 / 260" (seen as counted at the visit, of the photos now), the
+    /// bar full as at the visit, not done, "+12".
+    @Test func seenKeepsTheVisitsCount() {
+        let visit = FolderVisit(index: 247, count: 248, visited: t0 + 100)
+        var grown = FolderSummary(photos: 260, folders: 0)
+        grown.datesKnown = false
+        let card = FolderCardFacts(summary: grown).cardSummary(visit: visit, config: Config())
+        #expect(card.seen == 248 && card.viewed == 1)
+        #expect(CardSummaryText.viewed(card) == "248 / 260")
+        #expect(!card.done && card.new == 12)
+    }
+
     /// The visit's progress and check mark; new photos by the listing's dates (local) or by the count (a share).
     @Test func visitMapsToProgressAndNew() {
         let visit = FolderVisit(index: 136, count: 248, visited: t0 + 100)

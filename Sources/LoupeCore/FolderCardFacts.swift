@@ -79,6 +79,7 @@ public struct FolderCardFacts: Sendable {
         }
         if let visit {
             card.viewed = visit.progress()
+            card.seen = max(0, visit.index + 1)   // "137 / 248": seen as counted at the visit, of the photos now
             if let summary { card.new = max(0, FolderVisit.new(since: visit, summary: summary, dates: photoDates)) }
             card.done = visit.done && card.new == 0
         }

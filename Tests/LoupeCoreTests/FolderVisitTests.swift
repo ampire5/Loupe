@@ -74,11 +74,15 @@ import Foundation
         // With dates: those after the visit, whatever the counts say.
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 10), dates: [earlier, later, later, t0]) == 2)
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 10), dates: []) == 0)
-        // Without: unchanged dates mean none even if the count grew (a share's names only: growth).
-        #expect(FolderVisit.new(since: visit, summary: summary(photos: 15, last: earlier, datesKnown: true), dates: nil) == 0)
-        #expect(FolderVisit.new(since: visit, summary: summary(photos: 15, last: t0, datesKnown: true), dates: nil) == 0)
+        // R2b: copies keep their old dates, so the growth in the count counts too, with dates or without.
+        let copies = Array(repeating: earlier, count: 22)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 22), dates: copies) == 12)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 22), dates: copies + [later]) == 12)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 15, last: earlier, datesKnown: true), dates: nil) == 5)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 15, last: t0, datesKnown: true), dates: nil) == 5)
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 15, last: later, datesKnown: true), dates: nil) == 5)
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 14), dates: nil) == 4)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 10, last: earlier, datesKnown: true), dates: nil) == 0)
     }
 
     @Test func deletedFilesNeverNegative() {

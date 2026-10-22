@@ -25,12 +25,13 @@ public struct FolderVisit: Equatable, Sendable {
     /// The last photo was reached.
     public var done: Bool { count > 0 && index >= count - 1 }
 
-    /// Photos that came since `visit`. With `dates` (the photos' modification dates from a local listing): those later
-    /// than the visit. Without: none if the summary's dates are known and its newest is not after the visit, otherwise
-    /// the growth in the photo count (never negative: deleted files do not count as new).
+    /// Photos that came since `visit` (ruling R2b): the more of those dated after the visit (`dates`, the photos'
+    /// modification dates from a local listing) and the growth in the photo count since it (never negative: deleted
+    /// files do not count as new). Both, as copied photos keep their old dates; a photo edited in place counts by its
+    /// date alone.
     public static func new(since visit: FolderVisit, summary: FolderSummary, dates: [Date]?) -> Int {
-        if let dates { return dates.reduce(0) { $0 + ($1 > visit.visited ? 1 : 0) } }
-        if summary.datesKnown, let last = summary.last, last <= visit.visited { return 0 }
-        return max(0, summary.photos - visit.count)
+        let grown = max(0, summary.photos - visit.count)
+        guard let dates else { return grown }
+        return max(grown, dates.reduce(0) { $0 + ($1 > visit.visited ? 1 : 0) })
     }
 }

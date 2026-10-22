@@ -386,11 +386,14 @@ extension Notification.Name {
         let files = wanted.filter { $0.kind == .file }
         sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
         let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
+        // The folder cards' picture: a poster's slot, a compact card's 92 pt square (one picture: narrower than
+        // `HomeMosaic.narrowWidth`), a row's cover; with photos in the grid too, `width` is theirs.
+        let coverWidth = view?.coverWidth ?? width
         // Another card size or screen: the mosaics kept and those being made are the wrong size.
-        if let size = coverSize, size.width != width || size.scale != scale { dropCovers() }
-        coverSize = (width, scale)
+        if let size = coverSize, size.width != coverWidth || size.scale != scale { dropCovers() }
+        coverSize = (coverWidth, scale)
         let liveCards = shown.values.reduce(0) { $0 + ($1.kind == .folder || $1.kind == .archive ? 1 : 0) }
-        cards.setLimit(CoverCards.limit(cards: liveCards, pixels: Int((width * scale).rounded())))
+        cards.setLimit(CoverCards.limit(cards: liveCards, pixels: Int((coverWidth * scale).rounded())))
         let ask = cards.ask(cardIDs, visible: cardIDs.filter(inView.contains).count)
         lastAsked = cardIDs
         lastInView = Set(cardIDs.filter(inView.contains))
