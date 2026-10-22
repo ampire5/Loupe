@@ -1069,6 +1069,129 @@ struct ImageCacheTests {
         #expect(rig.decoder.calls.count == calls, "re-decoded under pressure")
         await rig.clear()
     }
+
+    // MARK: Ready decodes (a discrete card)
+
+    /// 2048×1536: rows of 8192 bytes, so a full decode (12 582 912 bytes) fills whole 16 KiB pages and its buffer is
+    /// exactly what the plan charges for it.
+    private let readyPhoto = PixelSize(width: 2048, height: 1536)
+    private var readyBytes: Int { 2048 * 4 * 1536 }
+
+    /// Forward five photos at 100 % with a dwell on each, on a card whose graphics tier holds two full pyramids, then
+    /// back four: each photo's full decode was kept ready in system memory, so a photo whose levels the card gave up
+    /// comes back by an upload of that decode, never by decoding the file again.
+    @Test func stepBackUploadsTheReadyDecode() async {
+        let rig = Rig(limits: CacheLimits.at3G)
+        let files = fileURLs(10)
+        rig.distinctWidths(files)
+        let widest = TileGrid(imageSize: PixelSize(width: rig.width(9), height: 1500))
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 2 * widest.byteCount(levels: 0..<widest.levelCount)
+        await rig.cache.setLimits(limits)
+        for i in 0..<5 {
+            await rig.focus(files, i, needsFull: true, previous: i > 0 ? i - 1 : nil)
+            await rig.focus(files, i, dwelling: true, needsFull: true, previous: i > 0 ? i - 1 : nil)
+            #expect(await eventually { await rig.state(files[i]) == .full }, "photo \(i)")
+            #expect(await rig.settle())
+        }
+        #expect(await rig.cache.stats().readyCount >= 5)
+        for i in [3, 2, 1, 0] {
+            await rig.focus(files, i, direction: -1, needsFull: true, previous: i + 1)
+            await rig.focus(files, i, direction: -1, dwelling: true, needsFull: true, previous: i + 1)
+            #expect(await eventually { await rig.state(files[i]) == .full }, "photo \(i)")
+            #expect(await rig.settle())
+        }
+        for i in 0..<5 {
+            #expect(rig.decoder.calls(files[i]).filter { $0 == .full }.count == 1, "photo \(i) decoded again")
+        }
+        let reuploaded = (0..<3).filter { i in
+            rig.loader.uploadedLevels(width: rig.width(i)).filter { $0 == 0 }.count >= 2
+        }
+        #expect(!reuploaded.isEmpty, "fixture: the card gave up some photo's full resolution")
+        await rig.clear()
+    }
+
+    /// The photo the user steps onto has its ready decode running: its full job waits for that decode and uploads
+    /// it rather than decoding the file a second time.
+    @Test func fullJobWaitsForReadyInFlight() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0   // no neighbour's full resolution: n2's full decode can only be its ready one
+        let rig = Rig(limits: limits)
+        let files = fileURLs(10)
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        let gate = BlockingGate()
+        rig.decoder.gateFull(files[2], gate)
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { rig.decoder.calls(files[2]).contains(.full) })
+        await rig.focus(files, 2, needsFull: true, previous: 0)
+        #expect(await eventually { log.events.contains { $0.url == files[2] && $0.kind == .readyAwait } })
+        gate.open()
+        #expect(await eventually { await rig.state(files[2]) == .full })
+        #expect(await rig.settle())
+        #expect(rig.decoder.calls(files[2]).filter { $0 == .full }.count == 1)
+        await rig.clear()
+    }
+
+    /// Memory pressure takes the ready decodes first: at a quarter of `cache-memory` the files all still fit and
+    /// stay, the current photo's included, and no ready decode does, so none is left (not even the current photo's:
+    /// the screen never draws from it).
+    @Test func pressureDropsReadyBeforeBytes() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let file = 1_000_000
+        limits.memory = 4 * (5 * file + 4_000_000)   // normal: the files and two ready decodes; critical: the files
+        let rig = Rig(size: readyPhoto, limits: limits)
+        rig.decoder.fullSizedBuffers = true
+        let files = fileURLs(5)
+        for url in files { rig.reader.pad(url, file) }
+        await rig.focus(files, 2, dwelling: true, needsFull: true)
+        #expect(await eventually { await rig.cache.stats().readyCount == 2 })
+        #expect(await rig.settle())
+        #expect(await rig.cache.stats().bytesCount == 5)
+        let calls = rig.decoder.calls.count
+
+        await rig.cache.setMemoryPressure(.critical)
+        #expect(await rig.settle())
+        let stats = await rig.cache.stats()
+        #expect(stats.readyCount == 0)
+        #expect(stats.bytesCount == 5)
+        #expect(await rig.cache.cachedBytes(files[2], stamp: fakeStamp) != nil)
+        #expect(stats.usedBytes <= limits.memory / 4, "system \(stats.usedBytes) over \(limits.memory / 4)")
+        #expect(await rig.state(files[2]) == .full)
+        #expect(rig.decoder.calls.count == calls, "decoded again under pressure")
+        await rig.clear()
+    }
+
+    /// Two neighbours not yet probed are planned ready at the size of the one photo known; their probes report four
+    /// times the pixels, the plan drops them, and the cache holds no more than `cache-memory`: neither is decoded.
+    @Test func readyReplannedWhenProbedLarger() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        limits.memory = 3 * readyBytes + 1_000_000
+        let rig = Rig(size: readyPhoto, limits: limits)
+        rig.decoder.fullSizedBuffers = true
+        let files = fileURLs(3)
+        let gate = BlockingGate()
+        for url in files[1...] {
+            rig.decoder.setSize(url, PixelSize(width: 2 * readyPhoto.width, height: 2 * readyPhoto.height))
+            rig.decoder.gateProbe(url, gate)
+        }
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually {
+            await rig.cache.inspect(Array(files[1...])).allSatisfy { $0?.planned[.ready] != nil }
+        }, "fixture: the neighbours are planned ready at the estimate")
+        gate.open()
+        #expect(await rig.settle())
+        #expect(await rig.cache.usedSystemBytes() <= limits.memory)
+        #expect(await rig.cache.inspect(Array(files[1...])).allSatisfy { $0?.planned[.ready] == nil })
+        for url in files[1...] { #expect(!rig.decoder.calls(url).contains(.full)) }
+        #expect(await rig.cache.stats().readyCount == 1)
+        await rig.clear()
+    }
 }
 
 private final class TraceEvents: @unchecked Sendable {

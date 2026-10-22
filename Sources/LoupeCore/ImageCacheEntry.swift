@@ -69,11 +69,13 @@ public enum MemoryPressure: Sendable {
 /// holds itself to now (smaller under memory pressure). `evictedInactive`: entries and bytes eviction took from
 /// inactive windows since launch (spec windows-and-tabs §3.8); growing, the limit is too small for the windows open.
 /// On a discrete card (`graphicsLimitBytes` set, `CacheLimits.graphicsMemory`) `usedBytes`, `limitBytes` and
-/// `effectiveLimitBytes` are the system tier's (the compressed bytes against `cache-memory`), and
+/// `effectiveLimitBytes` are the system tier's (the compressed bytes and ready decodes against `cache-memory`), and
 /// `graphicsUsedBytes` the pyramids and uploads against the graphics tier; with one budget `graphicsUsedBytes` is
-/// the pyramids' and uploads' share of `usedBytes`.
+/// the pyramids' and uploads' share of `usedBytes`. `readyCount`: entries holding a ready decode (only ever on a
+/// discrete card).
 public struct CacheStats: Equatable, Sendable {
     public let bytesCount, previewCount, fullCount: Int
+    public let readyCount: Int
     public let usedBytes, limitBytes, effectiveLimitBytes: Int
     public let evictedInactive: (count: Int, bytes: Int)
     public let graphicsUsedBytes: Int
@@ -81,8 +83,9 @@ public struct CacheStats: Equatable, Sendable {
 
     public init(bytesCount: Int, previewCount: Int, fullCount: Int, usedBytes: Int, limitBytes: Int,
                 effectiveLimitBytes: Int, evictedInactive: (count: Int, bytes: Int) = (0, 0),
-                graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil) {
+                graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil, readyCount: Int = 0) {
         self.bytesCount = bytesCount
+        self.readyCount = readyCount
         self.previewCount = previewCount
         self.fullCount = fullCount
         self.usedBytes = usedBytes
@@ -94,7 +97,8 @@ public struct CacheStats: Equatable, Sendable {
     }
 
     public static func == (a: CacheStats, b: CacheStats) -> Bool {
-        (a.bytesCount, a.previewCount, a.fullCount) == (b.bytesCount, b.previewCount, b.fullCount)
+        (a.bytesCount, a.previewCount, a.fullCount, a.readyCount)
+            == (b.bytesCount, b.previewCount, b.fullCount, b.readyCount)
             && (a.usedBytes, a.limitBytes, a.effectiveLimitBytes) == (b.usedBytes, b.limitBytes, b.effectiveLimitBytes)
             && a.evictedInactive == b.evictedInactive
             && a.graphicsUsedBytes == b.graphicsUsedBytes && a.graphicsLimitBytes == b.graphicsLimitBytes
@@ -126,6 +130,10 @@ final class CacheEntry<Pyramid: AnyObject & Sendable> {
     var info: ImageInfo?
     var decoder: (any ImageDecoder)?
     var pyramid: Pyramid?
+    /// On a discrete card, the full decode (level 0) kept in system memory after its upload or made for it in the
+    /// background (`CacheGoal.ready`): stepping onto the photo uploads it instead of decoding the file. Counted in
+    /// `ImageCache.usedSystemBytes`; never drawn from.
+    var ready: LevelImage?
     var failure: String?
     var timings = LoadTimings()
     /// The read in flight; decode jobs await it, so the file is read once.
@@ -134,7 +142,7 @@ final class CacheEntry<Pyramid: AnyObject & Sendable> {
     /// The queue position of the read in flight, shared with the reader: moving it moves the read whether it is
     /// queued yet or still on its way to the queue.
     var readPriority: ReadPriority?
-    /// Decode jobs in flight, at most one per goal (`coarse`, `preview`, `full`).
+    /// Decode jobs in flight, at most one per goal (`coarse`, `preview`, `full`, `ready`).
     var jobs: [CacheGoal: CacheJob] = [:]
     /// Bytes of the levels uploads into this entry are building right now: fresh textures for every level of
     /// `level...last`, all counted in `usedBytes` while the upload runs. Levels already resident are counted
@@ -164,6 +172,7 @@ final class JobPhase: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting = true
     private var current: Bool
+    private var abandoned = false
 
     init(forCurrent: Bool) { current = forCurrent }
 
@@ -171,6 +180,26 @@ final class JobPhase: @unchecked Sendable {
     var forCurrent: Bool { lock.withLock { current } }
     func markWaiting(forCurrent: Bool) { lock.withLock { waiting = true; current = forCurrent } }
     func markBusy() { lock.withLock { waiting = false } }
+
+    /// `markBusy` for work that may be given up (`abandonIfWaiting`): false, and still waiting, when it was. Called by
+    /// the work as it starts on its pool thread, so a slot granted just before the job was given up decodes nothing:
+    /// the task's own cancellation is checked only before the work is handed to the thread.
+    func beginIfLive() -> Bool {
+        lock.withLock {
+            guard !abandoned else { return false }
+            waiting = false
+            return true
+        }
+    }
+
+    /// Gives the job up if it is still waiting: its work then never starts (`beginIfLive`). False once it began.
+    func abandonIfWaiting() -> Bool {
+        lock.withLock {
+            guard waiting else { return false }
+            abandoned = true
+            return true
+        }
+    }
 }
 
 extension ContinuousClock.Instant {

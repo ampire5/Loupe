@@ -493,3 +493,32 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     // The files still go by the system tier: the 24 neighbours' fit 3 GiB.
     #expect(items.filter { $0.goal == .bytes && $0.index != 100 }.count == 24)
 }
+
+/// On a discrete card, at a zoom that needs full resolution, the full decodes are kept ready in system memory
+/// (`.ready`, hardware defaults spec «Два яруса памяти»): after the files, the photo on screen and then the neighbours
+/// nearest first, as many as `cache-memory` holds next to the files (a 147 MP decode is 588.7 MB: four in 3 GiB beside
+/// 25 files of 12 MB). Not at a zoom that needs no more than the preview (unless the photo already holds one), and
+/// never on unified memory, where the pyramids already live in system memory.
+@Test func readyPlannedOnlyOnADiscreteCardAtFullZoom() {
+    let decoded = (big.width * 4 + 63) / 64 * 64 * big.height
+    #expect(decoded == 588_672_000)
+    let tiers = limits { $0.graphicsMemory = 4 << 30 }
+    let items = plan(focus(needsFull: true), tiers)
+    let ready = items.filter { $0.goal == .ready }
+    #expect(ready.map(\.index) == [100, 101, 99, 102])
+    #expect(ready.allSatisfy { $0.cost == decoded })
+    #expect(names(items).firstIndex(of: "100:ready")! > names(items).lastIndex { $0.hasSuffix(":bytes") }!)
+    #expect(items.filter { !$0.goal.isPyramid }.reduce(0) { $0 + $1.cost } <= 3 << 30)
+    // Not in the graphics tier: the pyramids planned are the same as without the ready decodes.
+    #expect(items.filter(\.goal.isPyramid).reduce(0) { $0 + $1.cost } <= 4 << 30)
+    let noRoom = limits { $0.graphicsMemory = 4 << 30; $0.memory = 400 * mb }   // the files only
+    #expect(!plan(focus(needsFull: true), noRoom).contains { $0.goal == .ready })
+    #expect(items.filter(\.goal.isPyramid) == plan(focus(needsFull: true), noRoom).filter(\.goal.isPyramid))
+
+    #expect(!plan(focus(needsFull: false), tiers).contains { $0.goal == .ready })
+    // At Fit, a photo that already holds its ready decode keeps it; none is started.
+    let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, readyKept: $0 == 101 || $0 == 150) }
+    #expect(plan(focus(needsFull: false), tiers, kept).filter { $0.goal == .ready }.map(\.index) == [101])
+    #expect(!plan(focus(needsFull: true), CacheLimits.at3G).contains { $0.goal == .ready })
+    #expect(CacheGoal.allCases.filter(\.isPyramid) == [.coarse, .preview, .full])
+}

@@ -220,6 +220,9 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     var previewAtLevel0 = false
     /// When set, `firstLook` returns an image of this level; nil means the decoder has none.
     var firstLookLevel: Int?
+    /// Full decodes come back in a buffer as long as the real one (64-byte-aligned rows × height), so a ready decode
+    /// weighs in `usedSystemBytes` what it would in the app. Mapped and never touched, so it costs no memory.
+    var fullSizedBuffers = false
 
     init(size: PixelSize) { defaultSize = size }
 
@@ -300,7 +303,11 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
         defer { lock.withLock { fullsRunning -= 1 } }
         try work(name, full: true)
         defer { lock.withLock { finished[name] = Date() } }
-        return try image(info, level: 0).image
+        guard fullSizedBuffers else { return try image(info, level: 0).image }
+        let size = info.pixelSize, rowBytes = (size.width * 4 + 63) / 64 * 64
+        return DecodedImage(pixelSize: size, bytesPerRow: rowBytes,
+                            buffer: try PageAlignedBuffer(minimumLength: rowBytes * size.height),
+                            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
     }
 
     func firstLook(_ data: Data, info: ImageInfo) throws -> LevelImage? {

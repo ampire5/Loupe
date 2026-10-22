@@ -163,8 +163,9 @@ extension ImageCache {
     // MARK: Idle trim (spec windows-and-tabs §3.5)
 
     /// Trims every session neither active nor visible for at least `cache-idle-trim` by `now` (`CacheOwners.idle`): the
-    /// entries only such sessions list lose everything but their current photo, which keeps all it has
-    /// (`cache-idle-keep=full`) or goes down to its preview (`preview`, the Lfit of its holder's screen). An entry
+    /// entries only such sessions list lose everything but their current photo, which keeps all its levels
+    /// (`cache-idle-keep=full`) or goes down to its preview (`preview`, the Lfit of its holder's screen), and its file
+    /// but not its ready decode (a discrete card's, `CacheEntry.ready`). An entry
     /// another session lists too, or that one has on screen, is spared whole; one nobody lists is left to
     /// `evictToFit`, as is whatever the plan wants. Not counted in `evictedInactive`. The timer calls it once a
     /// minute; the next step in a trimmed window reads its neighbours again.
@@ -180,8 +181,10 @@ extension ImageCache {
         for (url, e) in entries where e.uploadReserve == 0 && !spared.contains(url) {
             let listing = sessions.filter { $0.value.fileIndex[url] != nil }.keys
             guard !listing.isEmpty, listing.allSatisfy(idle.contains) else { continue }
+            // The current photo keeps its levels as `cache-idle-keep` says, never its ready decode (system memory
+            // a hidden window has no use for).
             let steps: [EvictionStep] = !current.contains(url) ? EvictionStep.allCases
-                : limits.idleKeep == .preview ? [.finerThanPreview] : []
+                : limits.idleKeep == .preview ? [.ready, .finerThanPreview] : [.ready]
             for step in steps { freed += degrade(url, e, step) }
         }
         if freed > 0 {

@@ -71,7 +71,11 @@ extension ImageCache {
         let id = nextJobID
         let phase = JobPhase(forCurrent: isCurrent(url))
         let task = Task {
-            await runJob(url, e, goal, phase: phase)
+            if goal == .ready {
+                await runReadyJob(url, e, phase: phase)
+            } else {
+                await runJob(url, e, goal, phase: phase)
+            }
             if e.jobs[goal]?.id == id { e.jobs[goal] = nil }
             runningJobs -= 1
             reconcile()
@@ -140,6 +144,15 @@ extension ImageCache {
                 guard isWanted(url, e, goal) else { return }
             }
             guard !isSatisfied(url, e, goal) else { return }
+            if goal == .full {
+                guard await awaitReadyDecode(url, e) else { return }
+                // A discrete card's ready decode: uploaded as it is, no decode.
+                if let ready = e.ready {
+                    notify(url)
+                    try await upload(ready, url, e, goal, grid: l.grid, phase: phase)
+                    return
+                }
+            }
 
             let wanted = goal == .coarse ? l.coarse : goal == .preview ? l.lfit : 0
             let start = ContinuousClock.now
@@ -175,6 +188,87 @@ extension ImageCache {
             if goal == .full { e.timings.fullMs = start.millisecondsElapsed } else { e.timings.previewMs = start.millisecondsElapsed }
             notify(url)
             try await upload(image, url, e, goal, grid: l.grid, phase: phase)
+            // On a discrete card the decode stays in system memory when the plan wants it ready (spec «Два яруса
+            // памяти»: the full decode of the current photo and the next is kept after its upload).
+            if goal == .full && isAlive(url, e) && planned[url]?[.ready] != nil && e.ready == nil {
+                e.ready = image
+                evictToFit()
+            }
+        } catch {
+            guard !(error is CancellationError), isWanted(url, e, goal), e.failure == nil else { return }
+            e.failure = LoadErrorText.message(name: url.lastPathComponent, error: error, size: e.info?.pixelSize)
+            notify(url)
+        }
+    }
+
+    /// Before a full job decodes: a ready job of the entry that is only waiting (for its read or a slot) is cancelled,
+    /// this job decodes sooner and keeps the result; one past waiting (probing or decoding) is waited for, so its
+    /// decode is uploaded rather than made twice (a probing one gives way to this job and ends at once). False when
+    /// this job is no longer alive afterwards.
+    private func awaitReadyDecode(_ url: URL, _ e: CacheEntry<Pyramid>) async -> Bool {
+        guard e.ready == nil, let job = e.jobs[.ready] else { return true }
+        if job.phase.abandonIfWaiting() {
+            job.task.cancel()
+            e.jobs[.ready] = nil
+            emit(url, .jobCancelled, .ready)
+            return true
+        }
+        emit(url, .readyAwait, .full)
+        await job.task.value
+        return isAlive(url, e)
+    }
+
+    /// read → probe → full decode, kept as the entry's ready decode (`CacheEntry.ready`) and uploaded nowhere: a
+    /// discrete card's background decode, one at a time at `.utility` (`readyPool`), with the neighbours' decoder
+    /// role. Progressive JPEGs go through the gate of big decodes first, as `.full` does. A full job of the entry
+    /// in flight decodes the same pixels and keeps them, so this one then gives way before its decode.
+    private func runReadyJob(_ url: URL, _ e: CacheEntry<Pyramid>, phase: JobPhase) async {
+        let goal = CacheGoal.ready
+        do {
+            let data: Data
+            if let cached = e.data {
+                data = cached
+            } else {
+                data = try await readTask(url, e).value
+            }
+            guard isWanted(url, e, goal) else { return }
+
+            let (decoder, info) = try await probe(url, e, goal, data, phase: phase)
+            guard isWanted(url, e, goal), e.ready == nil, e.jobs[.full] == nil else { return }
+            guard TileGrid.fitsTextureArrays(info.pixelSize) else { throw DecodeError.tooLarge }
+
+            let start = ContinuousClock.now
+            let p = priority(url, goal, phase)
+            let trace = self.trace
+            let roleDecoder = decoder.forRole(.other)
+            emit(url, .decodeWait, goal)
+            // Background work even for the current photo: never the big-decode slot reserved for the current one.
+            let serial = info.isProgressive
+            if serial { try await progressiveFull.acquireSlot(forCurrent: false, rank: p.rank) }
+            let image: LevelImage
+            do {
+                image = try await readyPool.run(forCurrent: p.forCurrent, rank: p.rank) { () throws -> LevelImage in
+                    guard phase.beginIfLive() else { throw CancellationError() }
+                    trace?(CacheTraceEvent(url: url, kind: .decodeStart, goal: goal))
+                    return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0)
+                }
+            } catch {
+                if serial { progressiveFull.releaseSlot(forCurrent: false) }
+                throw error
+            }
+            if serial { progressiveFull.releaseSlot(forCurrent: false) }
+            emit(url, .decodeDone, goal, level: 0)
+            guard isAlive(url, e), e.ready == nil else { return }
+            // Planned, or a full job waits for it (it uploads it next): kept, room made. Left the plan meanwhile: kept
+            // only if it fits as things stand (as an unplanned upload).
+            let wanted = planned[url]?[goal] != nil || e.jobs[.full] != nil
+            guard wanted || usedSystemBytes() + image.image.buffer.length <= effectiveMemory else {
+                emit(url, .uploadSkipped, goal, level: 0)
+                return
+            }
+            e.ready = image
+            e.timings.fullMs = start.millisecondsElapsed
+            evictToFit()
         } catch {
             guard !(error is CancellationError), isWanted(url, e, goal), e.failure == nil else { return }
             e.failure = LoadErrorText.message(name: url.lastPathComponent, error: error, size: e.info?.pixelSize)

@@ -1,11 +1,22 @@
 import Foundation
 
 /// How much of a photo's pyramid is wanted resident. Ordered by that amount: coarse = level Lfit + 1 and
-/// coarser, preview = Lfit and coarser, full = every level; bytes is the compressed file only.
-public enum CacheGoal: Int, Comparable, Sendable {
-    case bytes, coarse, preview, full
+/// coarser, preview = Lfit and coarser, full = every level; bytes is the compressed file only. `ready` is no pyramid
+/// state: the full decode kept in system memory on a discrete card (hardware defaults spec, «Два яруса памяти»), so
+/// a step back onto the photo is an upload rather than a decode. Residency compares and takes the max of the
+/// pyramid goals only (`isPyramid`).
+public enum CacheGoal: Int, Comparable, CaseIterable, Sendable {
+    case bytes, coarse, preview, full, ready
 
     public static func < (a: CacheGoal, b: CacheGoal) -> Bool { a.rawValue < b.rawValue }
+
+    /// Levels of the photo's pyramid (`coarse`, `preview`, `full`): what the graphics tier holds on a discrete card.
+    public var isPyramid: Bool {
+        switch self {
+        case .coarse, .preview, .full: true
+        case .bytes, .ready: false
+        }
+    }
 }
 
 /// One wanted cache state: `index` in the playlist reaches `goal`, which adds `cost` bytes of memory.
@@ -31,14 +42,17 @@ public struct EntryFacts: Equatable, Sendable {
     public var failed = false
     /// Its full resolution is resident or being decoded: worth keeping, never worth starting (spec §11.1.7).
     public var fullKept = false
+    /// It holds its ready decode (`CacheGoal.ready`) or is making it: kept at a zoom that needs no full resolution.
+    public var readyKept = false
 
     public init(pixelSize: PixelSize? = nil, orientation: ImageOrientation = .up, fileSize: Int? = nil,
-                failed: Bool = false, fullKept: Bool = false) {
+                failed: Bool = false, fullKept: Bool = false, readyKept: Bool = false) {
         self.pixelSize = pixelSize
         self.orientation = orientation
         self.fileSize = fileSize
         self.failed = failed
         self.fullKept = fullKept
+        self.readyKept = readyKept
     }
 }
 
@@ -100,8 +114,9 @@ public struct CacheFocus: Equatable, Sendable {
 /// in priority order and fits `cache-memory`, except that the current photo's items are always included (they
 /// are never skipped by the ceiling, only reduce the room left for neighbours); the cache executes it front
 /// to back and degrades whatever it holds that is not in it. On a discrete card (`CacheLimits.graphicsMemory`) there
-/// are two ceilings: the pyramids (`coarse`, `preview`, `full`) fit the graphics tier, the compressed bytes
-/// `cache-memory` (hardware defaults spec, «Два яруса памяти»); so a full graphics tier never costs a file.
+/// are two ceilings: the pyramids (`coarse`, `preview`, `full`) fit the graphics tier, the compressed bytes and the
+/// ready decodes (`ready`) `cache-memory` (hardware defaults spec, «Два яруса памяти»); so a full graphics tier never
+/// costs a file.
 public enum CachePlan {
     /// Stand-ins for a photo that has not been probed or stat'ed and has no known siblings: a 147 MP JPEG.
     public static let defaultPixelSize = PixelSize(width: 10502, height: 14000)
@@ -140,8 +155,8 @@ public enum CachePlan {
         let estimate: PixelSize
         let direction: Int
         var items: [CacheItem] = []
-        /// What the planned items cost against `cache-memory`: all of them with one budget, the bytes only with a
-        /// graphics tier.
+        /// What the planned items cost against `cache-memory`: all of them with one budget, the bytes and ready
+        /// decodes with a graphics tier.
         var total = 0
         /// What the planned pyramids cost against the graphics tier (`CacheLimits.graphicsMemory`); unused without one.
         var graphicsTotal = 0
@@ -211,6 +226,12 @@ public enum CachePlan {
                 if isPlannable(index) && add(index, .bytes) { files += 1 }
             }
 
+            // 5a. On a discrete card, full decodes kept ready in system memory, so a step onto the photo is an upload:
+            // the photos on screen, then the neighbours nearest first (two ahead for one behind), each only while
+            // its file is planned (the decode is made from it) and while the zoom needs full resolution or it already
+            // holds one. What does not fit next to the files is skipped.
+            if limits.graphicsMemory != nil { planReady() }
+
             // 6. Previews for the rest, two ahead for one behind; far ones one level coarser.
             for index in neighbours() {
                 if previewed.count >= limits.previews { break }
@@ -221,6 +242,20 @@ public enum CachePlan {
             // 7. Full resolution for the previous one.
             if limits.full >= 2 && focus.dwelling {
                 for index in previousGroup where previewed.contains(index) && !plansFull(index) { _ = add(index, .full) }
+            }
+        }
+
+        /// Step 5a: `.ready` for the photos whose `.bytes` are planned, in the order of `neighbours()` after the
+        /// photos on screen; stops once every such photo has been seen.
+        private mutating func planReady() {
+            let filed = Set(items.filter { $0.goal == .bytes }.map(\.index))
+            var onScreen = ([focus.current] + [companionPage].compactMap { $0 }).makeIterator()
+            var around = neighbours().makeIterator()
+            var seen = 0
+            while seen < filed.count, let index = onScreen.next() ?? around.next() {
+                guard filed.contains(index) else { continue }
+                seen += 1
+                if focus.needsFull || entry(index).facts.readyKept { _ = add(index, .ready) }
             }
         }
 
@@ -312,8 +347,12 @@ public enum CachePlan {
             case .coarse: cost = e.grid.byteCount(levels: e.coarseLevel..<levels)
             case .preview: cost = e.grid.byteCount(levels: e.lfit..<levels)
             case .full: cost = e.grid.byteCount(levels: 0..<(allLevels ? levels : e.lfit))
+            case .ready:
+                // The decoder's buffer: rows of BGRA8 rounded up to 64 bytes (`DecodedImage.bytesPerRow`).
+                let size = e.grid.imageSize
+                cost = (size.width * 4 + 63) / 64 * 64 * size.height
             }
-            if goal != .bytes, let graphics = limits.graphicsMemory {
+            if goal.isPyramid, let graphics = limits.graphicsMemory {
                 guard exempt || graphicsTotal + cost <= graphics else { return false }
                 graphicsTotal += cost
             } else {
@@ -321,7 +360,7 @@ public enum CachePlan {
                 total += cost
             }
             items.append(CacheItem(index: index, goal: goal, cost: cost))
-            if goal != .bytes { previewed.insert(index) }
+            if goal.isPyramid { previewed.insert(index) }
             return true
         }
     }

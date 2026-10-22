@@ -185,6 +185,7 @@ public enum StatsLine {
         case .coarse: "coarse"
         case .preview: "preview"
         case .full: "full"
+        case .ready: "ready"
         }
     }
 
