@@ -69,13 +69,15 @@ public struct JXLDecoder: ImageDecoder {
             guard header.size == info.pixelSize else { throw DecodeError.unreadable }
             let (buffer, bytesPerRow) = try ImageIODecoder.allocateBGRA(width: header.size.width, height: header.size.height)
             try session.decode(into: buffer, bytesPerRow: bytesPerRow, size: header.size)
-            return Self.finish(buffer, bytesPerRow: bytesPerRow, size: header.size, header: header, info: info)
+            return Self.finish(buffer, bytesPerRow: bytesPerRow, size: header.size, header: header, info: info,
+                               workers: threads)
         }
     }
 
-    /// RGBA8 from libjxl in `buffer` to the viewer's premultiplied BGRA, as a `DecodedImage` of `size`.
+    /// RGBA8 from libjxl in `buffer` to the viewer's premultiplied BGRA, as a `DecodedImage` of `size`, on `workers`
+    /// threads at once (the decode's own).
     static func finish(_ buffer: PageAlignedBuffer, bytesPerRow: Int, size: PixelSize, header: Header,
-                       info: ImageInfo) -> DecodedImage {
+                       info: ImageInfo, workers: Int) -> DecodedImage {
         // A gray photo is tagged Display P3 (the probe says so too); a gray curve other than sRGB's needs its
         // codes mapped to P3's, as the ImageIO path's draw does (`GrayConversion`).
         if let iccProfile = header.iccProfile, let gray = GrayConversion.of(iccData: iccProfile) {
@@ -84,7 +86,7 @@ public struct JXLDecoder: ImageDecoder {
         }
         // libjxl hands back premultiplied pixels itself when the file stores them that way.
         RGBAToBGRA.convert(buffer.bytes, width: size.width, height: size.height,
-                           bytesPerRow: bytesPerRow, premultiply: header.hasStraightAlpha)
+                           bytesPerRow: bytesPerRow, premultiply: header.hasStraightAlpha, workers: workers)
         return DecodedImage(pixelSize: size, bytesPerRow: bytesPerRow, buffer: buffer,
                             colorSpace: info.colorSpace ?? EmbeddedColorSpace.resolve(iccData: header.iccProfile, convertsGray: true).space,
                             hasAlphaChannel: header.hasAlpha)

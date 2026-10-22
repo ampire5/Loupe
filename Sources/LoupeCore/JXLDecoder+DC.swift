@@ -34,7 +34,8 @@ extension JXLDecoder {
             let size = TileGrid(imageSize: header.size).levelSize(Self.dcLevel)
             let (buffer, bytesPerRow) = try ImageIODecoder.allocateBGRA(width: size.width, height: size.height)
             guard try session.decodeDC(into: buffer, bytesPerRow: bytesPerRow, size: size) else { return nil }
-            return LevelImage(image: Self.finish(buffer, bytesPerRow: bytesPerRow, size: size, header: header, info: info),
+            return LevelImage(image: Self.finish(buffer, bytesPerRow: bytesPerRow, size: size, header: header, info: info,
+                                                 workers: threads),
                               level: Self.dcLevel)
         }
     }
