@@ -8,7 +8,8 @@ import Foundation
 /// and `networkListingLimit` on shares, counted apart (a slow share never holds up the local cards, and a share gets
 /// one listing at a time from the covers, beside what the user opened). A cancelled task keeps its place in the count
 /// until it has really ended, so a burst of scrolling cannot pile up tasks. While the viewer is busy (`pause`), no
-/// new cover starts; those running go on (their reads are background reads, behind the viewer's).
+/// new cover starts; those running wait before their next thumbnail (`ThumbnailStore.folderCover`). A cover that
+/// cannot be made now (a share hung) says so and is tried again after `retryDelay`, rather than being done empty.
 ///
 /// Only the ids of the last `want` are kept: what waits is bounded by the cards on screen and in the margin.
 public actor CoverQueue {
@@ -26,12 +27,16 @@ public actor CoverQueue {
     /// How long the viewer must have been idle before covers start again: its idle signal flickers between jobs while
     /// the user steps through photos (the thumbnail generator's `idleDelay`).
     public static let defaultResumeDelay: Duration = .milliseconds(100)
+    /// How long a card whose work said "not now" (a share's lane full of hung calls, a listing with no name in time)
+    /// waits before it is tried again: a dead share is then asked about once a second per card at most, and only by
+    /// cards still wanted.
+    public static let defaultRetryDelay: Duration = .seconds(1)
 
     private struct Item {
         let id: String
         let network: Bool
         let visible: Bool
-        let work: @Sendable (String) async -> Void
+        let work: @Sendable (String) async -> Bool
     }
 
     private struct Running {
@@ -43,42 +48,51 @@ public actor CoverQueue {
     private let listingLimit: Int
     private let networkListingLimit: Int
     private let resumeDelay: Duration
-    /// Wanted and not started, visible first.
-    private var pending: [Item] = []
+    private let retryDelay: Duration
+    /// The cards of the last `want`, in their order (visible first); those running or done are skipped.
+    private var wanted: [Item] = []
     private var running: [String: Running] = [:]
     /// Cancelled tasks still ending, by token: they hold their place in the limits.
     private var ending: [UInt64: Bool] = [:]
     /// Covers made for cards still wanted: not made again on the next `want`.
     private var done: Set<String> = []
+    /// Cards whose work said "not now": not started again before then.
+    private var retryAt: [String: ContinuousClock.Instant] = [:]
+    private var retryWake: Task<Void, Never>?
     private var paused = false
+    /// Bumped by every `pause`: a resume scheduled before is stale.
+    private(set) var pauseGeneration = 0
     private var resumeWake: Task<Void, Never>?
     private var nextToken: UInt64 = 0
 
     public init(listingLimit: Int = CoverQueue.listingLimit, networkListingLimit: Int = CoverQueue.networkListingLimit,
-                resumeDelay: Duration = CoverQueue.defaultResumeDelay) {
+                resumeDelay: Duration = CoverQueue.defaultResumeDelay, retryDelay: Duration = CoverQueue.defaultRetryDelay) {
         self.listingLimit = max(1, listingLimit)
         self.networkListingLimit = max(1, networkListingLimit)
         self.resumeDelay = resumeDelay
+        self.retryDelay = retryDelay
     }
 
     /// The cards that want a cover now, in the order they start: the `visible` ones on screen first, then the margin.
     /// A card running or waiting that is not among them is cancelled or dropped; one already done stays done while
-    /// it stays wanted. `isNetwork` must answer without touching the disk (it runs on the queue for every id). `work`
-    /// makes and delivers the card's cover, at `.utility` for a visible card and `.background` for the margin's, and
-    /// should end soon once cancelled.
+    /// it stays wanted. `isNetwork` must answer without touching the disk (it runs on the queue for every id;
+    /// `ThumbnailLocation.isNetwork` of the folder Home shows). `work` makes and delivers the card's cover, at
+    /// `.utility` for a visible card and `.background` for the margin's, should end soon once cancelled, and returns
+    /// false for "not now": the card is tried again after `retryDelay` while it stays wanted.
     public func want(_ ids: [String], visible: Int, isNetwork: (String) -> Bool,
-                     work: @escaping @Sendable (String) async -> Void) {
-        let wanted = Set(ids)
-        for (id, job) in running where !wanted.contains(id) {
+                     work: @escaping @Sendable (String) async -> Bool) {
+        let wantedIDs = Set(ids)
+        for (id, job) in running where !wantedIDs.contains(id) {
             job.task.cancel()
             ending[job.token] = job.network
             running[id] = nil
         }
-        done.formIntersection(wanted)
+        done.formIntersection(wantedIDs)
+        retryAt = retryAt.filter { wantedIDs.contains($0.key) }
         var seen: Set<String> = []
         // A repeated id counts once, at its first place.
-        pending = ids.enumerated().compactMap { index, id in
-            guard seen.insert(id).inserted, running[id] == nil, !done.contains(id) else { return nil }
+        wanted = ids.enumerated().compactMap { index, id in
+            guard seen.insert(id).inserted else { return nil }
             return Item(id: id, network: isNetwork(id), visible: index < visible, work: work)
         }
         pump()
@@ -87,6 +101,7 @@ public actor CoverQueue {
     /// True while the viewer is busy: covers wait. Back to false, they start again after `resumeDelay`, unless the
     /// viewer is busy again by then.
     public func pause(_ on: Bool) {
+        pauseGeneration += 1
         resumeWake?.cancel()
         resumeWake = nil
         if on {
@@ -98,21 +113,24 @@ public actor CoverQueue {
             paused = false
             return pump()
         }
-        let delay = resumeDelay
+        let delay = resumeDelay, generation = pauseGeneration
         resumeWake = Task { [weak self] in
             guard (try? await Task.sleep(for: delay)) != nil else { return }
-            await self?.resume()
+            await self?.resume(generation)
         }
     }
 
-    private func resume() {
+    /// The end of a resume delay; stale (and ignored) when `pause` was called again since it was scheduled, even if
+    /// its wake had already left the timer.
+    func resume(_ generation: Int) {
+        guard generation == pauseGeneration else { return }
         resumeWake = nil
         paused = false
         pump()
     }
 
-    /// Covers waiting to start, for tests.
-    var pendingCount: Int { pending.count }
+    /// Covers wanted and waiting to start (or to be tried again), for tests.
+    var pendingCount: Int { wanted.filter { running[$0.id] == nil && !done.contains($0.id) }.count }
     /// Covers in flight, cancelled ones still ending included, for tests.
     var runningCount: Int { running.count + ending.count }
 
@@ -122,35 +140,49 @@ public actor CoverQueue {
 
     private func pump() {
         guard !paused else { return }
+        let now = ContinuousClock.now
         var local = inFlight(network: false), network = inFlight(network: true)
-        var index = 0
-        while index < pending.count {
-            let item = pending[index]
+        var nextRetry: ContinuousClock.Instant?
+        for item in wanted where running[item.id] == nil && !done.contains(item.id) {
+            if let at = retryAt[item.id], at > now {
+                nextRetry = min(nextRetry ?? at, at)
+                continue
+            }
             if item.network ? network < networkListingLimit : local < listingLimit {
-                pending.remove(at: index)
+                retryAt[item.id] = nil
                 start(item)
                 if item.network { network += 1 } else { local += 1 }
-            } else {
-                index += 1
             }
-            if local >= listingLimit, network >= networkListingLimit { return }
         }
+        retryWake?.cancel()
+        retryWake = nil
+        if let nextRetry {
+            retryWake = Task { [weak self] in
+                guard (try? await Task.sleep(until: nextRetry)) != nil else { return }
+                await self?.retryWoke()
+            }
+        }
+    }
+
+    private func retryWoke() {
+        retryWake = nil
+        pump()
     }
 
     private func start(_ item: Item) {
         nextToken += 1
         let token = nextToken, id = item.id, work = item.work
         let task = Task(priority: item.visible ? .utility : .background) {
-            await work(id)
-            self.finished(id, token: token)
+            let made = await work(id)
+            self.finished(id, token: token, made: made)
         }
         running[id] = Running(token: token, network: item.network, task: task)
     }
 
-    private func finished(_ id: String, token: UInt64) {
+    private func finished(_ id: String, token: UInt64, made: Bool) {
         if ending.removeValue(forKey: token) == nil, running[id]?.token == token {
             running[id] = nil
-            done.insert(id)
+            if made { done.insert(id) } else { retryAt[id] = .now + retryDelay }
         }
         pump()
     }

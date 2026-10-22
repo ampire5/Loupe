@@ -134,8 +134,9 @@ public actor ThumbnailStore {
     var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
     /// Folders and zips with nothing to show on a cover, for the session, by path.
     var emptyCovers: Set<String> = []
-    /// Listings running on their own threads, those given up on included (one hung on a dead share stays).
-    let coverListings = CoverListingThreads(limit: ThumbnailStore.coverListingThreads)
+    /// Covers' blocking calls (listings, resolves) on their own threads, per lane, those given up on included (one
+    /// hung on a dead share stays).
+    nonisolated let coverThreads = CoverThreads(limit: ThumbnailStore.coverThreadsPerLane)
 
     // MARK: Database
 

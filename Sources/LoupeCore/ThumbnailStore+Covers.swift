@@ -82,6 +82,23 @@ public struct CoverNames: Equatable, Sendable {
     }
 }
 
+extension ThumbnailLocation {
+    /// On a share (`net:` volume): its covers' listings have a time limit and a lane of their own.
+    public var isNetwork: Bool { volume.hasPrefix("net:") }
+
+    /// The location of the file `name` in this location's folder.
+    public func sibling(_ name: String) -> ThumbnailLocation {
+        ThumbnailLocation(volume: volume, folder: folder, name: name)
+    }
+
+    /// The subfolder (or zip) `name` of this location's folder, as a location in it (named "_", like
+    /// `resolve(folder/_)`), made without asking the system: the same volume, one level down. Home resolves the folder
+    /// it shows once (`ThumbnailStore.folderLocation`) and its cards' covers go from there.
+    public func subfolder(_ name: String) -> ThumbnailLocation {
+        ThumbnailLocation(volume: volume, folder: folder == "/" ? "/" + name : folder + "/" + name, name: "_")
+    }
+}
+
 /// Home's folder and archive covers made in the background (folder covers spec): `coverQueue` runs `folderCover` for a
 /// few cards at a time.
 extension ThumbnailStore {
@@ -90,8 +107,8 @@ extension ThumbnailStore {
     typealias CoverLister = @Sendable (_ folder: URL, _ archive: Bool,
                                        _ part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames
 
-    /// How long a cover's listing on a share may take: what came by then is what the photos are picked from, so a
-    /// folder of thousands of files on a slow share holds its place in the queue no longer than this.
+    /// How long a cover's listing on a share may take (and `folderLocation`): what came by then is what the photos are
+    /// picked from, so a folder of thousands of files on a slow share holds its place in the queue no longer than this.
     public static let coverListingTimeout: Duration = .seconds(2)
     /// Covers' reads and decodes go behind the open folders' thumbnails (`readPriority`) in the reader's queue and
     /// the decode slots.
@@ -100,11 +117,14 @@ extension ThumbnailStore {
     static let coverPhotos = 4
     /// Subfolders looked into below a folder without photos: its own, and theirs.
     static let coverDepth = 2
-    /// Listing threads at most, those given up on (hung on a dead share) included: past that no cover lists until
-    /// one returns (its card stays empty), so a share that hangs costs a few threads, not one per card. One more than
-    /// `CoverQueue`'s limits together, so one hung listing leaves the others their threads.
-    static let coverListingThreads = 4
-    /// The listing's thread: background work, below the viewer's and the open folders' thumbnails.
+    /// Threads in a cover's blocking call (a listing, a resolve) at most, per lane (local volumes, shares), those
+    /// given up on included: one hung on a dead share stays in the kernel. Past that the lane's covers are "not now"
+    /// until one returns, so a share that hangs costs a few threads, not one per card, and never the local lane's. One
+    /// more than the most `CoverQueue` runs at once in either lane.
+    static let coverThreadsPerLane = 3
+    /// How often a cover waiting for the viewer to go idle looks again (at most a few covers wait at once).
+    static let coverIdlePoll: Duration = .milliseconds(50)
+    /// The covers' threads: background work, below the viewer's and the open folders' thumbnails.
     static let coverQoS = DispatchQoS.QoSClass.utility
 
     /// Tests: a fake listing, and the share's time limit.
@@ -113,58 +133,89 @@ extension ThumbnailStore {
         coverNetworkTimeout = networkTimeout
     }
 
+    /// Where the catalog keeps `folder`'s files (`locate(folder/_)`), for its cards' covers (`subfolder`). Resolving
+    /// asks the system (realpath, statfs), which can hang on a share: it runs on a thread of the share lane, and
+    /// after `coverListingTimeout` (or a cancel) the answer is nil and the thread is left to finish alone.
+    public func folderLocation(_ folder: URL) async -> ThumbnailLocation? {
+        let locate = self.locate
+        let outcome = await Self.onThread(coverThreads, network: true, timeout: coverNetworkTimeout) {
+            (_: @Sendable (ThumbnailLocation?) -> Bool) -> ThumbnailLocation? in
+            locate(folder.appendingPathComponent("_"))
+        }
+        if case .value(let location, _) = outcome { return location }
+        return nil
+    }
+
     /// The pictures of a folder's or zip's card, at most `maxPixel` on their long side: up to four photos spread across
-    /// it (the one last viewed there first), from the catalog when it has four of the folder, else from a listing of
-    /// names (limited to `coverListingTimeout` on a share) whose picks are made into thumbnails and kept in the
-    /// catalog, like `cover`'s. A folder without photos shows one of each of its first four subfolders' (two levels
-    /// down at most). Empty when there is nothing to show; a folder found empty is not listed again this session.
-    /// Cancelling the task stops the listing and the reads.
-    public func folderCover(_ folder: URL, archive: Bool, maxPixel: Int, lastViewed: String? = nil) async -> [CGImage] {
-        await folderCover(folder, archive: archive, maxPixel: maxPixel, lastViewed: lastViewed,
+    /// it (the one last viewed there first). `location` is where the catalog keeps the folder's files (from the
+    /// folder Home shows: `folderLocation(shown).subfolder(name)`; nil: none, and the volume is taken for a share).
+    /// From the catalog when it has four of the folder's photos, else from a listing of names (limited to
+    /// `coverListingTimeout` on a share) whose picks are made into thumbnails and kept in the catalog, like `cover`'s.
+    /// A folder without photos shows one of each of its first four subfolders' (two levels down at most).
+    ///
+    /// Empty when there is nothing to show (a folder found empty is not listed again this session, nor one that
+    /// cannot be listed); nil for "not now": the share's lane is full of hung calls, or its listing gave no name in
+    /// time. Nothing here asks the system but the listing. New thumbnails wait while the viewer is busy; cancelling
+    /// the task stops the listing and the reads.
+    public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, maxPixel: Int,
+                            lastViewed: String? = nil) async -> [CGImage]? {
+        await folderCover(folder, archive: archive, location: location, maxPixel: maxPixel, lastViewed: lastViewed,
                           count: Self.coverPhotos, depth: 0)
     }
 
-    private func folderCover(_ folder: URL, archive: Bool, maxPixel: Int, lastViewed: String?, count: Int,
-                             depth: Int) async -> [CGImage] {
-        guard !emptyCovers.contains(folder.standardizedFileURL.path), !Task.isCancelled else { return [] }
-        let locate = self.locate
-        // `resolve` may block on a slow share: never on the actor.
-        let location = await Self.offActor(qos: Self.coverQoS) { locate(folder.appendingPathComponent("_")) }
-        if let location, let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: count) }),
+    private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, maxPixel: Int,
+                             lastViewed: String?, count: Int, depth: Int) async -> [CGImage]? {
+        guard !emptyCovers.contains(folder.standardizedFileURL.path) else { return [] }
+        guard !Task.isCancelled else { return nil }
+        if let location, let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
            names.count >= count {
+            // Sorting thousands of names takes a while: not on the actor.
+            let picked = await Self.offActor(qos: Self.coverQoS) {
+                CoverSampling.pick(Self.finderSorted(names), count: count, lastViewed: lastViewed)
+            }
             var images: [CGImage] = []
-            for name in names where !Task.isCancelled {
-                let file = ThumbnailLocation(volume: location.volume, folder: location.folder, name: name)
-                if let image = await storedCell(at: file, maxPixel: maxPixel) { images.append(image) }
+            for name in picked where !Task.isCancelled {
+                if let image = await storedCell(at: location.sibling(name), maxPixel: maxPixel) { images.append(image) }
             }
             return images
         }
-        // An unknown volume may be a share that does not answer: limited like one.
-        let isNetwork = location.map { $0.volume.hasPrefix("net:") } ?? true
-        let timeout = isNetwork ? coverNetworkTimeout : nil
-        guard let (names, complete) = await coverNames(folder, archive: archive, timeout: timeout) else { return [] }
-        let photos = names.files.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        let folders = names.folders.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        switch CoverSampling.plan(names: photos, directories: folders, lastViewed: lastViewed) {
+        let network = location?.isNetwork ?? true
+        let lister = coverLister
+        let outcome = await Self.onThread(coverThreads, network: network, timeout: network ? coverNetworkTimeout : nil) {
+            part in try lister(folder, archive, part)
+        }
+        let names: CoverNames, complete: Bool
+        switch outcome {
+        case .value(let listed, let ended): (names, complete) = (listed, ended)
+        case .failed: return []
+        case .notNow: return nil
+        }
+        let plan = await Self.offActor(qos: Self.coverQoS) {
+            CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
+                               lastViewed: lastViewed)
+        }
+        switch plan {
         case .photos(let picked):
             var images: [CGImage] = []
             for name in picked.prefix(count) {
-                guard !Task.isCancelled else { break }
-                let file = location.map { ThumbnailLocation(volume: $0.volume, folder: $0.folder, name: name) }
-                if let image = await coverCell(folder.appendingPathComponent(name), at: file, maxPixel: maxPixel) {
+                guard await idleViewer() else { break }
+                if let image = await coverCell(folder.appendingPathComponent(name), at: location?.sibling(name),
+                                               maxPixel: maxPixel) {
                     images.append(image)
                 }
             }
             return images
         case .subfolders(let subfolders):
             guard depth < Self.coverDepth else { return [] }
-            var images: [CGImage] = []
+            var images: [CGImage] = [], notNow = false
             for name in subfolders where images.count < count && !Task.isCancelled {
-                let sub = folder.appendingPathComponent(name, isDirectory: true)
                 // One picture of each: the subfolder's own card makes the rest when it is shown.
-                images += await folderCover(sub, archive: false, maxPixel: maxPixel, lastViewed: nil, count: 1,
-                                            depth: depth + 1).prefix(1)
+                let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
+                                            location: location?.subfolder(name), maxPixel: maxPixel, lastViewed: nil,
+                                            count: 1, depth: depth + 1)
+                if let sub { images += sub.prefix(1) } else { notNow = true }
             }
+            if notNow, images.count < count { return nil }
             let paths = subfolders.map { folder.appendingPathComponent($0).standardizedFileURL.path }
             if complete, paths.allSatisfy(emptyCovers.contains) { emptyCovers.insert(folder.standardizedFileURL.path) }
             return images
@@ -172,6 +223,19 @@ extension ThumbnailStore {
             if complete { emptyCovers.insert(folder.standardizedFileURL.path) }
             return []
         }
+    }
+
+    nonisolated static func finderSorted(_ names: [String]) -> [String] {
+        names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Waits while the viewer cache is not idle (the user stepping through photos), so a running cover reads nothing
+    /// meanwhile; false once the task is cancelled.
+    private func idleViewer() async -> Bool {
+        while activity != .idle {
+            guard (try? await Task.sleep(for: Self.coverIdlePoll)) != nil else { return false }
+        }
+        return !Task.isCancelled
     }
 
     /// The catalog's thumbnail of the file at `location` as a cell, however old (a card can afford it); nil when it
@@ -207,42 +271,43 @@ extension ThumbnailStore {
         return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel) }
     }
 
-    /// `folder`'s names from `coverLister` on a thread of its own: all of them (`complete`), or those it had when
-    /// `timeout` ran out or the task was cancelled. Nil when it cannot be listed, or too many listings still hang.
-    func coverNames(_ folder: URL, archive: Bool, timeout: Duration?) async -> CoverListing.Answer? {
-        guard coverListings.enter() else { return nil }
-        let listing = CoverListing(), lister = coverLister, threads = coverListings
-        DispatchQueue.global(qos: Self.coverQoS).async {
-            let result = Result { try lister(folder, archive) { listing.part($0) } }
-            threads.leave()
-            listing.finish(result)
+    /// Runs blocking `work` on a thread of its own in the lane's place (`threads`), and waits for it at most `timeout`
+    /// (nil: no limit) or until the task is cancelled, then gives up on it: the answer is what `work` handed to its
+    /// `part` so far, and `part` returns false from then on so it can stop; the thread keeps its place until it
+    /// returns. `.notNow` when the lane has no free place or nothing came in time.
+    static func onThread<T: Sendable>(_ threads: CoverThreads, network: Bool, timeout: Duration?,
+                                      _ work: @escaping @Sendable (_ part: @escaping @Sendable (T) -> Bool) throws -> T)
+        async -> ThreadAnswer<T>.Outcome {
+        guard threads.enter(network: network) else { return .notNow }
+        let answer = ThreadAnswer<T>()
+        DispatchQueue.global(qos: coverQoS).async {
+            let result = Result { try work { answer.part($0) } }
+            threads.leave(network: network)
+            answer.finish(result)
         }
-        enum Race: Sendable {
-            case listed(CoverListing.Answer?)
-            case timedOut
-        }
-        return await withTaskGroup(of: Race.self, returning: CoverListing.Answer?.self) { group in
-            group.addTask { .listed(await listing.value()) }
+        typealias Race = ThreadAnswer<T>.Race
+        return await withTaskGroup(of: Race.self, returning: ThreadAnswer<T>.Outcome.self) { group in
+            group.addTask { .answered(await answer.value()) }
             if let timeout {
                 group.addTask {
                     try? await Task.sleep(for: timeout)
                     return .timedOut
                 }
             }
-            // Whichever comes first: the timer stops the listing, whose answer is then what it had so far.
+            // Whichever comes first: the timer stops the work, whose answer is then what it had so far.
             while let first = await group.next() {
-                listing.stop()
+                answer.stop()
                 group.cancelAll()
-                if case .listed(let answer) = first { return answer }
+                if case .answered(let outcome) = first { return outcome }
             }
-            return nil
+            return .notNow
         }
     }
 
     /// The real listing: a folder's names without a stat (`BrowserListingSource.names`), a zip's photo entries from
     /// one read of its directory. Photos (by extension) and folders; hidden names left out.
     @Sendable static func listCoverNames(_ folder: URL, archive: Bool,
-                               part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames {
+                                         part: @escaping @Sendable (CoverNames) -> Bool) throws -> CoverNames {
         if archive || ArchivePath.isArchive(folder) {
             let entries = try ArchiveReader.shared.entries(of: folder)
             return CoverNames(files: entries.map(\.url.lastPathComponent), folders: [])
@@ -257,29 +322,41 @@ extension ThumbnailStore {
     }
 }
 
-/// One cover's listing, between its thread and the task waiting for it: the names so far, how it ended, and whether
-/// the waiter gave up on it (the thread then stops at its next part).
-final class CoverListing: @unchecked Sendable {
-    /// The names, and whether the listing ran to its end.
-    typealias Answer = (CoverNames, complete: Bool)
+/// One blocking call of a cover on its thread, between the thread and the task waiting for it: what it handed over so
+/// far, how it ended, and whether the waiter gave up on it (the thread then stops at its next `part`).
+final class ThreadAnswer<T: Sendable>: @unchecked Sendable {
+    enum Outcome: Sendable {
+        /// All of it (`complete`), or what came before the waiter gave up.
+        case value(T, complete: Bool)
+        /// It threw, with nothing before.
+        case failed
+        /// No free thread, or given up on with nothing yet.
+        case notNow
+    }
+
+    /// What the waiter heard first: the answer, or its time limit.
+    enum Race: Sendable {
+        case answered(Outcome)
+        case timedOut
+    }
 
     private let lock = NSLock()
-    private var latest: CoverNames?
-    private var outcome: Result<CoverNames, Error>?
+    private var latest: T?
+    private var outcome: Result<T, Error>?
     private var stopped = false
-    private var waiter: CheckedContinuation<Answer?, Never>?
+    private var waiter: CheckedContinuation<Outcome, Never>?
 
-    /// From the listing's thread: false once the waiter gave up.
-    func part(_ names: CoverNames) -> Bool {
+    /// From the thread: false once the waiter gave up.
+    func part(_ value: T) -> Bool {
         lock.withLock {
             guard !stopped else { return false }
-            latest = names
+            latest = value
             return true
         }
     }
 
-    func finish(_ result: Result<CoverNames, Error>) {
-        let (waiter, answer) = lock.withLock { () -> (CheckedContinuation<Answer?, Never>?, Answer?) in
+    func finish(_ result: Result<T, Error>) {
+        let (waiter, answer) = lock.withLock { () -> (CheckedContinuation<Outcome, Never>?, Outcome) in
             outcome = result
             defer { self.waiter = nil }
             return (self.waiter, answerLocked())
@@ -287,9 +364,9 @@ final class CoverListing: @unchecked Sendable {
         waiter?.resume(returning: answer)
     }
 
-    /// The waiter gives up: it gets the names so far now.
+    /// The waiter gives up: it gets what came so far now.
     func stop() {
-        let (waiter, answer) = lock.withLock { () -> (CheckedContinuation<Answer?, Never>?, Answer?) in
+        let (waiter, answer) = lock.withLock { () -> (CheckedContinuation<Outcome, Never>?, Outcome) in
             stopped = true
             defer { self.waiter = nil }
             return (self.waiter, answerLocked())
@@ -297,17 +374,16 @@ final class CoverListing: @unchecked Sendable {
         waiter?.resume(returning: answer)
     }
 
-    /// All the names once the listing ended, else those so far once `stop` was called or the task cancelled; nil when
-    /// the listing failed with nothing so far.
-    func value() async -> Answer? {
+    /// The outcome once the call ended, else once `stop` was called or the task cancelled.
+    func value() async -> Outcome {
         await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Answer?, Never>) in
-                let answer = lock.withLock { () -> Answer?? in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
+                let answer = lock.withLock { () -> Outcome? in
                     guard outcome != nil || stopped else {
                         waiter = continuation
                         return nil
                     }
-                    return .some(answerLocked())
+                    return answerLocked()
                 }
                 if let answer { continuation.resume(returning: answer) }
             }
@@ -316,27 +392,31 @@ final class CoverListing: @unchecked Sendable {
         }
     }
 
-    private func answerLocked() -> Answer? {
-        if case .success(let names) = outcome { return (names, true) }
-        return latest.map { ($0, false) }
+    private func answerLocked() -> Outcome {
+        if case .success(let value) = outcome { return .value(value, complete: true) }
+        if let latest { return .value(latest, complete: false) }
+        return stopped ? .notNow : .failed
     }
 }
 
-/// Counts the threads in a cover's listing, up to `limit`.
-final class CoverListingThreads: @unchecked Sendable {
+/// Counts the threads in a cover's blocking call, per lane (local volumes, shares), up to `limit` in each.
+final class CoverThreads: @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
-    private var count = 0
+    private var counts: [Bool: Int] = [:]
 
     init(limit: Int) { self.limit = limit }
 
-    func enter() -> Bool {
+    func enter(network: Bool) -> Bool {
         lock.withLock {
-            guard count < limit else { return false }
-            count += 1
+            guard counts[network, default: 0] < limit else { return false }
+            counts[network, default: 0] += 1
             return true
         }
     }
 
-    func leave() { lock.withLock { count -= 1 } }
+    func leave(network: Bool) { lock.withLock { counts[network, default: 0] -= 1 } }
+
+    /// Threads in a lane now, for tests.
+    func count(network: Bool) -> Int { lock.withLock { counts[network, default: 0] } }
 }

@@ -184,9 +184,14 @@ extension ThumbsBench {
             let ids = subfolders.map(\.path)
             let cpu = cpuTimeMs()
             let start = ContinuousClock.now
-            await queue.want(ids, visible: ids.count, isNetwork: { _ in false }) { id in
-                let images = await store.folderCover(URL(fileURLWithPath: id, isDirectory: true), archive: false, maxPixel: 256)
+            let shown = await store.folderLocation(root)
+            await queue.want(ids, visible: ids.count, isNetwork: { _ in shown?.isNetwork ?? true }) { id in
+                let folder = URL(fileURLWithPath: id, isDirectory: true)
+                guard let images = await store.folderCover(folder, archive: false,
+                                                           in: shown?.subfolder(folder.lastPathComponent),
+                                                           maxPixel: 256) else { return false }
                 pictures.add("\(images.count)")
+                return true
             }
             let deadline = start + .seconds(60 + 5 * ids.count)
             while pictures.all.count < ids.count, ContinuousClock.now < deadline {

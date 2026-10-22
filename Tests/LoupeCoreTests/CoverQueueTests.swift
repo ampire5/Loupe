@@ -37,18 +37,31 @@ private final class CoverLog: @unchecked Sendable {
     var cancelled: [String] { lock.withLock { _cancelled } }
 }
 
+/// Tries per id.
+private final class TryCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    func add(_ id: String) -> Int {
+        lock.withLock {
+            counts[id, default: 0] += 1
+            return counts[id]!
+        }
+    }
+}
+
 /// Home's folder and archive covers (folder covers spec, "Order and limits"): a few listings at a time, visible cards
 /// first, gone cards cancelled, nothing new while the viewer is busy.
 @Suite struct CoverQueueTests {
     private static func isNetwork(_ id: String) -> Bool { id.hasPrefix("net") }
 
     /// Work that takes `time` (or until cancelled) and logs it.
-    private static func work(_ log: CoverLog, time: Duration = .milliseconds(30)) -> @Sendable (String) async -> Void {
+    private static func work(_ log: CoverLog, time: Duration = .milliseconds(30)) -> @Sendable (String) async -> Bool {
         { id in
             let network = isNetwork(id)
             log.begin(id, network: network)
             let cancelled = (try? await Task.sleep(for: time)) == nil
             log.end(id, network: network, cancelled: cancelled)
+            return true
         }
     }
 
@@ -69,10 +82,11 @@ private final class CoverLog: @unchecked Sendable {
         let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1)
         let log = CoverLog()
         let gate = HoldGate()
-        let work: @Sendable (String) async -> Void = { id in
+        let work: @Sendable (String) async -> Bool = { id in
             log.begin(id, network: false)
             if id == "m1" { try? await gate.wait() }
             log.end(id, network: false, cancelled: false)
+            return true
         }
         await queue.want(["m1", "m2", "m3"], visible: 0, isNetwork: { _ in false }, work: work)
         #expect(await eventually { log.started == ["m1"] })
@@ -148,5 +162,40 @@ private final class CoverLog: @unchecked Sendable {
         #expect(log.started.isEmpty)
         await queue.pause(false)
         #expect(await eventually { log.ended.count == 1 })
+    }
+
+    /// A pause scheduled to end, then renewed: the first resume's wake, even one already past its timer, is stale.
+    @Test func staleResumeIgnored() async {
+        let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1, resumeDelay: .seconds(30))
+        let log = CoverLog()
+        await queue.pause(true)
+        await queue.want(["a"], visible: 1, isNetwork: { _ in false }, work: Self.work(log, time: .zero))
+        await queue.pause(false)
+        let stale = await queue.pauseGeneration
+        await queue.pause(true)
+        await queue.resume(stale)   // what the first wake does if it left its timer before the second pause
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(log.started.isEmpty)
+        await queue.resume(await queue.pauseGeneration)
+        #expect(await eventually { log.ended.count == 1 })
+    }
+
+    /// "Not now" from the work: the card stays wanted and is tried again after the retry delay, not marked done.
+    @Test func notNowIsTriedAgain() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .milliseconds(100))
+        let log = CoverLog()
+        let tries = TryCount()
+        let work: @Sendable (String) async -> Bool = { id in
+            log.begin(id, network: false)
+            log.end(id, network: false, cancelled: false)
+            return tries.add(id) >= 3
+        }
+        let start = ContinuousClock.now
+        await queue.want(["a", "b"], visible: 2, isNetwork: { _ in false }, work: work)
+        #expect(await eventually { log.ended.count == 6 })
+        #expect(ContinuousClock.now - start >= .milliseconds(200))
+        #expect(await queue.pendingCount == 0)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(log.ended.count == 6)
     }
 }

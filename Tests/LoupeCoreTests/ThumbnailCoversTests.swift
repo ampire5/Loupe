@@ -168,13 +168,18 @@ private final class FakeListing: @unchecked Sendable {
 
     private func tempDir() -> URL { fm.temporaryDirectory.appendingPathComponent("loupe-folder-cover-\(UUID().uuidString)") }
 
-    private func store(_ reader: ThumbReader, dir: URL, network: Bool = false) -> ThumbnailStore {
-        let volume = network ? "net:share" : "test"
-        let locate: @Sendable (URL) -> ThumbnailLocation? = { url in
-            ThumbnailLocation(volume: volume, folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
-        }
+    private func store(_ reader: ThumbReader, dir: URL,
+                       locate: @escaping @Sendable (URL) -> ThumbnailLocation? = { url in
+                           ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path,
+                                             name: url.lastPathComponent)
+                       }) -> ThumbnailStore {
         return ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
                               locate: locate, idleDelay: .zero, commitDelay: .seconds(3600))
+    }
+
+    /// Where the catalog keeps `folder`'s files, as `folderLocation` would say.
+    private func loc(_ folder: String, network: Bool = false) -> ThumbnailLocation {
+        ThumbnailLocation(volume: network ? "net:share" : "test", folder: folder, name: "_")
     }
 
     private func photos(_ reader: ThumbReader, in folder: String, _ names: [String]) {
@@ -190,8 +195,8 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/f", files: names.reversed() + ["notes.txt"], folders: ["sub"])
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64)
-        #expect(images.count == 4)
+        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64)
+        #expect(images?.count == 4)
         #expect(Set(reader.reads.map(\.lastPathComponent)) == ["01.jpg", "04.jpg", "07.jpg", "10.jpg"])
         // Behind the open folders' own thumbnails, in the reader's queue.
         #expect(reader.priorities == [ThumbnailStore.coverReadPriority])
@@ -209,9 +214,9 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/f", files: names)
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64,
+        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64,
                                              lastViewed: "05.jpg")
-        #expect(images.count == 4)
+        #expect(images?.count == 4)
         #expect(reader.reads.first?.lastPathComponent == "05.jpg")
     }
 
@@ -225,11 +230,11 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/f", files: names)
         let first = store(reader, dir: dir)
         await first.setCoverListing(listing.lister)
-        #expect(await first.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64).count == 4)
+        #expect(await first.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64)?.count == 4)
         let reads = reader.reads.count
         let again = store(reader, dir: dir)   // next session
         await again.setCoverListing(listing.lister)
-        #expect(await again.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64).count == 4)
+        #expect(await again.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64)?.count == 4)
         #expect(listing.calls == ["/photos/f"])
         #expect(reader.reads.count == reads)
     }
@@ -246,7 +251,7 @@ private final class FakeListing: @unchecked Sendable {
         let reads = reader.readCount(URL(fileURLWithPath: "/photos/f/1.jpg"))
         listing.set("/photos/f", files: names)
         await store.setCoverListing(listing.lister)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64).count == 4)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64)?.count == 4)
         #expect(reader.readCount(URL(fileURLWithPath: "/photos/f/1.jpg")) == reads)
     }
 
@@ -269,13 +274,138 @@ private final class FakeListing: @unchecked Sendable {
             }
             return CoverNames(files: ["1.jpg", "2.jpg", "3.jpg"], folders: [])
         }
-        let store = store(reader, dir: dir, network: true)
-        await store.setCoverListing(slow, networkTimeout: .milliseconds(200))
+        let store = store(reader, dir: dir)
+        // A second: under a loaded test run the listing's thread may start late, and give no name before 200 ms.
+        await store.setCoverListing(slow, networkTimeout: .seconds(1))
         let start = ContinuousClock.now
-        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64)
-        #expect(ContinuousClock.now - start < .seconds(2))
-        #expect(images.count == 2)
+        let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false,
+                                             in: loc("/photos/f", network: true), maxPixel: 64)
+        #expect(ContinuousClock.now - start < .seconds(5))   // the listing goes on for 10
+        #expect(images?.count == 2)
         #expect(await eventually { stopped.isSet })
+    }
+
+    /// Review fix: the catalog's four are a spread too, the photo last viewed first, sorted as Finder does; the folder is
+    /// not listed.
+    @Test func catalogCoverIsASpread() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        // Told apart by their shape: thumbnails 32 wide, 24 ... 7 high.
+        let names = (1...10).map { String(format: "%02d.jpg", $0) }
+        var byHeight: [Int: String] = [:]
+        let store = store(reader, dir: dir)
+        for (i, name) in names.enumerated() {
+            let url = URL(fileURLWithPath: "/photos/f").appendingPathComponent(name)
+            reader.add(url, TestJPEGs.gradient(width: 40 + 10 * i, height: 30))
+            guard let image = await store.cover(url, maxPixel: 64) else { Issue.record("no cover for \(name)"); return }
+            byHeight[image.height] = name
+        }
+        #expect(byHeight.count == 10)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/photos/f")
+        let plain = await store.folderCover(folder, archive: false, in: loc("/photos/f"), maxPixel: 64) ?? []
+        #expect(plain.map { byHeight[$0.height] } == ["01.jpg", "04.jpg", "07.jpg", "10.jpg"])
+        let last = await store.folderCover(folder, archive: false, in: loc("/photos/f"), maxPixel: 64,
+                                           lastViewed: "05.jpg") ?? []
+        #expect(last.map { byHeight[$0.height] } == ["05.jpg", "01.jpg", "07.jpg", "10.jpg"])
+        #expect(listing.calls.isEmpty)
+    }
+
+    /// Review fix: a share whose listings hang fills its own lane, never the local one: the local cards' covers are all
+    /// made, and the share's cards are "not now" (tried again later), not done with nothing.
+    @Test func hungShareDoesNotStarveLocalCovers() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let hang = DispatchSemaphore(value: 0)
+        let locals = (1...4).map { "/loc/\($0)" }, shares = (1...5).map { "/net/\($0)" }
+        for folder in locals { photos(reader, in: folder, ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]) }
+        let lister: ThumbnailStore.CoverLister = { folder, _, _ in
+            if folder.path.hasPrefix("/net/") { hang.wait() }   // in the kernel: deaf to `part`
+            return CoverNames(files: ["a.jpg", "b.jpg", "c.jpg", "d.jpg"], folders: [])
+        }
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(lister, networkTimeout: .milliseconds(100))
+        let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1, retryDelay: .milliseconds(50))
+        let made = FolderResults()
+        let work: @Sendable (String) async -> Bool = { id in
+            let network = id.hasPrefix("/net/")
+            let location = ThumbnailLocation(volume: network ? "net:share" : "test", folder: id, name: "_")
+            guard let images = await store.folderCover(URL(fileURLWithPath: id), archive: false, in: location,
+                                                       maxPixel: 64) else { return false }
+            made.add(id, images.count)
+            return true
+        }
+        // The share's cards first, until its hung listings fill its lane.
+        await queue.want(shares, visible: shares.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
+        #expect(await eventually { store.coverThreads.count(network: true) == ThumbnailStore.coverThreadsPerLane })
+        let ids = shares + locals
+        await queue.want(ids, visible: ids.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
+        #expect(await eventually { locals.allSatisfy { made.count(of: $0) == 4 } })
+        try? await Task.sleep(for: .milliseconds(200))   // a few retries of the share's cards
+        #expect(shares.allSatisfy { made.count(of: $0) == nil })
+        #expect(await queue.pendingCount >= shares.count - 1)   // one may be running its quick "not now"
+        #expect(store.coverThreads.count(network: true) == ThumbnailStore.coverThreadsPerLane)
+        await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
+        for _ in 0..<ThumbnailStore.coverThreadsPerLane { hang.signal() }
+        #expect(await eventually { store.coverThreads.count(network: true) == 0 })
+    }
+
+    /// Review fix: resolving the folder Home shows is limited like a share's listing: a resolve that hangs gives nil
+    /// after the time limit, and its thread stays in the share lane until it returns.
+    @Test func hungResolveTimesOut() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let hang = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir, locate: { _ in
+            hang.wait()
+            return nil
+        })
+        await store.setCoverListing(ThumbnailStore.listCoverNames, networkTimeout: .milliseconds(100))
+        let start = ContinuousClock.now
+        #expect(await store.folderLocation(URL(fileURLWithPath: "/net/share")) == nil)
+        #expect(ContinuousClock.now - start < .seconds(1))
+        #expect(store.coverThreads.count(network: true) == 1)
+        hang.signal()
+        #expect(await eventually { store.coverThreads.count(network: true) == 0 })
+    }
+
+    /// Review fix: a cover asks the system nothing but its listing: the subfolders' locations come from the folder's.
+    @Test func folderCoverNeverResolves() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        listing.set("/p/top", folders: ["s1", "s2"])
+        listing.set("/p/top/s1", files: ["a.jpg"])
+        listing.set("/p/top/s2", files: ["b.jpg"])
+        photos(reader, in: "/p/top/s1", ["a.jpg"])
+        photos(reader, in: "/p/top/s2", ["b.jpg"])
+        let resolved = LockedFlag()
+        let store = store(reader, dir: dir, locate: { _ in
+            resolved.set()
+            return nil
+        })
+        await store.setCoverListing(listing.lister)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/p/top"), archive: false, in: loc("/p/top"), maxPixel: 64)?.count == 2)
+        #expect(!resolved.isSet)
+    }
+
+    /// Review fix: a running cover makes no thumbnail while the viewer is busy, and goes on once it is idle.
+    @Test func waitsWhileViewerBusy() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/photos/f", ["1.jpg", "2.jpg"])
+        listing.set("/photos/f", files: ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        await store.setViewerActivity(.neighbours)
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(reader.reads.isEmpty)
+        await store.setViewerActivity(.idle)
+        #expect(await task.value?.count == 2)
     }
 
     /// The time limit is the share's: a local listing runs to its end.
@@ -291,7 +421,7 @@ private final class FakeListing: @unchecked Sendable {
         }
         let store = store(reader, dir: dir)
         await store.setCoverListing(slow, networkTimeout: .milliseconds(100))
-        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64).count == 3)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64)?.count == 3)
     }
 
     /// A card that left stops its listing at once, even one hung on a share.
@@ -307,10 +437,10 @@ private final class FakeListing: @unchecked Sendable {
         }
         let store = store(reader, dir: dir)
         await store.setCoverListing(hung)
-        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, maxPixel: 64) }
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
         try? await Task.sleep(for: .milliseconds(100))
         task.cancel()
-        #expect(await task.value.isEmpty)
+        #expect(await task.value?.isEmpty != false)
         #expect(await eventually { stopped.isSet })
     }
 
@@ -327,8 +457,8 @@ private final class FakeListing: @unchecked Sendable {
         }
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        let images = await store.folderCover(URL(fileURLWithPath: "/photos/top"), archive: false, maxPixel: 64)
-        #expect(images.count == 4)
+        let images = await store.folderCover(URL(fileURLWithPath: "/photos/top"), archive: false, in: loc("/photos/top"), maxPixel: 64)
+        #expect(images?.count == 4)
         #expect(Set(reader.reads.map(\.path)) == Set(["s1", "s2", "s3", "s4"].map { "/photos/top/\($0)/a.jpg" }))
         #expect(await store.folderSamples(URL(fileURLWithPath: "/photos/top/s2"), limit: 4).map(\.lastPathComponent) == ["a.jpg"])
     }
@@ -349,8 +479,8 @@ private final class FakeListing: @unchecked Sendable {
         photos(reader, in: "/p/three/d1/d2/d3", ["y.jpg"])
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/p/two"), archive: false, maxPixel: 64).count == 1)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/p/three"), archive: false, maxPixel: 64).isEmpty)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/p/two"), archive: false, in: loc("/p/two"), maxPixel: 64)?.count == 1)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/p/three"), archive: false, in: loc("/p/three"), maxPixel: 64) == [])
         #expect(!listing.calls.contains("/p/three/d1/d2/d3"))
     }
 
@@ -362,8 +492,8 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/videos", files: ["a.mov", "b.txt"])
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/videos"), archive: false, maxPixel: 64).isEmpty)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/videos"), archive: false, maxPixel: 64).isEmpty)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/videos"), archive: false, in: loc("/photos/videos"), maxPixel: 64) == [])
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/videos"), archive: false, in: loc("/photos/videos"), maxPixel: 64) == [])
         #expect(listing.calls == ["/photos/videos"])
     }
 
@@ -377,7 +507,7 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/g.zip", files: names)
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/g.zip"), archive: true, maxPixel: 64).count == 2)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/g.zip"), archive: true, in: loc("/photos/g.zip"), maxPixel: 64)?.count == 2)
     }
 
     /// The real listing: a folder's photos and subfolders by name (hidden ones and other files left out), a zip's
@@ -400,6 +530,14 @@ private final class FakeListing: @unchecked Sendable {
         #expect(Set(entries.files) == ["caps\u{2215}1.jpg", "caps\u{2215}2.jpg"])
         #expect(entries.folders.isEmpty)
     }
+}
+
+/// Pictures per folder, from other tasks.
+final class FolderResults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    func add(_ folder: String, _ count: Int) { lock.withLock { counts[folder] = count } }
+    func count(of folder: String) -> Int? { lock.withLock { counts[folder] } }
 }
 
 /// A flag set from another thread.
