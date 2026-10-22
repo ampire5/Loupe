@@ -60,6 +60,9 @@ public actor ThumbnailStore {
     let decodeLimit: DecodePool
     /// Home's covers are made one at a time (`cover`).
     let coverLimit = DecodePool(slots: 1, reserved: 0)
+    /// Home's folder and archive covers in the background (`folderCover`), a few at a time; paused while the viewer is
+    /// busy (`setViewerActivity`).
+    public let coverQueue = CoverQueue()
     /// Diagnostics, one line per thumbnail made (the app passes `DebugLog.log` under `LOUPE_DEBUG`).
     let log: (@Sendable (String) -> Void)?
 
@@ -124,6 +127,15 @@ public actor ThumbnailStore {
     /// (unlike a newly made thumbnail) would otherwise go unannounced.
     var missed: Set<URL> = []
     var onThumbnail: (@Sendable (URL) -> Void)?
+
+    // MARK: Folder covers
+
+    var coverLister: CoverLister = ThumbnailStore.listCoverNames
+    var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
+    /// Folders and zips with nothing to show on a cover, for the session, by path.
+    var emptyCovers: Set<String> = []
+    /// Listings running on their own threads, those given up on included (one hung on a dead share stays).
+    let coverListings = CoverListingThreads(limit: ThumbnailStore.coverListingThreads)
 
     // MARK: Database
 
@@ -257,8 +269,14 @@ public actor ThumbnailStore {
 
     /// The viewer cache's activity: new reads wait until `.idle` has held for `idleDelay`, `.current` cancels the
     /// jobs still reading or waiting to (their files go back in the queue) and lets the decodes finish: their bytes
-    /// are already here, and decodes take their own slot.
-    public func setViewerActivity(_ activity: CacheActivity) {
+    /// are already here, and decodes take their own slot. Home's covers start none while the viewer is not idle (the
+    /// user is stepping through photos): `coverQueue` is paused, after the thumbnails' own state is set.
+    public func setViewerActivity(_ activity: CacheActivity) async {
+        setActivity(activity)
+        await coverQueue.pause(activity != .idle)
+    }
+
+    private func setActivity(_ activity: CacheActivity) {
         self.activity = activity
         switch activity {
         case .idle:
@@ -548,9 +566,10 @@ public actor ThumbnailStore {
 
     /// Short blocking work (an ImageIO decode of a ~50 KB JPEG, the clean-up) on a GCD thread, so neither the
     /// actor nor the decode slots the viewer needs are held by it.
-    static func offActor<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+    static func offActor<T: Sendable>(qos: DispatchQoS.QoSClass = .userInitiated,
+                                      _ work: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: work()) }
+            DispatchQueue.global(qos: qos).async { continuation.resume(returning: work()) }
         }
     }
 }

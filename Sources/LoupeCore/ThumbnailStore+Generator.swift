@@ -174,6 +174,9 @@ extension ThumbnailStore {
         let cachedBytes: @Sendable (URL, FileStamp) async -> Data?
         let readEnded: @Sendable () async -> Void
         let readAgain: @Sendable () async -> Void
+        /// The reads' place in the reader's queue and the decodes' in the pool: Home's covers go behind the open
+        /// folders' thumbnails (`coverReadPriority`).
+        var rank = ThumbnailStore.readPriority
     }
 
     /// Where a job's time went, for the `log` line. Each includes its wait (for a `FileReader` thread, a decode slot).
@@ -198,7 +201,7 @@ extension ThumbnailStore {
             await r.readAgain()
             try Task.checkCancellation()
             let start = ContinuousClock.now
-            let bytes = try await r.reader.read(r.url, priority: ReadPriority(readPriority, isBackground: true))
+            let bytes = try await r.reader.read(r.url, priority: ReadPriority(r.rank, isBackground: true))
             t.read += ContinuousClock.now - start
             t.source = "prefix+full"
             await r.readEnded()
@@ -214,7 +217,7 @@ extension ThumbnailStore {
     /// function so the prefix is released before the whole file is read.
     static func fromFirstRead(_ r: Recipe, _ t: inout Timing) async throws -> Outcome? {
         let start = ContinuousClock.now
-        let bytes = try await r.reader.readPrefix(r.url, priority: ReadPriority(readPriority, isBackground: true),
+        let bytes = try await r.reader.readPrefix(r.url, priority: ReadPriority(r.rank, isBackground: true),
                                                   isEnough: { ThumbnailMaker.isPrefixEnough($0) })
         t.read += ContinuousClock.now - start
         await r.readEnded()
@@ -244,7 +247,7 @@ extension ThumbnailStore {
     static func decode<T: Sendable>(_ r: Recipe, _ t: inout Timing, _ work: @escaping @Sendable () throws -> T) async throws -> T {
         let start = ContinuousClock.now
         defer { t.decode += ContinuousClock.now - start }
-        return try await r.decodeLimit.run(forCurrent: false, rank: readPriority, work)
+        return try await r.decodeLimit.run(forCurrent: false, rank: r.rank, work)
     }
 
     static func ms(_ d: Duration) -> Int {
