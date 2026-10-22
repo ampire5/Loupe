@@ -103,9 +103,9 @@ extension ImageCache {
         setFocus(.solo, files: files, focus: focus)
     }
 
-    public func setPinned(_ url: URL?) {
+    public func setPinned(_ url: URL?, companion: URL? = nil) {
         soloRegistered()
-        setPinned(.solo, url)
+        setPinned(.solo, url, companion: companion)
     }
 
     private func soloRegistered() {
@@ -144,9 +144,11 @@ extension ImageCache {
     /// A session's photo on screen (nil: none). The viewer tells the cache whenever it changes; while the session is
     /// active or visible, its resident levels are never evicted, whatever the plan or the limit, so what is on screen
     /// is never degraded under it.
-    public func setPinned(_ session: CacheSessionID, _ url: URL?) {
-        guard let s = sessions[session], url != s.pinned else { return }
+    /// `companion`: the second page of a pair on screen (spread), pinned the same way.
+    public func setPinned(_ session: CacheSessionID, _ url: URL?, companion: URL? = nil) {
+        guard let s = sessions[session], url != s.pinned || companion != s.pinnedCompanion else { return }
         sessions[session]?.pinned = url
+        sessions[session]?.pinnedCompanion = companion
         reconcile()
     }
 
@@ -164,7 +166,7 @@ extension ImageCache {
         guard !idle.isEmpty else { return }
         let current = Set(idle.compactMap { sessions[$0]?.currentURL })
         let spared = CacheOwners.protected(owners)
-            .union(sessions.compactMap { id, s in idle.contains(id) ? nil : s.pinned })
+            .union(sessions.flatMap { id, s in idle.contains(id) ? [] : s.pinnedPages })
         var freed = 0
         for (url, e) in entries where e.uploadReserve == 0 && !spared.contains(url) {
             let listing = sessions.filter { $0.value.fileIndex[url] != nil }.keys
@@ -212,6 +214,10 @@ struct CacheSessionState {
     /// counts in `usedBytes`). Only the viewer moves it (`setPinned`), also across playlists: the old folder's photo
     /// stays on screen until the new one shows.
     var pinned: URL?
+    /// The other page of a pair on screen (spread), kept like `pinned`.
+    var pinnedCompanion: URL?
+    /// `pinned` and `pinnedCompanion`, those set.
+    var pinnedPages: [URL] { [pinned, pinnedCompanion].compactMap { $0 } }
     var focus: CacheFocus?
     var currentURL: URL?
     /// `becameCurrent` ran for `currentURL` while the session was active. A scrub only passes over photos, so it is

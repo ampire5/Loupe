@@ -122,8 +122,9 @@ import LoupeRender
     /// The window's playlist, position and colour keys, on every change of any. Cubes of photos outside the new order
     /// (but the pinned one) and of files with another stamp are dropped.
     func update(files: [URL], current: Int, direction: Int, stamps: [URL: FileStamp], settings: ColorSettings,
-                reach: Int) {
-        plan = ColorOrder.order(count: files.count, current: current, direction: direction, reach: reach)
+                reach: Int, companion: Int? = nil) {
+        plan = ColorOrder.order(count: files.count, current: current, direction: direction, reach: reach,
+                                companion: companion)
             .map { files[$0] }
         planned = Set(plan)
         for url in plan {

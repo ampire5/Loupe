@@ -140,14 +140,25 @@ import LoupeCore
         if let message = session.folderMessage {
             text = message
         } else if let loading = session.loadingName {
-            text = StatsLine.loading(name: loading, position: session.playlist.map { (index: $0.index, count: $0.files.count) },
-                                    counted: session.folderCounted)
+            // A pair: its range (spread spec, «Положение»).
+            let pages = session.currentPages
+            let position = session.playlist.map { (index: pages?.first ?? $0.index, count: $0.files.count) }
+            text = StatsLine.loading(name: loading, position: position, companion: pages?.second,
+                                     counted: session.folderCounted)
         } else if let error = session.error {
             text = error
         } else if let entry = session.entry, let info = entry.info, let list = session.playlist {
             // The photo on screen, which is the previous one until the cache answers for a new current photo.
             index = entry.url == list.current ? list.index : list.files.firstIndex(of: entry.url) ?? list.index
-            text = StatsLine.loaded(name: ArchivePath.shortName(entry.url), index: index, count: list.files.count,
+            // The current pair on screen: both names and the range, in reading order (spread spec, «Положение»).
+            var name = ArchivePath.shortName(entry.url), companion: Int?
+            if entry.url == list.current, session.shownLayout != nil, let pages = session.currentPages,
+               let second = pages.second {
+                index = pages.first
+                companion = second
+                name = ArchivePath.shortName(list.files[pages.first]) + " · " + ArchivePath.shortName(list.files[second])
+            }
+            text = StatsLine.loaded(name: name, index: index, companion: companion, count: list.files.count,
                                     counted: session.folderCounted,
                                     info: info, applyingOrientation: session.appliesOrientation,
                                     transform: session.zoomTarget ?? session.transform,   // a zoom animation's target
