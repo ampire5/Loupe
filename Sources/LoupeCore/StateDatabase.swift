@@ -12,7 +12,7 @@ import Foundation
 /// `folder-settings.json`) are not migrated: they are never read, renamed or deleted.
 public final class StateDatabase: @unchecked Sendable {
     public static let fileName = "Loupe.db"
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     /// `~/Library/Application Support/Loupe`.
     public static var defaultDirectory: URL? {
@@ -64,12 +64,14 @@ public final class StateDatabase: @unchecked Sendable {
 
     private static let pragmas = ["journal_mode=WAL", "synchronous=NORMAL", "busy_timeout=2000"]
 
-    /// Schema 2 (Home spec §3.1) only adds `recent` and `sessions`; a version 1 file keeps its rows.
+    /// Schema 2 (Home spec §3.1) only adds `recent` and `sessions`; a version 1 file keeps its rows. Schema 3 gives
+    /// `folder_positions` the visit (`idx` the photo, `count` of how many, `visited` when; all null until a visit is
+    /// recorded): older files get them by `ALTER TABLE` in `prepare`, new ones from the statement below.
     /// `touched` is a counter that only grows: recency for the stores' folder caps. `view` is the
     /// `SavedView.text` (zoom mode and position) the folder's last photo was left in, null when none was saved.
     private static let schema = """
         CREATE TABLE IF NOT EXISTS folder_positions(path TEXT PRIMARY KEY, file TEXT NOT NULL, view TEXT,
-            touched INTEGER NOT NULL);
+            touched INTEGER NOT NULL, idx INTEGER, count INTEGER, visited REAL);
         CREATE TABLE IF NOT EXISTS folder_settings(path TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
             touched INTEGER NOT NULL, PRIMARY KEY(path, key));
         CREATE TABLE IF NOT EXISTS recent(path TEXT PRIMARY KEY, kind TEXT NOT NULL, gallery_id TEXT,
@@ -87,6 +89,16 @@ public final class StateDatabase: @unchecked Sendable {
         CREATE TABLE IF NOT EXISTS browser_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """
 
+    /// Version 1 and 2 files have `folder_positions` without the visit columns (`CREATE TABLE IF NOT EXISTS` kept it as
+    /// it was); their rows stay, the new fields null.
+    private static func addVisitColumns(_ db: SQLiteConnection) throws {
+        var columns: Set<String> = []
+        try db.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.insert($0.text(0)) }
+        for (name, type) in [("idx", "INTEGER"), ("count", "INTEGER"), ("visited", "REAL")] where !columns.contains(name) {
+            try db.execute("ALTER TABLE folder_positions ADD COLUMN \(name) \(type)")
+        }
+    }
+
     private static func prepare(_ db: SQLiteConnection) throws {
         var version: Int64 = 0
         try db.query("PRAGMA user_version", []) { version = $0.int(0) }
@@ -96,6 +108,7 @@ public final class StateDatabase: @unchecked Sendable {
         if version < Int64(schemaVersion) {
             try db.transaction {
                 try db.execute(schema)
+                try addVisitColumns(db)
                 try db.execute("PRAGMA user_version = \(schemaVersion)")
             }
         }

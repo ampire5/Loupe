@@ -1527,6 +1527,8 @@ import LoupeRender
             entersFromOutside = false
         }
         recent.viewed(folder, file: file, index: playlist.index, count: playlist.files.count)
+        // The folder card's progress: in memory now, written with the position (no extra write per photo).
+        positions.recordVisit(folder: folder, index: playlist.index, count: playlist.files.count)
     }
 
     /// Saves how `photo` is looked at for its folder (`FolderPositions`): only while it is the photo on screen (the

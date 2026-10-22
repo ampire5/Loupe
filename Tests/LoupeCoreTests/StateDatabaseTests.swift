@@ -13,7 +13,7 @@ import Foundation
 
     private func names(_ dir: URL) throws -> Set<String> { Set(try fm.contentsOfDirectory(atPath: dir.path)) }
 
-    @Test func createsTheSchemaAtVersionTwo() throws {
+    @Test func createsTheSchemaAtVersionThree() throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let db = try StateDatabase(directory: dir)
@@ -24,11 +24,41 @@ import Foundation
             try $0.query("PRAGMA user_version", []) { version = $0.int(0) }
             try $0.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", []) { tables.append($0.text(0)) }
         }
-        #expect(version == 2)   // the browser's tables are additive: an older Loupe still opens the file
+        #expect(version == 3)   // the browser's tables are additive: an older Loupe still opens the file
         #expect(tables == ["browser_pins", "browser_state", "folder_positions", "folder_settings", "recent", "sessions"])
         var columns: [String] = []
         try db.perform { try $0.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.append($0.text(0)) } }
-        #expect(columns == ["path", "file", "view", "touched"])
+        #expect(columns == ["path", "file", "view", "touched", "idx", "count", "visited"])
+    }
+
+    @Test func version2FileMigrates() throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let old = try SQLiteConnection(path: dir.appendingPathComponent("Loupe.db").path, pragmas: [])
+        try old.execute("""
+            CREATE TABLE folder_positions(path TEXT PRIMARY KEY, file TEXT NOT NULL, view TEXT, touched INTEGER NOT NULL);
+            INSERT INTO folder_positions VALUES('/photos/a', 'a1.jpg', NULL, 1);
+            INSERT INTO folder_positions VALUES('/photos/b', 'b2.jpg', NULL, 2);
+            PRAGMA user_version = 2;
+            """)
+        old.close()
+        let db = try StateDatabase(directory: dir)
+        var version: Int64 = 0
+        var columns: [String] = []
+        try db.perform {
+            try $0.query("PRAGMA user_version", []) { version = $0.int(0) }
+            try $0.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.append($0.text(0)) }
+        }
+        #expect(version == 3)
+        #expect(columns == ["path", "file", "view", "touched", "idx", "count", "visited"])
+        let positions = FolderPositions(database: db)
+        #expect(positions.count == 2)
+        #expect(positions.fileName(in: folder("/photos/a")) == "a1.jpg")
+        #expect(positions.fileName(in: folder("/photos/b")) == "b2.jpg")
+        #expect(positions.visit(in: folder("/photos/a")) == nil)
+        // A file opened again at version 3 is left as it is.
+        _ = try StateDatabase(directory: dir)
     }
 
     @Test func bothStoresShareOneDatabaseAcrossInstances() throws {
@@ -88,7 +118,7 @@ import Foundation
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.appendingPathComponent("Loupe.db").path
         let other = try SQLiteConnection(path: path, pragmas: [])
-        try other.execute("PRAGMA user_version = 3")
+        try other.execute("PRAGMA user_version = 4")
         other.close()
         #expect(throws: SQLiteError.self) { try StateDatabase(directory: dir) }
         #expect(!(try names(dir).contains { $0.hasPrefix("Loupe.db.broken-") }))      // not treated as damaged

@@ -9,7 +9,7 @@ import Foundation
 public final class FolderPositions: @unchecked Sendable {
     public static let defaultCapacity = 1000
 
-    private struct Entry { var file: String; var view: SavedView?; var tick: Int }
+    private struct Entry { var file: String; var view: SavedView?; var tick: Int; var visit: FolderVisit? = nil }
 
     private let database: StateDatabase?
     private let capacity: Int
@@ -32,10 +32,13 @@ public final class FolderPositions: @unchecked Sendable {
         self.capacity = max(1, capacity)
         self.debounce = debounce
         try? database?.perform { db in
-            try db.query("SELECT path, file, view, touched FROM folder_positions ORDER BY touched DESC LIMIT ?",
+            try db.query("SELECT path, file, view, touched, idx, count, visited FROM folder_positions ORDER BY touched DESC LIMIT ?",
                          [.int(Int64(self.capacity))]) { r in
                 let view = r.isNull(2) ? nil : SavedView(text: r.text(2))
-                entries[r.text(0)] = Entry(file: r.text(1), view: view, tick: Int(r.int(3)))
+                let visit = r.isNull(4) || r.isNull(5) || r.isNull(6) ? nil
+                    : FolderVisit(index: Int(r.int(4)), count: Int(r.int(5)),
+                                  visited: Date(timeIntervalSinceReferenceDate: r.double(6)))
+                entries[r.text(0)] = Entry(file: r.text(1), view: view, tick: Int(r.int(3)), visit: visit)
                 tick = max(tick, Int(r.int(3)))
             }
         }
@@ -60,7 +63,7 @@ public final class FolderPositions: @unchecked Sendable {
             // Already the latest.
             if let e = entries[key], e.file == file, e.view == view, e.tick == tick { return false }
             tick += 1
-            entries[key] = Entry(file: file, view: view, tick: tick)
+            entries[key] = Entry(file: file, view: view, tick: tick, visit: entries[key]?.visit)
             dirty.insert(key)
             if entries.count > capacity, let oldest = entries.min(by: { $0.value.tick < $1.value.tick }) {
                 entries[oldest.key] = nil
@@ -75,6 +78,31 @@ public final class FolderPositions: @unchecked Sendable {
             lock.withLock { writeScheduled = false }
             write()
         }
+    }
+
+    /// The folder was on screen at photo `index` of `count` at `date`. Kept with the folder's position (one row, one
+    /// debounced write with it), so calling it on every photo change costs memory only; a folder with no position
+    /// yet (`record` not called) remembers nothing.
+    public func recordVisit(folder: URL, index: Int, count: Int, at date: Date = Date()) {
+        let key = folder.standardizedFileURL.path
+        let schedule = lock.withLock { () -> Bool in
+            guard entries[key] != nil else { return false }
+            entries[key]?.visit = FolderVisit(index: index, count: count, visited: date)
+            dirty.insert(key)
+            guard database != nil, !writeScheduled else { return false }
+            writeScheduled = true
+            return true
+        }
+        guard schedule else { return }
+        queue.asyncAfter(deadline: .now() + debounce.seconds) { [self] in
+            lock.withLock { writeScheduled = false }
+            write()
+        }
+    }
+
+    /// The last visit to `folder`; nil when none was recorded.
+    public func visit(in folder: URL) -> FolderVisit? {
+        lock.withLock { entries[folder.standardizedFileURL.path]?.visit }
     }
 
     /// The file name remembered for `folder`.
@@ -120,11 +148,16 @@ public final class FolderPositions: @unchecked Sendable {
                     for (path, entry) in batch {
                         if let entry {
                             try db.run("""
-                                INSERT INTO folder_positions(path, file, view, touched) VALUES(?, ?, ?, ?)
+                                INSERT INTO folder_positions(path, file, view, touched, idx, count, visited)
+                                VALUES(?, ?, ?, ?, ?, ?, ?)
                                 ON CONFLICT(path) DO UPDATE SET
-                                    file = excluded.file, view = excluded.view, touched = excluded.touched
+                                    file = excluded.file, view = excluded.view, touched = excluded.touched,
+                                    idx = excluded.idx, count = excluded.count, visited = excluded.visited
                                 """, [.text(path), .text(entry.file), entry.view.map { .text($0.text) } ?? .null,
-                                      .int(Int64(entry.tick))])
+                                      .int(Int64(entry.tick)),
+                                      entry.visit.map { .int(Int64($0.index)) } ?? .null,
+                                      entry.visit.map { .int(Int64($0.count)) } ?? .null,
+                                      entry.visit.map { .double($0.visited.timeIntervalSinceReferenceDate) } ?? .null])
                         } else {
                             try db.run("DELETE FROM folder_positions WHERE path = ?", [.text(path)])
                         }
