@@ -1,3 +1,4 @@
+import FilmstripModel
 import Foundation
 import HomeScreenModel
 import LogiHIDPP
@@ -7,12 +8,9 @@ public enum StripWindowMode: String, Sendable {
     case overlay, bar, off
 }
 
-/// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection. `natural`: fingers left
-/// go to the next files, as the three-finger swipe does (the strip is content that follows the fingers under the
-/// selection, so the selection's border moves against them); `reversed`: the selection moves with the fingers.
-public enum StripScrollDirection: String, Sendable {
-    case natural, reversed
-}
+/// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection (the kit's
+/// `FilmstripScrollDirection`: `natural`, fingers left go to the next files, or `reversed`).
+public typealias StripScrollDirection = FilmstripScrollDirection
 
 /// `launch-reveal`: when the photo first appears at a launch that goes back into full screen. `settled` (the default):
 /// once the window is in full screen, so the system's animation moves an empty window (the photo popping up in it and
@@ -279,7 +277,7 @@ public struct Config: Equatable, Sendable {
     public var stripCellMax = 1.5
     /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square).
     public var stripCornerRadius = 3.0
-    /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`StripScroll`).
+    /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`FilmstripScroll`).
     public var stripScrollDirection = StripScrollDirection.natural
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
     public var stripHideDelayMilliseconds = 200

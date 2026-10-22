@@ -137,6 +137,12 @@ import LoupeCore
         return true
     }
 
+    /// `otherMouseDown` (`down`) or `otherMouseUp`, for a view that hands both to one closure
+    /// (`FilmstripView.onOtherMouse`).
+    func otherMouse(_ event: NSEvent, down: Bool) -> Bool {
+        down ? otherMouseDown(event) : otherMouseUp(event)
+    }
+
     // LogiMouse's buttons (`AppDelegate`), at `t` on NSEvent's clock. `watched`: LogiMouse hears the button without
     // taking it (`mx-side-buttons=watch`), so the system delivers it too. A side button's press that AppKit already
     // brought, or a watched press with the pointer outside Loupe's windows, is dropped with its release (M4c spec
