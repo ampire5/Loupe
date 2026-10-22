@@ -254,9 +254,14 @@ public struct Config: Equatable, Sendable {
     public var spreadRightToLeft = false
     /// `spread-landscape`: `alone` shows a landscape page by itself, `pair` pairs it like any other (folder key).
     public var spreadLandscapeAlone = true
-    /// The pairing options the four spread keys give.
+    public static let spreadWideRatioRange = 1.0...2.0
+    /// `spread-wide-ratio`: with `spread-landscape = alone`, a page wider than this times its height stands alone,
+    /// 1.0...2.0 (a number or `w:h`; folder key). The default is `SpreadPlan.landscapeAspect`'s, with its reasons.
+    public var spreadWideRatio = SpreadPlan.landscapeAspect
+    /// The pairing options the spread keys give.
     public var spreadOptions: SpreadOptions {
-        SpreadOptions(shift: spreadShift, rightToLeft: spreadRightToLeft, landscapeAlone: spreadLandscapeAlone)
+        SpreadOptions(shift: spreadShift, rightToLeft: spreadRightToLeft, landscapeAlone: spreadLandscapeAlone,
+                      wideRatio: spreadWideRatio)
     }
 
     // The cache settings (spec §3.5). `CacheLimits(config:)` is what the cache reads.
@@ -527,7 +532,7 @@ public struct Config: Equatable, Sendable {
                               "rubber-band", "drag-inertia", "inertia-deceleration", "rmb-zoom-invert",
                               "pan-indicators", "pan-indicators-hide", "pan-indicators-fade",
                               "pan-indicators-on-switch",
-                              "spread", "spread-shift", "spread-direction", "spread-landscape",
+                              "spread", "spread-shift", "spread-direction", "spread-landscape", "spread-wide-ratio",
                               "thumb-wheel-zoom", "thumb-zoom-speed", "thumb-zoom-stops", "thumb-zoom-invert",
                               "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "cache-idle-trim", "cache-idle-keep",
                               "jxl-threads-current", "jxl-threads-other", "jxl-dc-preview",
@@ -563,7 +568,8 @@ public struct Config: Equatable, Sendable {
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
     public static let zoomFolderKeys = ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"]
     /// The two-page keys a folder sets for itself.
-    public static let spreadFolderKeys = ["spread", "spread-shift", "spread-direction", "spread-landscape"]
+    public static let spreadFolderKeys = ["spread", "spread-shift", "spread-direction", "spread-landscape",
+                                          "spread-wide-ratio"]
     /// The keys a folder may set for itself.
     public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys
 
@@ -615,6 +621,7 @@ public struct Config: Equatable, Sendable {
         case "spread-shift": return spreadShift ? "yes" : "no"
         case "spread-direction": return spreadRightToLeft ? "rtl" : "ltr"
         case "spread-landscape": return spreadLandscapeAlone ? "alone" : "pair"
+        case "spread-wide-ratio": return formatNumber(spreadWideRatio)
         case "toast-duration": return String(toastDurationMilliseconds)
         case "mouse-long-press": return String(mouseLongPressMilliseconds)
         case "mouse-move-step": return formatNumber(mouseMoveStep)
@@ -800,6 +807,9 @@ public struct Config: Equatable, Sendable {
             case "pair": spreadLandscapeAlone = false
             default: return .badValue
             }
+        case "spread-wide-ratio":
+            if let v = Self.aspect(value), Self.spreadWideRatioRange.contains(v) { spreadWideRatio = v }
+            else { return .badValue }
         case "toast-duration":
             if let v = Int(value), (500...10_000).contains(v) { toastDurationMilliseconds = v } else { return .badValue }
         case "mouse-long-press":

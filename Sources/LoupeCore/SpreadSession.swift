@@ -11,7 +11,8 @@ public struct SpreadRules: Equatable, Sendable {
         self.options = options
     }
 
-    /// `spread`, `spread-shift`, `spread-direction`, `spread-landscape` of `config` (loupe.conf with a folder's values).
+    /// `spread`, `spread-shift`, `spread-direction`, `spread-landscape`, `spread-wide-ratio` of `config` (loupe.conf with
+    /// a folder's values).
     public init(config: Config) {
         self.init(on: config.spread, options: config.spreadOptions)
     }
@@ -134,9 +135,10 @@ public enum SpreadSizes {
     }
 
     /// Whether a page that was planned at `old` (nil: unknown, portrait) pairs differently at `new`: only a landscape
-    /// page stands alone, so only a change across `SpreadPlan.landscapeAspect` matters.
-    public static func changesPairing(from old: PixelSize?, to new: PixelSize) -> Bool {
-        SpreadPlan.isLandscape(old) != SpreadPlan.isLandscape(new)
+    /// page stands alone, so only a change across the wide `ratio` (`spread-wide-ratio`) matters.
+    public static func changesPairing(from old: PixelSize?, to new: PixelSize,
+                                      ratio: Double = SpreadPlan.landscapeAspect) -> Bool {
+        SpreadPlan.isLandscape(old, ratio: ratio) != SpreadPlan.isLandscape(new, ratio: ratio)
     }
 
     /// The size a page is laid out at beside a page of size `other`: its own when known, else `other`'s height at the

@@ -73,7 +73,8 @@ public struct SpreadState: Sendable {
         guard rules.on, rules.options.landscapeAlone, let index, planFiles.indices.contains(index),
               planFiles[index] == url else { return false }
         let aspect = index < aspects.count ? aspects[index] : nil
-        return SpreadSizes.changesPairing(from: old ?? aspect.flatMap(SpreadSizes.size(aspect:)), to: size)
+        return SpreadSizes.changesPairing(from: old ?? aspect.flatMap(SpreadSizes.size(aspect:)), to: size,
+                                          ratio: rules.options.wideRatio)
     }
 
     /// The view's size: true when it crossed `SpreadLayout.showsTwo` while two pages are on, so the pair follows.

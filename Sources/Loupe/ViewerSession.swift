@@ -1129,9 +1129,10 @@ import LoupeRender
 
     // MARK: Two pages (spread spec 2026-10-23)
 
-    /// The spread keys of a photo's folder (`spread`, `spread-shift`, `spread-direction`, `spread-landscape`): the window
-    /// controller sets it from that folder's settings over loupe.conf, like `zoomRules`. Asked with the photo when the
-    /// current folder changes, so a folder step takes the new folder's own flag; `updateSpreadRules` asks again.
+    /// The spread keys of a photo's folder (`spread`, `spread-shift`, `spread-direction`, `spread-landscape`,
+    /// `spread-wide-ratio`): the window controller sets it from that folder's settings over loupe.conf, like
+    /// `zoomRules`. Asked with the photo when the current folder changes, so a folder step takes the new folder's own
+    /// flag; `updateSpreadRules` asks again.
     var spreadRules: (URL) -> SpreadRules = { _ in SpreadRules(config: Settings.shared.config) }
 
     /// The folder's rules, the known page sizes, the plan and the companion (`updateSpread`).
@@ -1216,7 +1217,8 @@ import LoupeRender
               spreadState.setRules(spreadRules(current), folder: current.deletingLastPathComponent()) else { return }
         let rules = spreadState.rules, options = rules.options
         DebugLog.log("spread \(rules.on ? "on" : "off")\(options.shift ? " shifted" : "")"
-                     + (options.rightToLeft ? " rtl" : "") + (options.landscapeAlone ? "" : " landscape paired"))
+                     + (options.rightToLeft ? " rtl" : "")
+                     + (options.landscapeAlone ? " wide from \(options.wideRatio)" : " landscape paired"))
         spreadChanged(rebuild: true)
     }
 

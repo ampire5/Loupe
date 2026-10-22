@@ -112,3 +112,20 @@ private func allPairs(_ p: SpreadPlan) -> [[Int]] {
     #expect(plan([portrait, wide]).isWide(1) && !plan([portrait, wide]).isWide(0))
     #expect(!plan([portrait, wide], landscapeAlone: false).isWide(1))
 }
+
+/// `spread-wide-ratio` moves the line `SpreadPlan.landscapeAspect` draws by default: a 1.2:1 page stands alone at
+/// 1.15 and pairs at 1.25; the default options keep 1.15.
+@Test func wideRatioDecidesWhichPagesStandAlone() {
+    let page = PixelSize(width: 1200, height: 1000)   // 1.2:1
+    func options(_ ratio: Double) -> SpreadOptions {
+        SpreadOptions(shift: false, rightToLeft: false, landscapeAlone: true, wideRatio: ratio)
+    }
+    #expect(SpreadOptions(shift: false, rightToLeft: false, landscapeAlone: true).wideRatio == SpreadPlan.landscapeAspect)
+    #expect(allPairs(SpreadPlan(sizes: [portrait, page, portrait], options: options(1.15))) == [[0], [1], [2]])
+    #expect(allPairs(SpreadPlan(sizes: [portrait, page, portrait], options: options(1.25))) == [[0, 1], [2]])
+    #expect(SpreadPlan(sizes: [portrait, page], options: options(1.15)).isWide(1))
+    #expect(!SpreadPlan(sizes: [portrait, page], options: options(1.25)).isWide(1))
+    #expect(SpreadPlan.isLandscape(page, ratio: 1.15) && !SpreadPlan.isLandscape(page, ratio: 1.25))
+    #expect(!SpreadSizes.changesPairing(from: nil, to: page, ratio: 1.25))
+    #expect(SpreadSizes.changesPairing(from: nil, to: page, ratio: 1.15))
+}

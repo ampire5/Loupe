@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 125)
+        #expect(Config.keys.count == 126)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -58,6 +58,23 @@ struct PagesTests {
                 continue
             }
         }
+    }
+
+    /// Two Pages › Wide page from: a slider over `spread-wide-ratio`'s range naming every 0.05 step as `1.15 : 1`.
+    @Test func spreadWideRatioIsASlider() {
+        guard case .slider(let range, let marks) = row("spread-wide-ratio")?.kind else {
+            Issue.record("spread-wide-ratio is not a slider")
+            return
+        }
+        #expect(range == Config.spreadWideRatioRange)
+        #expect(marks.count == 21 && marks.first?.title == "1.00 : 1" && marks.last?.title == "2.00 : 1")
+        #expect(SettingsRow.nearestMark(1.15, in: marks) == "1.15 : 1")
+        #expect(SettingsRow.nearestMark(1.24, in: marks) == "1.25 : 1")
+        #expect(row("spread-wide-ratio")?.title == "Wide page from")
+        #expect(row("spread-wide-ratio")?.description?.hasPrefix(
+            "Pages wider than this stand alone when Landscape Pages Alone is on.") == true)
+        let section = SettingsPanel.interface.sections.first { $0.title == "Two Pages" }
+        #expect(section?.rows.map(\.key).last == "spread-wide-ratio")
     }
 
     /// The two-page rows say what their menu items and toasts say: Shift Pages (⌥D, «Pages shifted»).
