@@ -33,7 +33,7 @@ public enum BrowserListingSource {
             let isDirectory = type == DT_DIR || (type == DT_UNKNOWN && ext.isEmpty)
             let url = folder.appendingPathComponent(name, isDirectory: isDirectory)
             if let entry = entry(url, isDirectory: isDirectory, isPackage: isDirectory && isPackageExtension(ext),
-                                 stamp: nil, archives: archives) {
+                                 stamp: nil, modified: nil, archives: archives) {
                 entries.append(entry)
                 if entries.count % max(1, partEvery) == 0, ContinuousClock.now - last >= partAfter {
                     last = ContinuousClock.now
@@ -44,11 +44,13 @@ public enum BrowserListingSource {
         return entries
     }
 
-    /// With dates, sizes and packages (`FolderSiblings.listEntries`).
+    /// With dates, sizes and packages (`FolderSiblings.listEntries`). A folder's date is its own modification date, as
+    /// Finder's Date Modified (from the same listing, no further reads); it has no size.
     public static func full(_ folder: URL, archives: Bool) throws -> [BrowserEntry] {
         if ArchivePath.isArchive(folder) { return try archiveEntries(folder) }
         return try FolderSiblings.listEntries(folder).compactMap {
-            entry($0.url, isDirectory: $0.isDirectory, isPackage: $0.isPackage, stamp: $0.stamp, archives: archives)
+            entry($0.url, isDirectory: $0.isDirectory, isPackage: $0.isPackage, stamp: $0.stamp, modified: $0.modified,
+                  archives: archives)
         }
     }
 
@@ -111,13 +113,13 @@ public enum BrowserListingSource {
         return type.conforms(to: .package)
     }
 
-    private static func entry(_ url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp?,
+    private static func entry(_ url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp?, modified: Date?,
                               archives: Bool) -> BrowserEntry? {
         let name = url.lastPathComponent
         guard !name.hasPrefix(".") else { return nil }
         if isDirectory {
             guard !isPackage else { return nil }
-            return BrowserEntry(url: url, name: name, kind: .folder, canRename: true, canTrash: true)
+            return BrowserEntry(url: url, name: name, kind: .folder, date: modified, canRename: true, canTrash: true)
         }
         if ArchivePath.isArchive(url) {
             guard archives else { return nil }
