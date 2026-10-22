@@ -1579,7 +1579,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 
 @Test func jxlKeys() {
     let d = Config()
-    #expect(d.jxlThreadsCurrent == 10 && d.jxlThreadsOther == 2 && d.jxlDCPreview)
+    #expect(d.jxlThreadsCurrent == Machine.jxlThreadsCurrent && d.jxlThreadsOther == 2 && d.jxlDCPreview)
 
     var (c, w) = Config.parse("jxl-threads-current=6\njxl-threads-other=3\njxl-dc-preview=no")
     #expect(w.isEmpty)

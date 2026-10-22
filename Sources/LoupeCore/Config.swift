@@ -238,8 +238,9 @@ public struct Config: Equatable, Sendable {
     public var cacheIdleKeep = CacheIdleKeep.full
     /// `show-blurry`.
     public var showBlurry = ShowBlurry.no
-    /// `jxl-threads-current`: libjxl worker threads for the current photo's decode, 1...16.
-    public var jxlThreadsCurrent = 10
+    /// `jxl-threads-current`: libjxl worker threads for the current photo's decode, 1...16; by default one per
+    /// performance core (`Machine`).
+    public var jxlThreadsCurrent = Machine.jxlThreadsCurrent
     /// `jxl-threads-other`: libjxl worker threads for neighbours and thumbnails, 1...16 (2 measured best,
     /// docs/bench/2026-10-20-jxl-tuning.md).
     public var jxlThreadsOther = 2

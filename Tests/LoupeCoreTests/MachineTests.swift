@@ -3,6 +3,7 @@ import Testing
 
 @Test func machineReadsItsCoresAndMemory() {
     #expect(Machine.physicalCores >= 1)
+    #expect((1...Machine.physicalCores).contains(Machine.performanceCores))
     #expect(Machine.memoryBytes >= 1 << 30)
 }
 
@@ -12,4 +13,10 @@ import Testing
     #expect([4, 8, 16, 18, 24, 36, 64, 128].map { Machine.cacheMemory(memoryBytes: $0 * gb) }
             == [gb, 1536 << 20, 3 * gb, 3584 << 20, 4 * gb, 4 * gb, 4 * gb, 4 * gb])
     #expect(Config().cacheMemory == Machine.cacheMemory(memoryBytes: Machine.memoryBytes))
+}
+
+/// One per performance core, 2 to 16.
+@Test func jxlThreadsFollowThePerformanceCores() {
+    #expect([1, 4, 8, 12, 24].map { Machine.jxlThreadsCurrent(performanceCores: $0) } == [2, 4, 8, 12, 16])
+    #expect(Config().jxlThreadsCurrent == Machine.jxlThreadsCurrent(performanceCores: Machine.performanceCores))
 }

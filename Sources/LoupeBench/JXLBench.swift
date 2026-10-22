@@ -10,8 +10,8 @@ enum JXLBench {
         let description: String
     }
 
-    /// Worker threads for the parallel runner.
-    static let threads = 10
+    /// Worker threads for the parallel runner (`--jxl-threads`).
+    nonisolated(unsafe) static var threads = JXLOptions().threadsCurrent
 
     static let methods: [String: BenchMethod] = [
         "jxl-full": BenchMethod(formats: [.jxl], decode: full, label: ImageFormat.rowLabel),
