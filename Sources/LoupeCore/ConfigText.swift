@@ -60,6 +60,15 @@ public enum ConfigText {
         return lines.joined(separator: "\n")
     }
 
+    /// Drops every active line of the given keys (Reset to Default), so their defaults apply again; comments, the
+    /// commented examples and every other line stay. Text without those keys comes back unchanged.
+    public static func removing(_ keys: [String], in text: String) -> String {
+        let gone = Set(keys.map { $0.lowercased() })
+        return text.components(separatedBy: "\n")
+            .filter { configKey(of: $0).map { !gone.contains($0) } ?? true }
+            .joined(separator: "\n")
+    }
+
     private static func configKey(of line: String) -> String? {
         let content = stripComment(line)
         guard let equals = content.firstIndex(of: "=") else { return nil }

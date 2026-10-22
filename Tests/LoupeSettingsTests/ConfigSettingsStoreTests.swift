@@ -55,6 +55,20 @@ struct ConfigSettingsStoreTests {
         #expect(f.store.value(forKey: "toast-duration") == "1500")
     }
 
+    @Test func removeValuesDropsTheLinesAndTheDefaultsApply() throws {
+        let f = try Fixture("# notes\ncache-memory=8G\ntoast-duration=1500\nzoom-animation=no\n")
+        try f.store.removeValues(forKeys: ["cache-memory", "toast-duration"])
+        #expect(f.text == "# notes\nzoom-animation=no\n")
+        #expect(f.store.value(forKey: "cache-memory") == f.store.defaultValue(forKey: "cache-memory"))
+        #expect(f.store.value(forKey: "toast-duration") == f.store.defaultValue(forKey: "toast-duration"))
+    }
+
+    @Test func removeValuesWithoutAFileWritesNothing() throws {
+        let f = try Fixture()
+        try f.store.removeValues(forKeys: ["cache-memory"])
+        #expect(!FileManager.default.fileExists(atPath: f.file.path))
+    }
+
     @Test func validateMatchesConfig() throws {
         let f = try Fixture()
         #expect(f.store.validate("abc", forKey: "toast-duration") == "Not a valid value")
