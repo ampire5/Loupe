@@ -89,6 +89,22 @@ public enum ThumbnailMaker {
         return try encode(pixels, size: size, orientation: info.orientation)
     }
 
+    /// A stored thumbnail for a cell that it fills, cropped (a cover's mosaic): decoded until its short side covers
+    /// `side` pixels, never past the thumbnail's own size, so a wide photo keeps the pixels its thumbnail has (the
+    /// long-side limit of `decodeCell` would thin a 512 × 144 panorama to 548 × 154 in a 548 px cell, no worse, but
+    /// to 274 × 77 in a grid's quarter). At most the stored thumbnail (`thumb-size` on its long side, 1 MB at 512 px)
+    /// per cell, held only while its mosaic is made.
+    public static func decodeFillCell(_ jpeg: Data, side: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil) else { return nil }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
+        guard width > 0, height > 0 else { return decodeCell(jpeg, maxPixel: side) }
+        let long = max(width, height), short = min(width, height)
+        let wanted = Int((Double(max(1, side)) * Double(long) / Double(short)).rounded(.up))
+        return decodeCell(jpeg, maxPixel: min(long, wanted))
+    }
+
     /// A stored thumbnail at most `maxPixel` on the long side, decoded now rather than at first draw:
     /// the strip's memory LRU holds cell-sized pictures, not the 512 px original.
     public static func decodeCell(_ jpeg: Data, maxPixel: Int) -> CGImage? {

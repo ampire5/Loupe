@@ -2196,11 +2196,12 @@ final class LockedErrors: @unchecked Sendable {
         let reader = ThumbReader(), busy = LockedFlag(), calls = TryCounter(), gate = DispatchSemaphore(value: 0)
         let store = await store(reader, dir: dir)
         reader.add(URL(fileURLWithPath: "/net/p/one/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
-        await store.setCoverListing(dated: { _, _, _, _ in
+        let lister: ThumbnailStore.DatedCoverLister = { _, _, _, _ in
             calls.add()
             if busy.isSet { gate.wait() }
             return CoverListing(names: CoverNames(files: ["a.jpg"], folders: []))
-        }, networkTimeout: .milliseconds(50))
+        }
+        await store.setCoverListing(dated: lister, networkTimeout: .seconds(30))
         let folder = URL(fileURLWithPath: "/net/p/one")
         func card(_ lastViewed: String?) async -> FolderCard? {
             await store.folderCard(folder, archive: false, in: loc("/net/p/one"), maxPixel: 64, lastViewed: lastViewed,
@@ -2209,6 +2210,7 @@ final class LockedErrors: @unchecked Sendable {
         let first = try #require(await card(nil))
         #expect(first.images.count == 1 && first.summary?.photos == 1)
         let listed = calls.count
+        await store.setCoverListing(dated: lister, networkTimeout: .milliseconds(50))
         busy.set()
         for _ in 0..<ThumbnailStore.coverTimeoutsAllowed {
             let again = await card("a.jpg")
@@ -2221,5 +2223,47 @@ final class LockedErrors: @unchecked Sendable {
         let back = try #require(await card("a.jpg"))
         #expect(back.images.count == 1)
         #expect(calls.count == listed)   // from the catalog: the folder is not listed for its picture again
+    }
+}
+
+/// The final fix wave: a cover's cell fills its place in the mosaic (cropped), so it is decoded until its short side
+/// covers the cell's pixels, never past the stored thumbnail: a wide photo keeps the pixels the thumbnail has.
+@Suite struct CoverCellSizeTests {
+    private let fm = FileManager.default
+
+    @Test func fillCellCoversItsShortSide() throws {
+        let jpeg = TestJPEGs.gradient(width: 576, height: 162)   // a 2880 × 810 photo, a fifth of it
+        let fit = try #require(ThumbnailMaker.decodeCell(jpeg, maxPixel: 100))
+        #expect(fit.width == 100)
+        let fill = try #require(ThumbnailMaker.decodeFillCell(jpeg, side: 100))
+        #expect(min(fill.width, fill.height) >= 100 && max(fill.width, fill.height) <= 576)
+        // Never past the thumbnail itself.
+        let whole = try #require(ThumbnailMaker.decodeFillCell(jpeg, side: 400))
+        #expect(whole.width == 576 && whole.height == 162)
+        // A square or a usual photo: as before.
+        let usual = try #require(ThumbnailMaker.decodeFillCell(TestJPEGs.gradient(width: 300, height: 200), side: 100))
+        #expect(usual.height >= 100 && usual.width <= 152)
+    }
+
+    /// A folder whose only photo is a wide one: its card's picture keeps the thumbnail's short side up to the cell.
+    @Test func wideFolderCoverIsNotThinned() async throws {
+        let dir = fm.temporaryDirectory.appendingPathComponent("loupe-cover-cell-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        reader.add(URL(fileURLWithPath: "/p/wide/pano.jpg"), TestJPEGs.gradient(width: 576, height: 162))
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 256, limitBytes: 1 << 30,
+                                   locate: { url in
+                                       ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path,
+                                                         name: url.lastPathComponent)
+                                   }, idleDelay: .zero, commitDelay: .seconds(3600))
+        await store.setCoverListing { _, _, _ in CoverNames(files: ["pano.jpg"], folders: []) }
+        let location = ThumbnailLocation(volume: "test", folder: "/p/wide", name: "_")
+        let made = try #require(await store.folderCard(URL(fileURLWithPath: "/p/wide"), archive: false, in: location,
+                                                       maxPixel: 64))
+        #expect(made.images.first.map { min($0.width, $0.height) >= 64 } == true)
+        // Again from the catalog.
+        let again = try #require(await store.folderCard(URL(fileURLWithPath: "/p/wide"), archive: false, in: location,
+                                                        maxPixel: 64))
+        #expect(again.images.first.map { min($0.width, $0.height) >= 64 } == true)
     }
 }

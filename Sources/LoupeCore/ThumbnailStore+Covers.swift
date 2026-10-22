@@ -5,18 +5,19 @@ import HomeScreenModel
 /// Home's card covers (Home spec §2.5): the thumbnail of a file whose folder no window lists, from the catalog without
 /// opening the folder, else made from the file and kept in the database like any thumbnail.
 extension ThumbnailStore {
-    /// The cover of `url` at most `maxPixel` on its long side; nil when the file cannot be read. A folder some window
+    /// The cover of `url`, decoded to fill a cell of `maxPixel` (its short side covers it, up to the thumbnail's own
+    /// size: `ThumbnailMaker.decodeFillCell`); nil when the file cannot be read. A folder some window
     /// lists answers from the strip's thumbnails; else a stored thumbnail whose stamp is still the file's; else one
     /// made now, one at a time, behind every viewer read.
     public func cover(_ url: URL, maxPixel: Int) async -> CGImage? {
-        if ids[url] != nil, let cell = await cell(url, maxPixel: maxPixel) { return cell }
+        if ids[url] != nil, let cell = await stripCell(url, side: maxPixel) { return cell }
         let locate = self.locate
         // `resolve` may block on a slow share: never on the actor.
         let location = await Self.offActor { locate(url) }
         guard let stamp = try? await reader.stamp(url, priority: ReadPriority.background) else { return nil }
         if let location, let row = perform("cover", { try $0.file(at: location) }) ?? nil, row.stamp == stamp,
            let stored = perform("cover", { try $0.thumbnail(row.id) }) ?? nil {
-            return await Self.offActor { ThumbnailMaker.decodeCell(stored.jpeg, maxPixel: maxPixel) }
+            return await Self.offActor { ThumbnailMaker.decodeFillCell(stored.jpeg, side: maxPixel) }
         }
         try? await coverLimit.acquireSlot(forCurrent: false, rank: Self.readPriority)
         defer { coverLimit.releaseSlot(forCurrent: false) }
@@ -31,7 +32,7 @@ extension ThumbnailStore {
                 try db.put([(id, madeStamp, jpeg, info)])
             }
         }
-        return await Self.offActor { ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel) }
+        return await Self.offActor { ThumbnailMaker.decodeFillCell(jpeg, side: maxPixel) }
     }
 
     /// The file browser's folder cards (file browser spec §4.2): how many photos the catalog knows in each folder, from
@@ -58,15 +59,15 @@ extension ThumbnailStore {
         return names.map { folder.appendingPathComponent($0) }
     }
 
-    /// The stored thumbnail of `url` at most `maxPixel` on its long side, from the catalog alone: no stat and no read
-    /// of the file (a folder card's mosaic on a slow share). Nil when the catalog has none; it may be older than the
-    /// file, which only a folder card can afford.
+    /// The stored thumbnail of `url` decoded to fill a cell of `maxPixel` (`decodeFillCell`), from the catalog alone:
+    /// no stat and no read of the file (a folder card's mosaic on a slow share). Nil when the catalog has none; it may
+    /// be older than the file, which only a folder card can afford.
     public func catalogThumbnail(_ url: URL, maxPixel: Int) async -> CGImage? {
         let locate = self.locate
         guard let location = await Self.offActor({ locate(url) }),
               let row = perform("catalog", { try $0.file(at: location) }) ?? nil,
               let stored = perform("catalog", { try $0.thumbnail(row.id) }) ?? nil else { return nil }
-        return await Self.offActor { ThumbnailMaker.decodeCell(stored.jpeg, maxPixel: maxPixel) }
+        return await Self.offActor { ThumbnailMaker.decodeFillCell(stored.jpeg, side: maxPixel) }
     }
 }
 
@@ -315,15 +316,17 @@ extension ThumbnailStore {
         return card.images
     }
 
-    /// A folder's or zip's card: its pictures, at most `maxPixel` on their long side (up to four photos spread across
-    /// it, the one last viewed there first), and its summary (folder cards spec, "Сводка папки"). `location` is where
+    /// A folder's or zip's card: its pictures (up to four photos spread across it, the one last viewed there first),
+    /// decoded to fill cells of `maxPixel` (`decodeFillCell`: the short side covers it, up to the thumbnail's own
+    /// size), and its summary (folder cards spec, "Сводка папки"). `location` is where
     /// the catalog keeps the folder's files (from the folder Home shows: `folderLocation(shown)`'s `.subfolder(name)`;
     /// nil: none). `network` says whether it is on a share when there is no location (`CoverPlace.unknown`); nil: from
     /// the location, or from the mount table without one. `modified` is the folder's (or zip's) date as its parent's
     /// listing gave it.
     ///
     /// Four of the folder's photos in the catalog (every one of a folder whose stored summary counts fewer:
-    /// `catalogCount`), or the pick of this session's complete listing, are its pictures, at once, without a listing. A summary in the catalog made at that date needs none either; else the card goes
+    /// `catalogCount`), or the pick of this session's complete listing, are its pictures, at once, without a listing.
+    /// A summary in the catalog made at that date needs none either; else the card goes
     /// out with `summaryPending` and the next call for the folder lists it (limited to `coverListingTimeout` on a
     /// share, `coverLocalListingTimeout` elsewhere), until a listing answers, once a session (`summaryFollowUp`; while
     /// its share is offline only a call that may take the share's probe of `coverOfflineProbeInterval` lists): with
@@ -862,7 +865,7 @@ extension ThumbnailStore {
         for name in names {
             guard !Task.isCancelled else { return nil }
             let url = folder.appendingPathComponent(name)
-            if ids[url] != nil || made[url] != nil, let cell = await cell(url, maxPixel: maxPixel) {
+            if ids[url] != nil || made[url] != nil, let cell = await stripCell(url, side: maxPixel) {
                 images.append(cell)
             } else if let stored = await storedCell(at: location.sibling(name), maxPixel: maxPixel) {
                 images.append(stored)
@@ -886,18 +889,25 @@ extension ThumbnailStore {
         return !Task.isCancelled
     }
 
+    /// The strip's thumbnail of `url` (a window lists its folder) as a cover's cell: decoded to fill (`decodeFillCell`),
+    /// not the strip's cell of the long side; nil while it is not made.
+    private func stripCell(_ url: URL, side: Int) async -> CGImage? {
+        guard let (jpeg, _) = storedThumbnail(url) else { return nil }
+        return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeFillCell(jpeg, side: side) }
+    }
+
     /// The catalog's thumbnail of the file at `location` as a cell, however old (a card can afford it); nil when it
     /// has none.
     private func storedCell(at location: ThumbnailLocation, maxPixel: Int) async -> CGImage? {
         guard let row = perform("cover", { try $0.file(at: location) }) ?? nil,
               let stored = perform("cover", { try $0.thumbnail(row.id) }) ?? nil else { return nil }
-        return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeCell(stored.jpeg, maxPixel: maxPixel) }
+        return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeFillCell(stored.jpeg, side: maxPixel) }
     }
 
     /// One photo of a cover: the strip's thumbnail when a window lists its folder, else the catalog's, else one made
     /// now, behind the open folders' thumbnails, and kept in the catalog.
     private func coverCell(_ url: URL, at location: ThumbnailLocation?, maxPixel: Int) async -> CGImage? {
-        if ids[url] != nil || made[url] != nil, let cell = await cell(url, maxPixel: maxPixel) { return cell }
+        if ids[url] != nil || made[url] != nil, let cell = await stripCell(url, side: maxPixel) { return cell }
         if let location, let stored = await storedCell(at: location, maxPixel: maxPixel) { return stored }
         // No stamp is asked for (a stat queues like a read): the read brings the file's, and no viewer bytes are
         // looked up, so the listed stamp is never used.
@@ -916,7 +926,7 @@ extension ThumbnailStore {
             storedBytes += jpeg.count
             if storedBytes > limitBytes { enforceLimit() }
         }
-        return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel) }
+        return await Self.offActor(qos: Self.coverQoS) { ThumbnailMaker.decodeFillCell(jpeg, side: maxPixel) }
     }
 
     /// Runs blocking `work` on a thread of its own in a place of `lane` (`threads`), and waits for it at most `timeout`
