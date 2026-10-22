@@ -28,7 +28,7 @@ import Foundation
         #expect(rows == 1)
         var version: Int64 = 0
         try db.perform { try $0.query("PRAGMA user_version", []) { version = $0.int(0) } }
-        #expect(version == 3)
+        #expect(version == 2)
         let places = BrowserPlaces(database: db)
         places.pin(dir("/a"))
         #expect(places.pins() == [dir("/a")])

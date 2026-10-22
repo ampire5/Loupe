@@ -99,8 +99,9 @@ public final class StateDatabase: @unchecked Sendable {
     private static func addVisitColumns(_ db: SQLiteConnection) throws {
         var columns: Set<String> = []
         try db.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.insert($0.text(0)) }
+        // No table (a file of a Loupe that never kept positions): nothing to add to.
         let missing = [("idx", "INTEGER"), ("count", "INTEGER"), ("visited", "REAL")].filter { !columns.contains($0.0) }
-        guard !missing.isEmpty else { return }
+        guard !columns.isEmpty, !missing.isEmpty else { return }
         try db.transaction {
             for (name, type) in missing { try db.execute("ALTER TABLE folder_positions ADD COLUMN \(name) \(type)") }
         }
