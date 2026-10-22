@@ -1,6 +1,7 @@
 import AppKit
 import Filmstrip
 import FilmstripModel
+import HomeChrome
 import LoupeCore
 
 extension Notification.Name {
@@ -436,9 +437,9 @@ extension Notification.Name {
         view.acceptsMouse = true
         view.isHidden = false
         DebugLog.log("strip show")
-        if fadeIn > 0 {
+        if Chrome.Motion.duration(fadeIn) > 0 {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = fadeIn
+                context.duration = Chrome.Motion.duration(fadeIn)
                 view.animator().alphaValue = 1
             }
         } else {
@@ -463,9 +464,9 @@ extension Notification.Name {
             guard let self, !self.isShown else { return }
             self.view.isHidden = true
         }
-        if fadeOut > 0 {
+        if Chrome.Motion.duration(fadeOut) > 0 {
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = fadeOut
+                context.duration = Chrome.Motion.duration(fadeOut)
                 view.animator().alphaValue = 0
             }, completionHandler: {
                 MainActor.assumeIsolated { finishHide() }
@@ -508,7 +509,7 @@ extension Notification.Name {
         view.labelTrailingInset = shown ? tools.fittingSize.width + Self.capsuleGap + FilmstripView.padding : 0
         let from = tools.alphaValue
         tools.setShown(shown, animated: false)   // its hit test; the fade is ours, from where it was
-        let duration = shown ? fadeIn : fadeOut
+        let duration = Chrome.Motion.duration(shown ? fadeIn : fadeOut)
         guard duration > 0 else { return }
         tools.alphaValue = from
         NSAnimationContext.runAnimationGroup { context in

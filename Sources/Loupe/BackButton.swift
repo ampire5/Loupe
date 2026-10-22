@@ -21,7 +21,7 @@ final class BackButton: NSView {
         chevron.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .semibold))
         chevron.contentTintColor = Chrome.Palette.overMedia.text
-        label.font = Chrome.Text.font(.title)
+        label.font = Chrome.Text.font(.heading)
         label.textColor = Chrome.Palette.overMedia.text
         for view in [chevron, label] {
             view.translatesAutoresizingMaskIntoConstraints = false
