@@ -135,14 +135,17 @@ import LoupeCore
     /// What the session shows right now: a load in progress wins over a stale picture, an error over both.
     func update(from session: ViewerSession) {
         let text: String
-        // The position the fill shows: the one the text gives, the current photo's where the text gives none.
+        // The position the fill shows: the one the text gives (a pair's last page), the current photo's where the text
+        // gives none.
         var index = session.playlist?.index ?? 0
+        var fillIndex: Int?
         if let message = session.folderMessage {
             text = message
         } else if let loading = session.loadingName {
             // A pair: its range (spread spec, «Положение»).
             let pages = session.currentPages
             let position = session.playlist.map { (index: pages?.first ?? $0.index, count: $0.files.count) }
+            fillIndex = pages?.second
             text = StatsLine.loading(name: loading, position: position, companion: pages?.second,
                                      counted: session.folderCounted)
         } else if let error = session.error {
@@ -156,6 +159,7 @@ import LoupeCore
                let second = pages.second {
                 index = pages.first
                 companion = second
+                fillIndex = second
                 name = ArchivePath.shortName(list.files[pages.first]) + " · " + ArchivePath.shortName(list.files[second])
             }
             text = StatsLine.loaded(name: name, index: index, companion: companion, count: list.files.count,
@@ -172,7 +176,8 @@ import LoupeCore
             needsLayout = true
         }
         // An uncounted folder's interim `1 / 1` would fill the whole bar.
-        let fraction = session.folderCounted ? session.playlist.map { StatsLine.progress(index: index, count: $0.files.count) } ?? 0 : 0
+        let filled = fillIndex ?? index
+        let fraction = session.folderCounted ? session.playlist.map { StatsLine.progress(index: filled, count: $0.files.count) } ?? 0 : 0
         if fraction != progress {
             progress = fraction
             needsLayout = true

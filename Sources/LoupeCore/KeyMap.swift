@@ -165,6 +165,7 @@ public struct KeyMap: Sendable, Equatable {
         .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance,
         .toggleStrip, .toggleStripPlacement, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
+        .toggleSpread, .saveSpread, .shiftSpread,
     ]
 
     /// An action's bindings in the order the cheat sheet and the menus show them: plain (and ⇧) keys first, then the ⌥
@@ -281,9 +282,9 @@ public struct KeyMap: Sendable, Equatable {
         .toggleInfoPanel: ("Show or hide the info panel", .view),
         .cyclePanIndicators: ("Pan indicators: auto / always / off", .view),
         .savePanIndicators: ("Save pan indicators as default", .view),
-        .toggleSpread: ("Two pages", .view),
-        .saveSpread: ("Two pages as default", .view),
-        .shiftSpread: ("Shift pages", .view),
+        .toggleSpread: ("Two pages on/off (this folder)", .view),
+        .saveSpread: ("Save two pages as default", .view),
+        .shiftSpread: ("Shift the pairs by a page (this folder)", .view),
         .newTab: ("New tab", .tabs),
         .newWindow: ("New window", .tabs),
         .closeTab: ("Close tab", .tabs),

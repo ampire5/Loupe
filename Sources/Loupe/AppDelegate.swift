@@ -734,6 +734,19 @@ import UniformTypeIdentifiers
         // The session's mode in every window, checked (Settings); `P` is its Next Mode item, `⇧P` the item below.
         view.addItem(submenu: Settings.shared.makePanIndicatorsMenu(), title: "Pan Indicators")
         view.addItem(.viewerKey("Save Pan Indicators as Default", .savePanIndicators))
+        view.addItem(.separator())
+        // Two pages (spread spec 2026-10-23): the same as `D` and `⌥D`, whose keys they show, checked at the window's
+        // folder values (ViewerWindowController validates them); Right to Left has no key and writes the folder's
+        // `spread-direction`; `⇧D` saves.
+        let spread = view.addItem(withTitle: "Two Pages", action: #selector(ViewerWindowController.toggleTwoPages(_:)),
+                                  keyEquivalent: "")
+        spread.showKey(of: .toggleSpread)
+        let shift = view.addItem(withTitle: "Shift Pages", action: #selector(ViewerWindowController.toggleShiftPages(_:)),
+                                 keyEquivalent: "")
+        shift.showKey(of: .shiftSpread)
+        view.addItem(withTitle: "Right to Left", action: #selector(ViewerWindowController.toggleRightToLeft(_:)),
+                     keyEquivalent: "")
+        view.addItem(.viewerKey("Save Two Pages as Default", .saveSpread))
         main.addItem(submenu: view, title: "View")
 
         main.addItem(submenu: Settings.shared.makeZoomMenu(), title: "Zoom")

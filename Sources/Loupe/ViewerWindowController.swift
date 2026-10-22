@@ -1440,6 +1440,21 @@ import UniformTypeIdentifiers
     /// View › Stats Bar: the same as `I`.
     @objc func toggleStatsBar(_ sender: Any?) { toggleStats() }
 
+    /// View › Two Pages: the same as `D`.
+    @objc func toggleTwoPages(_ sender: Any?) { spreadKey(.toggleSpread) }
+
+    /// View › Shift Pages: the same as `⌥D`.
+    @objc func toggleShiftPages(_ sender: Any?) { spreadKey(.shiftSpread) }
+
+    /// View › Right to Left: the folder's `spread-direction` the other way round (the folder's own value, as `D` writes
+    /// `spread`). The session follows through `.folderSettingsChanged`, as for `D`.
+    @objc func toggleRightToLeft(_ sender: Any?) {
+        guard let folder else { return }
+        let value = SpreadKeys.toggledDirection(effectiveConfig)
+        folderSettings.set(SpreadKeys.directionKey, value, for: folder)
+        toast.show(SpreadKeys.toast(rightToLeft: value == "rtl"))
+    }
+
     /// A viewer-key menu item (`NSMenuItem.viewerKey`) while the viewer is not the first responder (a value selected in
     /// the info panel): the viewer does it all the same.
     @objc func performKeyAction(_ sender: NSMenuItem) { viewerView.performKeyAction(sender) }
@@ -1495,6 +1510,15 @@ import UniformTypeIdentifiers
             item.state = Settings.shared.config.stripWindow == .beside && !isFullScreen ? .on : .off
         case #selector(toggleStatsBar(_:)):
             item.state = statsMode != .hidden ? .on : .off
+        case #selector(toggleTwoPages(_:)):
+            item.state = effectiveConfig.spread ? .on : .off
+            return folder != nil
+        case #selector(toggleShiftPages(_:)):
+            item.state = effectiveConfig.spreadShift ? .on : .off
+            return folder != nil
+        case #selector(toggleRightToLeft(_:)):
+            item.state = effectiveConfig.spreadRightToLeft ? .on : .off
+            return folder != nil
         case #selector(toggleInfoPanel(_:)):
             item.title = infoPanel.isVisible ? "Hide Info" : "Show Info"
         case #selector(pickColourMethod(_:)):
@@ -1823,11 +1847,13 @@ import UniformTypeIdentifiers
     }
 
     /// The pyramid level the frame on screen is drawn from and its zoom: the level is the finer of the one the zoom
-    /// wants and the finest resident, at the scale drawn (a zoom stretch included), as in the renderer. Nil without a
+    /// wants and the finest resident, at the scale drawn (a zoom stretch included), as in the renderer. In a pair it is
+    /// the page the panel is about (`infoPhoto`), at that page's own scale (`ViewerSession.drawnPage`). Nil without a
     /// picture (nothing decoded yet, a failed photo).
     private func drawnFrame() -> (level: Int, scale: Double)? {
-        guard let pyramid = session.image, let finest = pyramid.finestResidentLevel else { return nil }
-        let scale = session.transform.drawnScale
+        guard let (pyramid, scale) = session.drawnPage(infoPhoto), let finest = pyramid.finestResidentLevel else {
+            return nil
+        }
         return (pyramid.grid.drawnLevel(forScale: scale, finestResident: finest), scale)
     }
 
