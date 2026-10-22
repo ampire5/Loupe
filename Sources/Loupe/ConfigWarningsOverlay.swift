@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import LoupeCore
 
 /// The loupe.conf and input.conf problems box (Task 17c, user: `strip-magnify-reach=0.00` was rejected on stderr only
@@ -11,10 +12,10 @@ import LoupeCore
 /// not fit the height the window allows is clipped.
 @MainActor final class ConfigWarningsOverlay: NSView {
     static let visibleSeconds: TimeInterval = 8
-    private static let fadeSeconds: TimeInterval = 0.4
-    private static let dismissSeconds: TimeInterval = 0.15
-    private static let padding = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+    private static let padding = NSEdgeInsets(top: Chrome.Space.m, left: Chrome.Space.l, bottom: Chrome.Space.m,
+                                               right: Chrome.Space.l)
     private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private let glass = ChromeGlass(style: .overMedia(.regular), cornerRadius: Chrome.Radius.card)
     private let lines = NSStackView()
     private var fadeTimer: Timer?
     /// Bumped on every show and hide, so a fade that was overtaken does not hide the newer box.
@@ -22,16 +23,18 @@ import LoupeCore
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.1, alpha: 0.85).cgColor
-        layer?.cornerRadius = 8
         isHidden = true
-        layer?.masksToBounds = true
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        NSLayoutConstraint.activate([
+            glass.topAnchor.constraint(equalTo: topAnchor), glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor), glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
         lines.orientation = .vertical
         lines.alignment = .leading
         lines.spacing = 0
         lines.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(lines)
+        glass.contentView.addSubview(lines)
         // The bottom gives way (priority below required) to a height limit the window controller sets.
         let bottom = lines.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.padding.bottom)
         bottom.priority = .defaultHigh
@@ -56,8 +59,8 @@ import LoupeCore
         for old in lines.arrangedSubviews { old.removeFromSuperview() }
         for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let field = NSTextField(labelWithString: String(line))
-            field.font = n == 0 ? NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold) : Self.font
-            field.textColor = NSColor(white: 0.92, alpha: 1)
+            field.font = n == 0 ? NSFont.monospacedSystemFont(ofSize: Self.font.pointSize, weight: .semibold) : Self.font
+            field.textColor = Chrome.Palette.overMedia.text
             field.lineBreakMode = .byTruncatingTail
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             lines.addArrangedSubview(field)
@@ -74,7 +77,7 @@ import LoupeCore
         let shown = generation
         // In the common modes, so menu tracking or a live resize does not hold the fade back.
         let timer = Timer(timeInterval: Self.visibleSeconds, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.fade(over: Self.fadeSeconds, generation: shown) }
+            MainActor.assumeIsolated { self?.fade(over: Chrome.Motion.hide, generation: shown) }
         }
         RunLoop.main.add(timer, forMode: .common)
         fadeTimer = timer
@@ -92,7 +95,7 @@ import LoupeCore
         guard shown == generation, !isHidden else { return }
         fadeTimer = nil
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = seconds
+            context.duration = Chrome.Motion.duration(seconds)
             animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
@@ -115,6 +118,6 @@ import LoupeCore
 
     override func mouseDown(with event: NSEvent) {
         fadeTimer?.invalidate()
-        fade(over: Self.dismissSeconds, generation: generation)
+        fade(over: Chrome.Motion.hide, generation: generation)
     }
 }

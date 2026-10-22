@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import LoupeCore
 
 /// The stats strip (spec §10): one line, shown or hidden (M4a spec §3.5: the timings, cache, memory and GPU frame
@@ -13,12 +14,10 @@ import LoupeCore
 /// the bar's size changes, never per frame.
 @MainActor final class StatsBar: NSView {
     static let compactHeight: CGFloat = 24
-    private static let fontSize: CGFloat = 12
-    private static let folderFontSize: CGFloat = 14
     /// The stats text's distance from the bar's edges.
-    private static let inset: CGFloat = 10
+    private static let inset: CGFloat = Chrome.Space.m + Chrome.Space.xxs
     /// Between the folder name and the stats text.
-    private static let nameGap: CGFloat = 16
+    private static let nameGap: CGFloat = Chrome.Space.xl
     /// Narrower than this the name is not worth showing ("A…Z" and little more).
     private static let nameMinimumWidth: CGFloat = 40
     private let label = NSTextField(labelWithString: "")
@@ -52,8 +51,8 @@ import LoupeCore
         wantsLayer = true
         fill.wantsLayer = true
         addSubview(fill)   // first: under the text
-        label.font = .monospacedDigitSystemFont(ofSize: Self.fontSize, weight: .regular)   // digits do not jitter while zooming
-        label.textColor = NSColor(white: 0.92, alpha: 1)
+        label.font = Chrome.Text.digits(.small)   // digits do not jitter while zooming
+        label.textColor = Chrome.Palette.overMedia.text
         label.lineBreakMode = .byTruncatingMiddle
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -65,7 +64,7 @@ import LoupeCore
         ])
         // Placed by `layout()`: centred and as wide as the room beside the text allows.
         // The stats text's weight, a little larger (user, M3a): the name reads first, but stays a quiet label.
-        folderLabel.font = .systemFont(ofSize: Self.folderFontSize, weight: .regular)
+        folderLabel.font = Chrome.Text.font(.body)
         folderLabel.textColor = label.textColor
         folderLabel.alignment = .center
         folderLabel.lineBreakMode = .byTruncatingMiddle
@@ -193,7 +192,8 @@ import LoupeCore
     /// The fill lightens the bar with white at `stats-progress-opacity` (default 0.15: the 0.1 grey reads ≈ 0.24), the
     /// same over the picture and on the solid bar: no new hue, visible at a glance.
     private func applyBackground() {
-        layer?.backgroundColor = NSColor(white: 0.1, alpha: overlay ? 0.6 : 1).cgColor
+        let tint = Chrome.Palette.overMedia.glassTint
+        layer?.backgroundColor = tint.withAlphaComponent(overlay ? tint.alphaComponent : 1).cgColor
         fill.layer?.backgroundColor = NSColor(white: 1, alpha: progressOpacity).cgColor
     }
 }

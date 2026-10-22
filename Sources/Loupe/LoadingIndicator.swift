@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import QuartzCore
 
 /// `strip-loading-indicator=yes` (M2.5 spec §5.2): a small spinner in the viewer's bottom-right corner while the
@@ -33,13 +34,13 @@ import QuartzCore
         wantsLayer = true
         isHidden = true
         arc.fillColor = nil
-        arc.strokeColor = CGColor(gray: 0.92, alpha: 0.9)
+        arc.strokeColor = Chrome.Palette.overMedia.text.cgColor
         arc.lineWidth = Self.lineWidth
         arc.lineCap = .round
         arc.strokeEnd = 0.75
         // Readable over a light photo too.
-        arc.shadowColor = CGColor(gray: 0, alpha: 1)
-        arc.shadowOpacity = 0.5
+        arc.shadowColor = Chrome.Palette.overMedia.mediaShadow.cgColor
+        arc.shadowOpacity = 1
         arc.shadowRadius = 1.5
         arc.shadowOffset = .zero
         layer?.addSublayer(arc)
