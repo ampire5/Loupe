@@ -14,8 +14,11 @@ public final class MetalContext: @unchecked Sendable {
     /// Frames (and anything a frame must see in order) go here.
     public let queue: MTLCommandQueue
     /// Texture uploads and pyramid builds (label "upload"): a separate queue, so a frame never waits behind
-    /// a 100 MP upload (M2 spec §4.4).
+    /// a 100 MP upload (M2 spec §4.4). A separate queue alone is not enough on a discrete GPU, which ran a whole upload
+    /// before the frames queued behind it: uploads go in pieces and yield to `frames` (`TiledImage.encodeAndRun`).
     public let uploadQueue: MTLCommandQueue
+    /// The frames in flight on `queue`: whoever commits a frame tracks it here, so uploads yield to it.
+    public let frames = FrameTraffic()
     /// `downsample2x`: builds pyramid level L+1 from level L (see `Shaders.source` for its contract).
     public let downsample: MTLComputePipelineState
     /// `downsampleLanczos2x`: the same with a Lanczos-3 2x decimation (`pyramid-filter = lanczos3`).

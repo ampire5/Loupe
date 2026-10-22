@@ -21,10 +21,11 @@ import Testing
 /// The MSL structs are laid out by the Metal compiler; these sizes are what it produces for them
 /// (float2/uint2 align to 8, so `TileInstance` gets 4 bytes of tail padding).
 @Test func shaderStructLayoutsMatchMSL() {
-    #expect(MemoryLayout<DownsampleParams>.size == 24 && MemoryLayout<DownsampleParams>.stride == 24)
+    #expect(MemoryLayout<DownsampleParams>.size == 28 && MemoryLayout<DownsampleParams>.stride == 32)
     #expect(MemoryLayout<DownsampleParams>.alignment == 8)
     #expect(MemoryLayout<DownsampleParams>.offset(of: \.srcColumns) == 16)
     #expect(MemoryLayout<DownsampleParams>.offset(of: \.dstColumns) == 20)
+    #expect(MemoryLayout<DownsampleParams>.offset(of: \.firstSlice) == 24)
 
     #expect(MemoryLayout<TileInstance>.stride == 32 && MemoryLayout<TileInstance>.alignment == 8)
     #expect(MemoryLayout<TileInstance>.offset(of: \.slotOrigin) == 16)
@@ -70,8 +71,10 @@ import Testing
     #expect(MemoryLayout<TransparencyParams>.size == 48 && MemoryLayout<TransparencyParams>.alignment == 16)
     #expect(MemoryLayout<TransparencyParams>.offset(of: \.anchor) == 32)
     #expect(MemoryLayout<TransparencyParams>.offset(of: \.invCell) == 40)
-    #expect(MemoryLayout<AlphaUploadParams>.size == 16 && MemoryLayout<AlphaUploadParams>.alignment == 8)
+    #expect(MemoryLayout<AlphaUploadParams>.size == 20 && MemoryLayout<AlphaUploadParams>.stride == 24)
+    #expect(MemoryLayout<AlphaUploadParams>.alignment == 8)
     #expect(MemoryLayout<AlphaUploadParams>.offset(of: \.bytesPerRow) == 12)
+    #expect(MemoryLayout<AlphaUploadParams>.offset(of: \.firstSlice) == 16)
 }
 
 /// Eight pipelines (four kernels, up and down), each compiled once and able to run the kernel's full 16 x 16
@@ -280,7 +283,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
                                               options: [.bindingInfo, .bufferTypeInfo], reflection: &computeReflection)
     let params = try #require(computeReflection?.bindings.first { $0.name == "p" } as? MTLBufferBinding)
     #expect(params.bufferDataSize == MemoryLayout<DownsampleParams>.stride)
-    #expect(members(params) == ["srcLevelSize": 0, "dstLevelSize": 8, "srcColumns": 16, "dstColumns": 20])
+    #expect(members(params) == ["srcLevelSize": 0, "dstLevelSize": 8, "srcColumns": 16, "dstColumns": 20, "firstSlice": 24])
 
     let d = MTLRenderPipelineDescriptor()
     d.vertexFunction = c.library.makeFunction(name: "tileVertex")
@@ -346,7 +349,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
                                               options: [.bindingInfo, .bufferTypeInfo], reflection: &uploadReflection)
     let upload = try #require(uploadReflection?.bindings.first { $0.name == "p" } as? MTLBufferBinding)
     #expect(upload.index == 1 && upload.bufferDataSize == MemoryLayout<AlphaUploadParams>.stride)
-    #expect(members(upload) == ["levelSize": 0, "columns": 8, "bytesPerRow": 12])
+    #expect(members(upload) == ["levelSize": 0, "columns": 8, "bytesPerRow": 12, "firstSlice": 16])
 }
 
 @Test func curveTableVariantsBindTheInverseTableAtTexture3() throws {

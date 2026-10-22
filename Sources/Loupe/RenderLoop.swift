@@ -531,6 +531,7 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         }
         guard let renderer, let commands = context.queue.makeCommandBuffer() else { return }
         commands.label = "frame \(snapshot.generation)"
+        context.frames.track(commands)   // uploads yield to it
         renderer.background = snapshot.background
         renderer.resample = snapshot.resample
         renderer.transparency = snapshot.transparency

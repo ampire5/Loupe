@@ -144,7 +144,7 @@ public final class TiledImage: @unchecked Sendable {
 
     /// Uploads `image` as level `level` and (re)builds every coarser level with `filter` on `context.uploadQueue`;
     /// on completion swaps in the new textures for `level...` atomically and bumps `revision`. Returns the GPU time of
-    /// that work in seconds (blits and pyramid build, one command buffer), nil when the upload was skipped.
+    /// that work in seconds (blits and pyramid build, summed over its pieces), nil when the upload was skipped.
     ///
     /// Fresh textures are allocated for `level...last` and published only after the GPU completes, so a frame
     /// sampling the old ones is never disturbed; finer levels already resident stay. Levels that `evict` dropped

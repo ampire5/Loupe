@@ -199,6 +199,7 @@ enum Shaders {
         uint2 levelSize;
         uint columns;      // tile columns of the level (slice = row * columns + column)
         uint bytesPerRow;
+        uint firstSlice;   // the dispatch's slice gid.z = 0 (an upload goes in pieces of slices)
     };
 
     kernel void uploadPremultipliedLinear(const device uchar* src [[buffer(0)]],
@@ -207,13 +208,14 @@ enum Shaders {
                                           texture2d_array<float, access::write> dst [[texture(0)]],
                                           uint3 gid [[thread_position_in_grid]])
     {
-        if (gid.x >= kSlotSize || gid.y >= kSlotSize || gid.z >= dst.get_array_size() || p.columns == 0) return;
-        uint2 tile = uint2(gid.z % p.columns, gid.z / p.columns);
+        uint slice = gid.z + p.firstSlice;
+        if (gid.x >= kSlotSize || gid.y >= kSlotSize || slice >= dst.get_array_size() || p.columns == 0) return;
+        uint2 tile = uint2(slice % p.columns, slice / p.columns);
         int2 g = int2(tile * kTileSize) - int(kApron) + int2(gid.xy);
         if (any(g < 0) || any(g >= int2(p.levelSize))) return;
         const device uchar* px = src + ulong(g.y) * p.bytesPerRow + ulong(g.x) * 4;   // B, G, R, A
         uint row = uint(px[3]) * 256;
-        dst.write(float4(table[row + px[2]], table[row + px[1]], table[row + px[0]], px[3]) / 255.0, gid.xy, gid.z);
+        dst.write(float4(table[row + px[2]], table[row + px[1]], table[row + px[0]], px[3]) / 255.0, gid.xy, slice);
     }
 
     // ---- downsample2x ---------------------------------------------------------------------
@@ -223,6 +225,7 @@ enum Shaders {
         uint2 dstLevelSize;
         uint srcColumns;
         uint dstColumns;
+        uint firstSlice;   // the destination slice of gid.z = 0 (a level is built in pieces of slices)
     };
 
     // Both pyramid kernels read the source level's _srgb view, so for a photo with alpha (levels in premultiplied linear
@@ -236,8 +239,8 @@ enum Shaders {
         return src.read(texel, tile.y * p.srcColumns + tile.x);
     }
 
-    // One dispatch per destination level: threadsPerGrid = (528, 528, dstTileCount). gid.xy is the
-    // destination slot texel, gid.z the destination slice, so aprons are filled too. Each output is
+    // Dispatches of threadsPerGrid = (528, 528, slices) cover a destination level, a piece of its slices each. gid.xy is
+    // the destination slot texel, gid.z + firstSlice the destination slice, so aprons are filled too. Each output is
     // the 2×2 box average of the source in linear light (alpha averaged as-is), sRGB-encoded.
     //   src [[texture(0)]]: SOURCE level, bgra8Unorm_srgb view — read() returns linear values.
     //   dst [[texture(1)]]: DESTINATION level, bgra8Unorm view — written with a manual sRGB encode.
@@ -246,10 +249,11 @@ enum Shaders {
                              constant DownsampleParams& p [[buffer(0)]],
                              uint3 gid [[thread_position_in_grid]])
     {
-        if (gid.x >= kSlotSize || gid.y >= kSlotSize || gid.z >= dst.get_array_size()) return;
+        uint slice = gid.z + p.firstSlice;
+        if (gid.x >= kSlotSize || gid.y >= kSlotSize || slice >= dst.get_array_size()) return;
         if (any(p.dstLevelSize == 0) || any(p.srcLevelSize == 0) || p.dstColumns == 0) return;
 
-        uint2 tile = uint2(gid.z % p.dstColumns, gid.z / p.dstColumns);
+        uint2 tile = uint2(slice % p.dstColumns, slice / p.dstColumns);
         // Global destination pixel (slotOrigin + gid.xy), clamped into the level so edge aprons
         // replicate the edge pixel instead of reading outside the source.
         int2 g = int2(tile * kTileSize) - int(kApron) + int2(gid.xy);
@@ -263,7 +267,7 @@ enum Shaders {
                    + readSource(src, p, uint2(s0.x, s1.y))
                    + readSource(src, p, s1);
         float4 avg = sum * 0.25;
-        dst.write(float4(linearToSRGB(avg.rgb), avg.a), gid.xy, gid.z);
+        dst.write(float4(linearToSRGB(avg.rgb), avg.a), gid.xy, slice);
     }
 
     // ---- downsampleLanczos2x --------------------------------------------------------------
@@ -289,8 +293,9 @@ enum Shaders {
                                     uint3 tg [[threadgroup_position_in_grid]])
     {
         threadgroup float4 rows[kDecimateRows][kDecimateGroup];
-        // Uniform per group (gid.z is the group's slice), so the early return skips the barrier for all or none.
-        if (tg.z >= dst.get_array_size()) return;
+        // Uniform per group (tg.z + firstSlice is the group's slice), so the early return skips the barrier for all or none.
+        uint slice = tg.z + p.firstSlice;
+        if (slice >= dst.get_array_size()) return;
         if (any(p.dstLevelSize == 0) || any(p.srcLevelSize == 0) || p.dstColumns == 0) return;
 
         // Weights: Lanczos-3 at distance |t - 5.5| · 0.5 (never 0, so no special case at the centre), normalised.
@@ -305,7 +310,7 @@ enum Shaders {
 
         // Destination pixels as downsample2x: slotOrigin + slot texel, clamped into the level (edge aprons replicate
         // the edge pixel). d is monotone in the slot texel, so the group's rows span d0.y ... d0.y + 15 at most.
-        uint2 tile = uint2(tg.z % p.dstColumns, tg.z / p.dstColumns);
+        uint2 tile = uint2(slice % p.dstColumns, slice / p.dstColumns);
         int2 levelMax = int2(p.dstLevelSize) - 1;
         int2 slot0 = int2(tile * kTileSize) - int(kApron);
         int2 d = clamp(slot0 + int2(gid.xy), int2(0), levelMax);
@@ -329,7 +334,7 @@ enum Shaders {
         int r0 = 2 * (d.y - d0.y);
         float4 acc = 0.0;
         for (int t = 0; t < kDecimateTaps; t++) acc += w[t] * rows[r0 + t][tid.x];
-        dst.write(float4(linearToSRGB(acc.rgb), saturate(acc.a)), gid.xy, gid.z);
+        dst.write(float4(linearToSRGB(acc.rgb), saturate(acc.a)), gid.xy, slice);
     }
 
     // ---- tileVertex / tileFragment --------------------------------------------------------

@@ -4,12 +4,13 @@ import LoupeCore
 // match the MSL declarations exactly (MetalContextTests pins the sizes and offsets): SIMD2 of a
 // 4-byte scalar has the same 8-byte size and alignment as MSL `float2` / `uint2`.
 
-/// Parameters of one `downsample2x` dispatch (compute buffer 0). 24 bytes, alignment 8.
+/// Parameters of one `downsample2x` dispatch (compute buffer 0). Size 28, stride 32 (as MSL pads it), alignment 8.
 struct DownsampleParams {
     var srcLevelSize: SIMD2<UInt32>   // source level size in pixels
     var dstLevelSize: SIMD2<UInt32>   // destination level size, ceil(src / 2)
     var srcColumns: UInt32            // tile columns of the source level (slice = row * columns + column)
     var dstColumns: UInt32            // tile columns of the destination level
+    var firstSlice: UInt32 = 0        // the destination slice of the dispatch's first one (a level goes in pieces)
 }
 
 /// One tile to draw (vertex buffer 0, one element per instance). All positions in level pixels.
@@ -92,11 +93,12 @@ struct TransparencyParams {
     var pad: Float = 0
 }
 
-/// Parameters of one `uploadPremultipliedLinear` dispatch (compute buffer 1). 16 bytes, alignment 8.
+/// Parameters of one `uploadPremultipliedLinear` dispatch (compute buffer 1). Size 20, stride 24, alignment 8.
 struct AlphaUploadParams {
     var levelSize: SIMD2<UInt32>   // the level being uploaded
     var columns: UInt32            // its tile columns
     var bytesPerRow: UInt32        // of the decoded pixels
+    var firstSlice: UInt32 = 0     // the slice of the dispatch's first one (an upload goes in pieces)
 }
 
 /// The colour cube of a `COLOR_LUT` pipeline (fragment buffer 2 of the tile and MetalFX passes, compute buffer 3 of
