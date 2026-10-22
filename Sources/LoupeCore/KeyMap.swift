@@ -7,7 +7,7 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case toggleKeepZoom, saveKeepZoom
     /// `keep-zoom-as` for the folder (`share` ↔ `scale`), and as the loupe.conf default.
     case toggleZoomCarry, saveZoomCarry
-    case toggleFullScreen, cycleStats, toggleStrip, cheatSheet, toggleInfoPanel
+    case toggleFullScreen, cycleStats, toggleStrip, toggleStripPlacement, cheatSheet, toggleInfoPanel
     case cyclePanIndicators, savePanIndicators
     case panLeft, panRight, panUp, panDown
     case cycleFilter, saveFilters, toggleAntiring, saveAntiring
@@ -274,6 +274,7 @@ public struct KeyMap: Sendable, Equatable {
         .exitFullScreen: ("Leave full screen", .view),
         .cycleStats: ("Stats bar on/off", .view),
         .toggleStrip: ("Hide or show the strip", .view),
+        .toggleStripPlacement: ("Strip beside or over the photo", .view),
         .cheatSheet: ("Show or hide this sheet", .view),
         .toggleInfoPanel: ("Show or hide the info panel", .view),
         .cyclePanIndicators: ("Pan indicators: auto / always / off", .view),
@@ -358,6 +359,8 @@ public struct KeyMap: Sendable, Equatable {
         KeyBinding(character: "v", allowsRepeat: false, action: .toggleVibrance),
         KeyBinding(character: "f", allowsRepeat: false, action: .toggleFullScreen),
         KeyBinding(character: "i", allowsRepeat: false, action: .cycleStats),
+        // ⇧T first, as plain letters ignore Shift.
+        KeyBinding(character: "t", modifiers: .shift, allowsRepeat: false, action: .toggleStripPlacement),
         KeyBinding(character: "t", allowsRepeat: false, action: .toggleStrip),
         // Pan indicators: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "p", modifiers: .shift, allowsRepeat: false, action: .savePanIndicators),

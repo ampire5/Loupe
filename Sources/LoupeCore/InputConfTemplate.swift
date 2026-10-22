@@ -102,6 +102,7 @@ public enum InputConfTemplate {
     # ESC exit-full-screen                          # leave full screen
     # i cycle-stats                                 # stats bar
     # t toggle-strip                                # pin / unpin the thumbnail strip
+    # T toggle-strip-placement                      # strip beside or over the photo
     # ? cheat-sheet                                 # cheat sheet
     # p cycle-pan-indicators                        # pan indicators: auto / always / off
     # P save-pan-indicators                         # save pan indicators as default

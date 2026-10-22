@@ -38,6 +38,7 @@ import QuartzCore
     var onToggleStats: (() -> Void)?
     /// `t` pressed; the window controller owns the thumbnail strip.
     var onToggleStrip: (() -> Void)?
+    var onToggleStripPlacement: (() -> Void)?
     /// `?` pressed, or a key pressed while the sheet is open; the window controller owns the cheat sheet.
     var onToggleCheatSheet: (() -> Void)?
     /// `s`, `⇧S`, `a`, `⇧A` pressed (`cycleFilter`, `saveFilters`, `toggleAntiring`, `saveAntiring`); the window
@@ -1490,6 +1491,7 @@ import QuartzCore
         case .toggleFullScreen: window?.toggleFullScreen(nil)
         case .cycleStats: onToggleStats?()
         case .toggleStrip: onToggleStrip?()
+        case .toggleStripPlacement: onToggleStripPlacement?()
         case .cheatSheet: onToggleCheatSheet?()
         case .toggleInfoPanel: onToggleInfoPanel?()
         case .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring: return onScalingKey?(action) ?? false
