@@ -57,6 +57,8 @@ public struct CacheFocus: Equatable, Sendable {
     /// The photo shown before the current one (the one just left), nil when there is none: it keeps its full
     /// resolution if it has it, ahead of n1's (spec §11.1.7), so flipping back at 100 % stays sharp.
     public var previous: Int?
+    /// The other page of the pair just left (spread), nil when it was one page: kept like `previous`.
+    public var previousCompanion: Int?
     /// The user is scrubbing the strip (M2.5 spec §5.3): the current photo is the one under the cursor, only passing
     /// through, and shown from its thumbnail. Nothing is planned, so no read or decode starts and those waiting are
     /// cancelled, as in fast stepping; what is resident stays (eviction is lazy). Dropping the flag plans as before.
@@ -77,8 +79,9 @@ public struct CacheFocus: Equatable, Sendable {
 
     public init(count: Int, current: Int, direction: Int, dwelling: Bool, needsFull: Bool, screen: PixelSize,
                 previous: Int? = nil, scrubbing: Bool = false, appliesOrientation: Bool = true, opened: Bool = false,
-                companion: Int? = nil, step: Int = 1) {
+                companion: Int? = nil, step: Int = 1, previousCompanion: Int? = nil) {
         self.companion = companion
+        self.previousCompanion = previousCompanion
         self.step = step
         self.count = count
         self.current = current
@@ -184,9 +187,10 @@ public enum CachePlan {
             }
             // 3a. The photo just left keeps its full resolution if it still has it (or is decoding it), ahead of
             // n1's: flipping back at 100 % must not lose sharpness (spec §11.1.7). Never a new decode: planned only
-            // when already kept.
-            if let left = focus.previous, left != current, left != companionPage, !plansFull(left), isPlannable(left),
-               entry(left).facts.fullKept {
+            // when already kept. Both pages of a pair just left.
+            for left in [focus.previous, focus.previousCompanion].compactMap({ $0 })
+            where left != current && left != companionPage && !plansFull(left) && isPlannable(left)
+                && entry(left).facts.fullKept {
                 _ = add(left, .full)
             }
             // 4. Full resolution for the next one, so a flip lands sharp.

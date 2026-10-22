@@ -414,3 +414,15 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     #expect(items.filter { $0.index == 11 && $0.goal == .full }.count == 1)
     #expect(items.filter { $0.index == 10 && $0.goal == .full }.count == 1)
 }
+
+/// Both pages of the pair just left keep their full resolution (rule 3a), not only the page that was current.
+@Test func justLeftPairKeepsBothPagesFull() {
+    var f = pairFocus(current: 12, companion: 13)
+    f.previous = 10
+    f.previousCompanion = 11
+    let photo = PixelSize(width: 6000, height: 4000)   // two full ones fit the memory, unlike two 147 MP ones
+    let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: photo, fileSize: 12 * mb, fullKept: $0 == 10 || $0 == 11) }
+    let items = plan(f, CacheLimits.at3G, kept)
+    #expect(items.contains { $0.index == 10 && $0.goal == .full })
+    #expect(items.contains { $0.index == 11 && $0.goal == .full })
+}
