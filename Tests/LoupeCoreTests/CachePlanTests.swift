@@ -397,3 +397,20 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
 @Test func companionWithoutDwellHasNoFull() {
     #expect(!plan(pairFocus(dwelling: false)).contains { $0.goal == .full })
 }
+
+@Test func openedCompanionThatFitsIsNotDecodedTwice() {
+    var f = pairFocus(dwelling: false)
+    f.opened = true
+    let mixed: (Int) -> EntryFacts = { EntryFacts(pixelSize: $0 == 11 ? small : big, fileSize: 12 * mb) }
+    let fulls = plan(f, CacheLimits.at3G, mixed).filter { $0.goal == .full }.map(\.index)
+    #expect(fulls == [10])
+}
+
+@Test func justLeftCompanionIsPlannedFullOnce() {
+    var f = pairFocus()
+    f.previous = 11
+    let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, fullKept: $0 == 11) }
+    let items = plan(f, CacheLimits.at3G, kept)
+    #expect(items.filter { $0.index == 11 && $0.goal == .full }.count == 1)
+    #expect(items.filter { $0.index == 10 && $0.goal == .full }.count == 1)
+}
