@@ -137,7 +137,7 @@ extension StripPlacement {
         }
         switch pin {
         case .pin(on: false)?: tools.append(Tool(symbol: "pin", help: "Pin the strip (T)", isOn: false, action: .pin))
-        case .pin(on: true)?: tools.append(Tool(symbol: "pin.fill", help: "Unpin the strip (T)", isOn: true, action: .pin))
+        case .pin(on: true)?: tools.append(Tool(symbol: "pin", help: "Unpin the strip (T)", isOn: true, action: .pin))
         case .hide?: tools.append(Tool(symbol: "chevron.down", help: "Hide the strip (T)", isOn: false, action: .pin))
         case nil: break
         }

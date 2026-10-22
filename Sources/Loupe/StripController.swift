@@ -17,7 +17,7 @@ extension Notification.Name {
 ///
 /// Showing follows `StripPlacement` (filmstrip spec §2). With `strip-window=beside` (the default) the strip is a band
 /// of its own under the picture (the window controller anchors the viewer to its top), shown until `T` hides it
-/// (`stripBarHidden`); hidden, a bare chevron (`FilmstripRevealView`) 6 pt above the window's bottom edge shows while
+/// (`stripBarHidden`); hidden, a glass nub (`FilmstripRevealView`) 6 pt above the window's bottom edge shows while
 /// the mouse is within 24 pt of that edge and brings it back. In full screen, and in a window with `over`, it floats
 /// over the bottom of the picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the
 /// mouse is within the strip's whole height of the window's bottom edge or over the strip or its capsule, while its
