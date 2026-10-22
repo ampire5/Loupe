@@ -214,6 +214,11 @@ import UniformTypeIdentifiers
         session.onFolderLabel = { [weak self] in
             if Settings.shared.config.folderToast { self?.toast.show($0) }
         }
+        session.onSpreadRefusal = { [weak self] refusal in
+            // Only right after `D`: the pair it showed was taken back once the other page's header was in.
+            guard let self, let at = self.spreadKeyTime, ProcessInfo.processInfo.systemUptime - at < 2 else { return }
+            self.toast.show(SpreadKeys.toast(on: true, refusal: refusal))
+        }
         backButton.translatesAutoresizingMaskIntoConstraints = false
         backButton.alphaValue = 0
         backButton.isHidden = true
@@ -1455,6 +1460,14 @@ import UniformTypeIdentifiers
         toast.show(SpreadKeys.toast(rightToLeft: value == "rtl"))
     }
 
+    /// View › Landscape Pages Alone: the folder's `spread-landscape` the other way round, as Right to Left.
+    @objc func toggleLandscapeAlone(_ sender: Any?) {
+        guard let folder else { return }
+        let value = SpreadKeys.toggledLandscape(effectiveConfig)
+        folderSettings.set(SpreadKeys.landscapeKey, value, for: folder)
+        toast.show(SpreadKeys.toast(landscapeAlone: value == "alone"))
+    }
+
     /// A viewer-key menu item (`NSMenuItem.viewerKey`) while the viewer is not the first responder (a value selected in
     /// the info panel): the viewer does it all the same.
     @objc func performKeyAction(_ sender: NSMenuItem) { viewerView.performKeyAction(sender) }
@@ -1518,6 +1531,9 @@ import UniformTypeIdentifiers
             return folder != nil
         case #selector(toggleRightToLeft(_:)):
             item.state = effectiveConfig.spreadRightToLeft ? .on : .off
+            return folder != nil
+        case #selector(toggleLandscapeAlone(_:)):
+            item.state = effectiveConfig.spreadLandscapeAlone ? .on : .off
             return folder != nil
         case #selector(toggleInfoPanel(_:)):
             item.title = infoPanel.isVisible ? "Hide Info" : "Show Info"
@@ -2008,6 +2024,9 @@ import UniformTypeIdentifiers
 
     // MARK: Two-page keys (spread spec 2026-10-23)
 
+    /// When `D` last turned two pages on (system uptime): a pair taken back within 2 s says why (`onSpreadRefusal`).
+    private var spreadKeyTime: TimeInterval?
+
     /// `D`, `⇧D`, `⌥D`, as `L` / `⇧L`: without a photo there is no folder and they do nothing. `D` turns two pages on or
     /// off for the folder and `⌥D` shifts its pairs by a page (the folder's own values, even when they equal the
     /// inherited ones); `⇧D` saves the window's `spread` as loupe.conf's default. The session follows through
@@ -2018,8 +2037,9 @@ import UniformTypeIdentifiers
         switch action {
         case .toggleSpread:
             let value = SpreadKeys.toggled(effectiveConfig)
-            folderSettings.set(SpreadKeys.key, value, for: folder)
-            toast.show(SpreadKeys.toast(on: value == "yes"))
+            folderSettings.set(SpreadKeys.key, value, for: folder)   // the session follows at once
+            spreadKeyTime = value == "yes" ? ProcessInfo.processInfo.systemUptime : nil
+            toast.show(SpreadKeys.toast(on: value == "yes", refusal: session.spreadRefusal))
         case .saveSpread:
             saveAsDefault([SpreadKeys.key], from: folder, toast: SpreadKeys.savedToast(on: effectiveConfig.spread))
         case .shiftSpread:

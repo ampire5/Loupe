@@ -38,6 +38,13 @@ public struct SpreadNavigation: Sendable {
     /// Pairs are shown: the spread is on and the view is wide enough.
     public var isActive: Bool { plan != nil && showsTwo }
 
+    /// Why the page at `current` shows alone with two pages on, when the screen does not say it: a narrow view, a wide
+    /// page or a wide neighbour. Nil while off or for a pair.
+    public func refusal(at current: Int) -> SpreadRefusal? {
+        guard let plan else { return nil }
+        return showsTwo ? plan.refusal(at: current) : .narrowWindow
+    }
+
     /// The pair on screen with `current`, nil while inactive.
     public func pair(at current: Int) -> SpreadPair? {
         guard showsTwo else { return nil }
@@ -120,19 +127,19 @@ public enum SpreadSizes {
     }
 
     /// Whether a page that was planned at `old` (nil: unknown, portrait) pairs differently at `new`: only a landscape
-    /// page stands alone, so only a change across width = height matters.
+    /// page stands alone, so only a change across `SpreadPlan.landscapeAspect` matters.
     public static func changesPairing(from old: PixelSize?, to new: PixelSize) -> Bool {
-        isLandscape(old) != isLandscape(new)
+        SpreadPlan.isLandscape(old) != SpreadPlan.isLandscape(new)
     }
 
-    private static func isLandscape(_ s: PixelSize?) -> Bool { s.map { $0.width > $0.height } ?? false }
-
-    /// The size a page is laid out at beside a page of size `other`: its own when known, else `other`'s height at its
-    /// aspect, else `other` itself (two pages of a book are mostly alike). Its real size replaces it once read.
-    public static func pageSize(known: CGSize?, aspect: Double?, other: CGSize) -> CGSize {
+    /// The size a page is laid out at beside a page of size `other`: its own when known, else `other`'s height at the
+    /// store's aspect; its real size replaces it once read. Nil while neither is known: the pair waits for the page's
+    /// header, since a stand-in of `other`'s shape would show a pair that a wide page then takes back (a flicker, then
+    /// one page). A page that `failed` has no size to wait for and keeps `other` (two pages of a book are mostly alike).
+    public static func pageSize(known: CGSize?, aspect: Double?, other: CGSize, failed: Bool = false) -> CGSize? {
         if let known, known.width > 0, known.height > 0 { return known }
         if let aspect, aspect.isFinite, aspect > 0 { return CGSize(width: other.height * aspect, height: other.height) }
-        return other
+        return failed ? other : nil
     }
 }
 
@@ -206,6 +213,8 @@ public enum SpreadKeys {
     public static let shiftKey = "spread-shift"
     /// The key View › Right to Left writes.
     public static let directionKey = "spread-direction"
+    /// The key View › Landscape Pages Alone writes.
+    public static let landscapeKey = "spread-landscape"
 
     /// `D`: `spread` the other way round in `config`, as loupe.conf spells it.
     public static func toggled(_ config: Config) -> String { config.spread ? "no" : "yes" }
@@ -214,6 +223,16 @@ public enum SpreadKeys {
     public static func toggledShift(_ config: Config) -> String { config.spreadShift ? "no" : "yes" }
 
     public static func toast(on: Bool) -> String { on ? "Two pages" : "One page" }
+
+    /// `D`, with why the page shows alone when the screen does not say it (`SpreadNavigation.refusal`).
+    public static func toast(on: Bool, refusal: SpreadRefusal?) -> String {
+        guard on, let refusal else { return toast(on: on) }
+        switch refusal {
+        case .widePage: return toast(on: on) + " · this page is wide"
+        case .wideNext: return toast(on: on) + " · next page is wide"
+        case .narrowWindow: return toast(on: on) + " · window too narrow"
+        }
+    }
 
     /// `⇧D`, after loupe.conf took the value.
     public static func savedToast(on: Bool) -> String { toast(on: on) + " · saved as default" }
@@ -224,4 +243,11 @@ public enum SpreadKeys {
     public static func toggledDirection(_ config: Config) -> String { config.spreadRightToLeft ? "ltr" : "rtl" }
 
     public static func toast(rightToLeft: Bool) -> String { rightToLeft ? "Right to left" : "Left to right" }
+
+    /// View › Landscape Pages Alone: `spread-landscape` the other way round in `config`.
+    public static func toggledLandscape(_ config: Config) -> String { config.spreadLandscapeAlone ? "pair" : "alone" }
+
+    public static func toast(landscapeAlone: Bool) -> String {
+        landscapeAlone ? "Landscape pages alone" : "Landscape pages in pairs"
+    }
 }

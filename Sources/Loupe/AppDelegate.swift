@@ -761,6 +761,8 @@ import UniformTypeIdentifiers
         shift.showKey(of: .shiftSpread)
         view.addItem(withTitle: "Right to Left", action: #selector(ViewerWindowController.toggleRightToLeft(_:)),
                      keyEquivalent: "")
+        view.addItem(withTitle: "Landscape Pages Alone",
+                     action: #selector(ViewerWindowController.toggleLandscapeAlone(_:)), keyEquivalent: "")
         view.addItem(.viewerKey("Save Two Pages as Default", .saveSpread))
         main.addItem(submenu: view, title: "View")
 

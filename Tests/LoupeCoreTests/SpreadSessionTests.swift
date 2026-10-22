@@ -103,7 +103,8 @@ private let six = [PixelSize?](repeating: portrait, count: 6)
     let known = CGSize(width: 10, height: 20)
     #expect(SpreadSizes.pageSize(known: known, aspect: 2, other: other) == known)
     #expect(SpreadSizes.pageSize(known: nil, aspect: 0.5, other: other) == CGSize(width: 2000, height: 4000))
-    #expect(SpreadSizes.pageSize(known: .zero, aspect: nil, other: other) == other)
+    #expect(SpreadSizes.pageSize(known: .zero, aspect: nil, other: other) == nil)   // waits for its header
+    #expect(SpreadSizes.pageSize(known: nil, aspect: nil, other: other, failed: true) == other)
 }
 
 @Test func spreadKeysToastsAndValues() {

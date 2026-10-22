@@ -20,8 +20,8 @@ extension SettingsPanel {
             .toggle("spread", "Two pages", symbol: "book.pages",
                     description: "Photos in pairs side by side, as a book or a magazine spread: scans, comics, two "
                         + "portraits. Both pages share one height and zoom and pan as one picture; arrows and the wheel "
-                        + "step by pairs. A window taller than wide shows one page. D switches it for the folder, ⇧D "
-                        + "saves. Default off."),
+                        + "step by pairs. A window taller than wide shows one page. D switches it for the folder (its "
+                        + "toast says why a page stays alone), ⇧D saves. Default off."),
             .toggle("spread-shift", "First page alone", symbol: "book.closed",
                     description: "The first page stands alone, as a cover, and the pairs start from the second: 1, "
                         + "2–3, 4–5…; off: 1–2, 3–4… ⌥D switches it for the folder, when the pairs come out one page "
@@ -34,8 +34,10 @@ extension SettingsPanel {
             .choice("spread-landscape", "Landscape pages", [
                 (word: "alone", title: "Alone"), (word: "pair", title: "In pairs"),
             ], symbol: "rectangle.ratio.4.to.3",
-            description: "Alone: a page wider than tall shows by itself, and the pairs count again after it; a "
-                + "magazine's double page stays whole. In pairs: it pairs like any other page. Default Alone."),
+            description: "Alone: a page clearly wider than tall (over 1.15:1, so square and near-square scans "
+                + "still pair) shows by itself, and the pairs count again after it; a magazine's double page stays "
+                + "whole. In pairs: it pairs like any other page, as for a folder of landscape photos. Also View › "
+                + "Landscape Pages Alone, for the folder. Default Alone."),
         ]),
     ])
 }

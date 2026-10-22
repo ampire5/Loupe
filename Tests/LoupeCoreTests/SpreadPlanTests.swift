@@ -98,3 +98,17 @@ private func allPairs(_ p: SpreadPlan) -> [[Int]] {
     #expect(p.last == SpreadPair(first: 99_998, second: 99_999))
     #expect(p.pair(containing: 50_001) == SpreadPair(first: 50_000, second: 50_001))
 }
+
+/// Only a clearly wide page stands alone (`SpreadPlan.landscapeAspect`): square and near-square pages (scans with
+/// their margins) pair.
+@Test func nearSquarePagesPair() {
+    let square = PixelSize(width: 3000, height: 3000)
+    let nearSquare = PixelSize(width: 3400, height: 3000)   // 1.13
+    let wide = PixelSize(width: 3500, height: 3000)         // 1.17
+    #expect(allPairs(plan([portrait, square, nearSquare, portrait])) == [[0, 1], [2, 3]])
+    #expect(allPairs(plan([portrait, wide, portrait])) == [[0], [1], [2]])
+    #expect(!SpreadSizes.changesPairing(from: nil, to: nearSquare))
+    #expect(SpreadSizes.changesPairing(from: nearSquare, to: wide))
+    #expect(plan([portrait, wide]).isWide(1) && !plan([portrait, wide]).isWide(0))
+    #expect(!plan([portrait, wide], landscapeAlone: false).isWide(1))
+}

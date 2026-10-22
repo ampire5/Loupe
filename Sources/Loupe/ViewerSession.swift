@@ -205,6 +205,9 @@ import LoupeRender
     private var recentFolder: URL?
     /// A folder step entered a target with a label (a Stash gallery's title and place): the window shows it.
     var onFolderLabel: ((String) -> Void)?
+    /// A pair gave way to one page for a reason the screen does not show (a page's header proved it wide, the view
+    /// narrowed): the window controller says why when it follows a `D` (`SpreadKeys.toast(on:refusal:)`).
+    var onSpreadRefusal: ((SpreadRefusal) -> Void)?
     /// A folder step through `stashNavigator` entered a list item: its id there (the Stash gallery's) and its folder.
     var onListFolder: ((String?, URL) -> Void)?
     /// `openFolder`'s listing, and the token that makes the latest call win.
@@ -924,7 +927,7 @@ import LoupeRender
         appliesOrientation = applies
         DebugLog.log("exif-orientation \(applies ? "yes" : "no")")
         // Pages planned and laid out at their old orientation's sizes are measured anew.
-        spreadHeaders = [:]
+        spreadState.forgetSizes()
         stripAspects.setAppliesOrientation(applies)
         updateSpread(rebuild: true)
         let made = makeLayout()
@@ -1121,16 +1124,12 @@ import LoupeRender
     /// current folder changes, so a folder step takes the new folder's own flag; `updateSpreadRules` asks again.
     var spreadRules: (URL) -> SpreadRules = { _ in SpreadRules(config: Settings.shared.config) }
 
-    /// The rules of `spreadFolder`, the current photo's folder when they were last asked.
-    private var folderSpread = SpreadRules.off
-    private var spreadFolder: URL?
-    /// How steps go and which page pairs with the current one. Its plan is rebuilt (O(n)) only when one of its inputs
-    /// changes (`updateSpread`): the playlist, the rules, a page size that pairs otherwise; never per frame or event.
-    private var spread = SpreadNavigation(plan: nil, showsTwo: false)
-    /// The playlist the plan was built for ([] while the folder shows one page).
-    private var planFiles: [URL] = []
-    /// The view is at least as wide as it is tall (`SpreadLayout.showsTwo`), as of the last view size.
-    private var viewShowsTwo = false
+    /// The folder's rules, the known page sizes, the plan and the companion (`updateSpread`).
+    private var spreadState = SpreadState()
+    /// The rules of the current photo's folder when they were last asked.
+    private var folderSpread: SpreadRules { spreadState.rules }
+    /// How steps go and which page pairs with the current one.
+    private var spread: SpreadNavigation { spreadState.navigation }
     /// The thumbnail store's aspects of the playlist's files (its catalog and memory: no file is read): one per window,
     /// shared with the strip, which lays its cells out by them (`StripController`), so the catalog is asked once. The
     /// strip feeds it the playlist, `exif-orientation`, the store's thumbnail notices and its cells' pictures; the session
@@ -1139,12 +1138,10 @@ import LoupeRender
     let stripAspects: StripAspects
     /// New aspects arrived (`stripAspects.onChange`): the strip lays its cells out again.
     var onStripAspectsChange: (() -> Void)?
-    /// The headers' sizes (as shown) of the pages read in this folder: exact where the store has no aspect yet.
-    private var spreadHeaders: [URL: PixelSize] = [:]
     /// The other page of the current photo's pair (playlist index and file), nil for one page. The current photo is
     /// any page of the pair: turning two pages on mid-folder shows the pair containing it, a step lands on a first page.
-    private(set) var companionIndex: Int?
-    private(set) var companionURL: URL?
+    var companionIndex: Int? { spreadState.companionIndex }
+    var companionURL: URL? { spreadState.companionURL }
     /// The latest entry read for `companionURL`.
     private var latestCompanion: CacheEntryView<TiledImage>?
     /// The page on screen beside `entry`, nil for one page or while its slot waits for it. It is what was read of the
@@ -1190,6 +1187,9 @@ import LoupeRender
         return info.drawOrientation(applying: appliesOrientation, seeded: c.pyramidIsSeeded)
     }
 
+    /// Why the current photo shows alone with two pages on, when the screen does not say it; nil for a pair or off.
+    var spreadRefusal: SpreadRefusal? { playlist.flatMap { spread.refusal(at: $0.index) } }
+
     /// The current photo's pages in reading order (playlist indices), `second` nil for one page: the stats bar's
     /// `12–13 / 380` and the title's two names. Everything else that names one file acts on the current page
     /// (`playlist.current`): Show in Finder, Copy Path, the session tab, Recent and the folder's remembered file.
@@ -1202,14 +1202,11 @@ import LoupeRender
     /// The window's folder settings changed (`D`, `⌥D`, a reload): the current folder's rules are asked again and the
     /// pair follows them at once.
     func updateSpreadRules() {
-        guard let current = playlist?.current else { return }
-        let rules = spreadRules(current)
-        spreadFolder = current.deletingLastPathComponent()
-        guard rules != folderSpread else { return }
-        let options = rules.options
+        guard let current = playlist?.current,
+              spreadState.setRules(spreadRules(current), folder: current.deletingLastPathComponent()) else { return }
+        let rules = spreadState.rules, options = rules.options
         DebugLog.log("spread \(rules.on ? "on" : "off")\(options.shift ? " shifted" : "")"
                      + (options.rightToLeft ? " rtl" : "") + (options.landscapeAlone ? "" : " landscape paired"))
-        folderSpread = rules
         spreadChanged(rebuild: true)
     }
 
@@ -1218,33 +1215,9 @@ import LoupeRender
     /// callers make them (a navigation sends the focus once, with the companion). True when the companion changed.
     @discardableResult
     private func updateSpread(rebuild: Bool = false) -> Bool {
-        var rebuild = rebuild
-        if let current = playlist?.current, current.deletingLastPathComponent() != spreadFolder {
-            spreadFolder = current.deletingLastPathComponent()
-            spreadHeaders = [:]
-            let rules = spreadRules(current)
-            rebuild = rebuild || rules != folderSpread
-            folderSpread = rules
-        }
-        let files = folderSpread.on ? playlist?.files ?? [] : []
-        var plan = spread.plan
-        if rebuild || files != planFiles {   // the same list compares in O(1) (one storage)
-            planFiles = files
-            if files.isEmpty {
-                plan = nil
-            } else {
-                let aspects = aspectsFor(files)
-                plan = SpreadPlan(sizes: SpreadSizes.sizes(files: files, aspects: aspects, headers: spreadHeaders),
-                                  options: folderSpread.options)
-            }
-        }
-        spread = SpreadNavigation(plan: plan, showsTwo: viewShowsTwo)
-        let index = playlist.flatMap { spread.companion(of: $0.index) }
-        let url = index.flatMap { i in playlist.map { $0.files[i] } }
-        let changed = index != companionIndex || url != companionURL
-        companionIndex = index
-        companionURL = url
-        if latestCompanion?.url != url { latestCompanion = nil }
+        let changed = spreadState.update(files: playlist?.files ?? [], index: playlist?.index, rebuild: rebuild,
+                                         rules: spreadRules, aspects: aspectsFor)
+        if latestCompanion?.url != companionURL { latestCompanion = nil }
         return changed
     }
 
@@ -1263,10 +1236,7 @@ import LoupeRender
 
     /// The view's size crossed width = height: two pages give way to one, or come back (spread spec, «Узкое окно»).
     private func viewSizeDidChange() {
-        let two = SpreadLayout.showsTwo(viewSize: transform.viewSize)
-        guard two != viewShowsTwo else { return }
-        viewShowsTwo = two
-        if folderSpread.on { scheduleSpreadSync(rebuild: false) }
+        if spreadState.setViewSize(transform.viewSize) { scheduleSpreadSync(rebuild: false) }
     }
 
     /// `spreadChanged` once, after what is running now (a transform's observer, an entry being considered) is done.
@@ -1290,6 +1260,7 @@ import LoupeRender
         guard !closed, let index = playlist?.index else { return }
         let shown = spread.pair(at: index)
         updateSpread(rebuild: rebuild)
+        if shown?.second != nil, companionIndex == nil, let refusal = spreadRefusal { onSpreadRefusal?(refusal) }
         if !spread.isActive, let first = SpreadNavigation.single(after: shown, current: index) {
             // The first page was on screen beside the current one: it keeps its spot and its drawn scale
             // (`SpreadZoom`), as a page that stays does, rather than a switch's carried zoom.
@@ -1315,17 +1286,15 @@ import LoupeRender
     }
 
     /// A page's header is in: its size joins the known ones, and when it pairs the page otherwise than the plan did (a
-    /// page taken for portrait is landscape) the plan is rebuilt, after the entry has been dealt with.
-    private func noteSpreadSize(_ e: CacheEntryView<TiledImage>, at index: Int?) {
-        guard folderSpread.on, let info = e.info, let index, planFiles.indices.contains(index),
-              planFiles[index] == e.url else { return }
+    /// page taken for portrait is landscape) the plan is rebuilt, after the entry has been dealt with; true then. Two
+    /// pages off, the size is kept all the same, so `D` plans the photo on screen at its real size.
+    @discardableResult
+    private func noteSpreadSize(_ e: CacheEntryView<TiledImage>, at index: Int?) -> Bool {
+        guard let info = e.info else { return false }
         let size = info.displaySize(applying: appliesOrientation)
-        guard spreadHeaders[e.url] != size else { return }
-        let aspects = stripAspects.aspects
-        let aspect = index < aspects.count ? aspects[index] : nil
-        let planned = spreadHeaders[e.url] ?? aspect.flatMap(SpreadSizes.size(aspect:))
-        spreadHeaders[e.url] = size
-        if SpreadSizes.changesPairing(from: planned, to: size) { scheduleSpreadSync(rebuild: true) }
+        guard spreadState.note(e.url, size: size, at: index, aspects: stripAspects.aspects) else { return false }
+        scheduleSpreadSync(rebuild: true)
+        return true
     }
 
     /// Reads the companion's entry (after every cache call made so far).
@@ -1341,7 +1310,8 @@ import LoupeRender
     private func receivedCompanion(_ e: CacheEntryView<TiledImage>?, of url: URL) {
         guard url == companionURL, let e else { return }
         latestCompanion = e
-        noteSpreadSize(e, at: companionIndex)
+        // A page that pairs otherwise (wide) is not laid out beside the photo for the frame before the plan follows.
+        if noteSpreadSize(e, at: companionIndex) { return }
         if lastNeedsFull != nil, needsFull() != lastNeedsFull { sendFocus() }   // its header: its own needed level
         let before = shownPageRect
         adoptCompanion()
@@ -1427,8 +1397,9 @@ import LoupeRender
     }
 
     /// The pair `url` (the photo on screen, or the current one about to be; `own` its size) is laid out in, nil for one
-    /// page. A companion not read yet takes the store's aspect at `own`'s height, else `own` (`SpreadSizes.pageSize`),
-    /// so the photo keeps its place when the page comes.
+    /// page. A companion not read yet takes the store's aspect at `own`'s height, so the photo keeps its place when the
+    /// page comes; without one the photo shows alone until the page's header is in, and a failed page takes `own`
+    /// (`SpreadSizes.pageSize`).
     private func layout(of url: URL, size own: CGSize) -> SpreadLayout? {
         let other: URL?, otherFirst: Bool
         var aspect: Double?
@@ -1443,8 +1414,11 @@ import LoupeRender
             return nil
         }
         guard let other else { return nil }
-        let page = [shownCompanion, latestCompanion].lazy.compactMap { $0 }.first { $0.url == other && $0.failure == nil }
-        let size = SpreadSizes.pageSize(known: page?.info.map(displaySize), aspect: aspect, other: own)
+        let pages = [shownCompanion, latestCompanion].compactMap { $0 }.filter { $0.url == other }
+        let page = pages.first { $0.failure == nil }
+        // Unknown yet: one page until its header is in (`SpreadSizes.pageSize`); failed: a stand-in for good.
+        guard let size = SpreadSizes.pageSize(known: page?.info.map(displaySize), aspect: aspect, other: own,
+                                              failed: page == nil && !pages.isEmpty) else { return nil }
         let rtl = folderSpread.options.rightToLeft
         return otherFirst ? SpreadLayout(first: size, second: own, rightToLeft: rtl)
             : SpreadLayout(first: own, second: size, rightToLeft: rtl)
