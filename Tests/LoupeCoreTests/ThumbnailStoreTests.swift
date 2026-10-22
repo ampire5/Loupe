@@ -150,15 +150,15 @@ final class Locked<T>: @unchecked Sendable {
     }
 
     private func store(_ reader: ThumbReader, dir: URL?, limit: Int = 1 << 30, thumbSize: Int = 32,
-                       idleDelay: Duration = .zero, commitDelay: Duration = .seconds(3600),
+                       idleDelay: Duration = .zero, commitDelay: Duration = .seconds(3600), decodes: Int = 1,
                        decoder: @escaping @Sendable (Data) -> any ImageDecoder = DecoderRegistry.decoder(for:),
                        cachedBytes: @escaping @Sendable (URL, FileStamp) async -> Data? = { _, _ in nil },
                        locate: @escaping @Sendable (URL) -> ThumbnailLocation? = testLocate,
                        memoryCap: Int = ThumbnailStore.defaultMemoryCap,
                        log: (@Sendable (String) -> Void)? = nil) -> ThumbnailStore {
-        ThumbnailStore(directory: dir, reader: reader, pool: DecodePool(), thumbSize: thumbSize, limitBytes: limit,
+        ThumbnailStore(directory: dir, reader: reader, thumbSize: thumbSize, limitBytes: limit,
                        decoder: decoder, cachedBytes: cachedBytes, locate: locate, idleDelay: idleDelay,
-                       commitDelay: commitDelay, memoryCap: memoryCap, log: log)
+                       commitDelay: commitDelay, decodes: decodes, memoryCap: memoryCap, log: log)
     }
 
     private func request(_ files: [URL], current: Int = 0, visible: [Int] = [], isKey: Bool = true) -> ThumbnailRequest {
@@ -320,7 +320,7 @@ final class Locked<T>: @unchecked Sendable {
         #expect(reader.peakConcurrent <= 2)
     }
 
-    /// Thumbnail decodes take one decode slot at a time: the second finished read waits for the first decode.
+    /// With one decode slot the second finished read waits for the first decode.
     @Test func oneDecodeAtATime() async throws {
         let reader = ThumbReader()
         let files = photos(2, in: reader)
@@ -335,8 +335,37 @@ final class Locked<T>: @unchecked Sendable {
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
         #expect(await eventually { reader.reads.count == 2 })
         #expect(await eventually { await store.readsInFlight == 0 })   // both read
+        #expect(await eventually { entered.get == 1 })
         try await Task.sleep(for: .milliseconds(40))
         #expect(entered.get == 1)   // the other decode waits for the slot
+        decodeGate.open()
+        #expect(await eventually { await allReady(store, files) })
+    }
+
+    /// Half the physical cores less one, 1 to 4.
+    @Test func decodesFollowTheCores() {
+        #expect([2, 4, 6, 8, 10, 12, 24].map { ThumbnailStore.decodes(physicalCores: $0) } == [1, 1, 2, 3, 4, 4, 4])
+    }
+
+    /// With reads that cost nothing (a local disk) the decodes are the limit: `decodes` of them run side by side, and
+    /// one job more holds its bytes, read, until a slot frees.
+    @Test func decodesSideBySide() async throws {
+        let reader = ThumbReader()
+        let files = photos(6, in: reader)
+        let decodeGate = BlockingGate()
+        defer { decodeGate.open() }
+        let entered = Locked(0)
+        let store = store(reader, dir: nil, decodes: 3, decoder: { data in
+            entered.update { $0 += 1 }
+            decodeGate.wait()
+            return DecoderRegistry.decoder(for: data)
+        })
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { entered.get == 3 })
+        #expect(await eventually { reader.reads.count == 4 })
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(entered.get == 3)
+        #expect(reader.reads.count == 4)
         decodeGate.open()
         #expect(await eventually { await allReady(store, files) })
     }
@@ -412,7 +441,7 @@ final class Locked<T>: @unchecked Sendable {
         let store = store(reader, dir: nil)
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
         #expect(await eventually { reader.reads.count == 3 })   // the prefix, then both others; the full read waits
-        try await Task.sleep(for: .milliseconds(20))
+        #expect(await eventually { await store.readWaiters.count == 1 })
         await store.setViewerActivity(.current)
         #expect(await eventually { Set(reader.cancelled) == Set(others) })
         gates.forEach { $0.open() }                              // reads freed: the parked one must not go now

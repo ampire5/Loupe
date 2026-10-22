@@ -38,7 +38,7 @@ struct ReplaySeeds {
             if offset == 0 { _ = fcntl(fd, F_NOCACHE, 1) }
             return FileReader.pread(fd, buffer, count, offset)
         })
-        let store = ThumbnailStore(directory: directory, reader: reader, pool: DecodePool(), thumbSize: thumbSize,
+        let store = ThumbnailStore(directory: directory, reader: reader, thumbSize: thumbSize,
                                    limitBytes: 2 << 30, idleDelay: .zero)
         let resolved = LockedLines()
         await store.setOnThumbnail { resolved.add($0.path) }
@@ -61,8 +61,8 @@ struct ReplaySeeds {
     /// A store over the prefilled databases, told the playlist (window 1) and the cache's activity as the app's is
     /// (AppDelegate.connect, ViewerSession.sendThumbnailRequest): with every thumbnail made it reads nothing.
     /// `close` ends it.
-    func store(cache: ImageCache<MetalPyramidLoader>, reader: any FileReading, pool: DecodePool) async -> ReplaySeedStore {
-        let store = ThumbnailStore(directory: directory, reader: reader, pool: pool, thumbSize: thumbSize,
+    func store(cache: ImageCache<MetalPyramidLoader>, reader: any FileReading) async -> ReplaySeedStore {
+        let store = ThumbnailStore(directory: directory, reader: reader, thumbSize: thumbSize,
                                    limitBytes: 2 << 30, cachedBytes: { await cache.cachedBytes($0, stamp: $1) })
         let (activities, sink) = AsyncStream.makeStream(of: CacheActivity.self)
         await cache.setOnActivity { sink.yield($0) }

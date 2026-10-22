@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import LoupeCore
 
-// LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--size PX] <folder>
+// LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>
 //
 // Generates the thumbnails of a folder (files `from` ..< `from + limit` in Finder order) the way the app does with
 // the viewer idle: a real ThumbnailStore with the real FileReader (4 threads, as in the app) and DecodePool, its
@@ -13,13 +13,14 @@ import LoupeCore
 // decode times.
 
 enum ThumbsBench {
-    static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--size PX] <folder>"
+    static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>"
 
     struct Options {
         var folder = ""
         var from = 0
         var limit = Int.max
         var reads = ThumbnailStore.maxReads
+        var decodes = ThumbnailStore.defaultDecodes
         var size = 512
     }
 
@@ -47,6 +48,7 @@ enum ThumbsBench {
             case "--reads":
                 o.reads = number(arg, min: 1)
                 guard o.reads <= ThumbnailStore.maxReads else { fail("--reads is 1 or \(ThumbnailStore.maxReads)") }
+            case "--decodes": o.decodes = number(arg, min: 1)
             case "--size": o.size = number(arg, min: 16)
             case _ where arg.hasPrefix("--"): fail("unknown option \(arg)\n\(usage)")
             default:
@@ -98,8 +100,8 @@ enum ThumbsBench {
             return FileReader.pread(fd, buffer, count, offset)
         })
         let lines = LockedLines()
-        let store = ThumbnailStore(directory: cacheDir, reader: reader, pool: DecodePool(), thumbSize: o.size,
-                                   limitBytes: 2 << 30, idleDelay: .zero, readLimit: o.reads, log: { lines.add($0) })
+        let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size,
+                                   limitBytes: 2 << 30, idleDelay: .zero, readLimit: o.reads, decodes: o.decodes, log: { lines.add($0) })
         let resolved = LockedLines()   // ready or unavailable: the run is over when every file is one
         await store.setOnThumbnail { resolved.add($0.path) }
 
@@ -128,7 +130,7 @@ enum ThumbsBench {
             sources[timing.source, default: 0] += 1
         }
         func f(_ v: Double?) -> String { v.map { String(format: "%.0f", $0) } ?? "–" }
-        print("### thumbs \(folder.lastPathComponent) files \(o.from)..<\(o.from + files.count), reads \(o.reads), "
+        print("### thumbs \(folder.lastPathComponent) files \(o.from)..<\(o.from + files.count), reads \(o.reads), decodes \(o.decodes), "
               + "size \(o.size), F_NOCACHE\n")
         print("| files | made | unavailable | MB | s | files/s | MB/s | read ms p50 / p90 | decode ms p50 / p90 | sources |")
         print("|---|---|---|---|---|---|---|---|---|---|")
