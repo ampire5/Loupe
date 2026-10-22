@@ -414,6 +414,19 @@ import UniformTypeIdentifiers
         NSPasteboard.general.setString(ArchivePath.copyText(url), forType: .string)
     }
 
+    /// Loupe › About Loupe: the standard panel naming the build (BuildInfo), its credits selectable to copy.
+    @objc func showAbout(_ sender: Any?) {
+        let build = BuildInfo(info: Bundle.main.infoDictionary ?? [:])
+        let credits = NSAttributedString(string: build.credits, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+        ])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationVersion: build.version, .version: build.short, .credits: credits,
+        ])
+        NSApp.activate()
+    }
+
     /// Loupe › Settings… (⌘,): the settings window, made with its store on the first call.
     @objc func showSettings(_ sender: Any?) {
         openSettings(page: nil)
@@ -643,6 +656,8 @@ import UniformTypeIdentifiers
         let main = MainMenu()
 
         let app = NSMenu(title: "Loupe")
+        app.addItem(withTitle: "About Loupe", action: #selector(showAbout(_:)), keyEquivalent: "")
+        app.addItem(.separator())
         app.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
         app.addItem(.separator())
         app.addItem(withTitle: "Hide Loupe", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")

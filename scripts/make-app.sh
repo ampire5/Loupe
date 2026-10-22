@@ -2,9 +2,21 @@
 # Builds build/Loupe.app (release, for scripts/deps.arch: arm64 on main, x86_64 on lts/macos26). Only the Loupe product is built. Its decoders
 # (libjpeg-turbo, Loupe's own libjxl and their dependencies) are linked in statically (scripts/build-deps.sh), so the
 # app bundles no dylibs; libheif is not linked by the app.
-# Usage: scripts/make-app.sh [--install]   (--install copies the app to ~/Applications)
+# Usage: scripts/make-app.sh [--install] [--label NAME]   (--install copies the app to ~/Applications; --label, or
+# env LOUPE_BUILD_LABEL, names the build in Loupe › About Loupe, e.g. L7)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+install=0
+label=${LOUPE_BUILD_LABEL:-}
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install) install=1 ;;
+        --label) label=${2:?--label needs a name}; shift ;;
+        --label=*) label=${1#--label=} ;;
+        *) echo "error: unknown argument $1" >&2; exit 1 ;;
+    esac
+    shift
+done
 . scripts/libjxl-env.sh
 swift build -c release --triple "$DEPS_TRIPLE" --product Loupe
 app=build/Loupe.app
@@ -54,6 +66,18 @@ if ! check_links; then
     exit 1
 fi
 cp Resources/Info.plist "$app/Contents/Info.plist"
+# The build's identity for About Loupe (LoupeCore BuildInfo): commit (+dirty with uncommitted changes, the local
+# Package.resolved and release.yaml aside), branch, build time and the label. Without git each reads "unknown".
+commit=unknown branch=unknown
+if git rev-parse --git-dir >/dev/null 2>&1; then
+    commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+    [[ -z $(git status --porcelain -- . ':!Package.resolved' ':!release.yaml' 2>/dev/null) ]] || commit+="+dirty"
+fi
+for pair in "LoupeBuildCommit=$commit" "LoupeBuildBranch=$branch" "LoupeBuildDate=$(date '+%Y-%m-%d %H:%M')" \
+    "LoupeBuildLabel=$label"; do
+    plutil -replace "${pair%%=*}" -string "${pair#*=}" "$app/Contents/Info.plist"
+done
 # Document icons, one per format (CFBundleTypeIconFile in Info.plist), from the image lab's doc_icons.sh.
 cp Resources/DocumentIcons/*.icns "$app/Contents/Resources/"
 # App icon: the Icon Composer package (art.png rendered outside this repository) is compiled by
@@ -90,7 +114,7 @@ fi
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
 echo "Built $app"
-if [[ "${1:-}" == "--install" ]]; then
+if [[ $install == 1 ]]; then
     mkdir -p "$HOME/Applications"
     rm -rf "$HOME/Applications/Loupe.app"
     cp -R "$app" "$HOME/Applications/"
