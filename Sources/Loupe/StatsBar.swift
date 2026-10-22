@@ -155,18 +155,25 @@ import LoupeCore
             index = entry.url == list.current ? list.index : list.files.firstIndex(of: entry.url) ?? list.index
             // The current pair on screen: both names and the range, in reading order (spread spec, «Положение»).
             var name = ArchivePath.shortName(entry.url), companion: Int?
+            var facts = (info: info, timings: entry.timings)
             if entry.url == list.current, session.shownLayout != nil, let pages = session.currentPages,
                let second = pages.second {
                 index = pages.first
                 companion = second
                 fillIndex = second
                 name = ArchivePath.shortName(list.files[pages.first]) + " · " + ArchivePath.shortName(list.files[second])
+                // The first page's facts in reading order, whichever page is current.
+                if let other = session.shownCompanion, let otherInfo = other.info,
+                   StatsLine.factsOfCompanion(current: list.index, first: pages.first,
+                                              companionRead: other.failure == nil) {
+                    facts = (otherInfo, other.timings)
+                }
             }
             text = StatsLine.loaded(name: name, index: index, companion: companion, count: list.files.count,
                                     counted: session.folderCounted,
-                                    info: info, applyingOrientation: session.appliesOrientation,
+                                    info: facts.info, applyingOrientation: session.appliesOrientation,
                                     transform: session.zoomTarget ?? session.transform,   // a zoom animation's target
-                                    decodeMs: entry.timings.fullMs ?? entry.timings.previewMs)
+                                    decodeMs: facts.timings.fullMs ?? facts.timings.previewMs)
         } else {
             text = ""
         }
