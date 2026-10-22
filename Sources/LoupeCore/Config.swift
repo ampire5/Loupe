@@ -3,6 +3,20 @@ import Foundation
 import HomeScreenModel
 import LogiHIDPP
 
+/// `appearance`: light or dark windows and Home (the photo and everything over it stay dark). `system` follows macOS.
+public enum AppAppearance: String, Sendable {
+    case system, light, dark
+
+    /// Whether the app is forced dark (true), forced light (false) or follows macOS (nil, `system`).
+    public var prefersDark: Bool? {
+        switch self {
+        case .system: return nil
+        case .light: return false
+        case .dark: return true
+        }
+    }
+}
+
 /// `strip-window`: the thumbnail strip in a window (fullscreen always shows it over the photo).
 public enum StripWindowMode: String, Sendable {
     case over, beside, hidden
@@ -457,6 +471,8 @@ public struct Config: Equatable, Sendable {
     /// `vibrance-amount`: `CIVibrance.inputAmount`, 0...1.
     public var vibranceAmount = 0.5
 
+    /// `appearance`: light, dark or the system's windows and Home (`AppAppearance`).
+    public var appearance = AppAppearance.system
     /// `app-icon`: which icon the Dock shows (see `AppIcon`).
     public var appIcon = AppIcon.bundle
     /// `stash-url`: the Stash server whose WebUI Loupe shows (Stash spec §2.1); nil (empty) = no Stash at all.
@@ -511,7 +527,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -672,6 +688,7 @@ public struct Config: Equatable, Sendable {
         case "auto-color-fade": return String(autoColorFadeMilliseconds)
         case "vibrance": return vibrance ? "yes" : "no"
         case "vibrance-amount": return formatNumber(vibranceAmount)
+        case "appearance": return appearance.rawValue
         case "app-icon": return appIcon
         case "stash-url": return stashURL?.absoluteString ?? ""
         case "stash-api-key": return stashAPIKey
@@ -960,6 +977,8 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { vibrance = v } else { return .badValue }
         case "vibrance-amount":
             if let v = Double(value), (0...1).contains(v) { vibranceAmount = v } else { return .badValue }
+        case "appearance":
+            if let v = AppAppearance(rawValue: value.lowercased()) { appearance = v } else { return .badValue }
         case "app-icon":
             if let v = AppIcon.normalized(value) { appIcon = v } else { return .badValue }
         case "stash-url":

@@ -366,6 +366,19 @@ import Foundation
 
 // MARK: Strip and thumbnails
 
+@Test func appearanceWords() {
+    #expect(Config().appearance == .system && Config().text(forKey: "appearance") == "system")
+    for (word, value) in [("light", AppAppearance.light), ("dark", .dark), ("system", .system)] {
+        let (c, w) = Config.parse("appearance=\(word)")
+        #expect(c.appearance == value && w.isEmpty && c.text(forKey: "appearance") == word)
+    }
+    let (c, w) = Config.parse("appearance=sepia")
+    #expect(c.appearance == .system && w == ["loupe.conf:1: bad option 'appearance=sepia'"])
+    let keys = Config.keys
+    let appearance = keys.firstIndex(of: "appearance")!
+    #expect(keys[appearance - 1] == "stash-title" && keys[appearance + 1] == "home-tab")
+}
+
 @Test func stripWindowWords() {
     #expect(Config().stripWindow == .beside && Config().text(forKey: "strip-window") == "beside")
     for (word, mode) in [("over", StripWindowMode.over), ("beside", .beside), ("hidden", .hidden)] {
@@ -1079,7 +1092,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
-    "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"),
+    "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
     "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
