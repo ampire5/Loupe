@@ -25,7 +25,14 @@ import LoupeRender
     /// one of another folder: its cube is kept outside the order until another photo is shown.
     var pinned: URL? {
         didSet {
-            if let old = oldValue, old != pinned, !planned.contains(old) { built[old] = nil }
+            if let old = oldValue, old != pinned, old != pinnedCompanion, !planned.contains(old) { built[old] = nil }
+        }
+    }
+
+    /// The other page of a pair on screen (spread), kept like `pinned`.
+    var pinnedCompanion: URL? {
+        didSet {
+            if let old = oldValue, old != pinnedCompanion, old != pinned, !planned.contains(old) { built[old] = nil }
         }
     }
 
@@ -134,7 +141,8 @@ import LoupeRender
             }
         }
         built = built.filter { url, b in
-            (planned.contains(url) || url == pinned) && (stamps[url].map { $0 == b.stamp } ?? !planned.contains(url))
+            (planned.contains(url) || url == pinned || url == pinnedCompanion)
+                && (stamps[url].map { $0 == b.stamp } ?? !planned.contains(url))
         }
         spaces = spaces.filter { url, s in planned.contains(url) && stamps[url] == s.stamp }
         waiting.formIntersection(planned)

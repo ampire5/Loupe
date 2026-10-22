@@ -619,7 +619,8 @@ import UniformTypeIdentifiers
         return viewerTab() ?? .home(.recent)
     }
 
-    /// The photo on screen (in a Stash gallery or not), or nil.
+    /// The photo on screen (in a Stash gallery or not), or nil. With two pages on screen, the current page: a restored
+    /// tab opens the pair containing it.
     private func viewerTab() -> SessionSnapshot.Tab? {
         guard let current = session.playlist?.current else { return nil }
         let view = session.currentViewText

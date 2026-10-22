@@ -160,6 +160,13 @@ public struct ViewRestore: Equatable, Sendable {
         arrivalCenter = arrival.center
     }
 
+    /// The same restore, waiting from `t` on: the photo was shown before its size was final (a pair whose other page
+    /// had a stand-in size, spread spec), so the decision waits for the real size, and a zoom or pan since that show
+    /// still drops it.
+    public func rearrived(at t: ViewTransform) -> ViewRestore {
+        ViewRestore(file: file, view: view, ofSamePhoto: ofSamePhoto, arrival: t)
+    }
+
     /// What the photo laid out at `imageSize` gets: the saved mode with the saved or the middle centre, and the rule;
     /// nil when the view does not apply (the saved file at another size).
     public func target(imageSize: CGSize) -> (mode: ZoomMode, center: CGPoint, rule: Rule)? {

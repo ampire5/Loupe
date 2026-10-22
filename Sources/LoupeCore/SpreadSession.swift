@@ -136,6 +136,32 @@ public enum SpreadSizes {
     }
 }
 
+/// How the view follows a page whose layout changed under it (spread spec, «Раскладка пары»): two pages on or off, a
+/// narrow view, the other page's real size replacing a stand-in. The transform's picture is the pair's virtual one, so
+/// a relative centre or a times-fit zoom would name another spot or scale of the page; the page on screen keeps both.
+public enum SpreadZoom {
+    /// `t` (its picture holding the page at `from`; nil: the page is the whole picture) laid out at `size` with the
+    /// page at `to`: the centre names the same spot of the page, and a free zoom keeps the scale the page is drawn at
+    /// (pages are as tall as their picture, so that is the picture's scale times the rects' height ratio). Named modes
+    /// stay; transient offset and stretch go, as with `withImageSize`.
+    public static func carried(_ t: ViewTransform, from: CGRect?, to size: CGSize, at to: CGRect?) -> ViewTransform {
+        let old = from ?? CGRect(origin: .zero, size: t.imageSize)
+        let new = to ?? CGRect(origin: .zero, size: size)
+        var next = t.withImageSize(size)
+        guard old.width > 0, old.height > 0, new.width > 0, new.height > 0, size.width > 0, size.height > 0 else {
+            return next
+        }
+        // The spot of the page under the centre, 0…1 of the page.
+        let px = (t.center.x * t.imageSize.width - old.minX) / old.width
+        let py = (t.center.y * t.imageSize.height - old.minY) / old.height
+        next.center = CGPoint(x: (new.minX + px * new.width) / size.width, y: (new.minY + py * new.height) / size.height)
+        if case .free = t.mode {
+            next.mode = .free(t.scale * old.height / new.height / next.fitScale)
+        }
+        return next
+    }
+}
+
 /// What the viewer's spread keys do (spread spec, «Поведение»), on the model of `ZoomKeys`: `D` turns two pages on or
 /// off for the window's folder, `⇧D` saves the window's value as loupe.conf's default, `⌥D` shifts the pairs by a
 /// page. Pure: the window controller writes `FolderSettings` / loupe.conf and shows these toasts.

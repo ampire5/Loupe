@@ -124,3 +124,48 @@ private let six = [PixelSize?](repeating: portrait, count: 6)
     #expect(SpreadRules(config: config).options.shift)
     #expect(!SpreadRules.off.on)
 }
+
+/// Two pages on: the page at the left keeps its spot and its drawn scale in the wider picture; and back.
+@Test func zoomFollowsThePageIntoAndOutOfAPair() {
+    let page = CGSize(width: 1000, height: 1500)
+    let single = ViewTransform(imageSize: page, viewSize: CGSize(width: 1600, height: 1000), mode: .free(3),
+                               center: CGPoint(x: 0.25, y: 0.75))
+    let layout = SpreadLayout(first: page, second: CGSize(width: 500, height: 750), rightToLeft: false)
+    let pair = SpreadZoom.carried(single, from: nil, to: layout.virtualSize, at: layout.rects[0])
+    #expect(layout.virtualSize == CGSize(width: 2000, height: 1500))
+    #expect(pair.center == CGPoint(x: 0.125, y: 0.75))
+    #expect(abs(pair.scale - single.scale) < 1e-9)
+    let back = SpreadZoom.carried(pair, from: layout.rects[0], to: page, at: nil)
+    #expect(abs(back.center.x - 0.25) < 1e-12 && abs(back.center.y - 0.75) < 1e-12)
+    #expect(abs(back.scale - single.scale) < 1e-9)
+    // The right page, shorter than the picture: its scale is kept, the picture's grows by the height ratio.
+    let small = ViewTransform(imageSize: CGSize(width: 500, height: 750), viewSize: single.viewSize, mode: .free(2))
+    let right = SpreadZoom.carried(small, from: nil, to: layout.virtualSize, at: layout.rects[1])
+    #expect(right.center == CGPoint(x: 0.75, y: 0.5))
+    #expect(abs(right.scale - small.scale * 750 / 1500) < 1e-9)
+}
+
+@Test func namedModesStayWhenAPageMoves() {
+    let t = ViewTransform(imageSize: CGSize(width: 1000, height: 1500), viewSize: CGSize(width: 1600, height: 1000),
+                          mode: .actual(1), center: CGPoint(x: 0.5, y: 0.5))
+    let moved = SpreadZoom.carried(t, from: nil, to: CGSize(width: 2000, height: 1500),
+                                   at: CGRect(x: 1000, y: 0, width: 1000, height: 1500))
+    #expect(moved.mode == .actual(1))
+    #expect(moved.center == CGPoint(x: 0.75, y: 0.5))
+    #expect(SpreadZoom.carried(t, from: nil, to: .zero, at: nil).imageSize == .zero)   // degenerate: no NaN
+}
+
+/// A restore shown on a stand-in size waits from that show: the user's zoom since then still drops it.
+@Test func restoreWaitsFromTheProvisionalShow() {
+    let url = URL(fileURLWithPath: "/f/a.jpg")
+    let size = CGSize(width: 2000, height: 1500)
+    let saved = SavedView(mode: .actual(2), center: CGPoint(x: 0.3, y: 0.6), imageSize: size)
+    let arrival = ViewTransform(imageSize: CGSize(width: 900, height: 600), viewSize: CGSize(width: 1600, height: 1000))
+    let provisional = ViewTransform(imageSize: CGSize(width: 1990, height: 1500), viewSize: arrival.viewSize,
+                                    mode: .free(1.5))
+    let r = ViewRestore(file: url, view: saved, arrival: arrival)
+    #expect(r.target(imageSize: provisional.imageSize) == nil)   // the stand-in size: the saved view does not apply yet
+    let waiting = r.rearrived(at: provisional)
+    #expect(waiting.transform(for: url, imageSize: size, over: provisional.withImageSize(size))?.mode == .actual(2))
+    #expect(waiting.transform(for: url, imageSize: size, over: provisional.withMode(.fit).withImageSize(size)) == nil)
+}
