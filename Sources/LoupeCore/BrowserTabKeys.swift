@@ -45,6 +45,19 @@ public enum BrowserTabKeys {
     ]
 }
 
+/// ⌃⌘1 / ⌃⌘2 / ⌃⌘3: how Home's browser draws a folder's folders and archives (posters, cards, list; folder cards
+/// spec). ⌘ digits stay the tabs' (`BrowserTabKeys`), on Home too. By key code, like the tabs' digits.
+public enum CardStyleKeys {
+    private static let digitCodes: [UInt16] = [18, 19, 20]
+
+    /// The style's index (`CardStyle.allCases`) for ⌃⌘ with 1, 2 or 3 and nothing else; nil for any other key.
+    public static func match(keyCode: UInt16, command: Bool = false, shift: Bool = false, option: Bool = false,
+                             control: Bool = false) -> Int? {
+        guard command, control, !shift, !option else { return nil }
+        return digitCodes.firstIndex(of: keyCode)
+    }
+}
+
 /// The tabs closed lately, newest last, for File › Reopen Closed Tab (⇧⌘T). A tab on Home has nothing to reopen.
 public struct ClosedTabs: Sendable {
     public static let limit = 10

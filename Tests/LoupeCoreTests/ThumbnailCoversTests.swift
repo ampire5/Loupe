@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 import HomeScreenModel
 import Testing
 @testable import LoupeCore
@@ -1283,6 +1284,41 @@ private final class FakeDatedListing: @unchecked Sendable {
         for _ in 0..<2 { gate.signal() }
         #expect(await eventually { store.coverThreads.count(lane) == 0 })
         #expect(calls.count == 2)
+    }
+
+    /// Task 8 fix: a card asked for before its parent's complete listing has no folder date; its summary's listing
+    /// then counts the same photos, and the stored summary keeps its date (fresh next session) instead of being
+    /// written over undated. A listing that counts something else is written, date or not.
+    @Test func undatedListingKeepsTheDatedSummary() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), photos = Mutex(["1.jpg", "2.jpg", "3.jpg", "4.jpg"])
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: "/photos/f")
+        await store.setCoverVolumes { _ in false }
+        await store.setCoverListing(dated: { _, _, _, _ in
+            CoverListing(names: CoverNames(files: photos.withLock { $0 }, folders: []))
+        })
+        let dated = FolderSummary(photos: 4, folders: 0, folderModified: Self.day)
+        await store.putFolderSummaries([(loc("/photos/f"), dated)])
+        let folder = URL(fileURLWithPath: "/photos/f")
+        func card() async throws -> FolderCard {
+            try #require(await store.folderCard(folder, archive: false, in: loc("/photos/f"), maxPixel: 64))
+        }
+        #expect(try await card().summaryPending)
+        let listed = try await card()
+        #expect(!listed.summaryPending && listed.summary == dated)
+        #expect(await store.folderSummary(at: loc("/photos/f")) == dated)
+        // Now with a photo more (and a new date for the folder, which this card does not know yet): written.
+        photos.withLock { $0.append("5.jpg") }
+        await store.putFolderSummaries([(loc("/photos/f"), dated)])
+        let other = URL(fileURLWithPath: "/photos/f")
+        _ = await store.folderCard(other, archive: false, in: loc("/photos/f"), maxPixel: 64,
+                                   modified: Self.day + 1)
+        let relisted = try #require(await store.folderCard(other, archive: false, in: loc("/photos/f"), maxPixel: 64,
+                                                           modified: Self.day + 1))
+        #expect(relisted.summary?.photos == 5)
+        #expect(await store.folderSummary(at: loc("/photos/f"))?.photos == 5)
     }
 
     /// A share listing only part of a big folder in time: the pictures from the catalog, no summary from a part, and

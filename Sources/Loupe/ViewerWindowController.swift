@@ -887,7 +887,7 @@ import UniformTypeIdentifiers
         return view
     }
 
-    /// View › as Posters / as Cards / as List (⌘1–⌘3, the item's tag the style's index): how Home draws this folder's
+    /// View › as Posters / as Cards / as List (⌃⌘1–⌃⌘3, the item's tag the style's index): how Home draws this folder's
     /// folders and archives, saved for the folder (`folder-cards`).
     @objc func chooseCardStyle(_ sender: Any?) {
         guard canChooseCardStyle, let tag = (sender as? NSMenuItem)?.tag, CardStyle.allCases.indices.contains(tag) else {
@@ -896,7 +896,7 @@ import UniformTypeIdentifiers
         homeView?.browser.chooseCardStyle(CardStyle.allCases[tag])
     }
 
-    /// Home is on screen on a folder: its folder cards' style can be chosen (the View items and ⌘1–⌘3 are theirs).
+    /// Home is on screen on a folder: its folder cards' style can be chosen (the View items and ⌃⌘1–⌃⌘3 are theirs).
     var canChooseCardStyle: Bool { isShowingHome && homeView?.browser.canChooseCardStyle == true }
 
     /// File › Larger Cards / Smaller Cards / Default Card Size: Home's ⌘= / ⌘− / ⌘0 (the keys are Home's own, not the

@@ -61,8 +61,8 @@ extension ThumbnailStore {
             FolderSummary.of(listing: entries, folderModified: place.modified)
         }
         // A relist that changed nothing (the watcher's): nothing to write.
-        guard summary != storedSummary(at: location) else { return }
-        queueSummary(summary, at: location)
+        guard let write = Self.summaryToStore(summary, stored: storedSummary(at: location)) else { return }
+        queueSummary(write, at: location)
     }
 
     /// Summaries waiting for the next batch at most: a full batch is written at once, else with the thumbnails'
@@ -83,6 +83,19 @@ extension ThumbnailStore {
     func storedSummary(at location: ThumbnailLocation) -> FolderSummary? {
         if let pending = pendingSummaries[Self.summaryKey(location)] { return pending.summary }
         return perform("summary", { try $0.summary(at: location) }) ?? nil
+    }
+
+    /// The summary to write for a folder after a count, or nil to keep the stored one: the same, or the same facts
+    /// counted without the folder's date (a card asked for before its parent's complete listing) while the stored one
+    /// has it. Written over undated, a summary is never fresh again, and the folder is listed once per session.
+    nonisolated static func summaryToStore(_ summary: FolderSummary, stored: FolderSummary?) -> FolderSummary? {
+        guard let stored, summary != stored else { return stored == nil ? summary : nil }
+        if summary.folderModified == nil, stored.folderModified != nil {
+            var dated = summary
+            dated.folderModified = stored.folderModified
+            if dated == stored { return nil }
+        }
+        return summary
     }
 
     nonisolated static func summaryKey(_ location: ThumbnailLocation) -> String {

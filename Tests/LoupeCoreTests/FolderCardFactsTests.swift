@@ -41,6 +41,10 @@ import Testing
         #expect(leaf.insidePhotos == nil && !leaf.insideIncomplete)
         let unknown = FolderCardFacts(summary: full).cardSummary(visit: nil, config: Config())
         #expect(unknown.insidePhotos == nil && !unknown.insideIncomplete)
+        // More rows than subfolders: some are of subfolders that went away, so the sum is no sure count either.
+        let stale = FolderCardFacts(summary: full, inside: ChildSummaries(count: 4, photos: 1_300))
+            .cardSummary(visit: nil, config: Config())
+        #expect(stale.insidePhotos == 1_300 && stale.insideIncomplete)
     }
 
     /// The visit's progress and check mark; new photos by the listing's dates (local) or by the count (a share).

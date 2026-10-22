@@ -33,7 +33,8 @@ public struct ChildSummaries: Equatable, Sendable {
 /// main thread from what is already in memory.
 public struct FolderCardFacts: Sendable {
     public var summary: FolderSummary?
-    /// The direct subfolders' stored summaries; nil when not asked (no subfolders, or no place in the catalog).
+    /// The direct subfolders' stored summaries; nil when not asked (no subfolders, or no place in the catalog). "At
+    /// least" (`insideIncomplete`) unless there are exactly as many as the folder has subfolders.
     public var inside: ChildSummaries?
     /// The photos' modification dates from this pass's listing (`FolderCard.photoDates`): "+N new" by date.
     public var photoDates: [Date]?
@@ -72,7 +73,8 @@ public struct FolderCardFacts: Sendable {
             card.histogram = summary.histogram
             if summary.folders > 0, let inside, inside.count > 0 {
                 card.insidePhotos = inside.photos
-                card.insideIncomplete = inside.count < summary.folders
+                // Fewer rows than subfolders: some unknown; more: some of subfolders gone since. Neither is sure.
+                card.insideIncomplete = inside.count != summary.folders
             }
         }
         if let visit {

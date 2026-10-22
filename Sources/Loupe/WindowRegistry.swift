@@ -1,5 +1,4 @@
 import AppKit
-import HomeScreenKit
 import LoupeCore
 import StashKitUI
 
@@ -198,15 +197,17 @@ import StashKitUI
         }
     }
 
+    /// Whether the key window is a viewer's showing Home on a folder: View › as Posters / as Cards / as List and
+    /// ⌃⌘1–⌃⌘3 apply.
+    var keyWindowCanChooseCardStyle: Bool {
+        guard let window = NSApp.keyWindow else { return false }
+        return entries.first { $0.controller.window === window }?.controller.canChooseCardStyle ?? false
+    }
+
     /// ⌘1…⌘9, ⌥⌘→ / ⌥⌘←: a tab of the key window's group. False (the menu goes on) when the key window is not a
-    /// viewer's, and for ⌘1–⌘3 while it shows Home on a folder (View › as Posters / as Cards / as List take them, as
-    /// the browser does when it has the keys); a key with no tab to go to does nothing.
+    /// viewer's; a key with no tab to go to does nothing.
     func tabKey(_ key: BrowserTabKeys.Key) -> Bool {
-        guard let window = NSApp.keyWindow,
-              let entry = entries.first(where: { $0.controller.window === window }) else { return false }
-        if case .select(let index) = key, index < CardStyle.allCases.count, entry.controller.canChooseCardStyle {
-            return false
-        }
+        guard let window = NSApp.keyWindow, entries.contains(where: { $0.controller.window === window }) else { return false }
         let tabs = window.tabGroup?.windows ?? [window]
         let selected = tabs.firstIndex { $0 === window } ?? 0
         guard let i = BrowserTabKeys.index(key, selected: selected, count: tabs.count), i != selected else { return true }

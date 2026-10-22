@@ -117,6 +117,7 @@ import UniformTypeIdentifiers
         if let first = launchTargets.first { controller.open(first) }
         let menu = Self.makeMainMenu()
         menu.onTabKey = { [weak self] key in self?.registry.tabKey(key) ?? false }
+        menu.canChooseCardStyle = { [weak self] in self?.registry.keyWindowCanChooseCardStyle ?? false }
         NSApp.mainMenu = menu
         menuInputMap = Settings.shared.inputMap
         observeSettings()
@@ -731,13 +732,16 @@ import UniformTypeIdentifiers
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
-        // How Home's browser draws a folder's folders and archives (folder cards spec, as Finder's ⌘1–⌘4): on Home on
-        // a folder only, checked at its style (ViewerWindowController validates them). ⌘1–⌘3 select a tab elsewhere
-        // (`BrowserTabKeys`); while these items are on, the keys are theirs (`WindowRegistry.tabKey`).
+        // How Home's browser draws a folder's folders and archives (folder cards spec): ⌃⌘1–⌃⌘3 (`CardStyleKeys`; ⌘
+        // digits are the tabs'), on Home on a folder only, checked at its style (ViewerWindowController validates
+        // them; `CardStyleMenuReset` unchecks them where no viewer answers). Elsewhere `MainMenu` lets the keys go on.
         for (index, title) in ["as Posters", "as Cards", "as List"].enumerated() {
-            view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
-                         keyEquivalent: String(index + 1)).tag = index
+            let item = view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
+                                    keyEquivalent: String(index + 1))
+            item.keyEquivalentModifierMask = [.control, .command]
+            item.tag = index
         }
+        view.delegate = CardStyleMenuReset.shared
         view.addItem(.separator())
         // AppKit retitles this item "Exit Full Screen" while the window is in full screen.
         let fullScreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
@@ -819,13 +823,22 @@ import UniformTypeIdentifiers
 /// and Colour menus also decline them through their delegate (`Settings.menuHasKeyEquivalent`).
 ///
 /// The browser's tab chords no item carries (⌘1…⌘9, ⌥⌘→ / ⌥⌘←, `BrowserTabKeys`) go to `onTabKey` first; it declines
-/// them outside a viewer window.
+/// them outside a viewer window. ⌃⌘1–⌃⌘3 (`CardStyleKeys`) reach View › as Posters / as Cards / as List only while
+/// the key window can choose a card style: elsewhere (the settings window and its key recorder, the Open panel) a
+/// disabled item would take them.
 final class MainMenu: NSMenu {
     var onTabKey: ((BrowserTabKeys.Key) -> Bool)?
+    var canChooseCardStyle: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard !event.modifierFlags.isDisjoint(with: [.command, .control]) else { return false }
         let flags = event.modifierFlags
+        if event.type == .keyDown,
+           CardStyleKeys.match(keyCode: event.keyCode, command: flags.contains(.command), shift: flags.contains(.shift),
+                               option: flags.contains(.option), control: flags.contains(.control)) != nil,
+           canChooseCardStyle?() != true {
+            return false
+        }
         if event.type == .keyDown,
            let key = BrowserTabKeys.match(keyCode: event.keyCode, command: flags.contains(.command),
                                           shift: flags.contains(.shift), option: flags.contains(.option),
@@ -834,6 +847,19 @@ final class MainMenu: NSMenu {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// The View menu's delegate: before it opens or matches a key, its card style items lose their checkmark, which the
+/// key viewer's `validateMenuItem` puts back on its style; with no viewer answering (the settings window in front)
+/// none stays checked from before.
+@MainActor final class CardStyleMenuReset: NSObject, NSMenuDelegate {
+    static let shared = CardStyleMenuReset()
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items where item.action == #selector(ViewerWindowController.chooseCardStyle(_:)) {
+            item.state = .off
+        }
     }
 }
 

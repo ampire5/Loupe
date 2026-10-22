@@ -479,8 +479,14 @@ extension ThumbnailStore {
                       location: ThumbnailLocation?) -> FolderCard {
         let stored = location.flatMap { storedSummary(at: $0) }
         guard let listing else { return FolderCard(images: images, summary: stored, problem: problem) }
-        let summary = Self.summary(of: listing, modified: modified, stored: stored)
-        if let location, summary != stored { queueSummary(summary, at: location) }
+        var summary = Self.summary(of: listing, modified: modified, stored: stored)
+        if let location {
+            if let write = Self.summaryToStore(summary, stored: stored) {
+                queueSummary(write, at: location)
+            } else if let stored {
+                summary = stored   // the same facts: the stored one keeps its folder date
+            }
+        }
         return FolderCard(images: images, summary: summary, problem: problem, photoDates: listing.photoDates)
     }
 

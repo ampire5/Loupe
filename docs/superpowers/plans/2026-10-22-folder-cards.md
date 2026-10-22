@@ -22,7 +22,7 @@
 - `Loupe.db`: `schemaVersion` 2 → 3, `ALTER TABLE folder_positions ADD COLUMN` для файлов версии 2.
 - Ключ `folder-cards = posters | cards | list`, по умолчанию `posters`: глобально в `loupe.conf`, для папки — в folder settings (наследуется, как `browser-sort`).
 - Строки интерфейса — английские. Пороги ширины полосы: < 200 pt — одна строка; ≥ 280 pt — прогресс текстом. Узкая колонка (< 320 pt) — всегда «Плакат». Гистограмма — 12 корзин.
-- Клавиши переключателя: ⌘1 Posters, ⌘2 Cards, ⌘3 List (в Loupe ⌘-цифры свободны; Finder — так же).
+- Клавиши переключателя: ⌃⌘1 Posters, ⌃⌘2 Cards, ⌃⌘3 List (решение пользователя: ⌘1–⌘9 в Loupe всегда выбирают вкладку по номеру, и на Home тоже).
 - Числа пределов (строк в `folder_summaries`) — замером, запись рядом с константой. Проекты публичные: никаких личных путей и имён.
 
 ## Review Focus
@@ -76,14 +76,14 @@
 
 **Files (кит):**
 - Create: `Sources/HomeScreenKit/ListRow.swift`, `Sources/HomeScreenKit/ListHeader.swift`
-- Modify: `Sources/HomeScreenKit/HomeBrowserView.swift` (стиль `list`, ⌘1/⌘2/⌘3 в `handleKey`), `Sources/HomeScreenKit/HomeToolbar.swift` (трёхсегментный переключатель рядом со стилем сетки, скрыт на страницах и местах)
+- Modify: `Sources/HomeScreenKit/HomeBrowserView.swift` (стиль `list`, ⌃⌘1/⌃⌘2/⌃⌘3 в `handleKey`), `Sources/HomeScreenKit/HomeToolbar.swift` (трёхсегментный переключатель рядом со стилем сетки, скрыт на страницах и местах)
 - Test: `Tests/HomeScreenKitTests/HomeBrowserKeysTests.swift`, `HomeBrowserViewTests.swift`
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
 - Produces: заголовок колонок `Name · Inside · Dates · Viewed · Size`; щелчок по Name/Dates/Size → тот же путь, что капсула (`sortKeyChosen`).
 
-- [ ] **Step 1: Тесты** `commandDigitsSwitchStyle` (⌘1/⌘2/⌘3 → `setCardStyle` `.posters/.cards/.list`; ⌥1 по-прежнему сортировка), `listHeaderSorts` (щелчок Dates → `setSorts.last == date-desc`, повторный → `date`; Inside и Viewed не сортируют), `listShowsFilesInRows` (файлы — строки с форматом, датой, размером), `switchHiddenOnPlaces` (у мест и страниц переключателя нет), `toolbarSwitchFollowsStyle`.
+- [ ] **Step 1: Тесты** `commandDigitsSwitchStyle` (⌃⌘1/⌃⌘2/⌃⌘3 → `setCardStyle` `.posters/.cards/.list`; ⌥1 по-прежнему сортировка), `listHeaderSorts` (щелчок Dates → `setSorts.last == date-desc`, повторный → `date`; Inside и Viewed не сортируют), `listShowsFilesInRows` (файлы — строки с форматом, датой, размером), `switchHiddenOnPlaces` (у мест и страниц переключателя нет), `toolbarSwitchFollowsStyle`.
 - [ ] **Step 2:** FAIL. **Step 3:** реализовать. **Step 4:** `swift test` — все.
 - [ ] **Step 5:** commit `Home: a list of folders with sortable columns, and a posters / cards / list switch (⌘1–⌘3)`.
 
@@ -145,7 +145,7 @@
 ### Task 8: Loupe — связка, ключ, настройки (сборка L13)
 
 **Files:**
-- Modify: `Sources/Loupe/FolderBrowserSource.swift` (`FolderCard` → `CardSummary`: сводка, фото в подпапках из сводок прямых подпапок, визит → `viewed`/`done`/`new`, ⧉/RTL из `FolderSettings.values(for:)` + `Config.applying`, проблема; `setSummary`; `cardStyle(for:)`/`setCardStyle` по образцу `sort(for:)`), `Sources/LoupeCore/Config.swift` (ключ `folder-cards`, по умолчанию `posters`; `homeFolderKeys = ["browser-sort", "folder-cards"]`), `Sources/Loupe/ViewerWindowController.swift` (не сообщать «ignored» для `homeFolderKeys`; меню «Вид»: as Posters ⌘1 / as Cards ⌘2 / as List ⌘3 при показанном Home), `Sources/LoupeSettings/Pages/` (Settings › Home: «Folder cards», описание из спецификации)
+- Modify: `Sources/Loupe/FolderBrowserSource.swift` (`FolderCard` → `CardSummary`: сводка, фото в подпапках из сводок прямых подпапок, визит → `viewed`/`done`/`new`, ⧉/RTL из `FolderSettings.values(for:)` + `Config.applying`, проблема; `setSummary`; `cardStyle(for:)`/`setCardStyle` по образцу `sort(for:)`), `Sources/LoupeCore/Config.swift` (ключ `folder-cards`, по умолчанию `posters`; `homeFolderKeys = ["browser-sort", "folder-cards"]`), `Sources/Loupe/ViewerWindowController.swift` (не сообщать «ignored» для `homeFolderKeys`; меню «Вид»: as Posters ⌃⌘1 / as Cards ⌃⌘2 / as List ⌃⌘3 при показанном Home), `Sources/LoupeSettings/Pages/` (Settings › Home: «Folder cards», описание из спецификации)
 - Test: `ConfigTests` (`folderCardsKey`, число ключей `PagesTests` +1), `FolderBrowserSourceTests` (`summaryMapsToCard`, `cardStyleInherits`, `noIgnoredWarningForHomeKeys`)
 
 - [ ] **Step 1:** тесты выше. **Step 2:** FAIL. **Step 3:** реализовать. **Step 4:** `scripts/test.sh` — все.
