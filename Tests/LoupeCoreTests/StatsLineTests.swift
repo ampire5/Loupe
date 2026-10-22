@@ -232,6 +232,22 @@ import Testing
         #expect(value(rows, "Cache use") == "3 previews · 0 full · 2.1 / 1.5 GB (pressure)")
     }
 
+    /// On a discrete card the row's figures are the system tier's (`cache-memory`), followed by the graphics tier's.
+    @Test func diagnosticsShowTheGraphicsTier() {
+        let tiers = CacheStats(bytesCount: 24, previewCount: 20, fullCount: 2, usedBytes: 2_899_102_925,
+                               limitBytes: 3 << 30, effectiveLimitBytes: 3 << 30,
+                               evictedInactive: (count: 3, bytes: 412 << 20),
+                               graphicsUsedBytes: 3_758_096_384, graphicsLimitBytes: 4_286_578_688)
+        let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: LoadTimings(), fromCache: false,
+                                         state: .full, cache: tiers, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
+        #expect(value(rows, "Cache use")
+                == "20 previews · 2 full · 2.7 / 3.0 GB · GPU 3.5 / 4.0 GB · other windows −3 (412 MB)")
+        // Unified memory: one budget, no GPU figure.
+        let one = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: LoadTimings(), fromCache: false,
+                                        state: .full, cache: cache, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
+        #expect(value(one, "Cache use") == "20 previews · 2 full · 2.7 / 3.0 GB")
+    }
+
     /// The stats bar's fill (Task 17b): the folder position `(index + 1) / count`, so the last photo fills the bar.
     @Test func progressIsThePositionInTheFolder() {
         #expect(StatsLine.progress(index: 0, count: 4) == 0.25)

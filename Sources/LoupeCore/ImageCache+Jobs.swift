@@ -224,7 +224,8 @@ extension ImageCache {
     }
 
     /// Uploads `image` unless something at least as sharp is already resident. The levels it builds are reserved
-    /// in `usedBytes` while it runs. A planned goal first makes room (evicting unplanned state farthest first); an
+    /// in `usedBytes` (with a graphics tier, in `usedGraphicsBytes`) while it runs. A planned goal first makes room
+    /// (evicting unplanned state farthest first: with a graphics tier other pyramids' levels, never files); an
     /// unplanned one (it left the plan while decoding) is uploaded only if it fits as things stand, else dropped.
     /// Afterwards whatever no longer fits is evicted (a preview finer than planned, say, when memory is short).
     private func upload(_ image: LevelImage, _ url: URL, _ e: CacheEntry<Pyramid>, _ goal: CacheGoal,
@@ -239,9 +240,9 @@ extension ImageCache {
         let reserve = grid.byteCount(levels: image.level..<grid.levelCount)
         if planned[url]?[goal] != nil {
             e.uploadReserve += reserve   // first, so making room never touches this entry
-            evictToFit(effectiveMemory)
+            evictToFit()
         } else {
-            guard usedBytes() + reserve <= effectiveMemory else {
+            guard levelsFit(reserve) else {
                 emit(url, .uploadSkipped, goal, level: image.level)
                 return
             }
@@ -277,8 +278,17 @@ extension ImageCache {
         }
         guard e.pyramid === pyramid else { return }
         e.timings.uploadMs = start.millisecondsElapsed
-        evictToFit(effectiveMemory)
+        evictToFit()
         notify(url)
+    }
+}
+
+extension ImageCache {
+    /// Whether `bytes` more of pyramid levels fit as things stand: against the graphics tier when there is one, else
+    /// with everything held against the effective `cache-memory`.
+    func levelsFit(_ bytes: Int) -> Bool {
+        if let graphics = limits.graphicsMemory { return usedGraphicsBytes() + bytes <= graphics }
+        return usedBytes() + bytes <= effectiveMemory
     }
 }
 

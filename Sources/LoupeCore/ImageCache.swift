@@ -142,7 +142,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         setMemoryPressure(.normal)
     }
 
-    /// `cache-memory` as it applies now.
+    /// `cache-memory` as it applies now (with a graphics tier, the system tier's limit; that tier is not divided).
     var effectiveMemory: Int { limits.memory / pressure.divisor }
 
     public func entry(_ url: URL) -> CacheEntryView<Pyramid>? {
@@ -153,7 +153,8 @@ public actor ImageCache<Loader: PyramidLoader> {
                               isSeededOnly: seededOnly, pyramidIsSeeded: e.seeded && e.pyramid != nil)
     }
 
-    /// `usedBytes`: every entry's resident bytes (the pinned photo's included) plus the levels uploads are building.
+    /// `usedBytes`: every entry's resident bytes (the pinned photo's included) plus the levels uploads are building;
+    /// with a graphics tier, the system tier's (`usedSystemBytes`) and the graphics tier's (`usedGraphicsBytes`) apart.
     public func stats() -> CacheStats {
         var bytes = 0, previews = 0, full = 0
         for (url, e) in entries {
@@ -164,26 +165,37 @@ public actor ImageCache<Loader: PyramidLoader> {
             default: break
             }
         }
-        return CacheStats(bytesCount: bytes, previewCount: previews, fullCount: full, usedBytes: usedBytes(),
+        let tiered = limits.graphicsMemory != nil
+        return CacheStats(bytesCount: bytes, previewCount: previews, fullCount: full,
+                          usedBytes: tiered ? usedSystemBytes() : usedBytes(),
                           limitBytes: limits.memory, effectiveLimitBytes: effectiveMemory,
-                          evictedInactive: evictedInactive)
+                          evictedInactive: evictedInactive, graphicsUsedBytes: usedGraphicsBytes(),
+                          graphicsLimitBytes: limits.graphicsMemory)
     }
 
-    /// Compressed bytes plus resident levels' slot arrays of `e` (not its uploads in flight). A pending pyramid
-    /// (`CacheEntry.pending`) replaces the seeded one the moment an upload into it lands, so it holds nothing
-    /// resident of its own; counted anyway, so a failed upload that left levels behind is not hidden.
-    func residentBytes(_ e: CacheEntry<Pyramid>) -> Int {
-        var used = e.data?.count ?? 0
-        guard let info = e.info else { return used }
+    /// Resident levels' slot arrays of `e` (not its uploads in flight). A pending pyramid (`CacheEntry.pending`)
+    /// replaces the seeded one the moment an upload into it lands, so it holds nothing resident of its own; counted
+    /// anyway, so a failed upload that left levels behind is not hidden.
+    func pyramidBytes(_ e: CacheEntry<Pyramid>) -> Int {
+        guard let info = e.info else { return 0 }
         let grid = TileGrid(imageSize: info.pixelSize)
+        var used = 0
         for p in [e.pyramid, e.pending].compactMap({ $0 }) {
             if let finest = loader.finestResidentLevel(of: p) { used += grid.byteCount(levels: finest..<grid.levelCount) }
         }
         return used
     }
 
-    /// What the cache holds against `cache-memory`: all resident bytes plus the uploads' reservations.
-    func usedBytes() -> Int { entries.values.reduce(0) { $0 + residentBytes($1) + $1.uploadReserve } }
+    /// What lives in graphics memory on a discrete card: every entry's resident levels plus the levels uploads are
+    /// building (`CacheEntry.uploadReserve`). Held to `CacheLimits.graphicsMemory` when there is one.
+    public func usedGraphicsBytes() -> Int { entries.values.reduce(0) { $0 + pyramidBytes($1) + $1.uploadReserve } }
+
+    /// What lives in system memory whatever the card: the compressed bytes. Held to the effective `cache-memory`
+    /// when there is a graphics tier.
+    public func usedSystemBytes() -> Int { entries.values.reduce(0) { $0 + ($1.data?.count ?? 0) } }
+
+    /// Everything the cache holds: with one budget (unified memory), what is held against `cache-memory`.
+    func usedBytes() -> Int { usedSystemBytes() + usedGraphicsBytes() }
 
     /// `.current` while the current photo has a read, a job or a stamp check in flight or waiting (a job queued in
     /// the current class counts too: an ex-current one still ahead of the neighbours is the viewer's I/O), else
@@ -275,6 +287,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         defer { updateActivity() }
         let files = self.files
         // Planned against the effective memory, so what pressure just evicted is not planned (and decoded) again.
+        // Pressure divides only `cache-memory`: a graphics tier is planned against as it is.
         var planLimits = limits
         planLimits.memory = effectiveMemory
         let plan = focus.map { focus in CachePlan.make(focus: focus, limits: planLimits) { facts(files[$0]) } } ?? []
@@ -331,7 +344,7 @@ public actor ImageCache<Loader: PyramidLoader> {
                 entries[url] = nil
             }
         }
-        evictToFit(effectiveMemory)
+        evictToFit()
     }
 
     /// A visible inactive session's short plan (spec windows-and-tabs §3.2): its current photo up to what its screen
@@ -372,38 +385,67 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// whole pyramid, then the compressed bytes. Each keeps whatever the plan still wants of the entry.
     enum EvictionStep: CaseIterable { case finerThanPreview, preview, pyramid, bytes }
 
-    /// Evicts unplanned state until `usedBytes` ≤ `target`, in `CacheOwners.evictionOrder` (spec windows-and-tabs
-    /// §3.4): entries no session lists first, then the inactive invisible sessions' (the longest unused first), the
-    /// active one's last; within a session the farthest from its current photo first (ties: the one behind the
-    /// direction of travel). Each entry's levels go step by step (§3.3) before the next entry is touched; compressed
-    /// bytes only once no candidate has levels left to give, in the same order. Bytes cost an SMB re-read (0.2–2 s)
-    /// to get back, levels only a decode from them. Never the current photo of the active or a visible session
-    /// (`CacheOwners.protected`), nor the photo such a session has on screen (`setPinned`), nor an entry while an
-    /// upload into it is in flight. What it takes from entries an inactive session holds (`CacheOwners.holder`) counts
-    /// into `evictedInactive`, once per entry and call.
-    func evictToFit(_ target: Int) {
-        var used = usedBytes()
-        guard used > target else { return }
+    /// Evicts unplanned state until what is held fits: with one budget (unified memory) `usedBytes` ≤ the effective
+    /// `cache-memory`; with a graphics tier (a discrete card) `usedGraphicsBytes` ≤ `CacheLimits.graphicsMemory` by the
+    /// pyramid steps and `usedSystemBytes` ≤ the effective `cache-memory` by the bytes step, each tier on its own, so
+    /// a full card never costs a file and memory pressure (which divides only `cache-memory`) never a level.
+    /// In `CacheOwners.evictionOrder` (spec windows-and-tabs §3.4): entries no session lists first, then the inactive
+    /// invisible sessions' (the longest unused first), the active one's last; within a session the farthest from its
+    /// current photo first (ties: the one behind the direction of travel). Each entry's levels go step by step (§3.3)
+    /// before the next entry is touched; with one budget, compressed bytes only once no candidate has levels left to
+    /// give, in the same order. Bytes cost an SMB re-read (0.2–2 s) to get back, levels only a decode from them. Never
+    /// the current photo of the active or a visible session (`CacheOwners.protected`), nor the photo such a session
+    /// has on screen (`setPinned`), nor an entry while an upload into it is in flight. What it takes from entries an
+    /// inactive session holds (`CacheOwners.holder`) counts into `evictedInactive`, once per entry and call.
+    func evictToFit() {
+        let pyramidSteps = EvictionStep.allCases.filter { $0 != .bytes }
+        if let graphics = limits.graphicsMemory {
+            let usedGraphics = usedGraphicsBytes(), usedSystem = usedSystemBytes()
+            guard usedGraphics > graphics || usedSystem > effectiveMemory else { return }
+            var eviction = Eviction(order: evictionCandidates())
+            var used = usedGraphics
+            evict(&eviction, steps: pyramidSteps, used: &used, target: graphics)
+            used = usedSystem
+            evict(&eviction, steps: [.bytes], used: &used, target: effectiveMemory)
+        } else {
+            var used = usedBytes()
+            guard used > effectiveMemory else { return }
+            var eviction = Eviction(order: evictionCandidates())
+            evict(&eviction, steps: pyramidSteps, used: &used, target: effectiveMemory)
+            evict(&eviction, steps: [.bytes], used: &used, target: effectiveMemory)
+        }
+    }
+
+    /// One `evictToFit` call's walk: the candidates in eviction order, and the entries counted into
+    /// `evictedInactive` so far.
+    private struct Eviction {
+        let order: [(url: URL, entry: CacheEntry<Pyramid>)]
+        var counted = Set<URL>()
+    }
+
+    /// The entries eviction may touch, in `CacheOwners.evictionOrder`: not on screen, no upload in flight.
+    private func evictionCandidates() -> [(url: URL, entry: CacheEntry<Pyramid>)] {
         let onScreen = Set(sessions.flatMap { id, s in id == active || s.isVisible ? s.pinnedPages : [] })
-        let order = CacheOwners.evictionOrder(Array(entries.keys), sessions: owners)
+        return CacheOwners.evictionOrder(Array(entries.keys), sessions: owners)
             .compactMap { url -> (url: URL, entry: CacheEntry<Pyramid>)? in
                 guard !onScreen.contains(url), let e = entries[url], e.uploadReserve == 0 else { return nil }
                 return (url, e)
             }
-        var counted = Set<URL>()
-        for steps in [EvictionStep.allCases.filter { $0 != .bytes }, [.bytes]] {
-            for candidate in order {
-                var freed = 0
-                for step in steps where used > target {
-                    let bytes = degrade(candidate.url, candidate.entry, step)
-                    used -= bytes
-                    freed += bytes
-                }
-                if freed > 0, let holder = CacheOwners.holder(of: candidate.url, sessions: owners), holder != active {
-                    if counted.insert(candidate.url).inserted { evictedInactive.count += 1 }
-                    evictedInactive.bytes += freed
-                }
-                guard used > target else { return }
+    }
+
+    /// Applies `steps` to each candidate in turn while `used` > `target`, taking what each frees off `used`.
+    private func evict(_ eviction: inout Eviction, steps: [EvictionStep], used: inout Int, target: Int) {
+        for candidate in eviction.order {
+            guard used > target else { return }
+            var freed = 0
+            for step in steps where used > target {
+                let bytes = degrade(candidate.url, candidate.entry, step)
+                used -= bytes
+                freed += bytes
+            }
+            if freed > 0, let holder = CacheOwners.holder(of: candidate.url, sessions: owners), holder != active {
+                if eviction.counted.insert(candidate.url).inserted { evictedInactive.count += 1 }
+                evictedInactive.bytes += freed
             }
         }
     }
@@ -467,7 +509,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         if let existing = entries[url] { e = existing } else { e = CacheEntry(); entries[url] = e }
         let reserve = grid.byteCount(levels: level.level..<grid.levelCount)
         e.uploadReserve += reserve   // first, so making room never touches this entry
-        evictToFit(effectiveMemory)
+        evictToFit()
         let pyramid = loader.makePyramid(grid: grid, colorSpace: level.image.colorSpace)
         let uploaded = (try? await loader.upload(level, into: pyramid)) != nil
         e.uploadReserve -= reserve

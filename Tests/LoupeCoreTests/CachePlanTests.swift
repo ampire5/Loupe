@@ -426,3 +426,63 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     #expect(items.contains { $0.index == 10 && $0.goal == .full })
     #expect(items.contains { $0.index == 11 && $0.goal == .full })
 }
+
+// MARK: - Two memory tiers (a discrete card)
+
+/// Without a graphics tier (unified memory) the plan is the one made before the tiers existed: one total against
+/// `cache-memory`. Pinned from the plans of the code before the tiers, for a step forward, one back at 100 %, a
+/// tight `cache-memory` and `cache-full = 2` at 4 GiB, each with the photo just left holding its full resolution.
+@Test func unifiedPlanUnchanged() {
+    let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, fullKept: $0 == 99) }
+    func pinned(direction: Int, needsFull: Bool, _ l: CacheLimits) -> (count: Int, cost: Int, names: String) {
+        var l = l
+        l.graphicsMemory = nil
+        let items = plan(withPrevious(focus(direction: direction, needsFull: needsFull), 99), l, kept)
+        return (items.count, items.reduce(0) { $0 + $1.cost }, names(items).joined(separator: " "))
+    }
+    let forward = pinned(direction: 1, needsFull: false, CacheLimits.at3G)
+    #expect(forward.count == 36 && forward.cost == 3_214_965_504)
+    #expect(forward.names == "100:preview 100:bytes 100:full 101:preview 99:preview 99:full 101:full 101:bytes 99:bytes "
+            + "102:bytes 103:bytes 98:bytes 104:bytes 105:bytes 97:bytes 106:bytes 107:bytes 96:bytes 108:bytes 109:bytes "
+            + "95:bytes 110:bytes 111:bytes 94:bytes 112:bytes 113:bytes 93:bytes 114:bytes 115:bytes 92:bytes 116:bytes "
+            + "102:preview 103:preview 98:preview 104:coarse 105:coarse")
+    let back = pinned(direction: -1, needsFull: true, CacheLimits.at3G)
+    #expect(back.count == 46 && back.cost == 2_661_858_048)
+    #expect(back.names == "100:full 100:bytes 99:preview 101:preview 99:full 99:bytes 101:bytes 98:bytes 97:bytes "
+            + "102:bytes 96:bytes 95:bytes 103:bytes 94:bytes 93:bytes 104:bytes 92:bytes 91:bytes 105:bytes 90:bytes "
+            + "89:bytes 106:bytes 88:bytes 87:bytes 107:bytes 86:bytes 85:bytes 108:bytes 84:bytes 98:preview 97:preview "
+            + "102:preview 96:coarse 95:coarse 103:preview 94:coarse 93:coarse 104:coarse 92:coarse 91:coarse 105:coarse "
+            + "90:coarse 89:coarse 106:coarse 88:coarse 87:coarse")
+    let tight = pinned(direction: 1, needsFull: false, limits { $0.memory = 1 << 30 })
+    #expect(tight.count == 8 && tight.cost == 1_072_809_984)
+    #expect(tight.names == "100:preview 100:bytes 100:full 101:preview 99:preview 101:bytes 99:bytes 102:bytes")
+    let fullTwo = pinned(direction: 1, needsFull: true, limits { $0.full = 2; $0.memory = 4 << 30 })
+    #expect(fullTwo.count == 47 && fullTwo.cost == 3_489_288_960)
+    #expect(fullTwo.names == "100:full 100:bytes 101:preview 99:preview 99:full 101:full 101:bytes 99:bytes 102:bytes "
+            + "103:bytes 98:bytes 104:bytes 105:bytes 97:bytes 106:bytes 107:bytes 96:bytes 108:bytes 109:bytes 95:bytes "
+            + "110:bytes 111:bytes 94:bytes 112:bytes 113:bytes 93:bytes 114:bytes 115:bytes 92:bytes 116:bytes "
+            + "102:preview 103:preview 98:preview 104:coarse 105:coarse 97:preview 106:coarse 107:coarse 96:coarse "
+            + "108:coarse 109:coarse 95:coarse 110:coarse 111:coarse 94:coarse 112:coarse 113:coarse")
+}
+
+/// On a discrete card the pyramids fill the graphics tier and the compressed files the system tier: a graphics
+/// tier of two full 147 MP pyramids leaves the 24 neighbours' files (`cache-files`) all planned in 4 GiB of system
+/// memory, and the pyramids planned stay within the two.
+@Test func filesStayWhenPyramidsFillTheGraphicsTier() {
+    let graphics = 2 * Costs(big).all
+    let items = plan(focus(), limits { $0.graphicsMemory = graphics; $0.memory = 4 << 30; $0.files = 24 })
+    #expect(items.filter { $0.goal == .bytes && $0.index != 100 }.count == 24)
+    #expect(items.filter { $0.goal != .bytes }.reduce(0) { $0 + $1.cost } <= graphics)
+    #expect(items.filter { $0.goal == .bytes }.reduce(0) { $0 + $1.cost } <= 4 << 30)
+    #expect(items.contains { $0.index == 101 && $0.goal == .preview })
+}
+
+/// The current photo's full resolution is planned even when it is bigger than the whole graphics tier (a 147 MP
+/// photo at 100 % on a small card): only the neighbours lose their full resolution.
+@Test func currentFullExemptFromGraphicsTier() {
+    let items = plan(focus(dwelling: true, needsFull: true), limits { $0.graphicsMemory = 1 << 29 })
+    #expect(items.first == CacheItem(index: 100, goal: .full, cost: Costs(big).all))
+    #expect(items.filter { $0.goal == .full }.map(\.index) == [100])
+    // The files still go by the system tier: the 24 neighbours' fit 3 GiB.
+    #expect(items.filter { $0.goal == .bytes && $0.index != 100 }.count == 24)
+}

@@ -99,7 +99,9 @@ public struct CacheFocus: Equatable, Sendable {
 /// Turns the playlist position into the ordered list of cache states worth having (spec §3.2, §11.1.7). The list is
 /// in priority order and fits `cache-memory`, except that the current photo's items are always included (they
 /// are never skipped by the ceiling, only reduce the room left for neighbours); the cache executes it front
-/// to back and degrades whatever it holds that is not in it.
+/// to back and degrades whatever it holds that is not in it. On a discrete card (`CacheLimits.graphicsMemory`) there
+/// are two ceilings: the pyramids (`coarse`, `preview`, `full`) fit the graphics tier, the compressed bytes
+/// `cache-memory` (hardware defaults spec, «Два яруса памяти»); so a full graphics tier never costs a file.
 public enum CachePlan {
     /// Stand-ins for a photo that has not been probed or stat'ed and has no known siblings: a 147 MP JPEG.
     public static let defaultPixelSize = PixelSize(width: 10502, height: 14000)
@@ -138,7 +140,11 @@ public enum CachePlan {
         let estimate: PixelSize
         let direction: Int
         var items: [CacheItem] = []
+        /// What the planned items cost against `cache-memory`: all of them with one budget, the bytes only with a
+        /// graphics tier.
         var total = 0
+        /// What the planned pyramids cost against the graphics tier (`CacheLimits.graphicsMemory`); unused without one.
+        var graphicsTotal = 0
         var entries: [Int: Entry] = [:]
         /// Photos that have a preview or coarse item (or a full one), for `cache-previews`.
         var previewed: Set<Int> = []
@@ -292,10 +298,11 @@ public enum CachePlan {
             return made
         }
 
-        /// Appends the item unless it would push the total over `cache-memory`. A skipped item changes
-        /// nothing, so later (smaller) ones are still tried and no tier's count is spent on it.
-        /// `exempt` (the current photo's items) bypasses the ceiling, so a tiny `cache-memory` can never leave
-        /// the photo on screen undisplayable; its cost still counts in the total, leaving neighbours less room.
+        /// Appends the item unless it would push its total over its ceiling: `cache-memory`, or for a pyramid item
+        /// with a graphics tier, that tier. A skipped item changes nothing, so later (smaller) ones are still tried
+        /// and no tier's count is spent on it. `exempt` (the current photo's items) bypasses the ceiling, so a tiny
+        /// `cache-memory` or a small card can never leave the photo on screen undisplayable (a 147 MP photo at 100 %
+        /// still shows on a 4 GB card); its cost still counts in the total, leaving neighbours less room.
         private mutating func add(_ index: Int, _ goal: CacheGoal, allLevels: Bool = false, exempt: Bool = false) -> Bool {
             let e = entry(index)
             let levels = e.grid.levelCount
@@ -306,8 +313,13 @@ public enum CachePlan {
             case .preview: cost = e.grid.byteCount(levels: e.lfit..<levels)
             case .full: cost = e.grid.byteCount(levels: 0..<(allLevels ? levels : e.lfit))
             }
-            guard exempt || total + cost <= limits.memory else { return false }
-            total += cost
+            if goal != .bytes, let graphics = limits.graphicsMemory {
+                guard exempt || graphicsTotal + cost <= graphics else { return false }
+                graphicsTotal += cost
+            } else {
+                guard exempt || total + cost <= limits.memory else { return false }
+                total += cost
+            }
             items.append(CacheItem(index: index, goal: goal, cost: cost))
             if goal != .bytes { previewed.insert(index) }
             return true

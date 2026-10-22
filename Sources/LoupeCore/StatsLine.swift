@@ -72,8 +72,9 @@ public enum StatsLine {
 
     /// The Diagnostics rows of the info panel (the old second line of the extended bar): `Decoder` (`libjpeg-turbo`),
     /// `Colour space` (`Display P3`), `Load` (`read 98 · preview 112 · full 171 · upload 40 ms`), `Cache` (`full`),
-    /// `Cache use` (`20 previews · 2 full · 2.7 / 3.0 GB`, then ` · other windows −3 (412 MB)` once eviction took from
-    /// inactive windows), `Memory` (`RAM 3.4 GB · GPU 2.8 GB`), `Frame` (`GPU 1.2/1.9 ms · 0 dropped`, `–` before
+    /// `Cache use` (`20 previews · 2 full · 2.7 / 3.0 GB`; on a discrete card those are the system tier's figures,
+    /// followed by the graphics tier's, ` · GPU 3.5 / 4.0 GB`; then ` · other windows −3 (412 MB)` once eviction took
+    /// from inactive windows), `Memory` (`RAM 3.4 GB · GPU 2.8 GB`), `Frame` (`GPU 1.2/1.9 ms · 0 dropped`, `–` before
     /// there are frame times).
     /// `Load` is "cached" when the photo was shown from the cache (its timings are from an earlier visit). The cache
     /// state is `thumb` while only the seeded thumbnail is resident (`isSeededOnly`, M2.5 spec §5.2), whatever goal that
@@ -99,7 +100,8 @@ public enum StatsLine {
         let pressure = cache.effectiveLimitBytes != cache.limitBytes
         rows.append(InfoRow(label: "Cache use", value: "\(cache.previewCount) previews · \(cache.fullCount) full · "
                             + "\(gigabytes(cache.usedBytes)) / \(gigabytes(cache.effectiveLimitBytes)) GB"
-                            + (pressure ? " (pressure)" : "") + otherWindows(cache.evictedInactive)))
+                            + (pressure ? " (pressure)" : "") + graphicsTier(cache)
+                            + otherWindows(cache.evictedInactive)))
         rows.append(InfoRow(label: "Memory", value: "RAM \(gigabytes(ramBytes)) GB · GPU \(gigabytes(gpuBytes)) GB"))
         if let p50 = frames.gpuP50, let p90 = frames.gpuP90 {
             rows.append(InfoRow(label: "Frame", value: String(format: "GPU %.1f/%.1f ms · %d dropped", p50, p90, frames.dropped)))
@@ -183,6 +185,13 @@ public enum StatsLine {
         case .preview: "preview"
         case .full: "full"
         }
+    }
+
+    /// ` · GPU 3.5 / 4.0 GB`: what the pyramids hold of the graphics tier on a discrete card
+    /// (`CacheStats.graphicsLimitBytes`); empty with one budget.
+    private static func graphicsTier(_ cache: CacheStats) -> String {
+        guard let limit = cache.graphicsLimitBytes else { return "" }
+        return " · GPU \(gigabytes(cache.graphicsUsedBytes)) / \(gigabytes(limit)) GB"
     }
 
     /// ` · other windows −3 (412 MB)`: what eviction took from inactive windows (`CacheStats.evictedInactive`, MB of

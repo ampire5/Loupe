@@ -68,13 +68,20 @@ public enum MemoryPressure: Sendable {
 /// levels uploads in flight are building. `limitBytes` is `cache-memory`, `effectiveLimitBytes` what the cache
 /// holds itself to now (smaller under memory pressure). `evictedInactive`: entries and bytes eviction took from
 /// inactive windows since launch (spec windows-and-tabs §3.8); growing, the limit is too small for the windows open.
+/// On a discrete card (`graphicsLimitBytes` set, `CacheLimits.graphicsMemory`) `usedBytes`, `limitBytes` and
+/// `effectiveLimitBytes` are the system tier's (the compressed bytes against `cache-memory`), and
+/// `graphicsUsedBytes` the pyramids and uploads against the graphics tier; with one budget `graphicsUsedBytes` is
+/// the pyramids' and uploads' share of `usedBytes`.
 public struct CacheStats: Equatable, Sendable {
     public let bytesCount, previewCount, fullCount: Int
     public let usedBytes, limitBytes, effectiveLimitBytes: Int
     public let evictedInactive: (count: Int, bytes: Int)
+    public let graphicsUsedBytes: Int
+    public let graphicsLimitBytes: Int?
 
     public init(bytesCount: Int, previewCount: Int, fullCount: Int, usedBytes: Int, limitBytes: Int,
-                effectiveLimitBytes: Int, evictedInactive: (count: Int, bytes: Int) = (0, 0)) {
+                effectiveLimitBytes: Int, evictedInactive: (count: Int, bytes: Int) = (0, 0),
+                graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil) {
         self.bytesCount = bytesCount
         self.previewCount = previewCount
         self.fullCount = fullCount
@@ -82,12 +89,15 @@ public struct CacheStats: Equatable, Sendable {
         self.limitBytes = limitBytes
         self.effectiveLimitBytes = effectiveLimitBytes
         self.evictedInactive = evictedInactive
+        self.graphicsUsedBytes = graphicsUsedBytes
+        self.graphicsLimitBytes = graphicsLimitBytes
     }
 
     public static func == (a: CacheStats, b: CacheStats) -> Bool {
         (a.bytesCount, a.previewCount, a.fullCount) == (b.bytesCount, b.previewCount, b.fullCount)
             && (a.usedBytes, a.limitBytes, a.effectiveLimitBytes) == (b.usedBytes, b.limitBytes, b.effectiveLimitBytes)
             && a.evictedInactive == b.evictedInactive
+            && a.graphicsUsedBytes == b.graphicsUsedBytes && a.graphicsLimitBytes == b.graphicsLimitBytes
     }
 }
 

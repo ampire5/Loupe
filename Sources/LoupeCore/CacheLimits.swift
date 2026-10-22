@@ -22,7 +22,8 @@ public struct CacheLimits: Equatable, Sendable {
     public var farPreviewsCoarse = true
     /// `cache-files`: neighbours kept as compressed bytes.
     public var files = 24
-    /// `cache-memory`: a fuse over the sum of everything planned.
+    /// `cache-memory`: a fuse over the sum of everything planned; with a graphics tier (`graphicsMemory`), over what
+    /// lives in system memory only (the compressed bytes), the pyramids going by that tier.
     public var memory = HardwareAdvice.defaultCacheMemory(.current)
     /// `cache-idle-trim`: how long a tab may go unused before its cache is trimmed; nil: never.
     public var idleTrim: Duration? = .seconds(30 * 60)

@@ -989,6 +989,80 @@ struct ImageCacheTests {
         #expect(await rig.cache.stats().effectiveLimitBytes == memory)
         await rig.clear()
     }
+
+    // MARK: Two memory tiers (a discrete card)
+
+    /// The stamp `FakeReader` gives every file it reads.
+    private let fakeStamp = FileStamp(modified: Date(timeIntervalSince1970: 1), size: 1000)
+
+    /// Stepping through four photos at 100 % with a graphics tier of two full pyramids: the uploads make room by
+    /// evicting the photos left behind down to the tier, and leave their compressed files alone, which the system
+    /// tier has room for (each as heavy as a full pyramid, so evicting them would look like it helps).
+    @Test func uploadsEvictPyramidsNotBytes() async {
+        let full = TileGrid(imageSize: rigPhoto).byteCount(levels: 0..<TileGrid(imageSize: rigPhoto).levelCount)
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 2 * full
+        limits.files = 0   // the files of the photos left behind are not planned: kept only while they fit
+        let rig = Rig(limits: limits)
+        let files = fileURLs(10)
+        for url in files { rig.reader.pad(url, full) }
+        for i in 0..<4 {
+            await rig.focus(files, i, needsFull: true, previous: i > 0 ? i - 1 : nil)
+            await rig.focus(files, i, dwelling: true, needsFull: true, previous: i > 0 ? i - 1 : nil)
+            #expect(await eventually { await rig.state(files[i]) == .full }, "photo \(i)")
+            #expect(await rig.settle())
+        }
+        let graphics = await rig.cache.usedGraphicsBytes()
+        #expect(graphics <= 2 * full, "graphics \(graphics) over \(2 * full)")
+        #expect(await rig.pyramidBytes(Array(files[0..<3])) < 3 * full, "fixture: the photos left behind lost levels")
+        for i in 0..<3 {
+            #expect(await rig.cache.cachedBytes(files[i], stamp: fakeStamp) != nil, "file \(i) lost its bytes")
+        }
+        let stats = await rig.cache.stats()
+        #expect(stats.graphicsLimitBytes == 2 * full)
+        #expect(stats.graphicsUsedBytes == graphics)
+        #expect(stats.usedBytes == (await rig.cache.usedSystemBytes()))
+        #expect(stats.usedBytes >= 3 * full)
+        await rig.clear()
+    }
+
+    /// Memory pressure divides the system tier only: the compressed files go down to half of it, the pyramids (in
+    /// graphics memory, which pressure does not free) all stay, and nothing is decoded again.
+    @Test func pressureLeavesTheGraphicsTier() async {
+        var limits = CacheLimits.at3G
+        limits.full = 0
+        limits.previews = 9
+        limits.files = 0
+        limits.farPreviewsCoarse = false
+        limits.graphicsMemory = 1 << 30
+        let rig = Rig(limits: limits)
+        let files = fileURLs(20)
+        let preview = TileGrid(imageSize: rigPhoto).byteCount(levels: 1..<TileGrid(imageSize: rigPhoto).levelCount)
+        for url in files { rig.reader.pad(url, preview) }
+        await rig.focus(files, 10, dwelling: true)
+        await rig.cache.setPinned(files[10])
+        #expect(await rig.settle())
+        let system = await rig.cache.usedSystemBytes()
+        let memory = system * 3 / 2
+        await rig.setMemory(memory)
+        #expect(await rig.settle())
+        let before = await rig.cache.stats()
+        let graphics = await rig.cache.usedGraphicsBytes()
+        #expect(before.usedBytes > memory / 2, "fixture: the pressure limit must bite")
+        let calls = rig.decoder.calls.count
+
+        await rig.cache.setMemoryPressure(.warning)
+        #expect(await rig.settle())
+        let stats = await rig.cache.stats()
+        #expect(stats.limitBytes == memory)
+        #expect(stats.effectiveLimitBytes == memory / 2)
+        #expect(stats.usedBytes <= memory / 2, "system \(stats.usedBytes) over \(memory / 2)")
+        #expect(stats.graphicsLimitBytes == 1 << 30)
+        #expect(await rig.cache.usedGraphicsBytes() == graphics)
+        #expect(stats.previewCount == before.previewCount)
+        #expect(rig.decoder.calls.count == calls, "re-decoded under pressure")
+        await rig.clear()
+    }
 }
 
 private final class TraceEvents: @unchecked Sendable {
