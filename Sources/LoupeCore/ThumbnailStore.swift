@@ -139,6 +139,10 @@ public actor ThumbnailStore {
     var emptyCovers: Set<String> = []
     /// Listings of a folder that gave no name in time so far, by path (`coverTimeoutsAllowed`).
     var coverTimeouts: [String: Int] = [:]
+    /// Each folder's last pick from a complete listing this session, by path, at most `coverPickLimit` (the least
+    /// recently used go first): its next cover needs no listing.
+    var coverPicks: [String: CoverPick] = [:]
+    var coverPickUses: UInt64 = 0
     /// Covers' blocking calls (listings, resolves) on their own threads, per lane, those given up on included (one
     /// hung on a dead share stays).
     nonisolated let coverThreads = CoverThreads(limit: ThumbnailStore.coverThreadsPerLane)

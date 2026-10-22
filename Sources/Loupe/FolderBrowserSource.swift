@@ -40,28 +40,24 @@ import LoupeCore
     private var pictureTask: Task<Void, Never>?
     private var maxPixel = 440
 
-    /// How a folder's or zip's card shows its photos (`folder-cover`); a change makes the covers in view again.
+    /// How a folder's or zip's card shows its photos (`folder-cover`); a change makes every cover again.
     var coverLayout = HomeMosaic.Layout.hero {
         didSet { if coverLayout != oldValue { remakeCovers() } }
     }
+    /// The mosaics kept for cards asked for again (`CoverCards`). A mosaic is a card's pixels squared, ~2 MB for a
+    /// 352 pt card at 2x: 64 MB keeps about thirty, more than a window shows with its margin.
+    private static let coverCacheBytes = 64 << 20
     /// The folder on screen, for its cards' covers, and where the catalog keeps its files: resolved once, off the main
     /// thread (`ThumbnailStore.shownFolderPlace`); nil while it is being resolved.
     private var coverFolder: String?
     private var coverPlace: CoverPlace?
     private var placeTask: Task<Void, Never>?
-    /// The folder and zip cards that want a cover (those in view first), kept until the place is known.
-    private var coverWant: CoverWant?
-    /// Cards given a cover in the folder on screen: made again when the layout changes.
-    private var covered: [String: BrowserEntry] = [:]
-    /// The last `CoverQueue.want` sent: each goes after it, so the queue sees them in order.
+    /// The folder's cards' covers: those kept, and the cards still waiting for one.
+    private var cards = CoverCards(limitBytes: FolderBrowserSource.coverCacheBytes)
+    /// The cards' size in points and the screen's scale, as last asked.
+    private var coverSize: (width: CGFloat, scale: CGFloat)?
+    /// The last call to the cover queue sent: each goes after it, so the queue sees them in order.
     private var coverSend: Task<Void, Never>?
-
-    private struct CoverWant {
-        var cards: [BrowserEntry]
-        var visible: Int
-        var width: CGFloat
-        var scale: CGFloat
-    }
     private var observer: NSObjectProtocol?
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
@@ -91,7 +87,8 @@ import LoupeCore
             pictureTask?.cancel()
             waiting.removeAll()
             Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
-            send(covers: [])
+            // Those made stay made (`cards`): back on Home, only the cards still waiting are sent again.
+            stopQueuedCovers()
         }
     }
 
@@ -325,8 +322,16 @@ import LoupeCore
         let inView = Set(ids.prefix(visible))
         let files = wanted.filter { $0.kind == .file }
         sendRequest(visible: files.filter { inView.contains($0.id) }.map(\.url))
-        let cards = wanted.filter { $0.kind == .folder || $0.kind == .archive }
-        coverWant = CoverWant(cards: cards, visible: cards.filter { inView.contains($0.id) }.count, width: width, scale: scale)
+        let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
+        // Another card size or screen: the mosaics kept and those being made are the wrong size.
+        if let size = coverSize, size.width != width || size.scale != scale { dropCovers() }
+        coverSize = (width, scale)
+        let ask = cards.ask(cardIDs, visible: cardIDs.filter(inView.contains).count)
+        for (id, image) in ask.cached { view?.setImage(image, for: id) }
+        if !ask.forget.isEmpty {
+            let forget = ask.forget
+            sendToQueue { queue, client in await queue.forget(forget, client: client) }
+        }
         sendCovers()
         pictureTask?.cancel()
         let maxPixel = maxPixel
@@ -353,9 +358,8 @@ import LoupeCore
         placeTask = nil
         coverFolder = path
         coverPlace = nil
-        coverWant = nil
-        covered = [:]
-        send(covers: [])
+        cards.reset()
+        stopQueuedCovers()
         guard let folder, let path else { return }
         let thumbnails = self.thumbnails
         placeTask = Task { @MainActor [weak self] in
@@ -366,12 +370,12 @@ import LoupeCore
         }
     }
 
-    /// The wanted folder and zip cards to the store's cover queue, once the folder on screen is resolved. Each card's
-    /// work makes its cover (`ThumbnailStore.folderCover`: from the catalog when it has the photos, else from a
-    /// listing of names, both off the main thread) in the chosen layout, and gives it to the card; nil from it is "not
-    /// now", and the queue tries again later.
+    /// The folder and zip cards still waiting for a cover to the store's cover queue, once the folder on screen is
+    /// resolved. Each card's work makes its cover (`ThumbnailStore.folderCover`: from the catalog or the pick
+    /// remembered when they have the photos, else from a listing of names, both off the main thread) in the chosen
+    /// layout, and gives it to the card; nil from it is "not now", and the queue tries again later.
     private func sendCovers() {
-        guard !isPaused, let want = coverWant, let place = coverPlace else { return }
+        guard !isPaused, let place = coverPlace, let size = coverSize else { return }
         let shownLocation: ThumbnailLocation?, network: Bool
         switch place {
         case .located(let location): (shownLocation, network) = (location, location.isNetwork)
@@ -379,20 +383,21 @@ import LoupeCore
         case .notNow: return
         }
         // The remembered photo of each folder first (a zip's entry name is one path component already).
-        let cards = Dictionary(want.cards.map { ($0.id, ($0, positions.fileName(in: $0.url))) }, uniquingKeysWith: { a, _ in a })
-        let layout = coverLayout, side = want.width, scale = want.scale
-        let pixels = Int((side * scale).rounded())
-        // A grid's cells are a half or a quarter of the card: half its pixels are enough. The other layouts' first
-        // picture fills most of it.
-        let cellPixels = layout == .grid && side >= HomeMosaic.narrowWidth ? max(64, pixels / 2) : pixels
+        let entries = Dictionary(cards.pending.compactMap { id in shown[id].map { (id, ($0, positions.fileName(in: $0.url))) } },
+                                 uniquingKeysWith: { a, _ in a })
+        let ids = cards.pending, visible = cards.visiblePending
+        let layout = coverLayout, side = size.width, scale = size.scale
+        let cellPixels = layout.cellPixels(width: side, scale: scale)
         let thumbnails = self.thumbnails
-        let deliver: @MainActor (String, BrowserEntry, CGImage) -> Void = { [weak self] id, entry, mosaic in
-            guard let self, self.shown[id] != nil else { return }
-            self.covered[id] = entry
+        let deliver: @MainActor (String, CGImage) -> Void = { [weak self] id, mosaic in
+            // A mosaic of another folder, layout or size is not kept.
+            guard let self, self.shown[id] != nil, self.coverLayout == layout, self.coverSize?.width == side,
+                  self.coverSize?.scale == scale else { return }
+            self.cards.delivered(id, mosaic)
             self.view?.setImage(mosaic, for: id)
         }
-        send(covers: want.cards.map(\.id), visible: want.visible, network: network) { id in
-            guard let card = cards[id] else { return true }
+        let work: @Sendable (String) async -> Bool = { id in
+            guard let card = entries[id] else { return true }
             let (entry, lastViewed) = card
             guard let images = await thumbnails.folderCover(entry.url, archive: entry.kind == .archive,
                                                             in: shownLocation?.subfolder(entry.url.lastPathComponent),
@@ -402,41 +407,42 @@ import LoupeCore
             guard !Task.isCancelled, !images.isEmpty,
                   let mosaic = HomeMosaic.make(images, size: CGSize(width: side, height: side), layout: layout,
                                                scale: scale) else { return true }
-            await deliver(id, entry, mosaic)
+            await deliver(id, mosaic)
             return true
         }
-    }
-
-    /// This browser's cards for the cover queue (its client id is the browser's thumbnail window), after the last ones
-    /// sent: an empty list stops them all.
-    private func send(covers ids: [String], visible: Int = 0, network: Bool = false,
-                      work: @escaping @Sendable (String) async -> Bool = { _ in true }) {
-        let queue = thumbnails.coverQueue, client = thumbnailWindow, previous = coverSend
-        coverSend = Task {
-            await previous?.value
+        sendToQueue { queue, client in
             await queue.want(ids, visible: visible, client: client, isNetwork: { _ in network }, work: work)
         }
     }
 
-    /// The layout changed: the covers in view are made again (from the catalog, now), before those still waiting.
-    private func remakeCovers() {
-        guard var want = coverWant ?? noCoverWant() else { return }
-        let waiting = Set(want.cards.map(\.id))
-        let again = (view?.visibleIDs ?? []).compactMap { covered[$0] }.filter { !waiting.contains($0.id) }
-        covered = [:]
-        guard !again.isEmpty else { return }
-        want.cards = again + want.cards
-        want.visible += again.count
-        coverWant = want
-        // Forget what the queue made: those cards are wanted again.
-        send(covers: [])
-        sendCovers()
+    /// None of this browser's cards in the cover queue: those running are cancelled, those made forgotten.
+    private func stopQueuedCovers() {
+        sendToQueue { queue, client in await queue.want([], visible: 0, client: client, isNetwork: { _ in false }) { _ in true } }
     }
 
-    /// A request for no cards at the browser's size, for a layout change when none waits.
-    private func noCoverWant() -> CoverWant? {
-        guard let width = view?.slotWidth else { return nil }
-        return CoverWant(cards: [], visible: 0, width: width, scale: view?.window?.backingScaleFactor ?? 2)
+    /// `call` on the store's cover queue as this browser (its client id is the browser's thumbnail window), after the
+    /// calls sent before it.
+    private func sendToQueue(_ call: @escaping @Sendable (CoverQueue, Int) async -> Void) {
+        let queue = thumbnails.coverQueue, client = thumbnailWindow, previous = coverSend
+        coverSend = Task {
+            await previous?.value
+            await call(queue, client)
+        }
+    }
+
+    /// The layout changed: no mosaic kept is right, and the browser drops its cards' pictures and asks for them again,
+    /// in its order (those in view first); each covered card is made again.
+    private func remakeCovers() {
+        dropCovers()
+        guard case .folder = view?.location else { return }
+        view?.reload()
+    }
+
+    /// No mosaic kept, and those being made stopped (a running cover keeps the layout and size it began with): every
+    /// card asked for from now on is made again.
+    private func dropCovers() {
+        cards.dropImages()
+        stopQueuedCovers()
     }
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.
@@ -554,4 +560,21 @@ import LoupeCore
         settings?.set(BrowserSort.settingKey, sort.text, for: folder)
     }
 
+}
+
+extension HomeMosaic.Layout {
+    /// The long side, in pixels, of the photos a card `width` points wide (at `scale`) draws in this layout: a grid's
+    /// cells are a half or a quarter of the card; a hero's small cells are a third of it and its large one fills its
+    /// width but ⅔ of its height, and a stack's prints are ⅘ of it: ⅔ serves both (the photos come from thumbnails of
+    /// `thumb-size`, 512 px by default, so a large card's cells are near that anyway); one photo fills the card, and
+    /// any layout is one on a narrow card.
+    func cellPixels(width: CGFloat, scale: CGFloat) -> Int {
+        let pixels = Int((width * scale).rounded())
+        guard width >= HomeMosaic.narrowWidth else { return pixels }
+        switch self {
+        case .grid: return max(64, pixels / 2)
+        case .hero, .stack: return max(64, pixels * 2 / 3)
+        case .single: return pixels
+        }
+    }
 }

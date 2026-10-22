@@ -82,6 +82,19 @@ public struct CoverNames: Equatable, Sendable {
     }
 }
 
+/// A folder's pick from a complete listing (`ThumbnailStore.coverPicks`): its photos (spread across it, the one last
+/// viewed first) or, without any, its subfolders.
+struct CoverPick {
+    enum Kind {
+        case photos([String])
+        case subfolders([String])
+    }
+
+    var kind: Kind
+    var lastViewed: String?
+    var use: UInt64
+}
+
 /// Where the catalog keeps a folder's files, as `ThumbnailStore.folderLocation` found it.
 public enum CoverPlace: Equatable, Sendable {
     case located(ThumbnailLocation)
@@ -131,6 +144,9 @@ extension ThumbnailStore {
     public static let coverReadPriority = readPriority + 1
     /// Thumbnails a cover makes at most: the four of a folder's mosaic.
     static let coverPhotos = 4
+    /// Folders whose last pick is remembered (`coverPicks`): a few names each, so a few hundred kilobytes at most, for
+    /// the folders of any browsing session.
+    static let coverPickLimit = 4000
     /// Subfolders looked into below a folder without photos: its own, and theirs.
     static let coverDepth = 2
     /// Threads in a cover's blocking call at most, per lane (`CoverLane`: listings and resolves, each on local volumes
@@ -161,6 +177,21 @@ extension ThumbnailStore {
     /// share's or the local volumes' as the mount table says (which never hangs), and after the lane's time limit (or a
     /// cancel) the answer is `.notNow` and the thread is left to finish alone. The caller asks again later.
     public func folderLocation(_ folder: URL) async -> CoverPlace {
+        switch await resolveFolder(folder) {
+        case .place(let place): return place
+        case .busy, .timedOut: return .notNow
+        }
+    }
+
+    /// `folderLocation`'s answer, with its "not now" told apart: the lane full (`.busy`) or the resolve not answering
+    /// in time (`.timedOut`).
+    enum FolderResolve: Equatable {
+        case place(CoverPlace)
+        case busy
+        case timedOut
+    }
+
+    func resolveFolder(_ folder: URL) async -> FolderResolve {
         let locate = self.locate, network = coverVolumeIsNetwork(folder)
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: true),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
@@ -168,32 +199,40 @@ extension ThumbnailStore {
             locate(folder.appendingPathComponent("_"))
         }
         switch outcome {
-        case .value(let location?, _): return .located(location)
-        case .value(nil, _), .failed: return .unknown(network: network)
-        case .busy, .timedOut: return .notNow
+        case .value(let location?, _): return .place(.located(location))
+        case .value(nil, _), .failed: return .place(.unknown(network: network))
+        case .busy: return .busy
+        case .timedOut: return .timedOut
         }
     }
 
     /// How long Home waits before asking again where the folder it shows is, after a "not now" (`shownFolderPlace`).
     public static let coverResolveRetry: Duration = .milliseconds(500)
     /// How many times Home asks where a folder on a local volume is before it gives up on the catalog for it. The mount
-    /// table calls a symlink into a share local, so its resolve can hang on that share: past these tries its covers go
-    /// as a share's (`.unknown(network: true)`, the share lane's time limit and one listing at a time), and nothing more
-    /// waits in the local resolving lane for it.
+    /// table calls a symlink into a share local, so its resolve can hang on that share: past these time outs its covers
+    /// go as a share's (`.unknown(network: true)`, the share lane's time limit and one listing at a time), and nothing
+    /// more waits in the local resolving lane for it. As many tries finding the lane full (another folder's resolves
+    /// hung in it) and it goes on as a local folder without the catalog (`.unknown(network: false)`).
     public static let coverLocalResolveTries = 3
 
     /// Where the catalog keeps the files of `folder`, the folder Home shows, for its cards' covers: `folderLocation`,
     /// asked again after `retry` while it says "not now". A share is asked for as long as the task lasts (Home cancels
-    /// it when it leaves the folder); a local volume `coverLocalResolveTries` times, then `.unknown(network: true)`.
-    /// `.notNow` only once cancelled.
+    /// it when it leaves the folder). A local volume is asked until `coverLocalResolveTries` resolves time out (then
+    /// `.unknown(network: true)`) or as many tries find its lane full (then `.unknown(network: false)`). `.notNow` only
+    /// once cancelled.
     public func shownFolderPlace(_ folder: URL, retry: Duration = coverResolveRetry) async -> CoverPlace {
         let network = coverVolumeIsNetwork(folder)
-        var tries = 0
+        var timeouts = 0, busy = 0
         while !Task.isCancelled {
-            let place = await folderLocation(folder)
-            guard place == .notNow else { return place }
-            tries += 1
-            if !network, tries >= Self.coverLocalResolveTries { return .unknown(network: true) }
+            switch await resolveFolder(folder) {
+            case .place(let place): return place
+            case .timedOut:
+                timeouts += 1
+                if !network, timeouts >= Self.coverLocalResolveTries { return .unknown(network: true) }
+            case .busy:
+                busy += 1
+                if !network, busy >= Self.coverLocalResolveTries { return .unknown(network: false) }
+            }
             guard (try? await Task.sleep(for: retry)) != nil else { break }
         }
         return .notNow
@@ -257,7 +296,22 @@ extension ThumbnailStore {
             }
             return images
         }
-        let lister = coverLister, key = folder.standardizedFileURL.path
+        let key = folder.standardizedFileURL.path
+        // The pick of an earlier complete listing: the pictures from the catalog, no listing.
+        if let location, let pick = coverPick(key, lastViewed: lastViewed) {
+            switch pick {
+            case .photos(let names):
+                if let images = await knownCells(folder, names.prefix(count), at: location, maxPixel: maxPixel) {
+                    return images
+                }
+                guard !Task.isCancelled else { return nil }
+                coverPicks[key] = nil   // a thumbnail left the catalog: listed again
+            case .subfolders(let names):
+                return await subfolderCover(folder, names, location: location, network: network, maxPixel: maxPixel,
+                                            count: count, depth: depth, complete: true)
+            }
+        }
+        let lister = coverLister
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             part in try lister(folder, archive, part)
@@ -282,6 +336,13 @@ extension ThumbnailStore {
             CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
                                lastViewed: lastViewed)
         }
+        if complete, location != nil {
+            switch plan {
+            case .photos(let picked): remember(.photos(Array(picked)), for: key, lastViewed: lastViewed)
+            case .subfolders(let subfolders): remember(.subfolders(Array(subfolders)), for: key, lastViewed: lastViewed)
+            case .empty: break
+            }
+        }
         switch plan {
         case .photos(let picked):
             var images: [CGImage] = []
@@ -294,23 +355,66 @@ extension ThumbnailStore {
             }
             return images
         case .subfolders(let subfolders):
-            guard depth < Self.coverDepth else { return [] }
-            var images: [CGImage] = [], notNow = false
-            for name in subfolders where images.count < count && !Task.isCancelled {
-                // One picture of each: the subfolder's own card makes the rest when it is shown.
-                let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
-                                            location: location?.subfolder(name), network: network, maxPixel: maxPixel,
-                                            lastViewed: nil, count: 1, depth: depth + 1)
-                if let sub { images += sub.prefix(1) } else { notNow = true }
-            }
-            if notNow, images.count < count { return nil }
-            let paths = subfolders.map { folder.appendingPathComponent($0).standardizedFileURL.path }
-            if complete, paths.allSatisfy(emptyCovers.contains) { emptyCovers.insert(folder.standardizedFileURL.path) }
-            return images
+            return await subfolderCover(folder, Array(subfolders), location: location, network: network,
+                                        maxPixel: maxPixel, count: count, depth: depth, complete: complete)
         case .empty:
             if complete { emptyCovers.insert(folder.standardizedFileURL.path) }
             return []
         }
+    }
+
+    /// A folder without photos of its own: one picture of each of its first subfolders with one (`count` at most).
+    private func subfolderCover(_ folder: URL, _ subfolders: [String], location: ThumbnailLocation?, network: Bool,
+                                maxPixel: Int, count: Int, depth: Int, complete: Bool) async -> [CGImage]? {
+        guard depth < Self.coverDepth else { return [] }
+        var images: [CGImage] = [], notNow = false
+        for name in subfolders where images.count < count && !Task.isCancelled {
+            // One picture of each: the subfolder's own card makes the rest when it is shown.
+            let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
+                                        location: location?.subfolder(name), network: network, maxPixel: maxPixel,
+                                        lastViewed: nil, count: 1, depth: depth + 1)
+            if let sub { images += sub.prefix(1) } else { notNow = true }
+        }
+        if notNow, images.count < count { return nil }
+        let paths = subfolders.map { folder.appendingPathComponent($0).standardizedFileURL.path }
+        if complete, paths.allSatisfy(emptyCovers.contains) { emptyCovers.insert(folder.standardizedFileURL.path) }
+        return images
+    }
+
+    /// The pick remembered for `key`; a folder's photos only when made for the same last-viewed photo.
+    private func coverPick(_ key: String, lastViewed: String?) -> CoverPick.Kind? {
+        guard let pick = coverPicks[key] else { return nil }
+        if case .photos = pick.kind, pick.lastViewed != lastViewed { return nil }
+        coverPickUses += 1
+        coverPicks[key]?.use = coverPickUses
+        return pick.kind
+    }
+
+    private func remember(_ kind: CoverPick.Kind, for key: String, lastViewed: String?) {
+        coverPickUses += 1
+        coverPicks[key] = CoverPick(kind: kind, lastViewed: lastViewed, use: coverPickUses)
+        guard coverPicks.count > Self.coverPickLimit else { return }
+        // A tenth at once, the least recently used: one sort per few hundred new folders, not one per folder.
+        let old = coverPicks.sorted { $0.value.use < $1.value.use }.prefix(Self.coverPickLimit / 10)
+        for (path, _) in old { coverPicks[path] = nil }
+    }
+
+    /// The thumbnails of `names` in `folder` from the strip or the catalog; nil when one is in neither.
+    private func knownCells(_ folder: URL, _ names: ArraySlice<String>, at location: ThumbnailLocation,
+                            maxPixel: Int) async -> [CGImage]? {
+        var images: [CGImage] = []
+        for name in names {
+            guard !Task.isCancelled else { return nil }
+            let url = folder.appendingPathComponent(name)
+            if ids[url] != nil || made[url] != nil, let cell = await cell(url, maxPixel: maxPixel) {
+                images.append(cell)
+            } else if let stored = await storedCell(at: location.sibling(name), maxPixel: maxPixel) {
+                images.append(stored)
+            } else {
+                return nil
+            }
+        }
+        return images
     }
 
     nonisolated static func finderSorted(_ names: [String]) -> [String] {
