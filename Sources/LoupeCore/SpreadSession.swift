@@ -57,6 +57,13 @@ public struct SpreadNavigation: Sendable {
         return current == pair.first ? second : pair.first
     }
 
+    /// The cache focus's `previousCompanion`: the other page of the pair `previous` (the photo current before) is in,
+    /// from the plan, so a strip scrub's origin (`StripScrub`, the previous photo for the whole scrub) keeps its own
+    /// page however many cells the scrub passed. Nil for none, one page or a page alone.
+    public func previousCompanion(of previous: Int?) -> Int? {
+        previous.flatMap(companion(of:))
+    }
+
     /// The cache focus's `companion` and `step` with `current` (neighbours go by pairs while pairs are shown).
     public func focus(current: Int) -> (companion: Int?, step: Int) {
         (companion(of: current), isActive ? 2 : 1)
