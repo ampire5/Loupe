@@ -152,7 +152,7 @@ private func input(
     #expect(loose.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Pin the strip (T)"])
     #expect(loose.map(\.isOn) == [false, false])
     let pinned = StripPlacement(input(.over, pinned: true, over: true)).tools(mode: .over)
-    #expect(pinned.map(\.symbol) == ["rectangle.on.rectangle", "pin.fill"])
+    #expect(pinned.map(\.symbol) == ["rectangle.on.rectangle", "pin"])
     #expect(pinned.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Unpin the strip (T)"])
     #expect(pinned.map(\.isOn) == [false, true])
 }
@@ -161,7 +161,7 @@ private func input(
 @Test func capsuleToolsFullScreenHaveNoPlaceButton() {
     for mode in [StripWindowMode.over, .beside, .hidden] {
         let tools = StripPlacement(input(mode, fullScreen: true, pinned: true, over: true)).tools(mode: mode)
-        #expect(tools.map(\.symbol) == ["pin.fill"])
+        #expect(tools.map(\.symbol) == ["pin"])
         #expect(tools.map(\.action) == [.pin])
     }
 }
