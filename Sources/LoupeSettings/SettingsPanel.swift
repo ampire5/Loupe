@@ -20,13 +20,16 @@ public struct SettingsPanelContext {
     public var menuRows: @MainActor () -> [(input: String, title: String)]
     /// The thumbnail catalog's folder (`Caches/Loupe`) for the Catalog card; nil: thumbnails only in memory.
     public var catalogDirectory: URL?
+    /// The Catalog card's «Clear Thumbnails…»: File › Clear Thumbnail Cache…'s confirmation and clear; true when
+    /// the thumbnails went.
+    public var clearThumbnails: @MainActor () async -> Bool
 
     public init(configURL: URL, inputURL: URL,
                 iconChoices: @escaping @MainActor () -> [(word: String, image: NSImage?)] = { [] },
                 translateKey: @escaping (UInt16, Bool) -> String? = { _, _ in nil },
                 reloadInput: @escaping @MainActor () -> Void = {},
                 menuRows: @escaping @MainActor () -> [(input: String, title: String)] = { [] },
-                catalogDirectory: URL? = nil) {
+                catalogDirectory: URL? = nil, clearThumbnails: @escaping @MainActor () async -> Bool = { false }) {
         self.configURL = configURL
         self.inputURL = inputURL
         self.iconChoices = iconChoices
@@ -34,6 +37,7 @@ public struct SettingsPanelContext {
         self.reloadInput = reloadInput
         self.menuRows = menuRows
         self.catalogDirectory = catalogDirectory
+        self.clearThumbnails = clearThumbnails
     }
 }
 

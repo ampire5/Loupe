@@ -435,7 +435,10 @@ import UniformTypeIdentifiers
                                            translateKey: { KeyboardLayout.translate(keyCode: $0, shift: $1) },
                                            reloadInput: { Settings.shared.reload() },
                                            menuRows: { MenuShortcuts.rows() },
-                                           catalogDirectory: Self.thumbnailDirectory())
+                                           catalogDirectory: Self.thumbnailDirectory(),
+                                           clearThumbnails: { [weak self] in
+                                               await self?.confirmAndClearThumbnails() ?? false
+                                           })
         SettingsPanel.show(store: store, context: context, page: page)
     }
 
@@ -480,18 +483,22 @@ import UniformTypeIdentifiers
 
     /// File › Clear Thumbnail Cache…: after a confirmation, every thumbnail goes (the open folders' are made again).
     @objc func clearThumbnailCache(_ sender: Any?) {
-        guard let thumbnails else { return }
+        Task { await confirmAndClearThumbnails() }
+    }
+
+    /// The menu's and Settings › Performance › Catalog's: false when there is no store or the user cancelled.
+    func confirmAndClearThumbnails() async -> Bool {
+        guard let thumbnails else { return false }
         let alert = NSAlert()
         alert.messageText = "Clear the thumbnail cache?"
         alert.informativeText = "All thumbnails are deleted. Those of the open folders are made again in the background."
         alert.addButton(withTitle: "Clear")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
         DebugLog.log("thumbnails: clear")
-        Task {
-            await thumbnails.clear()
-            NotificationCenter.default.post(name: .thumbnailsCleared, object: nil)
-        }
+        await thumbnails.clear()
+        NotificationCenter.default.post(name: .thumbnailsCleared, object: nil)
+        return true
     }
 
     /// An input.conf edit (read again on activation) moves the menus' keys: an item shows its action's new first key,
