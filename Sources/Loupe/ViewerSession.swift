@@ -1123,8 +1123,13 @@ import LoupeRender
                 transform = next   // didSet notifies
                 return
             }
-        } else if e.failure != nil, restore?.file == e.url {
-            restore = nil
+        } else if e.failure != nil {
+            if restore?.file == e.url { restore = nil }
+            // A failed page in a pair: laid out at its stand-in beside the good page, which draws (`ownSize`).
+            if shownLayout != nil {
+                relayout(from: nil)
+                return
+            }
         }
         onChange?()
     }
@@ -1369,8 +1374,16 @@ import LoupeRender
     /// the view's centre and a free zoom's scale on it (`SpreadZoom`); otherwise the view redraws. A saved view that
     /// waited for the pair's real size (`show`) is decided here, once that size is in.
     private func relayout(from before: CGRect?) {
-        if let e = entry, let info = e.info, e.failure == nil, e.url == laidOut {
-            let size = layoutSize(info), now = shownPageRect
+        // A failed page first laid out in a pair (its companion's header came after it): the switch's view at the pair.
+        if let e = entry, e.failure != nil, e.url != laidOut, let own = ownSize(e) {
+            laidOut = e.url
+            let next = transform(showing: e.url, size: layoutSize(own))
+            if next != transform {
+                transform = next   // didSet notifies
+                return
+            }
+        } else if let e = entry, e.url == laidOut, let own = ownSize(e) {
+            let size = layoutSize(own), now = shownPageRect
             var next: ViewTransform?
             if let restore, restore.file == e.url, !shownLayoutProvisional {
                 settleZoom()
@@ -1397,8 +1410,7 @@ import LoupeRender
     /// The layout of the photo on screen and its companion, nil for one page; `provisional` while the companion has a
     /// stand-in size (not read yet).
     private func makeLayout() -> (layout: SpreadLayout, provisional: Bool)? {
-        guard let e = entry, let info = e.info, e.failure == nil else { return nil }
-        guard let layout = layout(of: e.url, size: displaySize(info)) else { return nil }
+        guard let e = entry, let own = ownSize(e), let layout = layout(of: e.url, size: own) else { return nil }
         // Read: its header is in, or it failed (then it keeps the stand-in for good).
         let other = entry?.url == playlist?.current ? companionURL : shownCompanion?.url
         let read = [shownCompanion, latestCompanion].contains { page in
@@ -1437,9 +1449,25 @@ import LoupeRender
     }
 
     /// The size the transform lays the photo on screen out at: the pair's virtual picture, else the photo's own.
-    private func layoutSize(_ info: ImageInfo) -> CGSize {
-        guard let size = shownLayout?.virtualSize, size.width > 0, size.height > 0 else { return displaySize(info) }
+    private func layoutSize(_ info: ImageInfo) -> CGSize { layoutSize(displaySize(info)) }
+
+    private func layoutSize(_ own: CGSize) -> CGSize {
+        guard let size = shownLayout?.virtualSize, size.width > 0, size.height > 0 else { return own }
         return size
+    }
+
+    /// The size the photo on screen `e` takes in a layout: its header's, as shown. A failed current page whose
+    /// companion is read takes a stand-in, the store's aspect at the companion's height (else the companion's size,
+    /// `SpreadSizes.pageSize`), so the good page still draws beside its gap and stays reachable; nil otherwise (the
+    /// failed page alone: nothing to lay out).
+    private func ownSize(_ e: CacheEntryView<TiledImage>) -> CGSize? {
+        if e.failure == nil { return e.info.map(displaySize) }
+        guard let list = playlist, e.url == list.current, let other = companionURL,
+              let info = [shownCompanion, latestCompanion].lazy.compactMap({ $0 })
+                .first(where: { $0.url == other && $0.failure == nil && $0.info != nil })?.info else { return nil }
+        let aspects = stripAspects.aspects
+        return SpreadSizes.pageSize(known: nil, aspect: list.index < aspects.count ? aspects[list.index] : nil,
+                                    other: displaySize(info), failed: true)
     }
 
     /// The scale the page `url` (of size `size`) gets on screen: the transform's for one page; in a pair its share of
