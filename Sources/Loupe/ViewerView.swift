@@ -34,6 +34,19 @@ import QuartzCore
     private var shownOrientation: ImageOrientation?
     /// The colour cube handed over with `shownImage`, and the fade into it (`ShownColor`); nil while no image is shown.
     private var shownColor: ShownColor<ColorLUT>?
+    /// The same of the pair's other page (`session.companionImage`), and where the pages sit (`session.shownLayout`).
+    private var shownCompanion: TiledImage?
+    private var shownCompanionRevision: Int?
+    private var shownCompanionOrientation: ImageOrientation?
+    private var shownCompanionColor: ShownColor<ColorLUT>?
+    private var shownLayout: SpreadLayout?
+    /// The page of a pair under the pointer (0 the first in reading order, 1 the second), nil outside the pages or for
+    /// one page: the info panel is about it (`onPointerPageChanged`).
+    private(set) var pointerPage: Int?
+    var onPointerPageChanged: (() -> Void)?
+    /// `d`, `⇧D`, `⌥D` pressed (`toggleSpread`, `saveSpread`, `shiftSpread`); the window controller owns the folder's
+    /// spread values.
+    var onSpreadKey: ((KeyAction) -> Bool)?
     /// `i` pressed; the window controller owns the stats bar.
     var onToggleStats: (() -> Void)?
     /// `t` pressed; the window controller owns the thumbnail strip.
@@ -204,8 +217,19 @@ import QuartzCore
             .next(shown: shownColor, url: url, cube: session.colorCube(for: url), now: CACurrentMediaTime(),
                   durationMs: Settings.shared.config.autoColorFadeMilliseconds)
         }
+        // The pair's other page, with its own orientation and cube (spread spec, «Цвет»).
+        let layout = session.shownLayout
+        let companion = layout == nil ? nil : session.companionImage
+        let companionRevision = companion?.revision, companionOrientation = session.companionDrawOrientation
+        let companionColor: ShownColor<ColorLUT>? = companion.flatMap { _ in session.shownCompanion?.url }.map { url in
+            .next(shown: shownCompanionColor, url: url, cube: session.colorCube(for: url), now: CACurrentMediaTime(),
+                  durationMs: Settings.shared.config.autoColorFadeMilliseconds)
+        }
         let changed = image !== shownImage || revision != shownRevision || session.transform != shownTransform
             || orientation != shownOrientation || color != shownColor
+            || companion !== shownCompanion || companionRevision != shownCompanionRevision
+            || companionOrientation != shownCompanionOrientation || companionColor != shownCompanionColor
+            || layout != shownLayout
         if changed {
             if image !== shownImage {
                 let photo = image.flatMap { _ in session.entry?.url }
@@ -217,11 +241,28 @@ import QuartzCore
             shownTransform = session.transform
             shownOrientation = orientation
             shownColor = color
-            // One page, the whole of the transform's image: drawn as a single photo always was.
+            shownCompanion = companion
+            shownCompanionRevision = companionRevision
+            shownCompanionOrientation = companionOrientation
+            shownCompanionColor = companionColor
+            shownLayout = layout
             let transform = session.transform
-            renderLoop.update(pages: RenderPages(first: RenderPage(image: image, orientation: orientation, color: color,
-                                                                   rect: CGRect(origin: .zero, size: transform.imageSize))),
-                              transform: transform)
+            let page = RenderPage(image: image, orientation: orientation, color: color,
+                                  rect: CGRect(origin: .zero, size: transform.imageSize))
+            if let layout, layout.rects.count == 2 {
+                // Two pages, left to right on screen, each in its rect of the virtual picture the transform shows.
+                let other = RenderPage(image: companion, orientation: companionOrientation, color: companionColor,
+                                       rect: .zero)
+                let reading = session.companionFirst ? (other, page) : (page, other)
+                var left = layout.order[0] == 0 ? reading.0 : reading.1
+                var right = layout.order[0] == 0 ? reading.1 : reading.0
+                left.rect = layout.rects[0]
+                right.rect = layout.rects[1]
+                renderLoop.update(pages: RenderPages(first: left, second: right), transform: transform)
+            } else {
+                // One page, the whole of the transform's image: drawn as a single photo always was.
+                renderLoop.update(pages: RenderPages(first: page), transform: transform)
+            }
         }
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in
         // between draws the bare background retagged back to P3.
@@ -806,12 +847,22 @@ import QuartzCore
         cursorAutohide.activity()
         refreshCursor()
         onPointerMoved?()
+        updatePointerPage(at: viewPoint(event))
         // A held button's travel comes from `MouseButtons`' own monitor of every mouse-moved event (M4c spec §12.2).
     }
     override func mouseEntered(with event: NSEvent) { cursorAutohide.activity() }
     override func mouseExited(with event: NSEvent) {
         shownCursor = nil
         onPointerMoved?()
+        updatePointerPage(at: nil)
+    }
+
+    /// The page of the pair under `point` (view pixels; nil: the pointer left), told when it changed.
+    private func updatePointerPage(at point: CGPoint?) {
+        let page = point.flatMap { p in session.shownLayout?.page(at: session.transform.imagePoint(forView: p)) }
+        guard page != pointerPage else { return }
+        pointerPage = page
+        onPointerPageChanged?()
     }
 
     /// An overlay that takes the mouse (the cheat sheet, the info panel) opened or closed: the cursor is chosen afresh, since the
@@ -1502,7 +1553,7 @@ import QuartzCore
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
         case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry: return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false
-        case .toggleSpread, .saveSpread, .shiftSpread: return false     // wired in a later task
+        case .toggleSpread, .saveSpread, .shiftSpread: return onSpreadKey?(action) ?? false
         case .newTab, .newWindow, .closeTab, .nextTab, .previousTab, .openInNewTab, .openInNewWindow, .home, .back,
              .reopenTab, .closeWindow, .browse:
             onTabAction?(action)

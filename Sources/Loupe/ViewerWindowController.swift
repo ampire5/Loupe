@@ -225,6 +225,8 @@ import UniformTypeIdentifiers
         viewerView.onScalingKey = { [weak self] in self?.scalingKey($0) ?? false }
         viewerView.onColourKey = { [weak self] in self?.colourKey($0) ?? false }
         viewerView.onZoomKey = { [weak self] in self?.zoomKey($0) ?? false }
+        viewerView.onSpreadKey = { [weak self] in self?.spreadKey($0) ?? false }
+        viewerView.onPointerPageChanged = { [weak self] in self?.updateInfoPanel() }
         viewerView.onPanIndicatorKey = { [weak self] in self?.panIndicatorKey($0) ?? false }
         viewerView.onToggleInfoPanel = { [weak self] in self?.toggleInfoPanel(nil) }
         viewerView.onTabAction = { [weak self] in self?.tabAction($0) }
@@ -235,6 +237,9 @@ import UniformTypeIdentifiers
         session.zoomRules = { [weak self] url in
             let config = self?.folderConfig(url.deletingLastPathComponent()).config ?? Settings.shared.config
             return ZoomRules(config: config)
+        }
+        session.spreadRules = { [weak self] url in
+            SpreadRules(config: self?.folderConfig(url.deletingLastPathComponent()).config ?? Settings.shared.config)
         }
         viewerView.isCheatSheetOpen = { [weak cheatSheet] in cheatSheet?.isOpen ?? false }
         cheatSheet.onClose = { [weak self] in self?.setCheatSheet(open: false) }
@@ -675,7 +680,10 @@ import UniformTypeIdentifiers
         if home == nil, let pending {
             window?.title = WindowTitle.text(of: pending)
         } else {
-            window?.title = WindowTitle.text(home: home, file: session.playlist?.current)
+            // A pair names both pages, in reading order (spread spec, «Положение»).
+            let list = session.playlist, pages = session.currentPages
+            window?.title = WindowTitle.text(home: home, file: pages.flatMap { p in list?.files[p.first] } ?? list?.current,
+                                             companion: pages?.second.flatMap { k in list?.files[k] })
         }
     }
 
@@ -1340,6 +1348,7 @@ import UniformTypeIdentifiers
         effectiveConfig = config
         applyResampling()
         session.setColor(ColorSettings(config: config), reach: config.cachePreviews)
+        session.updateSpreadRules()   // `D`, `⌥D` here or in another window, a reload: the pair follows at once
         // The panel names the filter and the colour (and ` · folder`): at once, not on the next tick.
         if changed { updateInfoPanel() }
     }
@@ -1657,7 +1666,7 @@ import UniformTypeIdentifiers
     private func updateInfoPanel(force: Bool = false) {
         guard infoActive else { return }
         var force = force
-        let current = session.playlist?.current
+        let current = infoPhoto
         if current != infoURL {
             force = true
             // A panel showing a photo keeps it until the new one's facts are in (none to keep on opening).
@@ -1681,6 +1690,15 @@ import UniformTypeIdentifiers
                                                  display: display, diagnostics: diagnosticsRows))
     }
 
+    /// The photo the panel is about: the current one, or in a pair the page under the pointer, the first in reading
+    /// order when the pointer is on neither (spread spec, «Положение»).
+    private var infoPhoto: URL? {
+        guard let list = session.playlist, let pages = session.currentPages, let second = pages.second else {
+            return session.playlist?.current
+        }
+        return list.files[viewerView.pointerPage == 1 ? second : pages.first]
+    }
+
     /// At the hold's limit the panel shows what is known of the new photo by then.
     private func scheduleInfoHoldEnd() {
         guard infoHoldTimer == nil, let deadline = infoHold.deadline else { return }
@@ -1698,7 +1716,7 @@ import UniformTypeIdentifiers
     /// meanwhile its name, folder and (once stat'ed) size. Nil without a photo.
     private func fileFacts(of url: URL?) -> InfoFileFacts? {
         guard let url else { return nil }
-        let entry = session.entry.flatMap { $0.url == url ? $0 : nil }
+        let entry = [session.entry, session.shownCompanion].lazy.compactMap { $0 }.first { $0.url == url }
         // The metadata read's header until the decoder's own is in: the same ImageIO header, read sooner on a cold photo.
         let info = entry?.info ?? (infoURL == url ? metadata?.header : nil)
         // An archive entry: the archive and its inner path, in the archive's folder (Stash spec §2.4).
@@ -1828,7 +1846,9 @@ import UniformTypeIdentifiers
     /// The panel's colour row for the photo on screen (the one `session.entry` holds), with the window's
     /// vibrance and ` · folder` when a colour value comes from a folder's record (M3c spec §2.3). Nil without a photo.
     private func colourLine() -> String? {
-        guard let url = session.entry?.url else { return nil }
+        guard let shown = session.entry?.url else { return nil }
+        // In a pair: the page the panel is about, when it is on screen.
+        let url = infoPhoto.flatMap { $0 == session.shownCompanion?.url ? $0 : nil } ?? shown
         let config = effectiveConfig
         return StatsLine.colour(session.colorStatus(for: url), vibrance: config.vibrance ? config.vibranceAmount : nil,
                                 fromFolder: Config.colorFolderKeys.contains { folderValues[$0] != nil })
@@ -1953,6 +1973,32 @@ import UniformTypeIdentifiers
             toast.show(ZoomKeys.toast(carry: carry))
         case .saveZoomCarry:
             saveAsDefault([ZoomKeys.carryKey], from: folder, toast: ZoomKeys.carrySaved)
+        default:
+            break
+        }
+        return true
+    }
+
+    // MARK: Two-page keys (spread spec 2026-10-23)
+
+    /// `D`, `⇧D`, `⌥D`, as `L` / `⇧L`: without a photo there is no folder and they do nothing. `D` turns two pages on or
+    /// off for the folder and `⌥D` shifts its pairs by a page (the folder's own values, even when they equal the
+    /// inherited ones); `⇧D` saves the window's `spread` as loupe.conf's default. The session follows through
+    /// `.folderSettingsChanged` (`updateEffectiveConfig` → `updateSpreadRules`).
+    @discardableResult
+    private func spreadKey(_ action: KeyAction) -> Bool {
+        guard let folder else { return false }
+        switch action {
+        case .toggleSpread:
+            let value = SpreadKeys.toggled(effectiveConfig)
+            folderSettings.set(SpreadKeys.key, value, for: folder)
+            toast.show(SpreadKeys.toast(on: value == "yes"))
+        case .saveSpread:
+            saveAsDefault([SpreadKeys.key], from: folder, toast: SpreadKeys.savedToast(on: effectiveConfig.spread))
+        case .shiftSpread:
+            let value = SpreadKeys.toggledShift(effectiveConfig)
+            folderSettings.set(SpreadKeys.shiftKey, value, for: folder)
+            toast.show(SpreadKeys.toast(shift: value == "yes"))
         default:
             break
         }

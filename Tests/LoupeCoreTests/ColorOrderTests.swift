@@ -71,3 +71,12 @@ private let photo = URL(fileURLWithPath: "/photos/a.jpg")
     let arrived = restamps.thumbnailArrived(photo)
     #expect(!restamps.isStale(other) && !arrived)
 }
+
+/// The other page of a pair on screen comes right after the current photo, whatever the reach, and only once.
+@Test func companionComesSecond() {
+    #expect(ColorOrder.order(count: 10, current: 4, direction: 1, reach: 4, companion: 3) == [4, 3, 5, 6])
+    #expect(ColorOrder.order(count: 10, current: 4, direction: 1, reach: 1, companion: 5) == [4, 5])
+    #expect(ColorOrder.order(count: 3, current: 1, direction: 1, reach: 9, companion: 0) == [1, 0, 2])
+    #expect(ColorOrder.order(count: 10, current: 4, direction: 1, reach: 3, companion: 4) == [4, 5, 3])
+    #expect(ColorOrder.order(count: 10, current: 4, direction: 1, reach: 3, companion: 12) == [4, 5, 3])
+}

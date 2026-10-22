@@ -24,6 +24,8 @@ import LoupeRender
         didSet {
             // Leaving a photo (any navigation, a re-read that lost it, another folder) saves how it was looked at.
             if let left = oldValue?.current, left != playlist?.current { recordView(of: left) }
+            // The pair the new position is in (no cache call here: the navigation that set the playlist makes them).
+            updateSpread()
             // Entering another folder (open, folder switch) moves the watcher with it.
             guard !closed, let folder = playlist?.current.deletingLastPathComponent(),
                   folder != oldValue?.current.deletingLastPathComponent() else { return }
@@ -118,6 +120,7 @@ import LoupeRender
             guard transform != oldValue else { return }
             onChange?()
             transformDidChange()
+            if transform.viewSize != oldValue.viewSize { viewSizeDidChange() }
         }
     }
 
@@ -272,7 +275,7 @@ import LoupeRender
         thumbnailChain = thumbnailsReady
         colorCorrector = ColorCorrector(thumbnails: thumbnails)
         colorCorrector.onChange = { [weak self] url in
-            guard let self, url == self.entry?.url else { return }
+            guard let self, url == self.entry?.url || url == self.shownCompanion?.url else { return }
             self.onChange?()
         }
         // A thumbnail the corrector waits for (spec §3.1: the file is never read for an analysis).
@@ -281,6 +284,7 @@ import LoupeRender
             MainActor.assumeIsolated {
                 guard let url = note.object as? URL else { return }
                 self?.colorCorrector.thumbnailArrived(url)
+                if self?.folderSpread.on == true { self?.spreadAspects?.thumbnailArrived(url) }   // its aspect is known now
             }
         }
         watcher.onChange = { [weak self] isPoll in self?.rereadFolder(isPoll ? .idle : .event) }
@@ -446,7 +450,8 @@ import LoupeRender
         }
     }
 
-    /// Next (`step` > 0) or previous file. Returns false at either end of the playlist (no wrap-around); the
+    /// Next (`step` > 0) or previous file, or pair of pages while two are shown (`SpreadNavigation`: the first page
+    /// of the pair `step` pairs away). Returns false at either end of the playlist (no wrap-around); the
     /// folder is then re-read, and the step made once more if files were added (spec §4.5). `wait`: the wheel's
     /// `wheel-step` or the keys' `key-step`, which decides what of the new photo is shown at once (see `stepWait`);
     /// nil for other steps.
@@ -454,7 +459,8 @@ import LoupeRender
     func go(by step: Int, wait: StepWait? = nil) -> Bool {
         guard var list = playlist else { return false }
         let before = list.index
-        guard list.move(by: step) else {
+        guard let target = spread.target(from: before, by: step, count: list.files.count),
+              list.move(by: target - before) else {
             stepAfterReread(step)
             return false
         }
@@ -471,7 +477,8 @@ import LoupeRender
         rereadFolder(.step { [weak self] in
             guard let self, var list = self.playlist, list.current == from else { return }
             let before = list.index
-            guard list.move(by: step) else { return }
+            guard let target = self.spread.target(from: before, by: step, count: list.files.count),
+                  list.move(by: target - before) else { return }
             DebugLog.log("folder grew at the end: step \(step) retried")
             self.playlist = list
             self.navigated(direction: step.signum(), from: before)
@@ -563,6 +570,7 @@ import LoupeRender
         if scrubEnded { startDwell(on: new.current) }
         sendThumbnailRequest()
         sendColorPlan()
+        companionDidChange()   // the list grew or shrank around the photo: its pair may have another page
         onChange?()
         return true
     }
@@ -714,8 +722,16 @@ import LoupeRender
         seedCurrent()
     }
 
-    func goFirst() { navigate { $0.moveToFirst() } }
-    func goLast() { navigate { $0.moveToLast() } }
+    /// Home / End: the first / last photo, or the first page of the first / last pair (`SpreadNavigation`).
+    func goFirst() {
+        guard let list = playlist, let target = spread.first(from: list.index, count: list.files.count) else { return }
+        navigate { _ = $0.move(by: target - $0.index) }
+    }
+
+    func goLast() {
+        guard let list = playlist, let target = spread.last(from: list.index, count: list.files.count) else { return }
+        navigate { _ = $0.move(by: target - $0.index) }
+    }
 
     private func navigate(_ move: (inout Playlist) -> Void) {
         guard var list = playlist else { return }
@@ -773,6 +789,7 @@ import LoupeRender
         sendThumbnailRequest()
         sendColorPlan()
         refresh(atNavigation: true)
+        refreshCompanion()
         onChange?()
 
         dwellTask?.cancel()
@@ -801,16 +818,18 @@ import LoupeRender
         guard let list = playlist else { return }
         let needsFull = needsFull()
         lastNeedsFull = needsFull
+        let pages = spread.focus(current: list.index)
         let focus = CacheFocus(count: list.files.count, current: list.index, direction: direction, dwelling: dwelling,
                                needsFull: needsFull, screen: screenSize, previous: previousIndex,
-                               scrubbing: isScrubbing, appliesOrientation: appliesOrientation, opened: opened)
+                               scrubbing: isScrubbing, appliesOrientation: appliesOrientation, opened: opened,
+                               companion: pages.companion, step: pages.step)
         guard focus != sentFocus || list.files != sentFiles else { return }
         sentFocus = focus
         sentFiles = list.files
         DebugLog.log("focus \(focus.current + 1)/\(focus.count) dir \(focus.direction) dwell \(focus.dwelling) "
                      + "full \(focus.needsFull) screen \(focus.screen.width)x\(focus.screen.height)"
                      + (focus.previous.map { " prev \($0 + 1)" } ?? "") + (focus.scrubbing ? " scrubbing" : "")
-                     + (focus.opened ? " opened" : ""))
+                     + (focus.opened ? " opened" : "") + (focus.companion.map { " pair \($0 + 1)" } ?? ""))
         let files = list.files, cache = self.cache, id = cacheID
         enqueue { await cache.setFocus(id, files: files, focus: focus) }
     }
@@ -835,7 +854,7 @@ import LoupeRender
     private func sendColorPlan() {
         guard !closed, let list = playlist else { return }
         colorCorrector.update(files: list.files, current: list.index, direction: direction, stamps: list.stamps,
-                              settings: colorSettings, reach: colorReach)
+                              settings: colorSettings, reach: colorReach, companion: companionIndex)
     }
 
     private func enqueueThumbnails(_ operation: @escaping @Sendable () async -> Void) {
@@ -867,10 +886,10 @@ import LoupeRender
     /// The level the photo `url` (header `info`) needs at the scale it gets (or has) on screen, laid out at its
     /// `displaySize`, and its Lfit on this screen, the fit of that same layout (as the cache plans it, told by the
     /// focus's `appliesOrientation`). A running zoom animation is judged by its target.
+    /// In a pair the transform is the virtual picture's: the page's scale is its share of it (`pageScale`).
     private func levels(for info: ImageInfo, of url: URL) -> (needed: Int, lfit: Int) {
         let grid = TileGrid(imageSize: info.pixelSize)
-        let needed = TileGrid.level(forScale: transform(showing: url, size: displaySize(info), over: judgedTransform).scale,
-                                    levelCount: grid.levelCount)
+        let needed = TileGrid.level(forScale: pageScale(of: url, size: displaySize(info)), levelCount: grid.levelCount)
         return (needed, grid.previewLevel(forScreen: screenSize,
                                           orientation: info.displayOrientation(applying: appliesOrientation)))
     }
@@ -892,11 +911,17 @@ import LoupeRender
         let before = drawOrientation
         appliesOrientation = applies
         DebugLog.log("exif-orientation \(applies ? "yes" : "no")")
+        // Pages planned and laid out at their old orientation's sizes are measured anew.
+        spreadHeaders = [:]
+        spreadAspects?.setAppliesOrientation(applies)
+        updateSpread(rebuild: true)
+        shownLayout = makeLayout()
         if let entry, let info = entry.info, entry.failure == nil,
-           displaySize(info) != transform.imageSize || drawOrientation != before {
-            transform = transform.reoriented(to: displaySize(info))   // didSet notifies when it changed
+           layoutSize(info) != transform.imageSize || drawOrientation != before {
+            transform = transform.reoriented(to: layoutSize(info))   // didSet notifies when it changed
         }
         sendFocus()
+        companionDidChange()
         refresh()   // a photo waiting for sharpness is judged against its new Lfit
         onChange?()
     }
@@ -929,8 +954,7 @@ import LoupeRender
     // MARK: Entries
 
     private func cacheDidUpdate(_ url: URL) {
-        guard url == playlist?.current else { return }
-        refresh()
+        if url == playlist?.current { refresh() } else if url == companionURL { refreshCompanion() }
     }
 
     /// Reads the current photo's entry (after every cache call made so far) and considers it for the screen. The
@@ -967,6 +991,7 @@ import LoupeRender
     private func consider(_ e: CacheEntryView<TiledImage>, atNavigation: Bool) {
         let incoming = incomingColorSpace
         latest = e
+        noteSpreadSize(e, at: playlist?.index)
         if lastNeedsFull != needsFull() { sendFocus() }   // the header arrived: needsFull is now exact
         if incomingColorSpace != incoming { onChange?() }   // the header arrived: the view can tag its layer
         let name = e.url.lastPathComponent
@@ -1017,17 +1042,19 @@ import LoupeRender
         if !samePhoto {
             settleZoom()   // a zoom key pressed while the photo loaded: the photo gets the mode it asked for
             shownFromCache = atNavigation
-            // The cache never evicts the photo on screen (spec §11.2): its levels stay while it is shown. The pin
-            // moves only here, so the old photo stays pinned (and on screen) until the new one is shown.
-            let cache = self.cache, id = cacheID, url = e.url
-            enqueue { await cache.setPinned(id, url) }
-            colorCorrector.pinned = url   // its cube stays while it is shown, wherever the order went
+            colorCorrector.pinned = e.url   // its cube stays while it is shown, wherever the order went
+            // The store's catalog has this folder by now: aspects it did not have at the playlist change are asked again.
+            if folderSpread.on { spreadAspects?.cellPictureArrived(e.url) }
         }
         entry = e
+        // The cache never evicts the photo on screen (spec §11.2): its levels stay while it is shown. The pin moves only
+        // here (and with the pair's other page, `adoptCompanion`), so the old photo stays pinned (and on screen) until
+        // the new one is shown. In a pair the transform is the virtual picture's (`layoutSize`).
+        adoptCompanion()
         loadingName = nil
         error = e.failure
         if let info = e.info, e.failure == nil {
-            let next = transform(showing: e.url, size: displaySize(info))
+            let next = transform(showing: e.url, size: layoutSize(info))
             laidOut = e.url   // before the transform changes: what its observers ask of this photo keeps this view
             if freshOpen == e.url { freshOpen = nil }
             if let restore, restore.file == e.url {
@@ -1049,6 +1076,288 @@ import LoupeRender
             restore = nil
         }
         onChange?()
+    }
+
+    // MARK: Two pages (spread spec 2026-10-23)
+
+    /// The spread keys of a photo's folder (`spread`, `spread-shift`, `spread-direction`, `spread-landscape`): the window
+    /// controller sets it from that folder's settings over loupe.conf, like `zoomRules`. Asked with the photo when the
+    /// current folder changes, so a folder step takes the new folder's own flag; `updateSpreadRules` asks again.
+    var spreadRules: (URL) -> SpreadRules = { _ in SpreadRules(config: Settings.shared.config) }
+
+    /// The rules of `spreadFolder`, the current photo's folder when they were last asked.
+    private var folderSpread = SpreadRules.off
+    private var spreadFolder: URL?
+    /// How steps go and which page pairs with the current one. Its plan is rebuilt (O(n)) only when one of its inputs
+    /// changes (`updateSpread`): the playlist, the rules, a page size that pairs otherwise; never per frame or event.
+    private var spread = SpreadNavigation(plan: nil, showsTwo: false)
+    /// The playlist the plan was built for ([] while the folder shows one page).
+    private var planFiles: [URL] = []
+    /// The view is at least as wide as it is tall (`SpreadLayout.showsTwo`), as of the last view size.
+    private var viewShowsTwo = false
+    /// The thumbnail store's aspects of the playlist's files (its catalog and memory: no file is read), made the first
+    /// time a folder shows two pages and fed only while one does.
+    private var spreadAspects: StripAspects?
+    /// The headers' sizes (as shown) of the pages read in this folder: exact where the store has no aspect yet.
+    private var spreadHeaders: [URL: PixelSize] = [:]
+    /// The other page of the current photo's pair (playlist index and file), nil for one page. The current photo is
+    /// any page of the pair: turning two pages on mid-folder shows the pair containing it, a step lands on a first page.
+    private(set) var companionIndex: Int?
+    private(set) var companionURL: URL?
+    /// The latest entry read for `companionURL`.
+    private var latestCompanion: CacheEntryView<TiledImage>?
+    /// The page on screen beside `entry`, nil for one page or while its slot waits for it. It is what was read of the
+    /// current companion while `entry` is the current photo; a previous photo still on screen keeps the page it had.
+    private(set) var shownCompanion: CacheEntryView<TiledImage>?
+    /// `shownCompanion` comes first in reading order.
+    private(set) var companionFirst = false
+    /// Where the pages on screen sit in the transform's (virtual) picture, nil for one page: the view draws by it and
+    /// finds the page under the pointer with it. Kept, not made per frame.
+    private(set) var shownLayout: SpreadLayout?
+    private var sentPins: (URL?, URL?) = (nil, nil)
+    private var spreadSyncPending = false
+    private var spreadRebuildPending = false
+
+    /// The companion's pyramid to draw: nothing for one page, a page not read yet or a failed one.
+    var companionImage: TiledImage? {
+        guard shownLayout != nil, let c = shownCompanion, c.failure == nil else { return nil }
+        return c.pyramid
+    }
+
+    /// The orientation `companionImage` is drawn with (as `drawOrientation`).
+    var companionDrawOrientation: ImageOrientation {
+        guard let c = shownCompanion, let info = c.info else { return .up }
+        return info.drawOrientation(applying: appliesOrientation, seeded: c.pyramidIsSeeded)
+    }
+
+    /// The current photo's pages in reading order (playlist indices), `second` nil for one page: the stats bar's
+    /// `12–13 / 380` and the title's two names.
+    var currentPages: (first: Int, second: Int?)? {
+        guard let list = playlist else { return nil }
+        guard let k = companionIndex else { return (list.index, nil) }
+        return (min(list.index, k), max(list.index, k))
+    }
+
+    /// The window's folder settings changed (`D`, `⌥D`, a reload): the current folder's rules are asked again and the
+    /// pair follows them at once.
+    func updateSpreadRules() {
+        guard let current = playlist?.current else { return }
+        let rules = spreadRules(current)
+        spreadFolder = current.deletingLastPathComponent()
+        guard rules != folderSpread else { return }
+        let options = rules.options
+        DebugLog.log("spread \(rules.on ? "on" : "off")\(options.shift ? " shifted" : "")"
+                     + (options.rightToLeft ? " rtl" : "") + (options.landscapeAlone ? "" : " landscape paired"))
+        folderSpread = rules
+        spreadChanged(rebuild: true)
+    }
+
+    /// Brings the spread state up to the folder's rules, the playlist, the known sizes and the view: the plan when one
+    /// of its inputs changed or `rebuild`, then the current photo's companion. No cache call and no notification: the
+    /// callers make them (a navigation sends the focus once, with the companion). True when the companion changed.
+    @discardableResult
+    private func updateSpread(rebuild: Bool = false) -> Bool {
+        var rebuild = rebuild
+        if let current = playlist?.current, current.deletingLastPathComponent() != spreadFolder {
+            spreadFolder = current.deletingLastPathComponent()
+            spreadHeaders = [:]
+            let rules = spreadRules(current)
+            rebuild = rebuild || rules != folderSpread
+            folderSpread = rules
+        }
+        let files = folderSpread.on ? playlist?.files ?? [] : []
+        var plan = spread.plan
+        if rebuild || files != planFiles {   // the same list compares in O(1) (one storage)
+            planFiles = files
+            if files.isEmpty {
+                plan = nil
+            } else {
+                let aspects = aspectsFor(files)
+                plan = SpreadPlan(sizes: SpreadSizes.sizes(files: files, aspects: aspects, headers: spreadHeaders),
+                                  options: folderSpread.options)
+            }
+        }
+        spread = SpreadNavigation(plan: plan, showsTwo: viewShowsTwo)
+        let index = playlist.flatMap { spread.companion(of: $0.index) }
+        let url = index.flatMap { i in playlist.map { $0.files[i] } }
+        let changed = index != companionIndex || url != companionURL
+        companionIndex = index
+        companionURL = url
+        if latestCompanion?.url != url { latestCompanion = nil }
+        return changed
+    }
+
+    /// The store's aspects of `files` as known now (an asynchronous fetch follows for the rest; its arrival rebuilds).
+    private func aspectsFor(_ files: [URL]) -> [Double?] {
+        let aspects: StripAspects
+        if let made = spreadAspects {
+            aspects = made
+        } else {
+            let store = thumbnails
+            aspects = StripAspects(fetch: { urls, applies in await store.aspects(urls, applyingOrientation: applies) })
+            aspects.onChange = { [weak self] in self?.scheduleSpreadSync(rebuild: true) }
+            spreadAspects = aspects
+        }
+        aspects.setAppliesOrientation(appliesOrientation)
+        aspects.setPlaylist(files)
+        return aspects.aspects
+    }
+
+    /// The view's size crossed width = height: two pages give way to one, or come back (spread spec, «Узкое окно»).
+    private func viewSizeDidChange() {
+        let two = SpreadLayout.showsTwo(viewSize: transform.viewSize)
+        guard two != viewShowsTwo else { return }
+        viewShowsTwo = two
+        if folderSpread.on { scheduleSpreadSync(rebuild: false) }
+    }
+
+    /// `spreadChanged` once, after what is running now (a transform's observer, an entry being considered) is done.
+    private func scheduleSpreadSync(rebuild: Bool) {
+        spreadRebuildPending = spreadRebuildPending || rebuild
+        guard !spreadSyncPending else { return }
+        spreadSyncPending = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rebuild = self.spreadRebuildPending
+            self.spreadSyncPending = false
+            self.spreadRebuildPending = false
+            self.spreadChanged(rebuild: rebuild)
+        }
+    }
+
+    /// The rules, the plan's inputs or the view changed: the current photo's pair is taken anew. A pair giving way to
+    /// one page (a narrow view, `D` off) keeps its first page in reading order, which is a navigation when the current
+    /// photo was the second; otherwise the cache hears the new companion and its page is read and laid out.
+    private func spreadChanged(rebuild: Bool) {
+        guard !closed, let index = playlist?.index else { return }
+        let shown = spread.pair(at: index)
+        updateSpread(rebuild: rebuild)
+        if !spread.isActive, let first = SpreadNavigation.single(after: shown, current: index) {
+            navigate { _ = $0.move(by: first - $0.index) }
+            return
+        }
+        sendFocus()
+        companionDidChange()
+    }
+
+    /// The companion may be another page: it is read, and the pair on screen laid out again.
+    private func companionDidChange() {
+        sendColorPlan()   // its cube is built next to the current photo's
+        refreshCompanion()
+        adoptCompanion()
+        relayout()
+    }
+
+    /// A page's header is in: its size joins the known ones, and when it pairs the page otherwise than the plan did (a
+    /// page taken for portrait is landscape) the plan is rebuilt, after the entry has been dealt with.
+    private func noteSpreadSize(_ e: CacheEntryView<TiledImage>, at index: Int?) {
+        guard folderSpread.on, let info = e.info, let index, planFiles.indices.contains(index),
+              planFiles[index] == e.url else { return }
+        let size = info.displaySize(applying: appliesOrientation)
+        guard spreadHeaders[e.url] != size else { return }
+        let aspects = spreadAspects?.aspects ?? []
+        let aspect = index < aspects.count ? aspects[index] : nil
+        let planned = spreadHeaders[e.url] ?? aspect.flatMap(SpreadSizes.size(aspect:))
+        spreadHeaders[e.url] = size
+        if SpreadSizes.changesPairing(from: planned, to: size) { scheduleSpreadSync(rebuild: true) }
+    }
+
+    /// Reads the companion's entry (after every cache call made so far).
+    private func refreshCompanion() {
+        guard let url = companionURL else { return }
+        let cache = self.cache
+        enqueue { [weak self] in
+            let entry = await cache.entry(url)
+            await self?.receivedCompanion(entry, of: url)
+        }
+    }
+
+    private func receivedCompanion(_ e: CacheEntryView<TiledImage>?, of url: URL) {
+        guard url == companionURL, let e else { return }
+        latestCompanion = e
+        noteSpreadSize(e, at: companionIndex)
+        adoptCompanion()
+        relayout()
+    }
+
+    /// Puts the current companion beside the photo on screen when that is the current photo (a previous photo still on
+    /// screen keeps the page it had, so a pair is never shown half old, half new), lays the pair out and moves the pins.
+    /// The companion is shown with whatever it has: it never holds the current photo back.
+    private func adoptCompanion() {
+        if entry != nil, entry?.url == playlist?.current {
+            shownCompanion = latestCompanion
+            companionFirst = (companionIndex ?? 0) < (playlist?.index ?? 0)
+        } else if companionURL == nil {
+            shownCompanion = nil
+        }
+        shownLayout = makeLayout()
+        let pins = (entry?.url, shownLayout == nil ? nil : shownCompanion?.url)
+        guard let first = pins.0, pins != sentPins else { return }
+        sentPins = pins
+        let cache = self.cache, id = cacheID, companion = pins.1
+        enqueue { await cache.setPinned(id, first, companion: companion) }
+    }
+
+    /// The transform follows the pair on screen: a new virtual size (a page's real size replacing a substitute, a page
+    /// more or less) keeps the view as a finer level does (`PhotoSwitchView` `.laidOut`); otherwise the view redraws.
+    private func relayout() {
+        if let e = entry, let info = e.info, e.failure == nil, e.url == laidOut {
+            let size = layoutSize(info)
+            if size != transform.imageSize {
+                settleZoom()
+                transform = transform(showing: e.url, size: size)   // didSet notifies
+                return
+            }
+        }
+        onChange?()
+    }
+
+    /// The layout of the photo on screen and its companion, nil for one page.
+    private func makeLayout() -> SpreadLayout? {
+        guard let e = entry, let info = e.info, e.failure == nil else { return nil }
+        return layout(of: e.url, size: displaySize(info))
+    }
+
+    /// The pair `url` (the photo on screen, or the current one about to be; `own` its size) is laid out in, nil for one
+    /// page. A companion not read yet takes the store's aspect at `own`'s height, else `own` (`SpreadSizes.pageSize`),
+    /// so the photo keeps its place when the page comes.
+    private func layout(of url: URL, size own: CGSize) -> SpreadLayout? {
+        let other: URL?, otherFirst: Bool
+        var aspect: Double?
+        if url == playlist?.current {
+            other = companionURL
+            otherFirst = (companionIndex ?? 0) < (playlist?.index ?? 0)
+            if let k = companionIndex, let aspects = spreadAspects?.aspects, k < aspects.count { aspect = aspects[k] }
+        } else if url == entry?.url {
+            other = shownCompanion?.url
+            otherFirst = companionFirst
+        } else {
+            return nil
+        }
+        guard let other else { return nil }
+        let page = [shownCompanion, latestCompanion].lazy.compactMap { $0 }.first { $0.url == other && $0.failure == nil }
+        let size = SpreadSizes.pageSize(known: page?.info.map(displaySize), aspect: aspect, other: own)
+        let rtl = folderSpread.options.rightToLeft
+        return otherFirst ? SpreadLayout(first: size, second: own, rightToLeft: rtl)
+            : SpreadLayout(first: own, second: size, rightToLeft: rtl)
+    }
+
+    /// The size the transform lays the photo on screen out at: the pair's virtual picture, else the photo's own.
+    private func layoutSize(_ info: ImageInfo) -> CGSize {
+        guard let size = shownLayout?.virtualSize, size.width > 0, size.height > 0 else { return displaySize(info) }
+        return size
+    }
+
+    /// The scale the page `url` (of size `size`) gets on screen: the transform's for one page; in a pair its share of
+    /// the virtual picture's (every page is as tall as the picture), so a pair at 1:1 of its taller page asks the other
+    /// page for the finer level it needs.
+    private func pageScale(of url: URL, size: CGSize) -> Double {
+        let layout = url == entry?.url && shownLayout != nil ? shownLayout : layout(of: url, size: size)
+        guard let layout, layout.virtualSize.height > 0, size.height > 0 else {
+            return transform(showing: url, size: size, over: judgedTransform).scale
+        }
+        let t = transform(showing: url, size: layout.virtualSize, over: judgedTransform)
+        return t.scale * layout.virtualSize.height / size.height
     }
 
     /// Tells Recent of the photo on screen: its folder is entered when it is not the last one told.
@@ -1083,6 +1392,7 @@ import LoupeRender
     func close() {
         recordView()
         watcher.stop()
+        spreadAspects?.close()
         rereads.reset()   // a listing in flight is dropped
         cancelFolderRequest()
         dwellTask?.cancel()

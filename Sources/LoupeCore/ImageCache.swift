@@ -254,7 +254,9 @@ public actor ImageCache<Loader: PyramidLoader> {
 
     /// Tells every session whose playlist lists `url` or which pins it.
     func notify(_ url: URL) {
-        for s in sessions.values where s.fileIndex[url] != nil || s.pinned == url { s.onUpdate?(url) }
+        for s in sessions.values where s.fileIndex[url] != nil || s.pinned == url || s.pinnedCompanion == url {
+            s.onUpdate?(url)
+        }
     }
 
     // MARK: Planning
@@ -381,7 +383,7 @@ public actor ImageCache<Loader: PyramidLoader> {
     func evictToFit(_ target: Int) {
         var used = usedBytes()
         guard used > target else { return }
-        let onScreen = Set(sessions.compactMap { id, s in id == active || s.isVisible ? s.pinned : nil })
+        let onScreen = Set(sessions.flatMap { id, s in id == active || s.isVisible ? s.pinnedPages : [] })
         let order = CacheOwners.evictionOrder(Array(entries.keys), sessions: owners)
             .compactMap { url -> (url: URL, entry: CacheEntry<Pyramid>)? in
                 guard !onScreen.contains(url), let e = entries[url], e.uploadReserve == 0 else { return nil }

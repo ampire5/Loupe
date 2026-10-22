@@ -460,6 +460,25 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
+    /// The second page of a pair on screen (spread) is pinned like the first: it keeps its levels whatever the limit.
+    @Test func pinnedCompanionNeverEvicted() async {
+        let rig = Rig()
+        let files = fileURLs(10)
+        await rig.focus(files, 0, dwelling: true)
+        #expect(await eventually { await rig.state(files[1]) == .full })
+        #expect(await rig.settle())
+        await rig.cache.setPinned(files[0], companion: files[1])
+        await rig.setMemory(1)
+        await rig.focus(files, 5)
+        #expect(await rig.settle())
+        #expect(await rig.state(files[0]) == .full)
+        #expect(await rig.state(files[1]) == .full)
+        await rig.cache.setPinned(files[0])
+        #expect(await rig.settle())
+        #expect(await rig.cache.entry(files[1])?.state == nil)
+        await rig.clear()
+    }
+
     /// A pin outlives a playlist change (another folder opened: the old photo stays on screen until the new one
     /// shows); once the viewer moves it, the old folder's photo goes first under the limit.
     @Test func pinMovesOnlyWhenTheViewerMovesIt() async {

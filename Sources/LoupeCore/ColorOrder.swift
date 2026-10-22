@@ -5,15 +5,19 @@ import Foundation
 public enum ColorOrder {
     /// Playlist indices: `current`, then +1, −1, +2, −2… (−1 first when `direction` is negative), `reach` of them in
     /// all (`cache-previews`). A side that runs out is skipped and the other fills the reach; nothing for an empty
-    /// list, a `current` outside it or a reach below 1.
-    public static func order(count: Int, current: Int, direction: Int, reach: Int) -> [Int] {
+    /// list, a `current` outside it or a reach below 1. `companion`, the other page of a pair on screen (spread), comes
+    /// right after `current`, whatever the reach: it is on screen too.
+    public static func order(count: Int, current: Int, direction: Int, reach: Int, companion: Int? = nil) -> [Int] {
         guard (0..<count).contains(current), reach > 0 else { return [] }
         let side = direction < 0 ? -1 : 1
         var result = [current]
+        let companion = companion.flatMap { $0 != current && (0..<count).contains($0) ? $0 : nil }
+        if let companion { result.append(companion) }
+        let reach = max(reach, result.count)
         var offset = 1
         while result.count < min(reach, count) {
             for index in [current + side * offset, current - side * offset]
-            where (0..<count).contains(index) && result.count < reach {
+            where (0..<count).contains(index) && index != companion && result.count < reach {
                 result.append(index)
             }
             offset += 1
