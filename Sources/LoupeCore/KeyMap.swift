@@ -292,7 +292,7 @@ public struct KeyMap: Sendable, Equatable {
     ]
 
     /// Mouse and trackpad inputs for the cheat sheet's last column (they have no bindings to read them from): what
-    /// `ViewerView` and `StripView` do with them.
+    /// `ViewerView` and `FilmstripView` do with them.
     public static let gestures: [(input: String, title: String)] = [
         ("Left-drag", "Pan (glides on after release)"),
         ("Right-drag up / down", "Zoom in / out at the pointer"),

@@ -256,7 +256,7 @@ import UniformTypeIdentifiers
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
-        strip.view.isScrollSpent = { [weak viewerView] in viewerView?.stripScrollIsSpent($0) ?? false }
+        strip.isScrollSpent = { [weak viewerView] in viewerView?.stripScrollIsSpent($0) ?? false }
         let center = NotificationCenter.default
         func observe(_ name: Notification.Name, _ action: @escaping @MainActor (ViewerWindowController) -> Void) {
             windowObservers.append(center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in

@@ -1,7 +1,7 @@
 import Foundation
 
 /// One strip's photo aspects (width / height, spec 2026-10-21): what the thumbnail store knows of the playlist's
-/// files, nil for the rest. `StripScrollLayout` needs no guess: a narrow cell is as wide without its photo's aspect,
+/// files, nil for the rest. `FilmstripLayout` needs no guess: a narrow cell is as wide without its photo's aspect,
 /// and the current photo's cell takes `unknownCurrentAspect` until its own arrives.
 ///
 /// The store is asked for every unknown file when the playlist (or `exif-orientation`) changes, for a file when the store

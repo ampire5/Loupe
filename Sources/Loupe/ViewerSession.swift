@@ -170,8 +170,8 @@ import LoupeRender
     private var colorReach = Settings.shared.config.cachePreviews
     private var thumbnailObserver: NSObjectProtocol?
 
-    /// File indices of the strip's visible cells (`StripView.visibleFiles`, from the centre outwards), `[]` while the
-    /// strip is hidden: the store makes those thumbnails first.
+    /// File indices of the strip's visible cells (`FilmstripView.visibleItems`, from the centre outwards), `[]` while
+    /// the strip is hidden: the store makes those thumbnails first.
     var stripVisibleFiles: [Int] = [] {
         didSet { if stripVisibleFiles != oldValue { sendThumbnailRequest() } }
     }
