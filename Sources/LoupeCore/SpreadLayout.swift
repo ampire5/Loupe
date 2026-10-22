@@ -3,7 +3,7 @@ import CoreGraphics
 /// Where the pages of one spread sit in the virtual picture they are shown as. The picture is as tall as the page
 /// with more pixels in height; the other page is scaled to that height, and the two touch with no gap.
 public struct SpreadLayout: Equatable, Sendable {
-    /// Size of the virtual picture, in the pixels of the taller page.
+    /// Size of the virtual picture, in the pixels of the taller page. May be zero when the pages have no size yet.
     public let virtualSize: CGSize
     /// A rectangle per page in virtual coordinates, left to right on screen.
     public let rects: [CGRect]

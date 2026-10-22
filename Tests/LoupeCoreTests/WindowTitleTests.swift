@@ -21,3 +21,10 @@ import Testing
         #expect(WindowTitle.text(of: .file(path: photo.path, view: nil)) == "IMG_1.jpg")
     }
 }
+
+@Test func titleTwoNames() {
+    let a = URL(fileURLWithPath: "/x/a.jpg"), b = URL(fileURLWithPath: "/x/b.jpg")
+    #expect(WindowTitle.text(home: nil, file: a, companion: b) == "a.jpg · b.jpg")
+    #expect(WindowTitle.text(home: .recent, file: a, companion: b) == "Recent")
+    #expect(WindowTitle.text(home: nil, file: a, companion: nil) == "a.jpg")
+}

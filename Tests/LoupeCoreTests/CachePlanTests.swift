@@ -351,3 +351,49 @@ private func withPrevious(_ f: CacheFocus, _ previous: Int?) -> CacheFocus {
     #expect(fulls(applying: true) == [1])
     #expect(fulls(applying: false).isEmpty)
 }
+
+// MARK: - A pair on screen (spread)
+
+private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, direction: Int = 1,
+                       dwelling: Bool = true) -> CacheFocus {
+    var f = focus(count: 200, current: current, direction: direction, dwelling: dwelling)
+    f.companion = companion
+    f.step = step
+    return f
+}
+
+@Test func companionFocusFollowsPlan() {
+    let items = plan(pairFocus())
+    // Current, then its companion, then the pairs around: ahead 12 13, behind 8 9.
+    var order: [Int] = []
+    for item in items where !order.contains(item.index) { order.append(item.index) }
+    #expect(Array(order.prefix(6)) == [10, 11, 12, 13, 8, 9])
+    // Both pages of the pair reach full on dwell.
+    #expect(items.contains { $0.index == 10 && $0.goal == .full })
+    #expect(items.contains { $0.index == 11 && $0.goal == .full })
+}
+
+@Test func companionBackwardMirrors() {
+    let items = plan(pairFocus(current: 11, companion: 10, direction: -1))
+    var order: [Int] = []
+    for item in items where !order.contains(item.index) { order.append(item.index) }
+    #expect(Array(order.prefix(6)) == [11, 10, 9, 8, 13, 12])
+}
+
+@Test func noCompanionUnchanged() {
+    var f = focus()
+    let base = plan(f)
+    f.companion = nil
+    f.step = 1
+    #expect(plan(f) == base)
+}
+
+@Test func companionFullIsNotLimitedByCacheFull() {
+    let zero = limits { $0.full = 0 }
+    let items = plan(pairFocus(), zero)
+    #expect(items.filter { $0.goal == .full }.map(\.index).sorted() == [10, 11])
+}
+
+@Test func companionWithoutDwellHasNoFull() {
+    #expect(!plan(pairFocus(dwelling: false)).contains { $0.goal == .full })
+}

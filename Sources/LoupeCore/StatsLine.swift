@@ -7,13 +7,14 @@ public enum StatsLine {
     /// `name   N / M   W×H   size MB   FORMAT[ progressive]   Mode NN %   decode NNNN ms`.
     /// `decodeMs` is nil while unknown. Sizes are decimal megabytes (1 MB = 1 000 000 bytes). W×H is the size as
     /// shown: oriented (M3b spec §2.1), stored when `applyingOrientation` is off (`exif-orientation=no`). `counted`
-    /// false: the folder is still being listed, so M is `…` rather than the interim playlist's count.
-    public static func loaded(name: String, index: Int, count: Int, counted: Bool = true, info: ImageInfo,
+    /// false: the folder is still being listed, so M is `…` rather than the interim playlist's count. `companion`
+    /// (the second page's index, spread) makes the position a range: `12–13 / 380`.
+    public static func loaded(name: String, index: Int, companion: Int? = nil, count: Int, counted: Bool = true, info: ImageInfo,
                               applyingOrientation: Bool = true, transform: ViewTransform, decodeMs: Double?) -> String {
         let size = info.displaySize(applying: applyingOrientation)
         var parts = [
             name,
-            position(index: index, count: count, counted: counted),
+            position(index: index, companion: companion, count: count, counted: counted),
             "\(size.width)×\(size.height)",
             String(format: "%.1f MB", Double(info.fileSize) / 1_000_000),
             formatName(info.typeIdentifier) + (info.isProgressive ? " progressive" : ""),
@@ -24,13 +25,15 @@ public enum StatsLine {
     }
 
     /// `Loading name…   N / M`; the position is left out when the playlist is not known.
-    public static func loading(name: String, position: (index: Int, count: Int)? = nil, counted: Bool = true) -> String {
+    public static func loading(name: String, position: (index: Int, count: Int)? = nil, companion: Int? = nil,
+                               counted: Bool = true) -> String {
         guard let position else { return "Loading \(name)…" }
-        return "Loading \(name)…   " + Self.position(index: position.index, count: position.count, counted: counted)
+        return "Loading \(name)…   " + Self.position(index: position.index, companion: companion, count: position.count,
+                                                                  counted: counted)
     }
 
-    private static func position(index: Int, count: Int, counted: Bool) -> String {
-        "\(index + 1) / " + (counted ? "\(count)" : "…")
+    private static func position(index: Int, companion: Int? = nil, count: Int, counted: Bool) -> String {
+        (companion.map { "\(index + 1)–\($0 + 1)" } ?? "\(index + 1)") + " / " + (counted ? "\(count)" : "…")
     }
 
     /// How much of the stats bar's width its progress fill covers (`stats-progress`): the folder position

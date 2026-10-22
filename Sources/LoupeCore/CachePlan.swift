@@ -68,9 +68,18 @@ public struct CacheFocus: Equatable, Sendable {
     /// chose it, so its full resolution is wanted at once, decoded next to its preview rather than after the dwell
     /// (docs/bench/2026-10-15-startup.md). The neighbours still wait for the dwell.
     public var opened: Bool
+    /// The second page of the pair on screen (spread), nil for a single page. It is current too: planned right
+    /// after the current photo, with the same goals, and its full resolution is wanted on dwell like the current's.
+    public var companion: Int?
+    /// How far the neighbours go: 1 for single pages, 2 when the viewer steps by pairs. Neighbours are then
+    /// planned as pairs beside the one on screen (ahead first, reading order within a pair).
+    public var step: Int
 
     public init(count: Int, current: Int, direction: Int, dwelling: Bool, needsFull: Bool, screen: PixelSize,
-                previous: Int? = nil, scrubbing: Bool = false, appliesOrientation: Bool = true, opened: Bool = false) {
+                previous: Int? = nil, scrubbing: Bool = false, appliesOrientation: Bool = true, opened: Bool = false,
+                companion: Int? = nil, step: Int = 1) {
+        self.companion = companion
+        self.step = step
         self.count = count
         self.current = current
         self.direction = direction
@@ -141,7 +150,7 @@ public enum CachePlan {
 
         mutating func run() {
             let current = focus.current
-            let next = current + direction, previous = current - direction
+            let nextGroup = group(ahead: true, unit: 1), previousGroup = group(ahead: false, unit: 1)
 
             // 1-2. The current photo: what is on screen, then the sharp version once the user stays.
             if focus.needsFull {
@@ -156,8 +165,20 @@ public enum CachePlan {
             let openedFull = focus.opened && entry(current).lfit > 0
             if (focus.dwelling || openedFull) && !focus.needsFull { _ = add(current, .full, exempt: true) }
 
-            // 3. Previews for the two photos most likely to come next.
-            for index in [next, previous] where isPlannable(index) && previewed.count < limits.previews {
+            // The companion page is current too. Its full resolution is part of the pair on screen, so it is not
+            // counted against `cache-full` (see `CacheLimits.full`).
+            if let companion = companionPage {
+                if focus.needsFull {
+                    _ = add(companion, .full, allLevels: true, exempt: true)
+                } else {
+                    _ = add(companion, .preview, exempt: true)
+                }
+                _ = add(companion, .bytes, exempt: true)
+                if (focus.dwelling || openedFull) && !focus.needsFull { _ = add(companion, .full, exempt: true) }
+            }
+
+            // 3. Previews for the photos (the pages of the pairs) most likely to come next.
+            for index in nextGroup + previousGroup where isPlannable(index) && previewed.count < limits.previews {
                 _ = add(index, .preview)
             }
             // 3a. The photo just left keeps its full resolution if it still has it (or is decoding it), ahead of
@@ -167,7 +188,9 @@ public enum CachePlan {
                 _ = add(left, .full)
             }
             // 4. Full resolution for the next one, so a flip lands sharp.
-            if limits.full >= 1 && focus.dwelling && previewed.contains(next) && !plansFull(next) { _ = add(next, .full) }
+            if limits.full >= 1 && focus.dwelling {
+                for index in nextGroup where previewed.contains(index) && !plansFull(index) { _ = add(index, .full) }
+            }
 
             // 5. Compressed bytes, nearest first.
             var files = 0
@@ -179,13 +202,13 @@ public enum CachePlan {
             // 6. Previews for the rest, two ahead for one behind; far ones one level coarser.
             for index in neighbours() {
                 if previewed.count >= limits.previews { break }
-                guard index != next, index != previous, isPlannable(index) else { continue }
+                guard !nextGroup.contains(index), !previousGroup.contains(index), isPlannable(index) else { continue }
                 _ = add(index, goalForPreview(at: index))
             }
 
             // 7. Full resolution for the previous one.
-            if limits.full >= 2 && focus.dwelling && previewed.contains(previous) && !plansFull(previous) {
-                _ = add(previous, .full)
+            if limits.full >= 2 && focus.dwelling {
+                for index in previousGroup where previewed.contains(index) && !plansFull(index) { _ = add(index, .full) }
             }
         }
 
@@ -204,23 +227,50 @@ public enum CachePlan {
             (0..<focus.count).contains(index) && !entry(index).facts.failed
         }
 
-        /// Playlist indices around the current one in planning order: n1, p1, then n2, n3, p2, n4, n5, p3, ...
-        /// (two ahead for one behind). Ends at the playlist's edges; out-of-range indices are skipped.
+        /// The second page of the pair, when it is a different photo in the playlist.
+        private var companionPage: Int? {
+            guard let companion = focus.companion, companion != focus.current,
+                  (0..<focus.count).contains(companion) else { return nil }
+            return companion
+        }
+
+        /// The pages on screen: the current photo and its companion.
+        private var shown: ClosedRange<Int> {
+            let c = focus.current
+            guard let k = companionPage else { return c...c }
+            return min(c, k)...max(c, k)
+        }
+
+        /// Group size of the neighbours: pairs while the viewer steps by pairs.
+        private var groupSize: Int { max(focus.step, 1) }
+
+        /// The in-range pages of the `unit`-th group (1 = nearest) ahead of or behind what is on screen, in
+        /// reading order for a pair behind and nearest first ahead; one page when single.
+        private func group(ahead: Bool, unit: Int) -> [Int] {
+            let size = groupSize
+            let edge = (ahead == (direction > 0)) ? shown.upperBound : shown.lowerBound
+            let sign = ahead ? direction : -direction
+            let offsets = Array((((unit - 1) * size + 1)...(unit * size)))
+            let ordered = ahead ? offsets : offsets.reversed()
+            return ordered.map { edge + sign * $0 }.filter { (0..<focus.count).contains($0) }
+        }
+
+        /// Playlist indices around what is on screen in planning order: n1, p1, then n2, n3, p2, n4, n5, p3, ...
+        /// (two ahead for one behind), where each is a group of `step` pages. Ends at the playlist's edges;
+        /// out-of-range indices are skipped.
         private func neighbours() -> some Sequence<Int> {
-            let current = focus.current, direction = direction, count = focus.count
-            var step = 0
+            var unit = 0
             var pending: [Int] = []
-            func inRange(_ offset: Int) -> Bool { (0..<count).contains(current + direction * offset) }
             return sequence(state: ()) { _ -> Int? in
                 while pending.isEmpty {
-                    let ahead = step == 0 ? [1] : [2 * step, 2 * step + 1]
-                    let behind = step == 0 ? [1] : [step + 1]
-                    guard inRange(ahead[0]) || inRange(-behind[0]) else { return nil }
-                    // Reversed, because the next one is taken off the end.
-                    pending = (ahead + behind.map { -$0 }).filter(inRange).reversed()
-                    step += 1
+                    let ahead = unit == 0 ? [1] : [2 * unit, 2 * unit + 1]
+                    let behind = unit == 0 ? [1] : [unit + 1]
+                    let groups = ahead.map { group(ahead: true, unit: $0) } + behind.map { group(ahead: false, unit: $0) }
+                    guard !(groups[0].isEmpty && groups[ahead.count].isEmpty) else { return nil }
+                    pending = Array(groups.joined())
+                    unit += 1
                 }
-                return current + direction * pending.removeLast()
+                return pending.removeFirst()
             }
         }
 
