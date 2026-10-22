@@ -53,6 +53,9 @@ extension Notification.Name {
     var coverLayout = HomeMosaic.Layout.hero {
         didSet { if coverLayout != oldValue { remakeCovers() } }
     }
+    /// The layout the covers are made in: `coverLayout`, except a list row's small cover, four photos (mockup C).
+    /// The list's cover width is its own, so a switch to or from it drops the covers made at the other size anyway.
+    private var shownCoverLayout: HomeMosaic.Layout { view?.shownStyle == .list ? .quad : coverLayout }
     /// The mosaics kept for cards asked for again (`CoverCards`). A mosaic is a card's pixels squared, ~2 MB for a
     /// 352 pt card at 2x: the budget is the folder's cards times that (`CoverCards.limit`), 32 MB at least and 256 MB
     /// at most, set on each ask.
@@ -389,7 +392,7 @@ extension Notification.Name {
         let files = wanted.filter { $0.kind == .file }
         sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
         let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
-        // The folder cards' picture: a poster's slot, a compact card's 92 pt square (one picture: narrower than
+        // The folder cards' picture: a poster's slot, a compact card's 76 pt square (one picture: narrower than
         // `HomeMosaic.narrowWidth`), a row's cover; with photos in the grid too, `width` is theirs.
         let coverWidth = view?.coverWidth ?? width
         // Another card size or screen: the mosaics kept and those being made are the wrong size.
@@ -478,7 +481,7 @@ extension Notification.Name {
         let ids = Array(pending.prefix(visiblePending)) + inView + pending.dropFirst(visiblePending)
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
-        let layout = coverLayout, side = size.width, scale = size.scale
+        let layout = shownCoverLayout, side = size.width, scale = size.scale
         let cellPixels = layout.cellPixels(width: side, scale: scale)
         let thumbnails = self.thumbnails
         /// The card as it is when its work starts (a want sent before the complete listing runs after it too): its
@@ -496,7 +499,7 @@ extension Notification.Name {
             guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
             self.keepFacts(facts, for: id, again: again)
             // A mosaic of another layout or size is not kept.
-            guard let mosaic, self.coverLayout == layout, self.coverSize?.width == side,
+            guard let mosaic, self.shownCoverLayout == layout, self.coverSize?.width == side,
                   self.coverSize?.scale == scale else { return }
             self.cards.delivered(id, mosaic)
             self.view?.setImage(mosaic, for: id)
@@ -784,7 +787,7 @@ extension HomeMosaic.Layout {
         let pixels = Int((width * scale).rounded())
         guard width >= HomeMosaic.narrowWidth else { return pixels }
         switch self {
-        case .grid: return max(64, pixels / 2)
+        case .grid, .quad: return max(64, pixels / 2)
         case .hero, .stack, .single: return pixels
         }
     }
