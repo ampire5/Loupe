@@ -162,6 +162,40 @@ public enum SpreadZoom {
     }
 }
 
+/// A pair giving way to its first page alone while the second was current (`D` off, a narrow view): the viewer
+/// navigates to the first page, which keeps its spot and drawn scale (`SpreadZoom.carried`) instead of a switch's
+/// carried zoom. Carried when the page is shown, from the transform of then, so a resize meanwhile (a narrow collapse
+/// comes during a live resize) is the window's current size; a zoom key, a pan or another layout meanwhile drops it.
+public struct SpreadCollapse: Equatable, Sendable {
+    public let page: URL
+    /// The page's rect in the pair's virtual picture, and its own size.
+    public let rect: CGRect
+    public let pageSize: CGSize
+    /// The pair's view when the pair gave way: its picture's size, mode and centre.
+    private let sourceSize: CGSize
+    private let sourceMode: ZoomMode
+    private let sourceCenter: CGPoint
+
+    public init(page: URL, rect: CGRect, pageSize: CGSize, from t: ViewTransform) {
+        self.page = page
+        self.rect = rect
+        self.pageSize = pageSize
+        sourceSize = t.imageSize
+        sourceMode = t.mode
+        sourceCenter = t.center
+    }
+
+    /// The view `url` laid out at `size` gets over `base` (the transform of now: still the pair's picture, at the
+    /// window's current size): the page's spot and scale carried out of the pair; nil for another photo or size, or
+    /// when `base` is no longer the pair's view as it was (a zoom key's mode, a pan, a resize that rescaled a free
+    /// zoom), which then takes the normal switch.
+    public func transform(for url: URL, size: CGSize, over base: ViewTransform) -> ViewTransform? {
+        guard url == page, size == pageSize, base.imageSize == sourceSize, base.mode == sourceMode,
+              base.center == sourceCenter else { return nil }
+        return SpreadZoom.carried(base, from: rect, to: size, at: nil)
+    }
+}
+
 /// What the viewer's spread keys do (spread spec, «Поведение»), on the model of `ZoomKeys`: `D` turns two pages on or
 /// off for the window's folder, `⇧D` saves the window's value as loupe.conf's default, `⌥D` shifts the pairs by a
 /// page. Pure: the window controller writes `FolderSettings` / loupe.conf and shows these toasts.
