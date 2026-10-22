@@ -791,7 +791,6 @@ import UniformTypeIdentifiers
                                      hasStash: { StashLibrary.Source.current != nil })
         let view = HomeView(source: source)
         source.view = view.browser
-        view.background = Settings.shared.config.background.cgColor
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
         if let container = window?.contentView {
@@ -906,7 +905,7 @@ import UniformTypeIdentifiers
     /// The folder a restored session tab had in the browser, opened on Folders' next show.
     private var restoreBrowserAt: URL?
 
-    /// `browser-card-size`, `grid-style`, `grid-names`, `background`: on every show and every settings change.
+    /// `browser-card-size`, `grid-style`, `grid-names`: on every show and every settings change.
     private func applyBrowserSettings() {
         guard let homeView else { return }
         let config = Settings.shared.config
@@ -914,7 +913,6 @@ import UniformTypeIdentifiers
         view.cardSize = CGFloat(config.browserCardSize)
         view.style = config.gridStyle
         view.names = config.gridNames
-        homeView.background = config.background.cgColor
         homeView.sidebarWidth = CGFloat(config.homeSidebarWidth)
         homeView.sidebarCompactChains = config.homeSidebarCompact
         homeView.sidebarCompactIndent = config.homeSidebarIndent == .compact
