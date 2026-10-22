@@ -204,6 +204,8 @@ Loupe needs macOS 26 or later and an Apple Silicon Mac. Intel Macs on macOS 26 g
 brew install --cask ampire5/tap/loupe
 ```
 
+The latest build that passed CI, not a release: `brew install --cask ampire5/tap/loupe@edge` (instead of `loupe`; `brew upgrade` brings every new build).
+
 Or download the zip from [Releases](https://github.com/ampire5/Loupe/releases). Builds are not signed with an Apple Developer ID yet; the cask clears the quarantine flag for you.
 
 **macOS won't open the downloaded app?** That is Gatekeeper refusing an unsigned build. Try to open Loupe once, then click **Open Anyway** in **System Settings → Privacy & Security**. Or clear the flag yourself:
