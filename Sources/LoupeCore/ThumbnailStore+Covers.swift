@@ -683,12 +683,30 @@ extension ThumbnailStore {
 
     /// The share answered: under its key, and under its catalog volume (`alias`) where a card on it without the mount
     /// table's share is keyed (a symlink into it, its mount gone). A share that was offline is told of
-    /// (`onVolumeAnswered`), once.
+    /// (`onVolumeAnswered`), once. One that was not, but has folders noted away on it (time outs while it answered
+    /// other listings), forgives them too: their time outs in a row start again, and one already given up is tried
+    /// again (the app told, so it asks for the card) — a busy share's slow folder is not lost for the session.
     func noteVolumeAnswered(_ volume: String?, alias: String? = nil) {
         for key in [volume, alias].compactMap({ $0 }) {
             coverVolumeTimeouts[key] = nil
-            if offlineVolumes.removeValue(forKey: key) != nil { shareCameBack(key) }
+            if offlineVolumes.removeValue(forKey: key) != nil {
+                shareCameBack(key)
+            } else if awayFolders.values.contains(key), forgiveAway(on: key) {
+                onVolumeAnswered?(key)
+            }
         }
+    }
+
+    /// Clears the away notes of the folders on `volume` (their time outs and their give-up for the session); true
+    /// when one of them had been given up.
+    private func forgiveAway(on volume: String) -> Bool {
+        var givenUp = false
+        for (key, on) in awayFolders where on == volume {
+            if emptyCovers.remove(key) != nil { givenUp = true }
+            coverTimeouts[key] = nil
+            awayFolders[key] = nil
+        }
+        return givenUp
     }
 
     /// The folder `key` was given up (or is on its way: time outs) because its share `volume` did not answer: tried
@@ -702,11 +720,7 @@ extension ThumbnailStore {
     /// An offline share is back (or forgotten): its folders given up while it was away are tried again, and the app
     /// is told (`onVolumeAnswered`), so it asks for their cards again.
     private func shareCameBack(_ volume: String) {
-        for (key, on) in awayFolders where on == volume {
-            emptyCovers.remove(key)
-            coverTimeouts[key] = nil
-            awayFolders[key] = nil
-        }
+        _ = forgiveAway(on: volume)
         onVolumeAnswered?(volume)
     }
 

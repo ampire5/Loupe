@@ -2140,6 +2140,39 @@ final class LockedErrors: @unchecked Sendable {
         #expect(back.images.count == 1 && back.problem == nil)
     }
 
+    /// A folder that times out three times on a share that answers in between (other folders on it list) is not
+    /// given up for the session: the time outs in a row are the share's, and its answers start them again. The owner's
+    /// vanishing covers: a busy share, one slow folder, nothing to clear it while the share never went offline.
+    @Test func shareAnsweringBetweenTimeOutsKeepsTheFolder() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), failing = LockedFlag()
+        failing.set()
+        let store = await store(reader, dir: dir)
+        await store.setCoverVolumes { _ in true }
+        reader.add(URL(fileURLWithPath: "/net/f/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        for i in 0..<ThumbnailStore.coverTimeoutsAllowed {
+            reader.add(URL(fileURLWithPath: "/net/g\(i)/b.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        }
+        await store.setCoverListing(dated: { folder, _, _, _ in
+            if folder.lastPathComponent == "f", failing.isSet { throw POSIXError(.EIO) }
+            return CoverListing(names: CoverNames(files: [folder.lastPathComponent == "f" ? "a.jpg" : "b.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/net/f"), key = ThumbnailStore.memoKey(folder, nil)
+        func card(_ name: String) async -> FolderCard? {
+            await store.folderCard(URL(fileURLWithPath: "/net/\(name)"), archive: false, in: loc("/net/\(name)"), maxPixel: 64)
+        }
+        for i in 0..<ThumbnailStore.coverTimeoutsAllowed {
+            #expect(await card("f") == nil)   // not now: asked again
+            #expect(await card("g\(i)")?.images.count == 1)   // another folder on the share lists: it answers
+        }
+        #expect(await !store.emptyCovers.contains(key))
+        #expect(await store.offlineVolumes.isEmpty)
+        failing.reset()
+        let back = try #require(await card("f"))
+        #expect(back.images.count == 1 && back.problem == nil)
+    }
+
     /// A card's share is looked up in the mount table once per call.
     @Test func shareLookedUpOncePerCard() async throws {
         let dir = tempDir()
