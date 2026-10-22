@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import HomeScreenKit
 import InfoPanelKit
 import LoupeCore
@@ -1264,7 +1265,7 @@ import UniformTypeIdentifiers
         infoPanel.place()   // a panel in the top left corner steps below the button, or back up
         // A soft fade both ways (ease-out in, ease-in out): it comes up as the pointer nears, without a pop.
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = shown ? 0.3 : 0.35
+            context.duration = Chrome.Motion.duration(shown ? Chrome.Motion.show : Chrome.Motion.hide)
             context.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
             backButton.animator().alphaValue = shown ? 1 : 0
         }, completionHandler: { [weak self] in

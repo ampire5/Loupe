@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import LoupeCore
 
 /// The `?` cheat sheet (spec §6): a dark HUD panel centred over the window, listing every key of the effective layout
@@ -22,8 +23,9 @@ import LoupeCore
     private static let margin: CGFloat = 16
     private static let minimumScale: CGFloat = 0.75
 
-    private let panel = NSVisualEffectView()
-    private let tint = NSView()
+    private let panel = ChromeGlass(style: .overMedia(.regular), cornerRadius: Chrome.Radius.panel)
+    /// `overMedia.scrim` between the glass and the text: the glass alone stays light over a bright photo.
+    private let scrim = NSView()
     private var content = NSView()
     /// The scale `content` was built at (0: not built yet), and the size the sheet has at scale 1, measured in the
     /// window on the first layout.
@@ -44,18 +46,10 @@ import LoupeCore
         isHidden = true
         clipsToBounds = true   // a panel larger than the window ends at the window's edge
         translatesAutoresizingMaskIntoConstraints = false
-        panel.material = .hudWindow
-        panel.blendingMode = .withinWindow
-        panel.state = .active
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.wantsLayer = true
-        panel.layer?.cornerRadius = 12
-        panel.layer?.masksToBounds = true
         addSubview(panel)
-        // The material alone stays light over a bright photo; a dark wash under the text keeps it readable.
-        tint.wantsLayer = true
-        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.45).cgColor
-        panel.addSubview(tint)
+        scrim.wantsLayer = true
+        scrim.layer?.backgroundColor = Chrome.Palette.overMedia.scrim.cgColor
+        panel.contentView.addSubview(scrim)
     }
 
     @available(*, unavailable)
@@ -104,15 +98,15 @@ import LoupeCore
         let y = size.height <= room.height ? ((bounds.height - size.height) / 2).rounded()
             : bounds.height - Self.margin - size.height   // the top edge at the margin (y up)
         panel.frame = NSRect(x: x, y: y, width: size.width.rounded(.up), height: size.height.rounded(.up))
-        tint.frame = panel.bounds
-        content.frame = panel.bounds
+        scrim.frame = panel.contentView.bounds
+        content.frame = panel.contentView.bounds
     }
 
     private func build(scale: CGFloat) {
         content.removeFromSuperview()
         content = Self.makeContent(sheet ?? Self.sheet(inputMap: inputMap), scale: scale)
         contentScale = scale
-        panel.addSubview(content)
+        panel.contentView.addSubview(content)
     }
 
     // MARK: Events
@@ -211,11 +205,11 @@ import LoupeCore
             return field
         }
         func section(_ section: Sheet.Section) -> NSView {
-            let header = label(section.title.uppercased(), font: headerFont, color: NSColor(white: 1, alpha: 0.5))
+            let header = label(section.title.uppercased(), font: headerFont, color: Chrome.Palette.overMedia.tertiaryText)
             // The keys in a column as wide as the widest of this section's, the titles beside them.
             let table = NSStackView(views: [
-                column(section.rows.map(\.keys), font: keyFont, color: .white),
-                column(section.rows.map(\.title), font: titleFont, color: NSColor(white: 1, alpha: 0.85)),
+                column(section.rows.map(\.keys), font: keyFont, color: Chrome.Palette.overMedia.text),
+                column(section.rows.map(\.title), font: titleFont, color: Chrome.Palette.overMedia.secondaryText),
             ])
             table.orientation = .horizontal
             table.alignment = .top
@@ -244,9 +238,9 @@ import LoupeCore
         columns.orientation = .horizontal
         columns.alignment = .top
         columns.spacing = 36 * k
-        let title = label("Keys and Gestures", font: .systemFont(ofSize: 17 * k, weight: .semibold), color: .white)
+        let title = label("Keys and Gestures", font: .systemFont(ofSize: 17 * k, weight: .semibold), color: Chrome.Palette.overMedia.text)
         let footer = label("Press any key or click to close", font: .systemFont(ofSize: 11 * k),
-                           color: NSColor(white: 1, alpha: 0.5))
+                           color: Chrome.Palette.overMedia.tertiaryText)
         let stack = NSStackView(views: [title, columns, footer])
         stack.orientation = .vertical
         stack.alignment = .centerX

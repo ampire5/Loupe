@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 import LoupeCore
 import StashKitUI
 
@@ -43,7 +44,7 @@ enum StashOpenError: LocalizedError, Equatable {
     let container = NSView()
     private(set) lazy var page: StashLibraryView = makePage()
     private let bar = NSTextField(labelWithString: "")
-    private let barBox = NSVisualEffectView()
+    private let barBox = ChromeGlass(style: .window, cornerRadius: Chrome.Radius.card)
     private var barTask: Task<Void, Never>?
     private let onPick: (StashGalleryPick) -> Void
     /// Shares whose mount failed lately, with why: a list step past many galleries on a switched-off PC must not wait
@@ -64,17 +65,13 @@ enum StashOpenError: LocalizedError, Equatable {
         guard page.superview == nil else { return }
         page.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(page)
-        barBox.material = .hudWindow
-        barBox.blendingMode = .withinWindow
-        barBox.state = .active
-        barBox.wantsLayer = true
-        barBox.layer?.cornerRadius = 10
         barBox.translatesAutoresizingMaskIntoConstraints = false
         barBox.isHidden = true
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.font = .systemFont(ofSize: 13, weight: .medium)
+        bar.font = Chrome.Text.font(.body, weight: .medium)
+        bar.textColor = Chrome.Palette.window.label
         bar.lineBreakMode = .byTruncatingMiddle
-        barBox.addSubview(bar)
+        barBox.contentView.addSubview(bar)
         container.addSubview(barBox)
         NSLayoutConstraint.activate([
             page.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -84,8 +81,8 @@ enum StashOpenError: LocalizedError, Equatable {
             barBox.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             barBox.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -24),
             barBox.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -48),
-            bar.leadingAnchor.constraint(equalTo: barBox.leadingAnchor, constant: 16),
-            bar.trailingAnchor.constraint(equalTo: barBox.trailingAnchor, constant: -16),
+            bar.leadingAnchor.constraint(equalTo: barBox.leadingAnchor, constant: Chrome.Space.xl),
+            bar.trailingAnchor.constraint(equalTo: barBox.trailingAnchor, constant: -Chrome.Space.xl),
             bar.topAnchor.constraint(equalTo: barBox.topAnchor, constant: 10),
             bar.bottomAnchor.constraint(equalTo: barBox.bottomAnchor, constant: -10),
         ])

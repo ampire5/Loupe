@@ -1,5 +1,5 @@
 import AppKit
-import InfoPanelKit
+import HomeChrome
 
 /// "‹ Recent" / "‹ Stash" (a chevron and the title) in the top left corner over the picture, on a glass capsule, as
 /// FrameScrub's: goes back to where the photo was opened from (File › Back, ⌘[). It comes and goes with the strip.
@@ -10,7 +10,7 @@ final class BackButton: NSView {
     var title = "" {
         didSet { label.stringValue = title }
     }
-    private let backdrop = GlassBackdrop(cornerRadius: BackButton.height / 2)
+    private let backdrop = ChromeGlass(style: .overMedia(.regular), cornerRadius: Chrome.Radius.capsule(BackButton.height))
     private let chevron = NSImageView()
     private let label = NSTextField(labelWithString: "")
 
@@ -20,9 +20,9 @@ final class BackButton: NSView {
         addSubview(backdrop)
         chevron.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .semibold))
-        chevron.contentTintColor = .white
-        label.font = .systemFont(ofSize: 17, weight: .semibold)
-        label.textColor = .white
+        chevron.contentTintColor = Chrome.Palette.overMedia.text
+        label.font = Chrome.Text.font(.title)
+        label.textColor = Chrome.Palette.overMedia.text
         for view in [chevron, label] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -33,10 +33,10 @@ final class BackButton: NSView {
             backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
             backdrop.topAnchor.constraint(equalTo: topAnchor),
             backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
-            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Chrome.Space.l + Chrome.Space.xxs),
             chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            label.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: Chrome.Space.s),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(Chrome.Space.xl + Chrome.Space.xxs)),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityRole(.button)

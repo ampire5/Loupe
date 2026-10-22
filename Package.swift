@@ -32,6 +32,7 @@ let package = Package(
                                                         .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                         .product(name: "InfoPanelKit", package: "InfoPanelKit"),
                                                         .product(name: "HomeScreenKit", package: "HomeScreenKit"),
+                                                        .product(name: "HomeChrome", package: "HomeScreenKit"),
                                                         .product(name: "Filmstrip", package: "HomeScreenKit"),
                                                         .product(name: "StashKit", package: "StashKit"),
                                                         .product(name: "StashKitUI", package: "StashKit")]),
