@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import HomeScreenModel
 @testable import LoupeCore
 
 private func entry(_ name: String, in parent: URL, directory: Bool = true, package: Bool = false) -> DirectoryEntry {
@@ -35,6 +36,39 @@ private let parent = URL(fileURLWithPath: "/photos")
     let two = parent.appendingPathComponent("2")
     #expect(s.candidates(from: two, step: 1).map(\.lastPathComponent) == ["3", "10"])
     #expect(s.candidates(from: two, step: -1).map(\.lastPathComponent) == ["1"])
+}
+
+@Test func siblingsFollowTheParentsSort() {   // the order Home shows the parent in
+    func dated(_ name: String, _ day: Double) -> DirectoryEntry {
+        DirectoryEntry(url: parent.appendingPathComponent(name), isDirectory: true, isPackage: false,
+                       modified: Date(timeIntervalSinceReferenceDate: day * 86_400))
+    }
+    let entries = [dated("a", 3), dated("b", 1), dated("c", 2)]
+    let newest = FolderSiblings(entries: entries, sort: BrowserSort(key: .date, ascending: false))
+    #expect(newest.folders.map(\.lastPathComponent) == ["a", "c", "b"])
+    #expect(newest.candidates(from: parent.appendingPathComponent("c"), step: 1).map(\.lastPathComponent) == ["b"])
+    #expect(newest.candidates(from: parent.appendingPathComponent("c"), step: -1).map(\.lastPathComponent) == ["a"])
+    let byNameDown = FolderSiblings(entries: entries, sort: BrowserSort(key: .name, ascending: false))
+    #expect(byNameDown.folders.map(\.lastPathComponent) == ["c", "b", "a"])
+}
+
+@Test func archivesBySizeComeBeforeFoldersWithoutOne() {   // as in Home: a folder has no size
+    let zip = { (name: String, size: Int) in
+        DirectoryEntry(url: parent.appendingPathComponent(name), isDirectory: false, isPackage: false,
+                       stamp: FileStamp(modified: Date(timeIntervalSinceReferenceDate: 0), size: size))
+    }
+    let s = FolderSiblings(entries: [entry("f", in: parent), zip("small.zip", 10), zip("big.zip", 99)],
+                           sort: BrowserSort(key: .size, ascending: false))
+    #expect(s.folders.map(\.lastPathComponent) == ["big.zip", "small.zip", "f"])
+}
+
+@Test func navigatorStepsInTheGivenSort() async throws {
+    let root = try makeTree(["1": ["a.jpg"], "2": ["b.jpg"], "3": ["c.jpg"]])
+    defer { try? FileManager.default.removeItem(at: root) }
+    let nav = FolderNavigator()
+    let next = try await nav.neighbour(of: root.appendingPathComponent("2"), step: 1,
+                                       sort: BrowserSort(key: .name, ascending: false))
+    #expect(next?.folder == root.appendingPathComponent("1"))
 }
 
 // MARK: FolderNavigator (real temp directories)

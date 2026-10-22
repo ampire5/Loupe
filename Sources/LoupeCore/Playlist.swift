@@ -44,7 +44,6 @@ public struct Playlist: Equatable, Sendable {
     }
 
     /// Finder order on the last path component ("img2" before "img10"); the full path breaks ties.
-    /// Folders are ordered with the same comparator (`FolderSiblings`).
     public static func naturalLess(_ a: URL, _ b: URL) -> Bool {
         switch a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) {
         case .orderedAscending: true

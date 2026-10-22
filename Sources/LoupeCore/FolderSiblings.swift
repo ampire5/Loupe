@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 
 /// One item of a directory listing, with the properties folder navigation needs. `stamp` (size and
 /// mtime, nil for directories and when the listing gave none) rides along so the playlist of the folder
@@ -27,30 +28,49 @@ public enum FolderNavigationError: Error, Equatable, Sendable {
     case timedOut
 }
 
-/// The subfolders of a folder's parent in Finder order, and what is next to a given one.
-/// Hidden folders, packages (`.app` etc.) and plain files are not siblings.
+/// The subfolders of a folder's parent in the parent's `browser-sort` order (the order Home shows it in), and what is
+/// next to a given one. Hidden folders, packages (`.app` etc.) and plain files are not siblings.
 public struct FolderSiblings: Equatable, Sendable {
     public let folders: [URL]
+    private let cards: [BrowserEntry]
+    private let sort: BrowserSort
 
-    /// Pure: keeps visible, non-package directories (and zip files with `archives`, `archive-folders`) and sorts
-    /// them like `Playlist` sorts files.
-    public init(entries: [DirectoryEntry], archives: Bool = true) {
-        folders = entries
-            .filter { ($0.isDirectory && !$0.isPackage) || (archives && !$0.isDirectory && ArchivePath.isArchive($0.url)) }
-            .filter { !$0.url.lastPathComponent.hasPrefix(".") }
-            .map { $0.url.standardizedFileURL }
-            .sorted(by: Playlist.naturalLess)
+    /// Pure: keeps visible, non-package directories (and zip files with `archives`, `archive-folders`) and orders them
+    /// as Home does with `sort`: a folder's date is its own, a zip's date and size the file's; a folder has no size.
+    public init(entries: [DirectoryEntry], archives: Bool = true, sort: BrowserSort = .standard) {
+        self.sort = sort
+        cards = sort.order(entries.compactMap { Self.card($0, archives: archives) })
+        folders = cards.map(\.url)
     }
 
     /// The siblings after (`step` > 0) or before (`step` < 0) `folder`, nearest first. A `folder` that is not
-    /// among them (hidden, say) counts as standing where its name sorts. Empty at either end: no wrap-around.
+    /// among them (hidden, say) counts as standing where the sort would put it without a date or size. Empty at
+    /// either end: no wrap-around.
     public func candidates(from folder: URL, step: Int) -> [URL] {
         let me = folder.standardizedFileURL
         let place = folders.firstIndex(of: me)
-        let after = place.map { $0 + 1 } ?? folders.firstIndex { Playlist.naturalLess(me, $0) } ?? folders.count
+        let after = place.map { $0 + 1 } ?? position(of: me)
         if step > 0 { return Array(folders[after...]) }
         let before = place ?? after
         return Array(folders[..<before].reversed())
+    }
+
+    /// How many siblings come before a folder that is not among them.
+    private func position(of folder: URL) -> Int {
+        let me = BrowserEntry(url: folder, name: folder.lastPathComponent, kind: .folder)
+        return sort.order(cards + [me]).firstIndex(of: me) ?? folders.count
+    }
+
+    private static func card(_ entry: DirectoryEntry, archives: Bool) -> BrowserEntry? {
+        let url = entry.url.standardizedFileURL
+        let name = url.lastPathComponent
+        guard !name.hasPrefix(".") else { return nil }
+        if entry.isDirectory {
+            return entry.isPackage ? nil : BrowserEntry(url: url, name: name, kind: .folder, date: entry.modified)
+        }
+        guard archives, ArchivePath.isArchive(url) else { return nil }
+        return BrowserEntry(url: url, name: name, kind: .archive, date: entry.stamp?.modified,
+                            size: entry.stamp.map { Int64($0.size) })
     }
 
     /// Lists `url`, skipping hidden items; a zip file lists its photos (`ArchiveReader.entries`). Blocking: call it
@@ -113,8 +133,9 @@ public actor FolderNavigator {
 
     /// The nearest folder in direction `step` that has images, or nil at the end of the siblings.
     /// A candidate that cannot be listed (or hangs) is skipped; the parent failing throws `.unreadable`, a hang `.timedOut`.
-    /// `archives`: zip files count as folders (`archive-folders`).
-    public func neighbour(of folder: URL, step: Int, archives: Bool = true) async throws -> FolderTarget? {
+    /// `archives`: zip files count as folders (`archive-folders`); `sort`: the parent's `browser-sort`.
+    public func neighbour(of folder: URL, step: Int, archives: Bool = true,
+                          sort: BrowserSort = .standard) async throws -> FolderTarget? {
         let folder = folder.standardizedFileURL
         let parent = folder.deletingLastPathComponent()
         let entries: [DirectoryEntry]
@@ -130,7 +151,7 @@ public actor FolderNavigator {
             }
             siblingsByParent[parent] = entries
         }
-        let siblings = FolderSiblings(entries: entries, archives: archives)
+        let siblings = FolderSiblings(entries: entries, archives: archives, sort: sort)
         for candidate in siblings.candidates(from: folder, step: step) where !skippedFolders.contains(candidate) {
             let entries: [DirectoryEntry]
             do {
