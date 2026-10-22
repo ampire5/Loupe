@@ -15,10 +15,8 @@ private func focus(count: Int = 200, current: Int = 100, direction: Int = 1, dwe
     CacheFocus(count: count, current: current, direction: direction, dwelling: dwelling, needsFull: needsFull, screen: screen)
 }
 
-/// The defaults with the 3 GB the expectations below were worked out for (`cache-memory` itself follows the Mac).
-private let limits3G = { var l = CacheLimits(); l.memory = 3 << 30; return l }()
 
-private func plan(_ focus: CacheFocus = focus(), _ limits: CacheLimits = limits3G,
+private func plan(_ focus: CacheFocus = focus(), _ limits: CacheLimits = CacheLimits.at3G,
                   _ facts: (Int) -> EntryFacts = facts()) -> [CacheItem] {
     CachePlan.make(focus: focus, limits: limits, facts: facts)
 }
@@ -26,7 +24,7 @@ private func plan(_ focus: CacheFocus = focus(), _ limits: CacheLimits = limits3
 private func names(_ items: some Sequence<CacheItem>) -> [String] { items.map { "\($0.index):\($0.goal)" } }
 
 private func limits(_ edit: (inout CacheLimits) -> Void) -> CacheLimits {
-    var l = limits3G
+    var l = CacheLimits.at3G
     edit(&l)
     return l
 }
@@ -113,7 +111,7 @@ private struct Costs {
     #expect(items.filter { $0.goal == .full }.map(\.index) == [100])
     #expect(!plan(focus(dwelling: false)).contains { $0.goal == .full })
     // A photo whose preview is already full resolution (Lfit 0) gets no second decode of the same level.
-    #expect(!plan(opened, limits3G, facts(small)).contains { $0.goal == .full })
+    #expect(!plan(opened, CacheLimits.at3G, facts(small)).contains { $0.goal == .full })
 }
 
 @Test func cacheFullTiers() {
@@ -131,7 +129,7 @@ private struct Costs {
 
 @Test func fullOfAFittingImageCostsNothing() {
     // Lfit 0: the preview already is the whole pyramid, so "full" adds no memory but is still listed.
-    let items = plan(focus(), limits3G, facts(small))
+    let items = plan(focus(), CacheLimits.at3G, facts(small))
     #expect(items.first { $0.index == 100 && $0.goal == .full }?.cost == 0)
 }
 
@@ -157,7 +155,7 @@ private struct Costs {
 @Test func farPreviewIsPlainPreviewWithoutACoarserLevel() {
     // 100x100 has a single level, so there is nothing coarser than Lfit to hold a far photo at.
     let tiny = PixelSize(width: 100, height: 100)
-    let items = plan(focus(), limits3G, facts(tiny))
+    let items = plan(focus(), CacheLimits.at3G, facts(tiny))
     #expect(!items.contains { $0.goal == .coarse })
     #expect(items.contains { $0.index == 105 && $0.goal == .preview })
 }
@@ -218,7 +216,7 @@ private struct Costs {
 
 @Test func failedSkipped() {
     let failing: (Int) -> EntryFacts = { i in EntryFacts(pixelSize: big, fileSize: 12 * mb, failed: i == 101 || i == 100) }
-    let items = plan(focus(), limits3G, failing)
+    let items = plan(focus(), CacheLimits.at3G, failing)
     #expect(!items.contains { $0.index == 101 })
     #expect(items.contains { $0.index == 100 && $0.goal == .preview })
     #expect(items.contains { $0.index == 99 && $0.goal == .full } == false)   // cache-full 1: only n1 would get it
@@ -227,26 +225,26 @@ private struct Costs {
 @Test func estimateUsesMedianOfKnown() {
     let known = PixelSize(width: 4000, height: 3000)
     let partial: (Int) -> EntryFacts = { i in i == 5 ? EntryFacts(pixelSize: known, fileSize: 5 * mb) : EntryFacts() }
-    let items = plan(focus(count: 10, current: 5), limits3G, partial)
+    let items = plan(focus(count: 10, current: 5), CacheLimits.at3G, partial)
     let c = Costs(known)
     #expect(items.first { $0.index == 6 && $0.goal == .preview }?.cost == c.preview)
     #expect(items.first { $0.index == 6 && $0.goal == .bytes }?.cost == CachePlan.defaultFileSize)
     #expect(items.first { $0.index == 5 && $0.goal == .bytes }?.cost == 5 * mb)
     // Nothing known at all: the 147 MP default.
-    let none = plan(focus(count: 10, current: 5), limits3G, { _ in EntryFacts() })
+    let none = plan(focus(count: 10, current: 5), CacheLimits.at3G, { _ in EntryFacts() })
     #expect(none.first { $0.index == 6 && $0.goal == .preview }?.cost == Costs(CachePlan.defaultPixelSize).preview)
 }
 
 @Test func medianIsByPixelCount() {
     let sizes = [PixelSize(width: 1000, height: 1000), PixelSize(width: 2000, height: 2000), PixelSize(width: 8000, height: 6000)]
     let f: (Int) -> EntryFacts = { i in i < 3 ? EntryFacts(pixelSize: sizes[i]) : EntryFacts() }
-    let items = plan(focus(count: 10, current: 5), limits3G, f)
+    let items = plan(focus(count: 10, current: 5), CacheLimits.at3G, f)
     #expect(items.first { $0.index == 6 && $0.goal == .preview }?.cost == Costs(sizes[1]).preview)
 }
 
 @Test func realSizeReplacesEstimate() {
-    let before = plan(focus(count: 10, current: 5), limits3G, { _ in EntryFacts() })
-    let after = plan(focus(count: 10, current: 5), limits3G, { i in
+    let before = plan(focus(count: 10, current: 5), CacheLimits.at3G, { _ in EntryFacts() })
+    let after = plan(focus(count: 10, current: 5), CacheLimits.at3G, { i in
         i == 6 ? EntryFacts(pixelSize: PixelSize(width: 3000, height: 2000), fileSize: 2 * mb) : EntryFacts()
     })
     func cost(_ items: [CacheItem], _ goal: CacheGoal) -> Int? { items.first { $0.index == 6 && $0.goal == goal }?.cost }
@@ -284,7 +282,7 @@ private struct Costs {
 
 @Test func allNeighboursFailed() {
     let f: (Int) -> EntryFacts = { i in EntryFacts(pixelSize: big, fileSize: 12 * mb, failed: i != 100) }
-    let items = plan(focus(), limits3G, f)
+    let items = plan(focus(), CacheLimits.at3G, f)
     #expect(names(items) == ["100:preview", "100:bytes", "100:full"])
 }
 
@@ -299,7 +297,7 @@ private func withPrevious(_ f: CacheFocus, _ previous: Int?) -> CacheFocus {
 /// Its full resolution, when it still has it, comes right after the n1/p1 previews and ahead of n1's full.
 @Test func previousFullKeptAheadOfNextFull() {
     let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, fullKept: $0 == 99) }
-    let items = plan(withPrevious(focus(), 99), limits3G, kept)
+    let items = plan(withPrevious(focus(), 99), CacheLimits.at3G, kept)
     #expect(names(items.prefix(7)) == [
         "100:preview", "100:bytes", "100:full", "101:preview", "99:preview", "99:full", "101:full",
     ])
@@ -312,7 +310,7 @@ private func withPrevious(_ f: CacheFocus, _ previous: Int?) -> CacheFocus {
     let kept: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, fullKept: $0 == 99) }
     let items = plan(withPrevious(focus(), 99), limits { $0.full = 2 }, kept)
     #expect(items.filter { $0.index == 99 && $0.goal == .full }.count == 1)
-    let jumped = plan(withPrevious(focus(), 40), limits3G,
+    let jumped = plan(withPrevious(focus(), 40), CacheLimits.at3G,
                       { EntryFacts(pixelSize: big, fileSize: 12 * mb, fullKept: $0 == 40) })
     #expect(names(jumped.prefix(6)) == ["100:preview", "100:bytes", "100:full", "101:preview", "99:preview", "40:full"])
 }
@@ -332,7 +330,7 @@ private func withPrevious(_ f: CacheFocus, _ previous: Int?) -> CacheFocus {
     func previewCost(applying: Bool) throws -> Int {
         let f = CacheFocus(count: 3, current: 1, direction: 1, dwelling: false, needsFull: false, screen: laptop,
                            appliesOrientation: applying)
-        return try #require(plan(f, limits3G, turned).first { $0.index == 1 && $0.goal == .preview }).cost
+        return try #require(plan(f, CacheLimits.at3G, turned).first { $0.index == 1 && $0.goal == .preview }).cost
     }
     let grid = TileGrid(imageSize: stored)
     #expect(try previewCost(applying: true) == grid.byteCount(levels: 1..<grid.levelCount))
@@ -348,7 +346,7 @@ private func withPrevious(_ f: CacheFocus, _ previous: Int?) -> CacheFocus {
     func fulls(applying: Bool) -> [Int] {
         let f = CacheFocus(count: 3, current: 1, direction: 1, dwelling: false, needsFull: false, screen: laptop,
                            appliesOrientation: applying, opened: true)
-        return plan(f, limits3G, turned).filter { $0.goal == .full }.map(\.index)
+        return plan(f, CacheLimits.at3G, turned).filter { $0.goal == .full }.map(\.index)
     }
     #expect(fulls(applying: true) == [1])
     #expect(fulls(applying: false).isEmpty)

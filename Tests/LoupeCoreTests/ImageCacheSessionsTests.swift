@@ -412,7 +412,7 @@ struct ImageCacheSessionsTests {
 
     /// `cache-idle-keep=preview`: the trimmed window's current photo goes down to its preview (Lfit).
     @Test func idleTrimPreviewKeep() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.idleKeep = .preview
         let rig = Rig(limits: limits)
         let (a, _) = await idleSetup(rig)
@@ -453,7 +453,7 @@ struct ImageCacheSessionsTests {
     /// An entry the active window lists too stays whole, even where that window's plan does not want it; only what
     /// the idle window alone lists goes.
     @Test func idleTrimSparesSharedWithActive() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.previews = 3
         limits.files = 3
         let rig = Rig(limits: limits)
@@ -482,7 +482,7 @@ struct ImageCacheSessionsTests {
 
     /// `cache-idle-trim=0`: no timer, and the trim does nothing.
     @Test func idleTrimOffWhenZero() async {
-        var limits = CacheLimits()
+        var limits = CacheLimits.at3G
         limits.idleTrim = nil
         let rig = Rig(limits: limits)
         let (a, _) = await idleSetup(rig)
@@ -492,7 +492,7 @@ struct ImageCacheSessionsTests {
         #expect(await rig.states(a) == heldA)
 
         // Turned on: the timer runs while a window is inactive, and stops with none.
-        await rig.cache.setLimits(CacheLimits())
+        await rig.cache.setLimits(CacheLimits.at3G)
         #expect(await rig.cache.idleTimer != nil)
         await rig.cache.unregister(sessionA)
         #expect(await rig.cache.idleTimer == nil)
