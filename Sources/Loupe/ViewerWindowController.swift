@@ -219,6 +219,7 @@ import UniformTypeIdentifiers
         backButton.onClick = { [weak self] in self?.goBack(nil) }
         viewerView.onToggleStats = { [weak self] in self?.toggleStats() }
         viewerView.onToggleStrip = { [weak self] in self?.strip.togglePin() }
+        viewerView.onToggleStripPlacement = { [weak self] in self?.strip.togglePlacement() }
         viewerView.onToggleCheatSheet = { [weak self] in self?.toggleCheatSheet() }
         viewerView.onScalingKey = { [weak self] in self?.scalingKey($0) ?? false }
         viewerView.onColourKey = { [weak self] in self?.colourKey($0) ?? false }
@@ -242,6 +243,7 @@ import UniformTypeIdentifiers
             self?.applyStripLayout()
             self?.updateIndicatorInset()
         }
+        strip.onToast = { [weak self] in self?.toast.show($0) }
         strip.onShownChange = { [weak self] in
             self?.infoPanel.place()
             self?.updateIndicatorInset()
@@ -1423,6 +1425,9 @@ import UniformTypeIdentifiers
     /// View › Thumbnail Strip: the same pin as `T`.
     @objc func toggleThumbnailStrip(_ sender: Any?) { strip.togglePin() }
 
+    /// View › Strip Beside the Photo: the same as `⇧T`.
+    @objc func toggleStripPlacement(_ sender: Any?) { strip.togglePlacement() }
+
     /// View › Stats Bar: the same as `I`.
     @objc func toggleStatsBar(_ sender: Any?) { toggleStats() }
 
@@ -1476,6 +1481,8 @@ import UniformTypeIdentifiers
             return canGoBack
         case #selector(toggleThumbnailStrip(_:)):
             item.state = strip.isPinned ? .on : .off
+        case #selector(toggleStripPlacement(_:)):
+            item.state = Settings.shared.config.stripWindow == .beside ? .on : .off
         case #selector(toggleStatsBar(_:)):
             item.state = statsMode != .hidden ? .on : .off
         case #selector(toggleInfoPanel(_:)):

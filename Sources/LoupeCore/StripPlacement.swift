@@ -84,3 +84,63 @@ public struct StripPlacement: Equatable, Sendable {
         return mode == .beside ? .over : .beside
     }
 }
+
+// MARK: What T does, and the capsule's buttons
+
+extension StripPlacement {
+    /// The persisted flag `T` (its capsule button, the reveal chevron, View › Thumbnail Strip) flips.
+    public enum Flag: Equatable, Sendable { case hidden, pinned }
+
+    /// `T`'s flag: `hidden` in a window's `beside`, `pinned` while the strip floats (`over`, full screen); nil in a
+    /// window's `hidden` mode, where T does nothing. Each mode has its own flag, so neither leaks into the other.
+    public static func flag(_ mode: StripWindowMode, fullScreen: Bool) -> Flag? {
+        if fullScreen { return .pinned }
+        switch mode {
+        case .beside: return .hidden
+        case .over: return .pinned
+        case .hidden: return nil
+        }
+    }
+
+    /// Whether `T` holds the strip on screen (View › Thumbnail Strip's checkmark): beside not hidden, a float pinned.
+    public static func holds(_ mode: StripWindowMode, fullScreen: Bool, hidden: Bool, pinned: Bool) -> Bool {
+        switch flag(mode, fullScreen: fullScreen) {
+        case .hidden: !hidden
+        case .pinned: pinned
+        case nil: false
+        }
+    }
+
+    /// One button of the capsule: the app turns it into a `FilmstripTool`.
+    public struct Tool: Equatable, Sendable {
+        public enum Action: Equatable, Sendable { case place, pin }
+        public let symbol: String
+        public let help: String
+        public let isOn: Bool
+        public let action: Action
+    }
+
+    /// The capsule's buttons, left to right: "where the strip is" (⇧T) when `placeButton`, then T's.
+    public func tools(mode: StripWindowMode) -> [Tool] {
+        var tools: [Tool] = []
+        if placeButton {
+            tools.append(mode == .beside
+                ? Tool(symbol: "rectangle.bottomthird.inset.filled", help: "Let the strip float over the photo (⇧T)",
+                       isOn: true, action: .place)
+                : Tool(symbol: "rectangle.on.rectangle", help: "Keep the strip beside the photo (⇧T)",
+                       isOn: false, action: .place))
+        }
+        switch pin {
+        case .pin(on: false)?: tools.append(Tool(symbol: "pin", help: "Pin the strip (T)", isOn: false, action: .pin))
+        case .pin(on: true)?: tools.append(Tool(symbol: "pin.fill", help: "Unpin the strip (T)", isOn: true, action: .pin))
+        case .hide?: tools.append(Tool(symbol: "chevron.down", help: "Hide the strip (T)", isOn: false, action: .pin))
+        case nil: break
+        }
+        return tools
+    }
+
+    /// The reveal chevron's tip.
+    public static let revealHelp = "Show the strip (T)"
+    /// `⇧T` in full screen, where the mode does not change.
+    public static let fullScreenToast = "In full screen the strip is always over the photo"
+}

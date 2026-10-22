@@ -720,6 +720,10 @@ import UniformTypeIdentifiers
         let strip = view.addItem(withTitle: "Thumbnail Strip", action: #selector(ViewerWindowController.toggleThumbnailStrip(_:)),
                                  keyEquivalent: "")
         strip.showKey(of: .toggleStrip)
+        // The same as `⇧T`, whose key it shows: beside ↔ over, written to loupe.conf; checked while `beside`.
+        let placement = view.addItem(withTitle: "Strip Beside the Photo",
+                                     action: #selector(ViewerWindowController.toggleStripPlacement(_:)), keyEquivalent: "")
+        placement.showKey(of: .toggleStripPlacement)
         // The same as `I`, whose key it shows; the checkmark is the bar on screen.
         let stats = view.addItem(withTitle: "Stats Bar", action: #selector(ViewerWindowController.toggleStatsBar(_:)),
                                  keyEquivalent: "")
