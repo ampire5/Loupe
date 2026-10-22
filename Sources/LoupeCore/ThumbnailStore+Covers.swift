@@ -48,6 +48,18 @@ extension ThumbnailStore {
         return counts
     }
 
+    /// The stored summary of the folder `location` names (`ThumbnailLocation.subfolder`), from the catalog alone. Nil
+    /// when there is none or the catalog cannot say: a summary never gets in the way of thumbnails.
+    public func folderSummary(at location: ThumbnailLocation) async -> FolderSummary? {
+        perform("summary", { try $0.summary(at: location) }) ?? nil
+    }
+
+    /// Stores folder summaries in one batch (the cover queue's, as they are made). Failure is logged by `perform` and
+    /// leaves the summaries unstored: they are made again on the next pass.
+    public func putFolderSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) async {
+        _ = perform("summaries", { try $0.putSummaries(items) })
+    }
+
     /// A folder card's mosaic (file browser, second round): up to `limit` photos of the folder that already have a
     /// thumbnail, by name, from the catalog alone — no listing and no read of the folder, which on a slow share would
     /// queue in front of what the user clicked.

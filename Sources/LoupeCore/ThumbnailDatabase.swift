@@ -15,6 +15,15 @@ public final class ThumbnailDatabase {
     /// not migrated: both files start anew (`openBoth`).
     public static let formatVersion = 2
 
+    /// Rows `folder_summaries` keeps; beyond it the least recently used go (`putSummaries`).
+    /// Measured (FolderSummaryStoreTests.measureCapacity, Intel Core i7 desktop, 8 physical cores, SSD, rows with ~55
+    /// character paths and a 12-byte histogram, WAL included in the size): a lookup (which also stamps `last_used`)
+    /// takes 0.17 ms at 10 000 rows and 0.20 ms at 50 000 and 100 000 (flat: it is a primary-key probe); a 50-row batch
+    /// with its eviction 3-28 ms at any size; the catalog grows about 2.4 MB per 10 000 rows (6 MB at 10 000, 12 MB at
+    /// 50 000, 26 MB at 100 000). 20 000 folders is far more than anyone browses and costs about 5 MB, small next to
+    /// the file rows of the folders it describes.
+    public static let summaryCapacity = 20_000
+
     /// What `reopenIfDeleted` had to recreate.
     public enum Reopened: Equatable, Sendable {
         /// Both files were still in place; nothing happened.
@@ -30,6 +39,7 @@ public final class ThumbnailDatabase {
     private let directory: URL
     private let thumbSize: Int
     private let now: () -> Date
+    private let summaryCapacity: Int
     private var catalog: SQLiteConnection
     private var thumbs: SQLiteConnection
     private var catalogID: String
@@ -37,10 +47,12 @@ public final class ThumbnailDatabase {
     /// Opens or creates both databases in `directory` (created too if missing). `Thumbs.db` made for
     /// another catalog, thumbnail size or format is emptied; a corrupt file is set aside and made anew.
     /// `now` stamps `last_access` (tests pass a clock).
-    public init(directory: URL, thumbSize: Int, now: @escaping () -> Date = Date.init) throws {
+    public init(directory: URL, thumbSize: Int, now: @escaping () -> Date = Date.init,
+                summaryCapacity: Int = ThumbnailDatabase.summaryCapacity) throws {
         self.directory = directory
         self.thumbSize = thumbSize
         self.now = now
+        self.summaryCapacity = summaryCapacity
         (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize)
     }
 
@@ -321,6 +333,64 @@ public final class ThumbnailDatabase {
         return rows
     }
 
+    // MARK: - Folder summaries
+
+    /// The stored summary of the folder `location.folder` on `location.volume` (`name` is not used), and it counts as
+    /// used now. Whether it is still fresh is the caller's to say (`folderModified` against the listing).
+    public func summary(at location: ThumbnailLocation) throws -> FolderSummary? {
+        var found: FolderSummary?
+        try catalog.query("""
+            UPDATE folder_summaries SET last_used = ? WHERE volume = ? AND path = ?
+            RETURNING folder_mtime, photos, folders, bytes, first, last, histogram, dates_known
+            """, [.double(now().timeIntervalSinceReferenceDate), .text(location.volume), .text(location.folder)]) { r in
+            func date(_ column: Int) -> Date? {
+                r.isNull(column) ? nil : Date(timeIntervalSinceReferenceDate: r.double(column))
+            }
+            found = FolderSummary(photos: Int(r.int(1)), folders: Int(r.int(2)), bytes: r.isNull(3) ? nil : r.int(3),
+                                  first: date(4), last: date(5), histogram: [UInt8](r.blob(6)),
+                                  folderModified: date(0), datesKnown: r.int(7) != 0)
+        }
+        return found
+    }
+
+    /// Stores summaries (a folder's again replaces its row) in one transaction, then drops the least recently used
+    /// rows beyond `summaryCapacity`, in the same transaction: one commit and one eviction per batch, not per row.
+    public func putSummaries(_ items: [(location: ThumbnailLocation, summary: FolderSummary)]) throws {
+        guard !items.isEmpty else { return }
+        let time = SQLiteValue.double(now().timeIntervalSinceReferenceDate)
+        try catalog.transaction {
+            for (location, summary) in items {
+                func date(_ value: Date?) -> SQLiteValue {
+                    value.map { .double($0.timeIntervalSinceReferenceDate) } ?? .null
+                }
+                try catalog.run("""
+                    INSERT INTO folder_summaries(volume, path, folder_mtime, photos, folders, bytes, first, last,
+                                                 histogram, dates_known, last_used)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(volume, path) DO UPDATE SET folder_mtime = excluded.folder_mtime,
+                        photos = excluded.photos, folders = excluded.folders, bytes = excluded.bytes,
+                        first = excluded.first, last = excluded.last, histogram = excluded.histogram,
+                        dates_known = excluded.dates_known, last_used = excluded.last_used
+                    """, [.text(location.volume), .text(location.folder), date(summary.folderModified),
+                           .int(Int64(summary.photos)), .int(Int64(summary.folders)),
+                           summary.bytes.map { .int($0) } ?? .null, date(summary.first), date(summary.last),
+                           .blob(Data(summary.histogram)), .int(summary.datesKnown ? 1 : 0), time])
+            }
+            // The newest rows of a batch share one `last_used`: the later rowid wins the tie.
+            try catalog.run("""
+                DELETE FROM folder_summaries WHERE rowid IN (
+                    SELECT rowid FROM folder_summaries ORDER BY last_used DESC, rowid DESC LIMIT -1 OFFSET ?)
+                """, [.int(Int64(max(0, summaryCapacity)))])
+        }
+    }
+
+    /// Rows in `folder_summaries`.
+    public func summaryCount() throws -> Int {
+        var count = 0
+        try catalog.query("SELECT COUNT(*) FROM folder_summaries", []) { count = Int($0.int(0)) }
+        return count
+    }
+
     /// Removes these files from both databases (thumbnails first, see the invariant above) and returns the
     /// space to the file system.
     public func deleteFiles(_ ids: [Int64]) throws {
@@ -418,6 +488,18 @@ public final class ThumbnailDatabase {
         CREATE UNIQUE INDEX IF NOT EXISTS files_folder_name ON files(folder, name);
         CREATE INDEX IF NOT EXISTS files_last_access ON files(last_access);
         """
+    /// Folder cards' facts (`FolderSummary`), keyed by the volume's text key and the folder's path (not by the
+    /// `volumes` / `folders` ids: a summary outlives the folder's file rows, which a clean-up deletes). Created with
+    /// `IF NOT EXISTS` on every open and kept out of `catalogSchema`'s format check: adding it changes no
+    /// `format_version`, so an existing catalog keeps its rows. Dates are `timeIntervalSinceReferenceDate` (REAL, as
+    /// elsewhere), NULL when unknown; `histogram` is 12 bytes, empty when there is none.
+    private static let summarySchema = """
+        CREATE TABLE IF NOT EXISTS folder_summaries(volume TEXT NOT NULL, path TEXT NOT NULL, folder_mtime REAL,
+            photos INTEGER NOT NULL, folders INTEGER NOT NULL, bytes INTEGER, first REAL, last REAL,
+            histogram BLOB NOT NULL, dates_known INTEGER NOT NULL, last_used REAL NOT NULL,
+            PRIMARY KEY(volume, path));
+        CREATE INDEX IF NOT EXISTS folder_summaries_last_used ON folder_summaries(last_used);
+        """
     private static let thumbsSchema = metaSchema
         + "CREATE TABLE IF NOT EXISTS thumbs(file_id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);"
 
@@ -436,6 +518,7 @@ public final class ThumbnailDatabase {
                     """)
             }
             try db.execute(catalogSchema)
+            try db.execute(summarySchema)
             // A catalog without an id is a new one (or the remains of one): it gets a new id.
             catalogID = try readMeta(db)["catalog_id"] ?? UUID().uuidString
             try writeMeta(db, catalogID: catalogID, thumbSize: thumbSize)
