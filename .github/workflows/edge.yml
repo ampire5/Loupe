@@ -89,8 +89,10 @@ jobs:
           echo "zip=$zip" >> "$GITHUB_ENV"
           notes="The latest build of ${{ steps.run.outputs.branch }} that passed CI (${sha::7}), not a release: unsigned, for testing. Homebrew: \`brew install --cask ampire5/tap/$CASK\`."
           if gh release view "$tag" >/dev/null 2>&1; then
-            # The tag follows the build.
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$sha" -F force=true >/dev/null
+            # The tag follows the build. Only a label (the cask needs the zip): GitHub refuses the move now and then
+            # (403, e.g. past a commit that changes a workflow, which GITHUB_TOKEN may not), and that is no failure.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$sha" -F force=true >/dev/null \
+              || echo "::warning title=Edge tag not moved::$tag stays where it was; the zip is published anyway"
             gh release edit "$tag" --notes "$notes"
           else
             gh release create "$tag" --target "$sha" --prerelease --latest=false --title "$tag (latest build)" --notes "$notes"
