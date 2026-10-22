@@ -45,12 +45,13 @@ public struct FolderCard: Sendable {
     /// The photos' modification dates from this pass's listing with stat (a local volume); nil when the card came
     /// from the catalog, on a share and for a zip.
     public var photoDates: [Date]?
-    /// The pictures came from the catalog at once and the folder is still to be listed for its summary: the next
-    /// `folderCard` for it does that (the cover queue keeps the card, its work "not done", and asks again at its pace).
-    /// On an offline share it stays pending until a call may probe the share (`coverOfflineProbeInterval`) or the
-    /// share answers: each such call re-reads the four pictures from the catalog and lists nothing (~20 ms in a debug
-    /// build on an 8-core Intel iMac, four 512 px thumbnails of a 200-photo folder; the queue's retry delay grows to a
-    /// minute).
+    /// The pictures came from the catalog (or a remembered pick) at once and the folder is still to be listed for its
+    /// summary: the next `folderCard` for it does that (the cover queue keeps the card, its work "not done", and asks
+    /// again at its pace). On an offline share it stays pending until a call may probe the share
+    /// (`coverOfflineProbeInterval`) and the share answers it (a probe that does not answer spends nothing), or the
+    /// share answers otherwise: each such call re-reads the four pictures from the catalog and lists nothing (~20 ms
+    /// in a debug build on an 8-core Intel iMac, four 512 px thumbnails of a 200-photo folder; the queue's retry delay
+    /// grows to a minute).
     public var summaryPending: Bool
 
     public init(images: [CGImage], summary: FolderSummary? = nil, problem: CardProblem? = nil,
