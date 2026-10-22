@@ -1,3 +1,5 @@
+import CoreGraphics
+
 /// What the photo strip shows in each mode, pinned or hidden, in a window and in full screen (filmstrip spec §2).
 /// A pure function of the mode and the pointer, so the rules are tested apart from the views.
 ///
@@ -116,44 +118,54 @@ extension StripPlacement {
         }
     }
 
-    /// One button of the capsule: the app turns it into a `FilmstripTool`.
+    /// One button of the capsule: the app turns it into a `FilmstripTool`. `symbol` names one of the kit's capsule
+    /// glyphs (`FilmstripGlyph`: the strip sketch's drawings).
     public struct Tool: Equatable, Sendable {
         public enum Action: Equatable, Sendable { case place, pin }
         public let symbol: String
         public let help: String
         public let isOn: Bool
         public let action: Action
+        /// A divider before it: T's button is a group of its own after "where the strip is".
+        public var separatorBefore = false
     }
 
-    /// The capsule's buttons, left to right: "where the strip is" (⇧T) when `placeButton`, then T's.
+    /// The capsule's buttons, left to right: "where the strip is" (⇧T) when `placeButton`, lit while the strip is
+    /// beside the photo; then T's: the pin (filled while pinned: unpin) or, beside, the chevron that hides the strip.
     public func tools(mode: StripWindowMode) -> [Tool] {
         var tools: [Tool] = []
         if placeButton {
             tools.append(mode == .beside
-                ? Tool(symbol: "rectangle.bottomthird.inset.filled", help: "Let the strip float over the photo (⇧T)",
-                       isOn: true, action: .place)
-                : Tool(symbol: "rectangle.on.rectangle", help: "Keep the strip beside the photo (⇧T)",
-                       isOn: false, action: .place))
+                ? Tool(symbol: "strip.beside", help: "Let the strip float over the photo (⇧T)", isOn: true, action: .place)
+                : Tool(symbol: "strip.over", help: "Keep the strip beside the photo (⇧T)", isOn: false, action: .place))
         }
+        var t: Tool?
         switch pin {
-        case .pin(on: false)?: tools.append(Tool(symbol: "pin", help: "Pin the strip (T)", isOn: false, action: .pin))
-        case .pin(on: true)?: tools.append(Tool(symbol: "pin", help: "Unpin the strip (T)", isOn: true, action: .pin))
-        case .hide?: tools.append(Tool(symbol: "chevron.down", help: "Hide the strip (T)", isOn: false, action: .pin))
+        case .pin(on: false)?: t = Tool(symbol: "pin", help: "Pin the strip (T)", isOn: false, action: .pin)
+        case .pin(on: true)?: t = Tool(symbol: "pin.fill", help: "Unpin the strip (T)", isOn: true, action: .pin)
+        case .hide?: t = Tool(symbol: "chevron.down", help: "Hide the strip (T)", isOn: false, action: .pin)
         case nil: break
+        }
+        if var t {
+            t.separatorBefore = !tools.isEmpty
+            tools.append(t)
         }
         return tools
     }
 
-    /// The reveal chevron's tip.
-    /// The tool capsule's centre along the strip (user, 2026-10-23: under the pointer): where the pointer entered the
-    /// strip, kept `inset` from either end of a strip `length` long; a capsule wider than the room sits in the middle.
-    /// An `entry` of `.infinity` (none yet) puts it at the trailing end.
-    public static func capsuleCentre(entry: Double, width: Double, length: Double, inset: Double) -> Double {
-        let low = inset + width / 2, high = length - inset - width / 2
-        guard low <= high else { return length / 2 }
-        return min(max(entry, low), high)
+    /// The capsule's inset from the strip's right end (the sketch's `right: 14px`).
+    public static let capsuleInset: CGFloat = 14
+
+    /// Where the tool capsule sits (owner, 2026-10-22): on the strip, `capsuleInset` in from its right end, centred
+    /// on the cells (the middle of the strip's height); a capsule wider than the room sits in the middle. In the
+    /// strip's coordinates, the origin at its bottom left.
+    public static func capsuleOrigin(strip: CGSize, capsule: CGSize) -> CGPoint {
+        let right = strip.width - capsuleInset - capsule.width
+        let x = right >= capsuleInset ? right : (strip.width - capsule.width) / 2
+        return CGPoint(x: x, y: (strip.height - capsule.height) / 2)
     }
 
+    /// The reveal chevron's tip.
     public static let revealHelp = "Show the strip (T)"
     /// `⇧T` in full screen, where the mode does not change.
     public static let fullScreenToast = "In full screen the strip is always over the photo"

@@ -26,11 +26,11 @@ extension Notification.Name {
 /// `strip-hide-delay` ms after none of these holds. While the `?` cheat sheet is open (`staysShown`) a strip on screen
 /// stays too. `hidden` never shows it in a window, and `T` does nothing there.
 ///
-/// The glass tool capsule (`FilmstripToolsView`) sits 6 pt above the strip where the pointer entered it (kept inside the
-/// strip's ends, `StripPlacement.capsuleCentre`) while the pointer is over the strip or the capsule, and leaves
-/// `strip-hide-delay` ms after it with the strip's fade; coming back before that keeps it where it was, a new entry
-/// after it places it anew. The hover label steps aside from it (`FilmstripView.labelAvoid`). Its buttons: "where the strip is" (`⇧T`,
-/// not in full screen) and `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
+/// The tool capsule (`FilmstripToolsView`, the strip sketch's `.cap`) sits on the strip, 14 pt in from its right end and
+/// centred on the cells (`StripPlacement.capsuleOrigin`), while the pointer is over the strip or the capsule, and
+/// leaves `strip-hide-delay` ms after it with the strip's fade. The hover label steps aside from it
+/// (`FilmstripView.labelAvoid`). Its buttons: "where the strip is" (`⇧T`, not in full screen) and, after a divider,
+/// `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
 /// over) to loupe.conf; in full screen it only says the strip is always over the photo there.
 ///
 /// At rest the current file is at the centre, expanded to its photo's proportions; with two pages on screen (spread
@@ -58,14 +58,13 @@ extension Notification.Name {
 @MainActor final class StripController: NSObject {
     static let pinnedKey = "stripPinned"
     static let barHiddenKey = "stripBarHidden"
-    /// The capsule's gap to the strip's top edge; the reveal chevron's to the window's bottom edge.
-    private static let capsuleGap: CGFloat = 6
+    /// The reveal chevron's gap to the window's bottom edge.
     private static let revealGap: CGFloat = 6
     /// How near the window's bottom edge the pointer brings up the reveal chevron.
     private static let revealZone: CGFloat = 24
 
     let view = FilmstripView()
-    /// The glass capsule of the strip's buttons, over the strip's right end.
+    /// The capsule of the strip's buttons, on the strip's right end.
     private let tools = FilmstripToolsView()
     /// The chevron that brings a hidden `beside` strip back.
     private let reveal = FilmstripRevealView()
@@ -106,10 +105,8 @@ extension Notification.Name {
     private var mouseOverStrip = false
     /// `mouseOverStrip`, let go `strip-hide-delay` after the cursor left: the capsule stays that long.
     private var capsuleHeld = false
-    /// Where the pointer entered the strip (the strip's x) when the capsule was last placed; nil before the first entry.
-    private var capsuleEntry: CGFloat?
-    /// The capsule's centre along the strip.
-    private var toolsCentre: NSLayoutConstraint?
+    /// The capsule's left edge along the strip.
+    private var toolsLeading: NSLayoutConstraint?
     private var capsuleRelease: Task<Void, Never>?
     /// The capsule's buttons as last given to `tools`, and whether it is shown; the reveal chevron's too.
     private var shownTools: [StripPlacement.Tool] = []
@@ -233,11 +230,11 @@ extension Notification.Name {
         reveal.onReveal = { [weak self] in self?.togglePin() }
         reveal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(reveal, positioned: .above, relativeTo: view)
-        let centre = tools.centerXAnchor.constraint(equalTo: view.leadingAnchor)
-        toolsCentre = centre
+        let leading = tools.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        toolsLeading = leading
         NSLayoutConstraint.activate([
-            centre,
-            tools.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Self.capsuleGap),
+            leading,
+            tools.centerYAnchor.constraint(equalTo: view.centerYAnchor),   // the cells are in the strip's middle
             reveal.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             reveal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.revealGap),
             reveal.widthAnchor.constraint(equalToConstant: FilmstripRevealView.size.width),
@@ -509,7 +506,8 @@ extension Notification.Name {
         if wanted != shownTools {
             shownTools = wanted
             tools.tools = wanted.map { tool in
-                FilmstripTool(symbol: tool.symbol, help: tool.help, isOn: tool.isOn) { [weak self] in
+                FilmstripTool(symbol: tool.symbol, help: tool.help, isOn: tool.isOn,
+                              separatorBefore: tool.separatorBefore) { [weak self] in
                     switch tool.action {
                     case .place: self?.togglePlacement()
                     case .pin: self?.togglePin()
@@ -521,15 +519,13 @@ extension Notification.Name {
         setToolsShown(isShown && capsuleHeld && p.pin != nil)
     }
 
-    /// The capsule over where the pointer entered the strip, inside its ends (the strip's width changes with the
-    /// window's); the hover label keeps clear of it while it shows.
+    /// The capsule on the strip's right end (the strip's width changes with the window's); the hover label keeps
+    /// clear of it while it shows.
     private func placeTools() {
-        let width = tools.fittingSize.width
-        let centre = CGFloat(StripPlacement.capsuleCentre(entry: Double(capsuleEntry ?? .infinity), width: Double(width),
-                                                          length: Double(view.bounds.width),
-                                                          inset: Double(FilmstripView.padding)))
-        if toolsCentre?.constant != centre { toolsCentre?.constant = centre }
-        let avoid: ClosedRange<CGFloat>? = toolsShown ? (centre - width / 2)...(centre + width / 2) : nil
+        let size = tools.fittingSize
+        let x = StripPlacement.capsuleOrigin(strip: view.bounds.size, capsule: size).x
+        if toolsLeading?.constant != x { toolsLeading?.constant = x }
+        let avoid: ClosedRange<CGFloat>? = toolsShown ? x...(x + size.width) : nil
         if view.labelAvoid != avoid { view.labelAvoid = avoid }
     }
 
@@ -572,17 +568,8 @@ extension Notification.Name {
         let p = container.convert(event.locationInWindow, from: nil)
         let inside = container.bounds.contains(p)
         let height = p.y - container.bounds.minY
-        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && capsuleArea.contains(p)))
-        pointer(nearBottom: inside && height <= bandHeight, nearEdge: inside && height <= Self.revealZone, overStrip: over,
-                at: p.x - view.frame.minX)
-    }
-
-    /// The capsule with the gap down to the strip's top edge: crossing it is still "over the strip", so a short
-    /// `strip-hide-delay` does not drop the capsule (or an over strip) on the way from the strip to its buttons.
-    private var capsuleArea: CGRect {
-        let gap = CGRect(x: tools.frame.minX, y: view.frame.maxY, width: tools.frame.width,
-                         height: tools.frame.minY - view.frame.maxY).standardized
-        return tools.frame.union(gap)
+        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && tools.frame.contains(p)))
+        pointer(nearBottom: inside && height <= bandHeight, nearEdge: inside && height <= Self.revealZone, overStrip: over)
     }
 
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
@@ -600,9 +587,9 @@ extension Notification.Name {
         pointer(nearBottom: false, nearEdge: false, overStrip: false)
     }
 
-    /// Where the pointer is now (`x`: along the strip). Leaving the strip lets the capsule go `strip-hide-delay` later,
-    /// as a floating strip goes; coming back keeps it where it was. Entering with no capsule held places it at `x`.
-    private func pointer(nearBottom: Bool, nearEdge: Bool, overStrip: Bool, at x: CGFloat? = nil) {
+    /// Where the pointer is now. Leaving the strip lets the capsule go `strip-hide-delay` later, as a floating strip
+    /// goes; coming back before that keeps it.
+    private func pointer(nearBottom: Bool, nearEdge: Bool, overStrip: Bool) {
         guard nearBottom != mouseNearBottom || nearEdge != mouseNearEdge || overStrip != mouseOverStrip else { return }
         mouseNearBottom = nearBottom
         mouseNearEdge = nearEdge
@@ -611,7 +598,6 @@ extension Notification.Name {
             capsuleRelease?.cancel()
             capsuleRelease = nil
             if overStrip {
-                if !capsuleHeld, let x { capsuleEntry = x }
                 capsuleHeld = true
             } else if capsuleHeld {
                 let delay = hideDelay

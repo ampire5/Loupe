@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 @testable import LoupeCore
 
@@ -140,7 +141,8 @@ private func input(
 
 @Test func capsuleToolsBeside() {
     let tools = StripPlacement(input(.beside, over: true)).tools(mode: .beside)
-    #expect(tools.map(\.symbol) == ["rectangle.bottomthird.inset.filled", "chevron.down"])
+    #expect(tools.map(\.symbol) == ["strip.beside", "chevron.down"])
+    #expect(tools.map(\.separatorBefore) == [false, true])   // the "where" group, then T's
     #expect(tools.map(\.help) == ["Let the strip float over the photo (⇧T)", "Hide the strip (T)"])
     #expect(tools.map(\.isOn) == [true, false])
     #expect(tools.map(\.action) == [.place, .pin])
@@ -148,11 +150,11 @@ private func input(
 
 @Test func capsuleToolsOver() {
     let loose = StripPlacement(input(.over, over: true, edge: true)).tools(mode: .over)
-    #expect(loose.map(\.symbol) == ["rectangle.on.rectangle", "pin"])
+    #expect(loose.map(\.symbol) == ["strip.over", "pin"])
     #expect(loose.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Pin the strip (T)"])
     #expect(loose.map(\.isOn) == [false, false])
     let pinned = StripPlacement(input(.over, pinned: true, over: true)).tools(mode: .over)
-    #expect(pinned.map(\.symbol) == ["rectangle.on.rectangle", "pin"])
+    #expect(pinned.map(\.symbol) == ["strip.over", "pin.fill"])   // the pin filled: unpin
     #expect(pinned.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Unpin the strip (T)"])
     #expect(pinned.map(\.isOn) == [false, true])
 }
@@ -161,8 +163,9 @@ private func input(
 @Test func capsuleToolsFullScreenHaveNoPlaceButton() {
     for mode in [StripWindowMode.over, .beside, .hidden] {
         let tools = StripPlacement(input(mode, fullScreen: true, pinned: true, over: true)).tools(mode: mode)
-        #expect(tools.map(\.symbol) == ["pin"])
+        #expect(tools.map(\.symbol) == ["pin.fill"])
         #expect(tools.map(\.action) == [.pin])
+        #expect(tools.map(\.separatorBefore) == [false])
     }
 }
 
@@ -183,18 +186,15 @@ private func input(
     #expect(StripPlacement.flag(.hidden, fullScreen: false) == nil)
 }
 
-// MARK: The capsule under the pointer
+// MARK: The capsule's place
 
-@Test func capsuleStandsWhereThePointerEntered() {
-    #expect(StripPlacement.capsuleCentre(entry: 300, width: 100, length: 1000, inset: 8) == 300)
-}
-
-@Test func capsuleKeepsInsideTheStripsEnds() {
-    #expect(StripPlacement.capsuleCentre(entry: 10, width: 100, length: 1000, inset: 8) == 58)
-    #expect(StripPlacement.capsuleCentre(entry: 990, width: 100, length: 1000, inset: 8) == 942)
-    #expect(StripPlacement.capsuleCentre(entry: .infinity, width: 100, length: 1000, inset: 8) == 942)   // none yet
+/// On the strip, 14 pt in from its right end, centred on the cells (owner, 2026-10-22; the sketch's `right: 14px`).
+@Test func capsuleSitsOnTheStripsRightEnd() {
+    #expect(StripPlacement.capsuleOrigin(strip: CGSize(width: 1000, height: 80), capsule: CGSize(width: 70, height: 32))
+            == CGPoint(x: 916, y: 24))
 }
 
 @Test func capsuleWiderThanTheStripSitsInTheMiddle() {
-    #expect(StripPlacement.capsuleCentre(entry: 30, width: 100, length: 90, inset: 8) == 45)
+    #expect(StripPlacement.capsuleOrigin(strip: CGSize(width: 90, height: 80), capsule: CGSize(width: 100, height: 32))
+            == CGPoint(x: -5, y: 24))
 }
