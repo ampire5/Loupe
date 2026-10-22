@@ -12,7 +12,11 @@ import Foundation
 /// `folder-settings.json`) are not migrated: they are never read, renamed or deleted.
 public final class StateDatabase: @unchecked Sendable {
     public static let fileName = "Loupe.db"
-    public static let schemaVersion = 3
+    /// Ruling R9: the visit columns came without a new version (`addVisitColumns`), so an older Loupe opens the file.
+    public static let schemaVersion = 2
+    /// The version a pre-release build of the folder cards stamped its files with: the same tables, accepted and
+    /// stamped `schemaVersion` again.
+    static let prereleaseVersion = 3
 
     /// `~/Library/Application Support/Loupe`.
     public static var defaultDirectory: URL? {
@@ -64,9 +68,9 @@ public final class StateDatabase: @unchecked Sendable {
 
     private static let pragmas = ["journal_mode=WAL", "synchronous=NORMAL", "busy_timeout=2000"]
 
-    /// Schema 2 (Home spec §3.1) only adds `recent` and `sessions`; a version 1 file keeps its rows. Schema 3 gives
-    /// `folder_positions` the visit (`idx` the photo, `count` of how many, `visited` when; all null until a visit is
-    /// recorded): older files get them by `ALTER TABLE` in `prepare`, new ones from the statement below.
+    /// Schema 2 (Home spec §3.1) only adds `recent` and `sessions`; a version 1 file keeps its rows.
+    /// `folder_positions` has the visit too (`idx` the photo, `count` of how many, `visited` when; all null until a
+    /// visit is recorded): new files from the statement below, older ones by `addVisitColumns`.
     /// `touched` is a counter that only grows: recency for the stores' folder caps. `view` is the
     /// `SavedView.text` (zoom mode and position) the folder's last photo was left in, null when none was saved.
     private static let schema = """
@@ -89,29 +93,33 @@ public final class StateDatabase: @unchecked Sendable {
         CREATE TABLE IF NOT EXISTS browser_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """
 
-    /// Version 1 and 2 files have `folder_positions` without the visit columns (`CREATE TABLE IF NOT EXISTS` kept it as
-    /// it was); their rows stay, the new fields null.
+    /// The visit columns of `folder_positions`, added to a file that has not got them (made by a Loupe before the
+    /// folder cards: `CREATE TABLE IF NOT EXISTS` kept the table as it was) on every open, outside the version, as
+    /// `browserTables`: an older Loupe still opens the file and never reads them. Its rows stay, the new fields null.
     private static func addVisitColumns(_ db: SQLiteConnection) throws {
         var columns: Set<String> = []
         try db.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.insert($0.text(0)) }
-        for (name, type) in [("idx", "INTEGER"), ("count", "INTEGER"), ("visited", "REAL")] where !columns.contains(name) {
-            try db.execute("ALTER TABLE folder_positions ADD COLUMN \(name) \(type)")
+        let missing = [("idx", "INTEGER"), ("count", "INTEGER"), ("visited", "REAL")].filter { !columns.contains($0.0) }
+        guard !missing.isEmpty else { return }
+        try db.transaction {
+            for (name, type) in missing { try db.execute("ALTER TABLE folder_positions ADD COLUMN \(name) \(type)") }
         }
     }
 
     private static func prepare(_ db: SQLiteConnection) throws {
         var version: Int64 = 0
         try db.query("PRAGMA user_version", []) { version = $0.int(0) }
-        guard version <= Int64(schemaVersion) else {
+        guard version <= Int64(prereleaseVersion) else {
             throw SQLiteError(code: -1, message: "\(fileName) has schema version \(version), newer than this Loupe's \(schemaVersion)")
         }
-        if version < Int64(schemaVersion) {
+        // Older (or the pre-release's 3): made up to date, then stamped `schemaVersion`.
+        if version != Int64(schemaVersion) {
             try db.transaction {
                 try db.execute(schema)
-                try addVisitColumns(db)
                 try db.execute("PRAGMA user_version = \(schemaVersion)")
             }
         }
+        try addVisitColumns(db)
         try db.execute(browserTables)
     }
 }

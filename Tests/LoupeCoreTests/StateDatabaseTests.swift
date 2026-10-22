@@ -13,7 +13,7 @@ import Foundation
 
     private func names(_ dir: URL) throws -> Set<String> { Set(try fm.contentsOfDirectory(atPath: dir.path)) }
 
-    @Test func createsTheSchemaAtVersionThree() throws {
+    @Test func createsTheSchemaAtVersionTwo() throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let db = try StateDatabase(directory: dir)
@@ -24,14 +24,15 @@ import Foundation
             try $0.query("PRAGMA user_version", []) { version = $0.int(0) }
             try $0.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", []) { tables.append($0.text(0)) }
         }
-        #expect(version == 3)   // the browser's tables are additive: an older Loupe still opens the file
+        #expect(version == 2)   // the browser's tables and the visit columns are additive: an older Loupe opens it
         #expect(tables == ["browser_pins", "browser_state", "folder_positions", "folder_settings", "recent", "sessions"])
         var columns: [String] = []
         try db.perform { try $0.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.append($0.text(0)) } }
         #expect(columns == ["path", "file", "view", "touched", "idx", "count", "visited"])
     }
 
-    @Test func version2FileMigrates() throws {
+    /// Ruling R9: a version 2 file gains the visit columns and stays at version 2, so an older Loupe still opens it.
+    @Test func version2FileGainsTheVisitColumns() throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -50,15 +51,41 @@ import Foundation
             try $0.query("PRAGMA user_version", []) { version = $0.int(0) }
             try $0.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.append($0.text(0)) }
         }
-        #expect(version == 3)
+        #expect(version == 2)
         #expect(columns == ["path", "file", "view", "touched", "idx", "count", "visited"])
         let positions = FolderPositions(database: db)
         #expect(positions.count == 2)
         #expect(positions.fileName(in: folder("/photos/a")) == "a1.jpg")
         #expect(positions.fileName(in: folder("/photos/b")) == "b2.jpg")
         #expect(positions.visit(in: folder("/photos/a")) == nil)
-        // A file opened again at version 3 is left as it is.
+        // Opened again: the columns are there, nothing changes.
         _ = try StateDatabase(directory: dir)
+    }
+
+    /// Ruling R9: a file a pre-release build stamped version 3 (the same tables, the visit columns in) is opened with
+    /// its rows and visits, and stamped 2 again so older builds open it.
+    @Test func version3FileIsAcceptedAndStampedTwo() throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let old = try SQLiteConnection(path: dir.appendingPathComponent("Loupe.db").path, pragmas: [])
+        try old.execute("""
+            CREATE TABLE folder_positions(path TEXT PRIMARY KEY, file TEXT NOT NULL, view TEXT, touched INTEGER NOT NULL,
+                idx INTEGER, count INTEGER, visited REAL);
+            INSERT INTO folder_positions VALUES('/photos/a', 'a1.jpg', NULL, 1, 4, 9, 1000000);
+            CREATE TABLE folder_settings(path TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+                touched INTEGER NOT NULL, PRIMARY KEY(path, key));
+            PRAGMA user_version = 3;
+            """)
+        old.close()
+        let db = try StateDatabase(directory: dir)
+        var version: Int64 = 0
+        try db.perform { try $0.query("PRAGMA user_version", []) { version = $0.int(0) } }
+        #expect(version == 2)
+        let positions = FolderPositions(database: db)
+        #expect(positions.fileName(in: folder("/photos/a")) == "a1.jpg")
+        #expect(positions.visit(in: folder("/photos/a"))
+                == FolderVisit(index: 4, count: 9, visited: Date(timeIntervalSinceReferenceDate: 1_000_000)))
     }
 
     @Test func bothStoresShareOneDatabaseAcrossInstances() throws {
