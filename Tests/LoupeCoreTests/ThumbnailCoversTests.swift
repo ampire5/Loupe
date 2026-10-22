@@ -521,21 +521,26 @@ private final class FakeListing: @unchecked Sendable {
         #expect(calls.count == ThumbnailStore.coverLocalResolveTries)
     }
 
-    /// Task 4: a share is asked again for as long as its folder is shown, and its place found once it answers.
+    /// Task 4: a share is asked again for as long as its folder is shown, and its place found once it answers. The
+    /// first two asks hang until the end (a gate, not a sleep: a stalled CI machine cannot let one answer before its
+    /// time limit), so the place can only come from the third; then the hung threads give their places back.
     @Test func shownShareKeepsAsking() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
-        let calls = TryCounter(), slow = ThumbnailStore.coverLocalResolveTries + 1
+        let gate = DispatchSemaphore(value: 0), calls = TryCounter(), hung = 2
         let store = store(ThumbReader(), dir: dir, locate: { url in
             calls.add()
-            if calls.count <= slow { usleep(100_000) }   // past the limit, then back: its thread frees its place
+            if calls.count <= hung { gate.wait() }
             return ThumbnailLocation(volume: "net:share", folder: url.deletingLastPathComponent().path, name: "_")
         })
         await store.setCoverListing(ThumbnailStore.listCoverNames, networkTimeout: .milliseconds(20))
         await store.setCoverVolumes { _ in true }
-        let place = await store.shownFolderPlace(URL(fileURLWithPath: "/net/f"), retry: .milliseconds(50))
+        let place = await store.shownFolderPlace(URL(fileURLWithPath: "/net/f"), retry: .milliseconds(10))
         #expect(place == .located(loc("/net/f", network: true)))
-        #expect(calls.count > slow)
+        #expect(calls.count == hung + 1)
+        for _ in 0..<hung { gate.signal() }
+        let lane = CoverLane(network: true, resolving: true)
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
     }
 
     /// Task 4: a cancelled resolve (Home left the folder) ends at once, "not now".
