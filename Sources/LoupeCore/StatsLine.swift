@@ -9,7 +9,8 @@ public enum StatsLine {
     /// shown: oriented (M3b spec §2.1), stored when `applyingOrientation` is off (`exif-orientation=no`). `counted`
     /// false: the folder is still being listed, so M is `…` rather than the interim playlist's count. `companion`
     /// (the second page's index, spread) makes the position a range: `12–13 / 380`.
-    public static func loaded(name: String, index: Int, companion: Int? = nil, count: Int, counted: Bool = true, info: ImageInfo,
+    public static func loaded(name: String, index: Int, companion: Int? = nil, count: Int, counted: Bool = true,
+                              info: ImageInfo,
                               applyingOrientation: Bool = true, transform: ViewTransform, decodeMs: Double?) -> String {
         let size = info.displaySize(applying: applyingOrientation)
         var parts = [

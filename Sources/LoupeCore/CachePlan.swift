@@ -174,7 +174,8 @@ public enum CachePlan {
                     _ = add(companion, .preview, exempt: true)
                 }
                 _ = add(companion, .bytes, exempt: true)
-                if (focus.dwelling || openedFull) && !focus.needsFull { _ = add(companion, .full, exempt: true) }
+                let companionOpenedFull = focus.opened && entry(companion).lfit > 0
+                if (focus.dwelling || companionOpenedFull) && !focus.needsFull { _ = add(companion, .full, exempt: true) }
             }
 
             // 3. Previews for the photos (the pages of the pairs) most likely to come next.
@@ -184,7 +185,8 @@ public enum CachePlan {
             // 3a. The photo just left keeps its full resolution if it still has it (or is decoding it), ahead of
             // n1's: flipping back at 100 % must not lose sharpness (spec §11.1.7). Never a new decode: planned only
             // when already kept.
-            if let left = focus.previous, left != current, isPlannable(left), entry(left).facts.fullKept {
+            if let left = focus.previous, left != current, left != companionPage, !plansFull(left), isPlannable(left),
+               entry(left).facts.fullKept {
                 _ = add(left, .full)
             }
             // 4. Full resolution for the next one, so a flip lands sharp.
@@ -245,7 +247,8 @@ public enum CachePlan {
         private var groupSize: Int { max(focus.step, 1) }
 
         /// The in-range pages of the `unit`-th group (1 = nearest) ahead of or behind what is on screen, in
-        /// reading order for a pair behind and nearest first ahead; one page when single.
+        /// the order of the plan: nearest first ahead, the farther page first behind (so in the forward direction a
+        /// pair behind reads in page order, in the reverse one it does not); one page when single.
         private func group(ahead: Bool, unit: Int) -> [Int] {
             let size = groupSize
             let edge = (ahead == (direction > 0)) ? shown.upperBound : shown.lowerBound
