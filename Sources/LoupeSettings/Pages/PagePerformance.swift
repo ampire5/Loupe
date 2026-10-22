@@ -10,6 +10,7 @@ extension SettingsPanel {
 
     /// `cache-memory`'s default on this Mac, as the file spells it.
     private static let cacheMemoryHere = Config().text(forKey: "cache-memory") ?? ""
+    private static let jxlThreadsHere = Config().text(forKey: "jxl-threads-current") ?? ""
 
     /// Performance (spec §5): the photo cache and how fast stepping goes.
     static let performance = SettingsPage("performance", "Performance", symbol: "gauge.with.dots.needle.67percent",
@@ -68,7 +69,8 @@ extension SettingsPanel {
                         + "far previews and thumbnails come from it; off: every picture is a full decode, made "
                         + "smaller. Default on."),
             .number("jxl-threads-current", "Threads, current photo", unit: "threads", step: 1, symbol: "cpu",
-                    description: "libjxl threads decoding the photo on screen. 1–16, default 10."),
+                    description: "libjxl threads decoding the photo on screen. 1–16, default one per performance "
+                        + "core (" + jxlThreadsHere + " here)."),
             .number("jxl-threads-other", "Threads, neighbours", unit: "threads", step: 1, symbol: "cpu.fill",
                     description: "libjxl threads for neighbours and thumbnails, so they leave the current photo "
                         + "room. 1–16, default 2."),

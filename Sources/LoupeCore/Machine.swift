@@ -13,6 +13,16 @@ public enum Machine {
         return Int(count)
     }()
 
+    /// Performance cores: an Apple chip's big cores (an M4 Max: 12 of its 16), every physical core on Intel.
+    public static let performanceCores: Int = {
+        var count: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("hw.perflevel0.physicalcpu", &count, &size, nil, 0) == 0, count > 0 else {
+            return physicalCores
+        }
+        return Int(count)
+    }()
+
     public static let memoryBytes = Int(clamping: ProcessInfo.processInfo.physicalMemory)
 
     /// `cache-memory` by default: a fifth of the memory, down to a 256 MB step, 1 to 4 GB. 16 GB keeps the 3 GB Loupe
@@ -25,4 +35,12 @@ public enum Machine {
         let step = 256 << 20
         return min(4 << 30, max(1 << 30, memoryBytes / 5 / step * step))
     }
+
+    /// `jxl-threads-current` by default: one libjxl thread per performance core, 2 to 16. On an i7-10700K (8 cores,
+    /// 16 threads) a ~120 MP JPEG XL decodes in 708 / 610 / 515 / 543 / 517 ms with 4 / 6 / 8 / 10 / 16 threads
+    /// (VarDCT; a transcoded JPEG 456 / 405 / 313 / 289 / 270 ms), for 2.6 / 3.3 / 3.6 / 4.5 / 5.5 s of CPU: past the
+    /// cores the threads only burn CPU. The efficiency cores are left out: they would finish their groups last.
+    public static let jxlThreadsCurrent = jxlThreadsCurrent(performanceCores: performanceCores)
+
+    static func jxlThreadsCurrent(performanceCores: Int) -> Int { min(16, max(2, performanceCores)) }
 }

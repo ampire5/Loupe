@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import LoupeCore
 
-// LoupeBench [--limit N] [--methods a,b,…] <folder-or-file>…
+// LoupeBench [--limit N] [--methods a,b,…] [--jxl-threads N] <folder-or-file>…
 // LoupeBench replay … (see Replay.swift)
 // LoupeBench thumbs … (see ThumbsBench.swift)
 // LoupeBench render … (see RenderBench.swift)
@@ -73,13 +73,16 @@ while let arg = args.popFirst() {
     case "--methods":
         guard let v = args.popFirst() else { fail("--methods needs a comma-separated list") }
         methods = v.split(separator: ",").map(String.init)
+    case "--jxl-threads":
+        guard let v = args.popFirst(), let n = Int(v), n > 0 else { fail("--jxl-threads needs a positive integer") }
+        JXLBench.threads = n
     case _ where arg.hasPrefix("--"):
         fail("unknown option \(arg)")
     default:
         inputs.append(arg)
     }
 }
-if inputs.isEmpty { fail("usage: LoupeBench [--limit N] [--methods a,b,…] <folder-or-file>…") }
+if inputs.isEmpty { fail("usage: LoupeBench [--limit N] [--methods a,b,…] [--jxl-threads N] <folder-or-file>…") }
 if let unknown = methods.first(where: { !knownMethods.contains($0) }) {
     fail("unknown method \(unknown) (available: \(knownMethods.joined(separator: ", ")))")
 }
