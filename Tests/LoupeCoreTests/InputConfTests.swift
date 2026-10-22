@@ -93,7 +93,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
     let toggles = KeyAction.allCases.filter(InputConf.isToggle)
     #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .cycleStats, .toggleStrip, .toggleStripPlacement,
                              .toggleInfoPanel, .cyclePanIndicators, .cycleFilter, .toggleAntiring, .toggleAutoColor,
-                             .toggleVibrance])
+                             .toggleVibrance, .toggleSpread])
 }
 
 @Test func parsesAddWithTrailingComment() {
@@ -180,4 +180,11 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
     #expect(InputMap(lines: lines).mouse(.threeDown, .tap) == .action(.fit))
     #expect(InputMap(lines: lines).mouse(.forceClick, .tap) == nil)
     #expect(MouseButton.allCases.filter(\.isTrackpad).allSatisfy { $0.cid == nil })
+}
+
+@Test func templateHasTheSpreadKeys() {
+    let text = InputConfTemplate.text
+    for line in ["# d toggle-spread", "# D save-spread", "# Alt+d shift-spread"] {
+        #expect(text.contains(line), "\(line)")
+    }
 }

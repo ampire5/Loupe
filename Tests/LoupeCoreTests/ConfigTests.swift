@@ -1090,6 +1090,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "rmb-zoom-invert": ("yes", "maybe"),
     "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"), "keep-zoom-as": ("scale", "pixels"),
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
+    "spread": ("yes", "maybe"), "spread-shift": ("yes", "maybe"), "spread-direction": ("rtl", "up"), "spread-landscape": ("pair", "both"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
@@ -1154,7 +1155,8 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"])
     #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"])
     #expect(Config.zoomFolderKeys == ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"])
-    #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys)
+    #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape"])
+    #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys + Config.spreadFolderKeys)
     #expect(Config.folderKeys.allSatisfy(Config.keys.contains))
 }
 
@@ -1615,4 +1617,19 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     var o = Config()
     o.jxlThreadsCurrent = 8; o.jxlThreadsOther = 3; o.jxlDCPreview = false
     #expect(JXLOptions(config: o) == JXLOptions(threadsCurrent: 8, threadsOther: 3, dcPreview: false))
+}
+
+@Test func spreadKeys() {
+    let d = Config()
+    #expect(!d.spread && !d.spreadShift && !d.spreadRightToLeft && d.spreadLandscapeAlone)
+    #expect(d.spreadOptions == SpreadOptions(shift: false, rightToLeft: false, landscapeAlone: true))
+    let (c, w) = Config.parse("spread=yes\nspread-shift=yes\nspread-direction=RTL\nspread-landscape=pair\n")
+    #expect(w.isEmpty)
+    #expect(c.spread && c.spreadShift && c.spreadRightToLeft && !c.spreadLandscapeAlone)
+    #expect(c.spreadOptions == SpreadOptions(shift: true, rightToLeft: true, landscapeAlone: false))
+    #expect(c.text(forKey: "spread-direction") == "rtl" && c.text(forKey: "spread-landscape") == "pair")
+    let (bad, warnings) = Config.parse("spread-direction=up\n")
+    #expect(bad == Config() && warnings.count == 1)
+    let (folder, rejected) = Config().applying(["spread": "yes", "spread-direction": "rtl"])
+    #expect(folder.spread && folder.spreadRightToLeft && rejected.isEmpty)
 }

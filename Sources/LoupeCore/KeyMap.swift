@@ -9,6 +9,8 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case toggleZoomCarry, saveZoomCarry
     case toggleFullScreen, cycleStats, toggleStrip, toggleStripPlacement, cheatSheet, toggleInfoPanel
     case cyclePanIndicators, savePanIndicators
+    /// Two pages: on/off for the folder, as the loupe.conf default, and the pairing shifted by one page.
+    case toggleSpread, saveSpread, shiftSpread
     case panLeft, panRight, panUp, panDown
     case cycleFilter, saveFilters, toggleAntiring, saveAntiring
     case toggleAutoColor, saveAutoColor, toggleVibrance, saveVibrance
@@ -279,6 +281,9 @@ public struct KeyMap: Sendable, Equatable {
         .toggleInfoPanel: ("Show or hide the info panel", .view),
         .cyclePanIndicators: ("Pan indicators: auto / always / off", .view),
         .savePanIndicators: ("Save pan indicators as default", .view),
+        .toggleSpread: ("Two pages", .view),
+        .saveSpread: ("Two pages as default", .view),
+        .shiftSpread: ("Shift pages", .view),
         .newTab: ("New tab", .tabs),
         .newWindow: ("New window", .tabs),
         .closeTab: ("Close tab", .tabs),
@@ -367,5 +372,9 @@ public struct KeyMap: Sendable, Equatable {
         // Pan indicators: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "p", modifiers: .shift, allowsRepeat: false, action: .savePanIndicators),
         KeyBinding(character: "p", allowsRepeat: false, action: .cyclePanIndicators),
+        // Two pages: ⇧ and ⌥ variants first, as plain letters ignore Shift.
+        KeyBinding(character: "d", modifiers: .shift, allowsRepeat: false, action: .saveSpread),
+        KeyBinding(character: "d", modifiers: .option, allowsRepeat: false, action: .shiftSpread),
+        KeyBinding(character: "d", allowsRepeat: false, action: .toggleSpread),
     ])
 }

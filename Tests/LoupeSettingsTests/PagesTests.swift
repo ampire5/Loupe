@@ -23,9 +23,11 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 120)
+        #expect(Config.keys.count == 124)
+        // The four spread keys get their Settings rows in a later task (Task 6 of the two-pages plan).
+        let pending = Set(Config.spreadFolderKeys)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
-        #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
+        #expect(Set(keys) == Set(Config.keys).subtracting(pending), "missing \(Set(Config.keys).subtracting(pending).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
 
     /// Spec §5: the sections of each page, in order.

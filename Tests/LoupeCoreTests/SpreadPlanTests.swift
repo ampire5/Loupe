@@ -78,3 +78,23 @@ private func allPairs(_ p: SpreadPlan) -> [[Int]] {
 @Test func unknownSizeIsPortrait() {
     #expect(allPairs(plan([nil, portrait, nil])) == [[0, 1], [2]])
 }
+
+@Test func landscapeBreaksTheRunOfPortraits() {
+    #expect(allPairs(plan([portrait, portrait, portrait, landscape])) == [[0, 1], [2], [3]])
+}
+
+@Test func shiftWithLandscapeFirstPage() {
+    #expect(allPairs(plan([landscape, portrait, portrait], shift: true)) == [[0], [1, 2]])
+}
+
+@Test func emptyPlanFindsNothing() {
+    let p = plan([])
+    #expect(p.pair(containing: 0) == nil)
+    #expect(p.first == nil && p.last == nil)
+}
+
+@Test func hugePlanIsFastToQuery() {
+    let p = plan(Array(repeating: portrait, count: 100_000))
+    #expect(p.last == SpreadPair(first: 99_998, second: 99_999))
+    #expect(p.pair(containing: 50_001) == SpreadPair(first: 50_000, second: 50_001))
+}
