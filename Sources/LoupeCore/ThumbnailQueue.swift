@@ -19,6 +19,12 @@ public struct ThumbnailRequest: Sendable, Equatable {
         self.isKey = isKey
         self.lastActive = lastActive
     }
+
+    /// `urls` with those in `inView` first, then the rest (the margin around the view), each in its order: the
+    /// request's `visible` for a browser that shows photos in view and keeps a margin of them warm.
+    public static func inViewFirst(_ urls: [URL], inView: Set<URL>) -> [URL] {
+        urls.filter(inView.contains) + urls.filter { !inView.contains($0) }
+    }
 }
 
 /// The order in which thumbnails get generated across windows. The user is looking at the key window's strip,

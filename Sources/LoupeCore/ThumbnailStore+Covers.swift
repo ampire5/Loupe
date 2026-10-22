@@ -275,14 +275,16 @@ extension ThumbnailStore {
     /// hung calls, or its listing gave no name in time. Nothing here asks the system but the listing. New thumbnails
     /// wait while the viewer is busy; cancelling the task stops the listing and the reads.
     public func folderCover(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
-                            maxPixel: Int, lastViewed: String? = nil) async -> [CGImage]? {
+                            maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> [CGImage]? {
         await folderCover(folder, archive: archive, location: location, network: network ?? location?.isNetwork ?? true,
-                          maxPixel: maxPixel, lastViewed: lastViewed, count: Self.coverPhotos, depth: 0)
+                          maxPixel: maxPixel, lastViewed: lastViewed, modified: modified, count: Self.coverPhotos,
+                          depth: 0)
     }
 
     private func folderCover(_ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool, maxPixel: Int,
-                             lastViewed: String?, count: Int, depth: Int) async -> [CGImage]? {
-        guard !emptyCovers.contains(folder.standardizedFileURL.path) else { return [] }
+                             lastViewed: String?, modified: Date?, count: Int, depth: Int) async -> [CGImage]? {
+        let key = Self.memoKey(folder, modified)
+        guard !emptyCovers.contains(key) else { return [] }
         guard !Task.isCancelled else { return nil }
         if let location, let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
            names.count >= count {
@@ -296,7 +298,6 @@ extension ThumbnailStore {
             }
             return images
         }
-        let key = folder.standardizedFileURL.path
         // The pick of an earlier complete listing: the pictures from the catalog, no listing.
         if let location, let pick = coverPick(key, lastViewed: lastViewed) {
             switch pick {
@@ -308,7 +309,7 @@ extension ThumbnailStore {
                 coverPicks[key] = nil   // a thumbnail left the catalog: listed again
             case .subfolders(let names):
                 return await subfolderCover(folder, names, location: location, network: network, maxPixel: maxPixel,
-                                            count: count, depth: depth, complete: true)
+                                            count: count, depth: depth, complete: true, modified: modified)
             }
         }
         let lister = coverLister
@@ -356,29 +357,40 @@ extension ThumbnailStore {
             return images
         case .subfolders(let subfolders):
             return await subfolderCover(folder, Array(subfolders), location: location, network: network,
-                                        maxPixel: maxPixel, count: count, depth: depth, complete: complete)
+                                        maxPixel: maxPixel, count: count, depth: depth, complete: complete,
+                                        modified: modified)
         case .empty:
-            if complete { emptyCovers.insert(folder.standardizedFileURL.path) }
+            if complete { emptyCovers.insert(key) }
             return []
         }
     }
 
     /// A folder without photos of its own: one picture of each of its first subfolders with one (`count` at most).
     private func subfolderCover(_ folder: URL, _ subfolders: [String], location: ThumbnailLocation?, network: Bool,
-                                maxPixel: Int, count: Int, depth: Int, complete: Bool) async -> [CGImage]? {
+                                maxPixel: Int, count: Int, depth: Int, complete: Bool,
+                                modified: Date?) async -> [CGImage]? {
         guard depth < Self.coverDepth else { return [] }
         var images: [CGImage] = [], notNow = false
         for name in subfolders where images.count < count && !Task.isCancelled {
             // One picture of each: the subfolder's own card makes the rest when it is shown.
             let sub = await folderCover(folder.appendingPathComponent(name, isDirectory: true), archive: false,
                                         location: location?.subfolder(name), network: network, maxPixel: maxPixel,
-                                        lastViewed: nil, count: 1, depth: depth + 1)
+                                        lastViewed: nil, modified: nil, count: 1, depth: depth + 1)
             if let sub { images += sub.prefix(1) } else { notNow = true }
         }
         if notNow, images.count < count { return nil }
-        let paths = subfolders.map { folder.appendingPathComponent($0).standardizedFileURL.path }
-        if complete, paths.allSatisfy(emptyCovers.contains) { emptyCovers.insert(folder.standardizedFileURL.path) }
+        let keys = subfolders.map { Self.memoKey(folder.appendingPathComponent($0), nil) }
+        if complete, keys.allSatisfy(emptyCovers.contains) { emptyCovers.insert(Self.memoKey(folder, modified)) }
         return images
+    }
+
+    /// The key of a folder's session memos (`emptyCovers`, `coverPicks`): its path and the modification date its
+    /// listing entry gave, so a folder filled or emptied in the Finder is looked at again. Nil where the caller has
+    /// no date (a subfolder looked into).
+    static func memoKey(_ folder: URL, _ modified: Date?) -> String {
+        let path = folder.standardizedFileURL.path
+        guard let modified else { return path }
+        return path + "\u{0}" + String(modified.timeIntervalSinceReferenceDate)
     }
 
     /// The pick remembered for `key`; a folder's photos only when made for the same last-viewed photo.

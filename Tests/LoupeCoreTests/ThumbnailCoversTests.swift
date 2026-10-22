@@ -662,6 +662,42 @@ private final class FakeListing: @unchecked Sendable {
         #expect(calls.count == 1)
     }
 
+    /// A folder found empty is looked at again when its modification date changed (filled in the Finder).
+    @Test func emptyMemoFollowsTheFolderDate() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/p/fill")
+        let before = Date(timeIntervalSinceReferenceDate: 1000), after = Date(timeIntervalSinceReferenceDate: 2000)
+        listing.set("/p/fill", files: [])
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/fill"), maxPixel: 64, modified: before) == [])
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/fill"), maxPixel: 64, modified: before) == [])
+        #expect(listing.calls.count == 1)               // same date: not listed again
+        photos(reader, in: "/p/fill", ["1.jpg", "2.jpg"])
+        listing.set("/p/fill", files: ["1.jpg", "2.jpg"])
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/fill"), maxPixel: 64, modified: after)?.count == 2)
+    }
+
+    /// A pick remembered is dropped when the folder's date changed (emptied or changed in the Finder).
+    @Test func pickMemoFollowsTheFolderDate() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/p/two", ["1.jpg", "2.jpg"])
+        listing.set("/p/two", files: ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let folder = URL(fileURLWithPath: "/p/two")
+        let before = Date(timeIntervalSinceReferenceDate: 1000), after = Date(timeIntervalSinceReferenceDate: 2000)
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: before)?.count == 2)
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: before)?.count == 2)
+        #expect(listing.calls == ["/p/two"])            // same date: from the pick
+        #expect(await store.folderCover(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: after)?.count == 2)
+        #expect(listing.calls == ["/p/two", "/p/two"])  // another date: listed again
+    }
+
     /// The mount table says where a path is without asking its file system: the boot volume is local.
     @Test func mountTableKnowsLocal() {
         #expect(!ThumbnailStore.mountIsNetwork(URL(fileURLWithPath: "/")))

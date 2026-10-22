@@ -45,15 +45,15 @@ import LoupeCore
         didSet { if coverLayout != oldValue { remakeCovers() } }
     }
     /// The mosaics kept for cards asked for again (`CoverCards`). A mosaic is a card's pixels squared, ~2 MB for a
-    /// 352 pt card at 2x: 64 MB keeps about thirty, more than a window shows with its margin.
-    private static let coverCacheBytes = 64 << 20
+    /// 352 pt card at 2x: the budget is the folder's cards times that (`CoverCards.limit`), 32 MB at least and 256 MB
+    /// at most, set on each ask.
     /// The folder on screen, for its cards' covers, and where the catalog keeps its files: resolved once, off the main
     /// thread (`ThumbnailStore.shownFolderPlace`); nil while it is being resolved.
     private var coverFolder: String?
     private var coverPlace: CoverPlace?
     private var placeTask: Task<Void, Never>?
     /// The folder's cards' covers: those kept, and the cards still waiting for one.
-    private var cards = CoverCards(limitBytes: FolderBrowserSource.coverCacheBytes)
+    private var cards = CoverCards(limitBytes: CoverCards.limit(cards: 0, pixels: 0))
     /// The cards' size in points and the screen's scale, as last asked.
     private var coverSize: (width: CGFloat, scale: CGFloat)?
     /// The last call to the cover queue sent: each goes after it, so the queue sees them in order.
@@ -321,11 +321,13 @@ import LoupeCore
         let wanted = ids.compactMap { shown[$0] }
         let inView = Set(ids.prefix(visible))
         let files = wanted.filter { $0.kind == .file }
-        sendRequest(visible: files.filter { inView.contains($0.id) }.map(\.url))
+        sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
         let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
         // Another card size or screen: the mosaics kept and those being made are the wrong size.
         if let size = coverSize, size.width != width || size.scale != scale { dropCovers() }
         coverSize = (width, scale)
+        let liveCards = shown.values.reduce(0) { $0 + ($1.kind == .folder || $1.kind == .archive ? 1 : 0) }
+        cards.setLimit(CoverCards.limit(cards: liveCards, pixels: Int((width * scale).rounded())))
         let ask = cards.ask(cardIDs, visible: cardIDs.filter(inView.contains).count)
         for (id, image) in ask.cached { view?.setImage(image, for: id) }
         if !ask.forget.isEmpty {
@@ -402,7 +404,8 @@ import LoupeCore
             guard let images = await thumbnails.folderCover(entry.url, archive: entry.kind == .archive,
                                                             in: shownLocation?.subfolder(entry.url.lastPathComponent),
                                                             network: network, maxPixel: cellPixels,
-                                                            lastViewed: lastViewed) else { return false }
+                                                            lastViewed: lastViewed,
+                                                            modified: entry.date) else { return false }
             // No photos: the card keeps its symbol.
             guard !Task.isCancelled, !images.isEmpty,
                   let mosaic = HomeMosaic.make(images, size: CGSize(width: side, height: side), layout: layout,
@@ -446,11 +449,13 @@ import LoupeCore
     }
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.
-    private func sendRequest(visible: [URL]) {
+    /// `files`: those in view first, then the margin's.
+    private func sendRequest(_ files: [URL]) {
         guard !isPaused, !shownFiles.isEmpty else { return }
         let index = Dictionary(shownFiles.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
-        let shownIndices = visible.compactMap { index[$0] }
-        let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1, visible: shownIndices,
+        let shownIndices = files.compactMap { index[$0] }
+        let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
+                                       visible: shownIndices,
                                        isKey: view?.window?.isKeyWindow ?? false)
         let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
         Task { await thumbnails.setRequest(window: window, request, stamps: stamps) }
@@ -564,17 +569,16 @@ import LoupeCore
 
 extension HomeMosaic.Layout {
     /// The long side, in pixels, of the photos a card `width` points wide (at `scale`) draws in this layout: a grid's
-    /// cells are a half or a quarter of the card; a hero's small cells are a third of it and its large one fills its
-    /// width but ⅔ of its height, and a stack's prints are ⅘ of it: ⅔ serves both (the photos come from thumbnails of
-    /// `thumb-size`, 512 px by default, so a large card's cells are near that anyway); one photo fills the card, and
-    /// any layout is one on a narrow card.
+    /// cells are a half or a quarter of the card; a hero's large cell fills the card's width and a stack's prints are
+    /// ⅘ of it, so those (and one photo, which fills the card, and any layout on a narrow card) ask for the card's
+    /// pixels. A card's photos are all made at one size, and they come from thumbnails of `thumb-size`, 512 px by
+    /// default, which caps a large card's anyway; so a hero's small cells, a third of the card, share its large one's.
     func cellPixels(width: CGFloat, scale: CGFloat) -> Int {
         let pixels = Int((width * scale).rounded())
         guard width >= HomeMosaic.narrowWidth else { return pixels }
         switch self {
         case .grid: return max(64, pixels / 2)
-        case .hero, .stack: return max(64, pixels * 2 / 3)
-        case .single: return pixels
+        case .hero, .stack, .single: return pixels
         }
     }
 }

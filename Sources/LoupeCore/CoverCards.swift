@@ -17,7 +17,16 @@ public struct CoverCards {
         public var forget: [String] = []
     }
 
-    public let limitBytes: Int
+    public private(set) var limitBytes: Int
+    /// The most the mosaics kept take, however many cards the folder has.
+    public static let maxLimitBytes = 256 << 20
+    /// A budget for `cards` cards `pixels` wide and high (4 bytes a pixel): all of them, between 32 MB (a few dozen
+    /// at the usual size) and `maxLimitBytes`.
+    public static func limit(cards: Int, pixels: Int) -> Int {
+        let each = max(1, pixels) * max(1, pixels) * 4
+        let (total, overflow) = max(1, cards).multipliedReportingOverflow(by: each)
+        return min(maxLimitBytes, max(32 << 20, overflow ? maxLimitBytes : total))
+    }
     /// Bytes of the mosaics kept.
     public private(set) var bytes = 0
     /// The cards of the last ask still waiting for a cover, in order; the first `visiblePending` in view.
@@ -65,6 +74,12 @@ public struct CoverCards {
         uses += 1
         kept[id] = (image, size, uses)
         bytes += size
+        while bytes > limitBytes, let oldest = kept.min(by: { $0.value.use < $1.value.use })?.key { remove(oldest) }
+    }
+
+    /// Another budget (the folder's card count or the cards' size changed): the least recently used go if it shrank.
+    public mutating func setLimit(_ limit: Int) {
+        limitBytes = limit
         while bytes > limitBytes, let oldest = kept.min(by: { $0.value.use < $1.value.use })?.key { remove(oldest) }
     }
 
