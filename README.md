@@ -189,7 +189,7 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 |---|---|
 | **Rendering** | Metal: a tiled image pyramid with its own shaders (Lanczos, EWA, Mitchell, Catmull-Rom, pixel art) in linear light, MetalFX spatial upscaling, display colour management through Core Graphics. |
 | **Decoding** | libjpeg-turbo for JPEG; a [fork of libjxl 0.12](https://github.com/ampire5/libjxl/tree/loupe) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP. The decoder is chosen by the file's magic bytes. |
-| **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a 3 GB budget per window by default (`cache-memory`) and memory-pressure handling. |
+| **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a budget of a fifth of the Mac's memory, 1–4 GB, by default (`cache-memory`) and memory-pressure handling. |
 | **Colour** | Auto colour and vibrance from Core Image's analysis, baked into a 33³ colour cube that is applied on the GPU, so every frame costs the same. |
 | **Storage** | SQLite (the C API, no ORM) for the thumbnail catalog, sessions and per-folder settings. Zip archives are read in place through Compression and zlib. |
 | **Input** | `input.conf` bindings for keys, mouse buttons, trackpad gestures and chords; the MX Master 4 over IOKit HID with [LogiHIDPP](https://github.com/ampire5/LogiHIDPP), a HID++ 2.0 library written for this. |

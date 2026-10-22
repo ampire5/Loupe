@@ -6,7 +6,7 @@ import Foundation
 ///
 /// With a database `made` holds only a batch's worth between commits, but memory only (`thumb-cache-size=0`, or a
 /// database that cannot be opened) it is every thumbnail of the session: at ~50 KB each, a walk through 20–40 k
-/// photos would hold 1–2 GB of JPEGs beside the viewer's 3 GB `cache-memory`, past the 3 GB-a-window bar.
+/// photos would hold 1–2 GB of JPEGs beside the viewer's 1–4 GB `cache-memory`, past the 3 GB-a-window bar.
 /// `memoryCap` (256 MB, ~5,000 thumbnails at the default 512 px, ~1,500 at 1024 px) keeps a few big folders' worth.
 /// Thumbnails waiting for a batch are never dropped (the database would lose them). Like the database's limit,
 /// what goes from a folder still shown is not made again until that folder is opened again, or a folder bigger

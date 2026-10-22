@@ -21,7 +21,7 @@ public struct CacheLimits: Equatable, Sendable {
     /// `cache-files`: neighbours kept as compressed bytes.
     public var files = 24
     /// `cache-memory`: a fuse over the sum of everything planned.
-    public var memory = 3 << 30
+    public var memory = Machine.cacheMemory
     /// `cache-idle-trim`: how long a tab may go unused before its cache is trimmed; nil: never.
     public var idleTrim: Duration? = .seconds(30 * 60)
     /// `cache-idle-keep`: what the trim leaves.

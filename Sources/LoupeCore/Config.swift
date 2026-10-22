@@ -230,8 +230,8 @@ public struct Config: Equatable, Sendable {
     public var cacheFarPreviewsCoarse = true
     /// `cache-files`: neighbours kept as compressed bytes, 0...50.
     public var cacheFiles = 24
-    /// `cache-memory`: ceiling over all planned levels, in bytes.
-    public var cacheMemory = 3 << 30
+    /// `cache-memory`: ceiling over all planned levels, in bytes; by default by the Mac's memory (`Machine`).
+    public var cacheMemory = Machine.cacheMemory
     /// `cache-idle-trim`: minutes without use after which a tab's cache is trimmed, 0...1440 (0: never).
     public var cacheIdleTrimMinutes = 30
     /// `cache-idle-keep`: what an idle tab's current photo keeps when it is trimmed (`CacheIdleKeep`).

@@ -1,3 +1,4 @@
+import LoupeCore
 import SettingsKit
 
 extension SettingsPanel {
@@ -6,6 +7,9 @@ extension SettingsPanel {
         (word: "thumb", title: "Thumbnail"), (word: "coarse", title: "Coarse"), (word: "sharp", title: "Sharp"),
         (word: "any", title: "Nothing"),
     ]
+
+    /// `cache-memory`'s default on this Mac, as the file spells it.
+    private static let cacheMemoryHere = Config().text(forKey: "cache-memory") ?? ""
 
     /// Performance (spec §5): the photo cache and how fast stepping goes.
     static let performance = SettingsPage("performance", "Performance", symbol: "gauge.with.dots.needle.67percent",
@@ -31,7 +35,8 @@ extension SettingsPanel {
                             + "current photo's always. 0–50, default 24."),
                 .number("cache-memory", "Memory limit", symbol: "memorychip",
                         description: "The ceiling over all of the above; the photos on screen may briefly pass it. M "
-                            + "or G, or bytes; default 3G."),
+                            + "or G, or bytes; default a fifth of this Mac's memory, 1–4G (" + cacheMemoryHere
+                            + " here)."),
                 .number("cache-idle-trim", "Trim idle windows after", unit: "min", step: 5, symbol: "moon.zzz",
                         description: "A window or tab not active for this many minutes lets go of everything but "
                             + "its current photo; those on screen are never trimmed. 0–1440 min, 0 = never; "

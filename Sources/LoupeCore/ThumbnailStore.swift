@@ -37,18 +37,9 @@ public actor ThumbnailStore {
     /// on a local SSD folder of progressive 3456 x 2160 JPEGs (i7-10700K) 1/2/3/4/6 decodes make
     /// 7.0/13.8/20.3/26.3/36.2 files/s for the same ~30 s of CPU per 200 files, so each slot is one busy core for as
     /// long as the folder takes.
-    public static let defaultDecodes = decodes(physicalCores: physicalCores)
+    public static let defaultDecodes = decodes(physicalCores: Machine.physicalCores)
 
     static func decodes(physicalCores: Int) -> Int { min(4, max(1, physicalCores / 2 - 1)) }
-
-    private static var physicalCores: Int {
-        var count: Int32 = 0
-        var size = MemoryLayout<Int32>.size
-        guard sysctlbyname("hw.physicalcpu", &count, &size, nil, 0) == 0, count > 0 else {
-            return ProcessInfo.processInfo.activeProcessorCount
-        }
-        return Int(count)
-    }
     static let batchSize = 100
     static let cellCapacity = 300
 
