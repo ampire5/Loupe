@@ -12,11 +12,38 @@ private func photos(_ n: Int) -> [String] { (0..<n).map { "p\($0).jpg" } }
 }
 
 @Test func lastViewedFirst() {
-    let picked = CoverSampling.pick(photos(10), lastViewed: "p6.jpg")
-    #expect(picked.first == "p6.jpg")
-    #expect(picked.count == 4)
-    #expect(Set(picked).count == 4)
-    #expect(CoverSampling.pick(photos(10), lastViewed: "p4.jpg").first == "p4.jpg")
+    #expect(CoverSampling.pick(photos(10), lastViewed: "p5.jpg") == ["p5.jpg", "p0.jpg", "p3.jpg", "p9.jpg"])
+    #expect(CoverSampling.pick(photos(10), lastViewed: "p4.jpg") == ["p4.jpg", "p0.jpg", "p6.jpg", "p9.jpg"])
+}
+
+@Test func lastViewedAlreadyInSpreadIsNotDuplicated() {
+    #expect(CoverSampling.pick(photos(10), lastViewed: "p6.jpg") == ["p6.jpg", "p0.jpg", "p3.jpg", "p9.jpg"])
+}
+
+@Test func absentLastViewedIsNotInserted() {
+    #expect(CoverSampling.pick(photos(10), lastViewed: "zzz.jpg") == ["p0.jpg", "p3.jpg", "p6.jpg", "p9.jpg"])
+    #expect(CoverSampling.pick(photos(2), lastViewed: "zzz.jpg") == ["p0.jpg", "p1.jpg"])
+}
+
+@Test func lastViewedAmongFewKeepsAll() {
+    #expect(CoverSampling.pick(photos(3), lastViewed: "p2.jpg") == ["p2.jpg", "p0.jpg", "p1.jpg"])
+}
+
+@Test func planIgnoresLastViewedThatIsNotAPhoto() {
+    #expect(CoverSampling.plan(names: ["a.jpg", "b.jpg", "c.txt"], directories: [], lastViewed: "c.txt")
+        == .photos(["a.jpg", "b.jpg"]))
+}
+
+@Test func hiddenAndAppleDoubleAreNotPhotos() {
+    #expect(!CoverSampling.isPhoto("._a.jpg"))
+    #expect(!CoverSampling.isPhoto("__MACOSX/x/._a.jpg"))
+    #expect(!CoverSampling.isPhoto("__MACOSX/x/a.jpg"))
+    #expect(!CoverSampling.isPhoto("d/__MACOSX/a.jpg"))
+    #expect(!CoverSampling.isPhoto(".hidden.png"))
+    #expect(!CoverSampling.isPhoto("d/.hidden.png"))
+    #expect(CoverSampling.isPhoto("d/a.jpg"))
+    let mixed = ["._a.jpg", "__MACOSX/x/._a.jpg", ".hidden.png", "a.jpg", "b.png"]
+    #expect(CoverSampling.plan(names: mixed, directories: [], lastViewed: nil) == .photos(["a.jpg", "b.png"]))
 }
 
 @Test func noPhotosUsesSubfolders() {
