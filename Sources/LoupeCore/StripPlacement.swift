@@ -156,13 +156,12 @@ extension StripPlacement {
     /// The capsule's inset from the strip's right end (the sketch's `right: 14px`).
     public static let capsuleInset: CGFloat = 14
 
-    /// Where the tool capsule sits (owner, 2026-10-22): on the strip, `capsuleInset` in from its right end, centred
-    /// on the cells (the middle of the strip's height); a capsule wider than the room sits in the middle. In the
-    /// strip's coordinates, the origin at its bottom left.
-    public static func capsuleOrigin(strip: CGSize, capsule: CGSize) -> CGPoint {
-        let right = strip.width - capsuleInset - capsule.width
-        let x = right >= capsuleInset ? right : (strip.width - capsule.width) / 2
-        return CGPoint(x: x, y: (strip.height - capsule.height) / 2)
+    /// Where the tool capsule sits along the strip (owner, 2026-10-22): `capsuleInset` in from its right end (its
+    /// left edge, in the strip's x); a capsule wider than the room sits in the middle. Vertically it is centred on
+    /// the cells, which are in the strip's middle (the app's constraint).
+    public static func capsuleX(stripWidth: CGFloat, capsuleWidth: CGFloat) -> CGFloat {
+        let right = stripWidth - capsuleInset - capsuleWidth
+        return right >= capsuleInset ? right : (stripWidth - capsuleWidth) / 2
     }
 
     /// The reveal chevron's tip.

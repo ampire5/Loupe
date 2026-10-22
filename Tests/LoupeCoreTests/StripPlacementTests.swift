@@ -190,11 +190,9 @@ private func input(
 
 /// On the strip, 14 pt in from its right end, centred on the cells (owner, 2026-10-22; the sketch's `right: 14px`).
 @Test func capsuleSitsOnTheStripsRightEnd() {
-    #expect(StripPlacement.capsuleOrigin(strip: CGSize(width: 1000, height: 80), capsule: CGSize(width: 70, height: 32))
-            == CGPoint(x: 916, y: 24))
+    #expect(StripPlacement.capsuleX(stripWidth: 1000, capsuleWidth: 70) == 916)
 }
 
 @Test func capsuleWiderThanTheStripSitsInTheMiddle() {
-    #expect(StripPlacement.capsuleOrigin(strip: CGSize(width: 90, height: 80), capsule: CGSize(width: 100, height: 32))
-            == CGPoint(x: -5, y: 24))
+    #expect(StripPlacement.capsuleX(stripWidth: 90, capsuleWidth: 100) == -5)
 }

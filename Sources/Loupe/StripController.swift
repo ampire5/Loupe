@@ -27,7 +27,7 @@ extension Notification.Name {
 /// stays too. `hidden` never shows it in a window, and `T` does nothing there.
 ///
 /// The tool capsule (`FilmstripToolsView`, the strip sketch's `.cap`) sits on the strip, 14 pt in from its right end and
-/// centred on the cells (`StripPlacement.capsuleOrigin`), while the pointer is over the strip or the capsule, and
+/// centred on the cells (`StripPlacement.capsuleX`), while the pointer is over the strip or the capsule, and
 /// leaves `strip-hide-delay` ms after it with the strip's fade. The hover label steps aside from it
 /// (`FilmstripView.labelAvoid`). Its buttons: "where the strip is" (`⇧T`, not in full screen) and, after a divider,
 /// `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
@@ -523,10 +523,13 @@ extension Notification.Name {
     /// clear of it while it shows.
     private func placeTools() {
         let size = tools.fittingSize
-        let x = StripPlacement.capsuleOrigin(strip: view.bounds.size, capsule: size).x
+        let x = StripPlacement.capsuleX(stripWidth: view.bounds.width, capsuleWidth: size.width)
         if toolsLeading?.constant != x { toolsLeading?.constant = x }
         let avoid: ClosedRange<CGFloat>? = toolsShown ? x...(x + size.width) : nil
         if view.labelAvoid != avoid { view.labelAvoid = avoid }
+        // The label sits above the cells: it steps aside only if the capsule reaches up to it (a thin strip).
+        let top = (view.bounds.height + size.height) / 2
+        if view.labelAvoidTop != top { view.labelAvoidTop = top }
     }
 
     /// Fades the capsule with the strip's `strip-fade-in` / `strip-fade-out`; it takes clicks only while wanted.
@@ -535,6 +538,7 @@ extension Notification.Name {
         toolsShown = shown
         placeTools()   // the hover label keeps clear of it while it shows
         let from = tools.alphaValue
+        if shown { container?.layoutSubtreeIfNeeded() }   // in place first: it lights at once when under the pointer
         tools.setShown(shown, animated: false)   // its hit test; the fade is ours, from where it was
         let duration = Chrome.Motion.duration(shown ? fadeIn : fadeOut)
         guard duration > 0 else { return }
