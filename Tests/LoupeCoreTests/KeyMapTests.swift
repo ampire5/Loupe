@@ -92,7 +92,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .first: "Home", .last: "End", .browse: "Return  Enter", .exitFullScreen: "Esc", .fit: "0", .actual100: "1", .actual200: "2",
         .actual400: "4", .fitWidth: "W", .fitHeight: "H", .fill: "X", .toggleFitActual: "Z", .zoomIn: "=  +",
         .zoomOut: "-", .panLeft: "⇧←", .panRight: "⇧→", .panUp: "⇧↑", .panDown: "⇧↓", .toggleFullScreen: "F",
-        .cycleStats: "I", .toggleStrip: "T", .cheatSheet: "?",
+        .cycleStats: "I", .toggleStrip: "T", .toggleStripPlacement: "⇧T", .cheatSheet: "?",
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
         .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
         .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
@@ -235,6 +235,14 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
 
 @Test func tIsToggleStrip() {
     #expect(action(200, "t") == .toggleStrip)
+}
+
+/// ⇧T has its own action, bound before plain t (which ignores Shift).
+@Test func shiftTPlacesTheStrip() {
+    #expect(action(17, "t") == .toggleStrip)
+    #expect(action(17, "T", .shift) == .toggleStripPlacement)
+    #expect(map.label(.toggleStripPlacement).keys == "⇧T")
+    #expect(map.label(.toggleStripPlacement).title == "Strip beside or over the photo")
 }
 
 /// The strip as Photos' filmstrip (2026-10-21): no magnifier any more, and T hides the strip.

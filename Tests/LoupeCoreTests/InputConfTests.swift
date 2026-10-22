@@ -91,7 +91,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
 
 @Test func togglesAreTheToggleAndCycleActions() {
     let toggles = KeyAction.allCases.filter(InputConf.isToggle)
-    #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .cycleStats, .toggleStrip,
+    #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .cycleStats, .toggleStrip, .toggleStripPlacement,
                              .toggleInfoPanel, .cyclePanIndicators, .cycleFilter, .toggleAntiring, .toggleAutoColor,
                              .toggleVibrance])
 }
