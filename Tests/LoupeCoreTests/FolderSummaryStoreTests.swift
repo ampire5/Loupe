@@ -240,4 +240,42 @@ import SQLite3
             try lines.write(to: report, atomically: true, encoding: .utf8)
         }
     }
+
+    /// Plan Review Focus 4: a renamed folder keeps its summary, and its subfolders theirs; a sibling whose name only
+    /// starts the same stays, as does another volume's folder of that path; a stale row at the new path is replaced.
+    @Test func renameMovesTheFolderAndItsDescendants() throws {
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512)
+        try db.putSummaries([(folder("P/old"), summary(1)), (folder("P/old/sub"), summary(2)),
+                             (folder("P/old/sub/deep"), summary(3)), (folder("P/older"), summary(4)),
+                             (folder("P/new"), summary(9)), (folder("P/old", volume: "net:other"), summary(5))])
+        try db.moveSummaries(volume: "uuid:ABCD-1234", from: "/P/old", to: "/P/new")
+        #expect(try db.summary(at: folder("P/new")) == summary(1))
+        #expect(try db.summary(at: folder("P/new/sub")) == summary(2))
+        #expect(try db.summary(at: folder("P/new/sub/deep")) == summary(3))
+        #expect(try db.summary(at: folder("P/old")) == nil && db.summary(at: folder("P/old/sub")) == nil)
+        #expect(try db.summary(at: folder("P/older")) == summary(4))
+        #expect(try db.summary(at: folder("P/old", volume: "net:other")) == summary(5))
+        #expect(try db.summaryCount() == 5)
+    }
+
+    /// The store moves them when the browser renames a folder (`PathMoving`), those waiting for its batch too; where
+    /// the catalog keeps the folder is asked of the new path.
+    @Test func storeMovesSummariesOnRename() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let store = ThumbnailStore(directory: dir, reader: ThumbReader(), thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: { url in
+                                       ThumbnailLocation(volume: "test", folder: url.deletingLastPathComponent().path,
+                                                         name: url.lastPathComponent)
+                                   }, idleDelay: .zero, commitDelay: .seconds(3600))
+        func at(_ path: String) -> ThumbnailLocation { ThumbnailLocation(volume: "test", folder: path, name: "_") }
+        await store.putFolderSummaries([(at("/p/trip"), summary(1)), (at("/p/trip/day 1"), summary(2))])
+        await store.queueSummary(summary(3), at: at("/p/trip/day 2"))
+        await store.moveSummaries(from: URL(fileURLWithPath: "/p/trip"), to: URL(fileURLWithPath: "/p/Trip 2019"))
+        #expect(await store.folderSummary(at: at("/p/Trip 2019")) == summary(1))
+        #expect(await store.folderSummary(at: at("/p/Trip 2019/day 1")) == summary(2))
+        #expect(await store.folderSummary(at: at("/p/Trip 2019/day 2")) == summary(3))
+        #expect(await store.folderSummary(at: at("/p/trip")) == nil)
+        #expect(await store.folderSummary(at: at("/p/trip/day 2")) == nil)
+    }
 }

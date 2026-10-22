@@ -148,6 +148,11 @@ public final class RecentStore: @unchecked Sendable {
         for path in paths { hide(path) }
     }
 
+    /// The entry of `folder`, hidden or not; nil when it has none.
+    public func entry(for folder: URL) -> RecentEntry? {
+        lock.withLock { entries[Self.key(folder)] }
+    }
+
     /// The newest `limit` entries not hidden, newest first.
     public func shown(limit: Int) -> [RecentEntry] {
         guard limit > 0 else { return [] }

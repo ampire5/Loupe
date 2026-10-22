@@ -26,6 +26,8 @@ extension Notification.Name {
     private let places: BrowserPlaces
     private let settings: FolderSettings?
     private let positions: FolderPositions
+    /// Where Recent has a folder's photo, for a card whose folder has no visit yet (`FolderCardFacts.visit`).
+    private let recent: RecentStore?
     private let actions: BrowserFileActions
     /// The thumbnail store's id for the browser's request: apart from every viewer session's.
     private let thumbnailWindow: Int
@@ -86,11 +88,12 @@ extension Notification.Name {
     private var observers: [NSObjectProtocol] = []
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
-         stores: [any PathMoving]) {
+         recent: RecentStore?, stores: [any PathMoving]) {
         self.thumbnails = thumbnails
         self.places = places
         self.settings = settings
         self.positions = positions
+        self.recent = recent
         actions = BrowserFileActions(stores: stores)
         thumbnailWindow = Self.nextWindow
         Self.nextWindow += 1
@@ -434,6 +437,7 @@ extension Notification.Name {
         cards.reset()
         facts = [:]
         followUps = []
+        shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
         lastInView = []
         stopQueuedCovers()
@@ -479,12 +483,14 @@ extension Notification.Name {
         let thumbnails = self.thumbnails
         /// The card as it is when its work starts (a want sent before the complete listing runs after it too): its
         /// entry (with its folder's date once the listing is complete), its remembered photo (a zip's entry name is
-        /// one path component already), whether the entries are dated, and whether it still wants its picture (a
-        /// follow-up's is on screen, or kept). Nil: no longer this folder's.
-        let lookup: @MainActor (String) -> (entry: BrowserEntry, lastViewed: String?, dated: Bool, picture: Bool)? = {
-            [weak self] id in
+        /// one path component already), whether the entries are dated, whether it still wants its picture (a
+        /// follow-up's is on screen, or kept), and since when its photos' dates may count as new (its visit now, else
+        /// now: a visit recorded later is later). Nil: no longer this folder's.
+        typealias CardNow = (entry: BrowserEntry, lastViewed: String?, dated: Bool, picture: Bool, since: Date)
+        let lookup: @MainActor (String) -> CardNow? = { [weak self] id in
             guard let self, self.coverFolder == folderPath, let entry = self.shown[id] else { return nil }
-            return (entry, self.positions.fileName(in: entry.url), self.shownDated, self.cards.pending.contains(id))
+            return (entry, self.positions.fileName(in: entry.url), self.shownDated, self.cards.pending.contains(id),
+                    self.visit(of: entry.url)?.visited ?? Date())
         }
         let deliver: @MainActor (String, CGImage?, FolderCardFacts, Bool) -> Void = { [weak self] id, mosaic, facts, again in
             guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
@@ -509,7 +515,9 @@ extension Notification.Name {
             if let location, let summary = made.summary, summary.folders > 0 {
                 inside = await thumbnails.childSummaries(of: location)
             }
-            let facts = FolderCardFacts(summary: made.summary, inside: inside, photoDates: made.photoDates,
+            // Only the dates that may still be new, sorted (off the main thread): bounded by the photos new since.
+            let facts = FolderCardFacts(summary: made.summary, inside: inside,
+                                        photoDates: made.photoDates.map { NewPhotoDates($0, since: card.since) },
                                         problem: made.problem)
             // No photos: the card keeps its symbol.
             var mosaic: CGImage?
@@ -543,13 +551,20 @@ extension Notification.Name {
     private func showSummary(_ id: String) {
         guard let entry = shown[id], let facts = facts[id] else { return }
         let config = FolderCardFacts.config(for: entry.url, base: Settings.shared.config, settings: settings)
-        view?.setSummary(facts.cardSummary(visit: positions.visit(in: entry.url), config: config), for: id)
+        view?.setSummary(facts.cardSummary(visit: visit(of: entry.url), config: config), for: id)
     }
 
-    /// Every card's facts again (back from the viewer: a visit or the two-page keys may have changed). The view keeps
-    /// only those in its listing, and redraws only those that changed.
+    /// The folder's visit, else where Recent has it (`FolderCardFacts.visit`): both in memory.
+    private func visit(of folder: URL) -> FolderVisit? {
+        FolderCardFacts.visit(positions.visit(in: folder), recent: recent?.entry(for: folder))
+    }
+
+    /// The facts of the cards laid out again (back from the viewer: a visit or the two-page keys may have changed),
+    /// and of those of the last ask: a card laid out later asks for its picture and gets its facts then
+    /// (`wantImages`). The view redraws only those that changed.
     private func showSummaries() {
-        for id in facts.keys { showSummary(id) }
+        var seen: Set<String> = []
+        for id in (view?.liveIDs ?? []) + lastAsked where facts[id] != nil && seen.insert(id).inserted { showSummary(id) }
     }
 
     /// A share that was offline answered (`ThumbnailStore.setOnVolumeAnswered`): the cards of the folder on screen

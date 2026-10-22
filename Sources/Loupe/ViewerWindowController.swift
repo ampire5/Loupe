@@ -795,7 +795,7 @@ import UniformTypeIdentifiers
         let places = registry?.browserPlaces ?? BrowserPlaces(database: nil)
         let folders = FolderBrowserSource(thumbnails: thumbnails, places: places, settings: folderSettings,
                                           positions: registry?.positions ?? FolderPositions(database: nil),
-                                          stores: registry?.pathStores ?? [])
+                                          recent: session.recent, stores: registry?.pathStores ?? [])
         let collections = CollectionSource(thumbnails: thumbnails, recent: { [weak self] in
             self?.session.recent?.shown(limit: Settings.shared.config.recentCount) ?? []
         }, sessions: { [weak self] in self?.registry?.sessions?.all() ?? [] }, stashPage: { [weak self] in

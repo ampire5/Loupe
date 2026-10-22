@@ -36,11 +36,12 @@ public struct FolderCardFacts: Sendable {
     /// The direct subfolders' stored summaries; nil when not asked (no subfolders, or no place in the catalog). "At
     /// least" (`insideIncomplete`) unless there are exactly as many as the folder has subfolders.
     public var inside: ChildSummaries?
-    /// The photos' modification dates from this pass's listing (`FolderCard.photoDates`): "+N new" by date.
-    public var photoDates: [Date]?
+    /// The photos' modification dates from this pass's listing (`FolderCard.photoDates`) that may still be new
+    /// (`NewPhotoDates`): "+N new" by date.
+    public var photoDates: NewPhotoDates?
     public var problem: CardProblem?
 
-    public init(summary: FolderSummary? = nil, inside: ChildSummaries? = nil, photoDates: [Date]? = nil,
+    public init(summary: FolderSummary? = nil, inside: ChildSummaries? = nil, photoDates: NewPhotoDates? = nil,
                 problem: CardProblem? = nil) {
         self.summary = summary
         self.inside = inside
@@ -52,6 +53,15 @@ public struct FolderCardFacts: Sendable {
     public static func config(for folder: URL, base: Config, settings: FolderSettings?) -> Config {
         guard let settings else { return base }
         return base.applying(settings.values(for: folder)).config
+    }
+
+    /// The folder's visit for its card: its own (`FolderPositions`), else where Recent has it (the photo's index of how
+    /// many, when it was entered): the first run after the update has no visits yet, and the spec takes progress from
+    /// the one place it is in. Nil when neither knows.
+    public static func visit(_ visit: FolderVisit?, recent: RecentEntry?) -> FolderVisit? {
+        if let visit { return visit }
+        guard let recent, let index = recent.index, let count = recent.count else { return nil }
+        return FolderVisit(index: index, count: count, visited: recent.opened)
     }
 
     /// The card's facts. `visit`: the folder's last visit (progress, ✓, "+N new"; none without one). `config`: the
@@ -80,7 +90,7 @@ public struct FolderCardFacts: Sendable {
         if let visit {
             card.viewed = visit.progress()
             card.seen = max(0, visit.index + 1)   // "137 / 248": seen as counted at the visit, of the photos now
-            if let summary { card.new = max(0, FolderVisit.new(since: visit, summary: summary, dates: photoDates)) }
+            if let summary { card.new = max(0, FolderVisit.new(since: visit, summary: summary, newer: photoDates)) }
             card.done = visit.done && card.new == 0
         }
         return card

@@ -85,6 +85,20 @@ import Foundation
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 10, last: earlier, datesKnown: true), dates: nil) == 0)
     }
 
+    /// D2: a card keeps only the dates that may still be new (after the visit it knew, or the listing's time without
+    /// one: a later visit is never earlier), sorted; "+N" for any later visit is a binary search.
+    @Test func newerDatesAreBoundedAndSearched() {
+        let all = [t0 - 60, t0 + 60, t0 + 30, t0 + 90, t0, t0 - 3600]
+        let newer = NewPhotoDates(all, since: t0)
+        #expect(newer.dates == [t0 + 30, t0 + 60, t0 + 90])
+        #expect(newer.count(after: t0) == 3 && newer.count(after: t0 + 45) == 2)
+        #expect(newer.count(after: t0 + 60) == 1 && newer.count(after: t0 + 100) == 0)
+        let visit = FolderVisit(index: 2, count: 10, visited: t0 + 45)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 10), newer: newer) == 2)
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 15), newer: newer) == 5)   // R2b: the growth
+        #expect(FolderVisit.new(since: visit, summary: summary(photos: 10), newer: nil) == 0)
+    }
+
     @Test func deletedFilesNeverNegative() {
         let visit = FolderVisit(index: 299, count: 300, visited: t0)
         #expect(FolderVisit.new(since: visit, summary: summary(photos: 250), dates: nil) == 0)

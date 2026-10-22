@@ -100,6 +100,7 @@ import UniformTypeIdentifiers
                                         thumbSize: config.thumbSize, limitBytes: config.thumbCacheBytes,
                                         cachedBytes: { await cache.cachedBytes($0, stamp: $1) }, log: thumbnailLog)
         self.thumbnails = thumbnails
+        registry.pathStores.append(thumbnails)   // a folder renamed in the browser keeps its card's summary
         Settings.shared.thumbnails = thumbnails
         thumbnailsReady = Self.connect(cache, to: thumbnails)
         registry.makeController = { [unowned self] in self.makeController() }

@@ -59,10 +59,27 @@ import Testing
         #expect(!card.done && card.new == 12)
     }
 
+    /// D5: the first run after the update has no visits yet, but Recent has where each recent folder was: its
+    /// progress comes from there (spec: from the one place it is in); a visit, once there, wins.
+    @Test func recentStandsInForAMissingVisit() {
+        let entry = RecentEntry(path: "/p/a", kind: .folder, gallery: nil, title: nil, file: "x.jpg", index: 9,
+                                count: 40, opened: t0, hidden: false)
+        #expect(FolderCardFacts.visit(nil, recent: entry) == FolderVisit(index: 9, count: 40, visited: t0))
+        let visit = FolderVisit(index: 3, count: 40, visited: t0 + 10)
+        #expect(FolderCardFacts.visit(visit, recent: entry) == visit)
+        var unknown = entry
+        unknown.count = nil
+        #expect(FolderCardFacts.visit(nil, recent: unknown) == nil)
+        #expect(FolderCardFacts.visit(nil, recent: nil) == nil)
+        let card = FolderCardFacts(summary: full).cardSummary(visit: FolderCardFacts.visit(nil, recent: entry),
+                                                              config: Config())
+        #expect(card.seen == 10 && card.viewed == 0.25)
+    }
+
     /// The visit's progress and check mark; new photos by the listing's dates (local) or by the count (a share).
     @Test func visitMapsToProgressAndNew() {
         let visit = FolderVisit(index: 136, count: 248, visited: t0 + 100)
-        let dated = FolderCardFacts(summary: full, photoDates: [t0, t0 + 50, t0 + 150, t0 + 200])
+        let dated = FolderCardFacts(summary: full, photoDates: NewPhotoDates([t0, t0 + 50, t0 + 150, t0 + 200], since: .distantPast))
             .cardSummary(visit: visit, config: Config())
         #expect(dated.viewed == visit.progress() && !dated.done && dated.new == 2)
         var grown = FolderSummary(photos: 260, folders: 0)
@@ -70,7 +87,7 @@ import Testing
         let counted = FolderCardFacts(summary: grown).cardSummary(visit: visit, config: Config())
         #expect(counted.new == 12)
         // No visit: no progress, nothing new.
-        let unvisited = FolderCardFacts(summary: full, photoDates: [t0 + 500]).cardSummary(visit: nil, config: Config())
+        let unvisited = FolderCardFacts(summary: full, photoDates: NewPhotoDates([t0 + 500], since: .distantPast)).cardSummary(visit: nil, config: Config())
         #expect(unvisited.viewed == nil && !unvisited.done && unvisited.new == 0)
         // A visit without a summary yet: the progress, nothing new.
         let early = FolderCardFacts().cardSummary(visit: visit, config: Config())
@@ -82,7 +99,7 @@ import Testing
         let visit = FolderVisit(index: 9, count: 50, visited: t0)
         let fewer = FolderCardFacts(summary: FolderSummary(photos: 30, folders: 0)).cardSummary(visit: visit, config: Config())
         #expect(fewer.new == 0)
-        let none = FolderCardFacts(summary: FolderSummary(photos: 30, folders: 0), photoDates: [])
+        let none = FolderCardFacts(summary: FolderSummary(photos: 30, folders: 0), photoDates: NewPhotoDates([], since: .distantPast))
             .cardSummary(visit: visit, config: Config())
         #expect(none.new == 0)
     }
@@ -90,9 +107,9 @@ import Testing
     /// ✓ is the last photo reached, and only while nothing came since.
     @Test func doneOnlyWithoutNew() {
         let visit = FolderVisit(index: 247, count: 248, visited: t0 + 100)
-        let read = FolderCardFacts(summary: full, photoDates: [t0, t0 + 50]).cardSummary(visit: visit, config: Config())
+        let read = FolderCardFacts(summary: full, photoDates: NewPhotoDates([t0, t0 + 50], since: .distantPast)).cardSummary(visit: visit, config: Config())
         #expect(read.done && read.viewed == 1 && read.new == 0)
-        let more = FolderCardFacts(summary: full, photoDates: [t0, t0 + 150]).cardSummary(visit: visit, config: Config())
+        let more = FolderCardFacts(summary: full, photoDates: NewPhotoDates([t0, t0 + 150], since: .distantPast)).cardSummary(visit: visit, config: Config())
         #expect(!more.done && more.new == 1)
     }
 

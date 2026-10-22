@@ -30,8 +30,37 @@ public struct FolderVisit: Equatable, Sendable {
     /// files do not count as new). Both, as copied photos keep their old dates; a photo edited in place counts by its
     /// date alone.
     public static func new(since visit: FolderVisit, summary: FolderSummary, dates: [Date]?) -> Int {
+        new(since: visit, summary: summary, newer: dates.map { NewPhotoDates($0, since: .distantPast) })
+    }
+
+    /// `new(since:summary:dates:)` from the dates a card keeps (`NewPhotoDates`): a binary search.
+    public static func new(since visit: FolderVisit, summary: FolderSummary, newer: NewPhotoDates?) -> Int {
         let grown = max(0, summary.photos - visit.count)
-        guard let dates else { return grown }
-        return max(grown, dates.reduce(0) { $0 + ($1 > visit.visited ? 1 : 0) })
+        guard let newer else { return grown }
+        return max(grown, newer.count(after: visit.visited))
+    }
+}
+
+/// The modification dates of a folder's photos that may still count as new on its card: those after `since` (the
+/// folder's visit when they were listed, or the listing's time without one: a visit recorded later is never earlier),
+/// sorted. A folder's card keeps these rather than every photo's date, mostly none or a few, and "+N new" for any
+/// later visit is a binary search, not a scan on the main thread.
+public struct NewPhotoDates: Equatable, Sendable {
+    public let since: Date
+    public private(set) var dates: [Date]
+
+    public init(_ all: [Date], since: Date) {
+        self.since = since
+        dates = all.filter { $0 > since }.sorted()
+    }
+
+    /// The photos dated after `date`; for a `date` before `since`, those after `since` (all it knows).
+    public func count(after date: Date) -> Int {
+        var low = 0, high = dates.count
+        while low < high {
+            let middle = (low + high) / 2
+            if dates[middle] > date { high = middle } else { low = middle + 1 }
+        }
+        return dates.count - low
     }
 }

@@ -65,6 +65,30 @@ extension ThumbnailStore {
         queueSummary(write, at: location)
     }
 
+    /// A folder renamed (the browser, through `PathMoving`): its summary and its subfolders' go with it, in the
+    /// catalog and in the batch waiting, so its card keeps them under the new name. Where the catalog keeps it is
+    /// asked of the new path, off the actor (`locate` may block on a slow share); the old one is the same volume and
+    /// parent with the old name.
+    public func moveSummaries(from: URL, to: URL) async {
+        let locate = self.locate
+        guard let location = await Self.offActor(qos: Self.coverQoS, { locate(to.appendingPathComponent("_")) })
+        else { return }
+        let parent = (location.folder as NSString).deletingLastPathComponent
+        let move = PathMove(from: URL(fileURLWithPath: (parent == "/" ? "" : parent) + "/" + from.lastPathComponent),
+                            to: URL(fileURLWithPath: location.folder))
+        // The batch as the catalog: those at the new path or under it are stale, those at the old one move.
+        let waiting = pendingSummaries.filter { $0.value.location.volume == location.volume }
+        let stale = PathMove(from: URL(fileURLWithPath: move.to), to: URL(fileURLWithPath: move.to))
+        for (key, pending) in waiting where stale.moved(pending.location.folder) != nil { pendingSummaries[key] = nil }
+        for (key, pending) in waiting {
+            guard let moved = move.moved(pending.location.folder) else { continue }
+            pendingSummaries[key] = nil
+            let target = ThumbnailLocation(volume: pending.location.volume, folder: moved, name: pending.location.name)
+            pendingSummaries[Self.summaryKey(target)] = (target, pending.summary)
+        }
+        _ = perform("move summaries", { try $0.moveSummaries(volume: location.volume, from: move.from, to: move.to) })
+    }
+
     /// Summaries waiting for the next batch at most: a full batch is written at once, else with the thumbnails'
     /// batch (`commitDelay`). Covers finish a few a second, so a batch is mostly what a second of covers made; the
     /// bound keeps a burst (a folder of hundreds of zips from the catalog) to one transaction per this many, each
@@ -116,5 +140,12 @@ extension ThumbnailStore {
             summary.datesKnown = true
         }
         return summary
+    }
+}
+
+/// Renames in the file browser (`BrowserFileActions`): the summaries move with their folders, after the call returns.
+extension ThumbnailStore: PathMoving {
+    public nonisolated func movePaths(from: URL, to: URL) {
+        Task(priority: .utility) { await self.moveSummaries(from: from, to: to) }
     }
 }

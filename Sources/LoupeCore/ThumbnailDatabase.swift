@@ -454,6 +454,25 @@ public final class ThumbnailDatabase {
         return found
     }
 
+    /// A folder renamed (`from` to `to`, folder paths on `volume`): its summary and those of every folder under it
+    /// move with it, its folder date unchanged (a rename changes the parent's, not the folder's), so the card under
+    /// the new name finds it fresh. Rows at `to` or under it are stale (nothing was there) and go first.
+    public func moveSummaries(volume: String, from: String, to: String) throws {
+        guard from != to, !from.isEmpty, from != "/" else { return }
+        // Under a folder: from "folder/" up to "folder0" ("0" follows "/"), as `childSummaries`.
+        func under(_ path: String) -> [SQLiteValue] { [.text(path), .text(path + "/"), .text(path + "0")] }
+        try catalog.transaction {
+            try flushStamps()
+            try catalog.run("DELETE FROM folder_summaries WHERE volume = ? AND (path = ? OR (path >= ? AND path < ?))",
+                            [.text(volume)] + under(to))
+            // substr counts code points from 1, as `childSummaries`' (names are often decomposed on macOS).
+            try catalog.run("""
+                UPDATE folder_summaries SET path = ? || substr(path, ?)
+                WHERE volume = ? AND (path = ? OR (path >= ? AND path < ?))
+                """, [.text(to), .int(Int64(from.unicodeScalars.count + 1)), .text(volume)] + under(from))
+        }
+    }
+
     /// Rows in `folder_summaries`.
     public func summaryCount() throws -> Int {
         var count = 0

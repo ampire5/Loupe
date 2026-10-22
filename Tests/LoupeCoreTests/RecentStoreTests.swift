@@ -45,6 +45,16 @@ import Foundation
         #expect(tables.contains("recent") && tables.contains("sessions"))
     }
 
+    /// One folder's entry by its path, hidden or not (a folder card's progress before it has a visit).
+    @Test func entryOfAFolder() {
+        let s = store()
+        enter(s, "/p/a")
+        s.viewed(folder("/p/a"), file: "x.jpg", index: 4, count: 12)
+        s.hide("/p/a")
+        #expect(s.entry(for: folder("/p/a"))?.index == 4 && s.entry(for: folder("/p/a"))?.count == 12)
+        #expect(s.entry(for: folder("/p/b")) == nil)
+    }
+
     @Test func enteredMovesToFront() {
         let s = store()
         enter(s, "/a"); enter(s, "/b"); enter(s, "/a")
