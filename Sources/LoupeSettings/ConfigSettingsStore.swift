@@ -74,6 +74,19 @@ public final class ConfigSettingsStore: SettingsStore {
         try updated.write(to: fileURL, atomically: true, encoding: .utf8)
         reload()
     }
+
+    /// Reset to Default: the keys' lines leave the file (comments stay), so a default that depends on this Mac
+    /// (`cache-memory`, `jxl-threads-current`) follows it again. One write and one reload for a whole page; no file,
+    /// or none of the keys in it: nothing is written.
+    public func removeValues(forKeys keys: [String]) throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        let existing = try String(contentsOf: fileURL, encoding: .utf8)
+        let updated = ConfigText.removing(keys, in: existing)
+        guard updated != existing else { return }
+        try requireWritable(fileURL)
+        try updated.write(to: fileURL, atomically: true, encoding: .utf8)
+        reload()
+    }
 }
 
 /// An existing file the user made read-only is not replaced: an atomic write would swap it out anyway (the folder

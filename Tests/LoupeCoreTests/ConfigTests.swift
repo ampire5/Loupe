@@ -149,6 +149,12 @@ import Foundation
     #expect(Config.parse(edited).0 == c)
 }
 
+@Test func removingDropsEveryActiveLineOfTheKeys() {   // Reset to Default
+    let text = "# mine\ncache-memory=8G # big\n# cache-memory=2G\nzoom-animation=no\nCache-Memory = 6G\n"
+    #expect(ConfigText.removing(["cache-memory"], in: text) == "# mine\n# cache-memory=2G\nzoom-animation=no\n")
+    #expect(ConfigText.removing(["toast-duration"], in: text) == text)
+}
+
 @Test func editingAppendsMissingKeysBeforeTheTrailingNewline() {
     let edited = ConfigText.setting([("zoom-stops", "100%")], in: "# hi\nzoom-stop-haptics=no\n")
     #expect(edited == "# hi\nzoom-stop-haptics=no\nzoom-stops=100%\n")
