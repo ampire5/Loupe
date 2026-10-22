@@ -11,6 +11,7 @@ import LoupeCore
 // LoupeBench autocolour … (see AutoColourBench.swift)
 // LoupeBench browser … (see BrowserBench.swift)
 // LoupeBench strip … (see StripBench.swift)
+// LoupeBench panload … (see PanLoadBench.swift)
 
 let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "avif", "jxl", "webp", "tif", "tiff", "gif", "bmp"]
 /// Every decode method by name. Each declares the formats it accepts; ImageIO takes all of them.
@@ -55,6 +56,9 @@ if CommandLine.arguments.dropFirst().first == "autocolour" {
 }
 if CommandLine.arguments.dropFirst().first == "browser" {
     BrowserBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "panload" {
+    PanLoadBench.main(Array(CommandLine.arguments.dropFirst(2)))
 }
 if CommandLine.arguments.dropFirst().first == "strip" {
     StripBench.main(Array(CommandLine.arguments.dropFirst(2)))
