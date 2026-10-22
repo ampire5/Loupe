@@ -1,8 +1,9 @@
 import Foundation
 
 /// Which build is running, for Loupe › About Loupe: `scripts/make-app.sh` stamps the commit (`+dirty` with
-/// uncommitted changes), branch, build time and an optional label (`LOUPE_BUILD_LABEL`, `--label`) into Info.plist.
-/// A build without them (`swift run`, no git) reads "unknown".
+/// uncommitted changes), branch (CI's ref or `detached` for a tag checkout), build time with its time zone
+/// (`2026-10-22 14:05 +0300`) and an optional label (`LOUPE_BUILD_LABEL`, `--label`) into Info.plist. A build without
+/// them (`swift run`, no git, a source tree without its own repository) reads "unknown".
 public struct BuildInfo: Equatable, Sendable {
     public static let commitKey = "LoupeBuildCommit"
     public static let branchKey = "LoupeBuildBranch"
@@ -27,7 +28,7 @@ public struct BuildInfo: Equatable, Sendable {
         label = value(Self.labelKey)
     }
 
-    /// `cb8586f · night-lts · 2026-10-22 14:05`.
+    /// `cb8586f · night-lts · 2026-10-22 14:05 +0300`.
     public var line: String { "\(commit) · \(branch) · \(date)" }
 
     /// The panel's bracketed version after the app's: the label, else the commit.

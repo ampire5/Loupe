@@ -67,14 +67,18 @@ if ! check_links; then
 fi
 cp Resources/Info.plist "$app/Contents/Info.plist"
 # The build's identity for About Loupe (LoupeCore BuildInfo): commit (+dirty with uncommitted changes, the local
-# Package.resolved and release.yaml aside), branch, build time and the label. Without git each reads "unknown".
+# Package.resolved and release.yaml aside), branch, build time with its time zone and the label. A tag checkout
+# (detached HEAD) names CI's ref (GITHUB_REF_NAME), else "detached". Git is asked only when this tree is a repository's
+# root: a source tree without its own .git inside another repository would take that one's commit; without git, or
+# there, commit and branch read "unknown".
 commit=unknown branch=unknown
-if git rev-parse --git-dir >/dev/null 2>&1; then
+top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [[ -n $top && $(cd "$top" && pwd -P) == "$(pwd -P)" ]]; then
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+    branch=$(git symbolic-ref -q --short HEAD || echo "${GITHUB_REF_NAME:-detached}")
     [[ -z $(git status --porcelain -- . ':!Package.resolved' ':!release.yaml' 2>/dev/null) ]] || commit+="+dirty"
 fi
-for pair in "LoupeBuildCommit=$commit" "LoupeBuildBranch=$branch" "LoupeBuildDate=$(date '+%Y-%m-%d %H:%M')" \
+for pair in "LoupeBuildCommit=$commit" "LoupeBuildBranch=$branch" "LoupeBuildDate=$(date '+%Y-%m-%d %H:%M %z')" \
     "LoupeBuildLabel=$label"; do
     plutil -replace "${pair%%=*}" -string "${pair#*=}" "$app/Contents/Info.plist"
 done
