@@ -1136,7 +1136,8 @@ struct ImageCacheTests {
 
     /// Memory pressure takes the ready decodes first: at a quarter of `cache-memory` the files all still fit and
     /// stay, the current photo's included, and no ready decode does, so none is left (not even the current photo's:
-    /// the screen never draws from it).
+    /// the screen never draws from it). Three of the files are held but no longer planned (`cache-files` lowered to 1
+    /// beforehand): taking files first would drop them before the ready decodes and still have to take those.
     @Test func pressureDropsReadyBeforeBytes() async {
         var limits = CacheLimits.at3G
         limits.graphicsMemory = 1 << 30
@@ -1150,7 +1151,12 @@ struct ImageCacheTests {
         await rig.focus(files, 2, dwelling: true, needsFull: true)
         #expect(await eventually { await rig.cache.stats().readyCount == 2 })
         #expect(await rig.settle())
+        limits.files = 1   // only n1's file stays planned besides the current one: 0, 1 and 4 are held, unplanned
+        await rig.cache.setLimits(limits)
+        #expect(await rig.settle())
         #expect(await rig.cache.stats().bytesCount == 5)
+        #expect(await rig.cache.stats().readyCount == 2)
+        #expect(await rig.cache.inspect([files[0], files[1], files[4]]).allSatisfy { $0?.planned[.bytes] == nil })
         let calls = rig.decoder.calls.count
 
         await rig.cache.setMemoryPressure(.critical)
@@ -1162,6 +1168,42 @@ struct ImageCacheTests {
         #expect(stats.usedBytes <= limits.memory / 4, "system \(stats.usedBytes) over \(limits.memory / 4)")
         #expect(await rig.state(files[2]) == .full)
         #expect(rig.decoder.calls.count == calls, "decoded again under pressure")
+        await rig.clear()
+    }
+
+    /// A ready decode that fails is dropped quietly: the photo is not marked failed and no ready decode of it
+    /// restarts (n1 of photo 0). Stepping onto a photo whose ready decode is running (n2 of photo 28), its full job
+    /// waits for it; when that fails the full job decodes the file itself, and that decode succeeds.
+    @Test func failedReadyDecodeLeavesThePhotoAlone() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let rig = Rig(limits: limits)
+        let files = fileURLs(40)   // 30 lies beyond what photo 0's dwell reads
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        rig.decoder.failFullOnce(files[1])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { log.events.contains { $0.url == files[1] && $0.kind == .readyFailed } })
+        #expect(await rig.settle())
+        #expect(await rig.cache.entry(files[1])?.failure == nil)
+        #expect(rig.decoder.calls(files[1]).filter { $0 == .full }.count == 1, "n1's ready decode restarted")
+        #expect(await rig.state(files[1]).map { $0 >= .preview } == true)
+        #expect(rig.decoder.calls(files[30]).isEmpty, "fixture: photo 30 untouched so far")
+
+        rig.decoder.failFullOnce(files[30])
+        let gate = BlockingGate()
+        rig.decoder.gateFull(files[30], gate)
+        await rig.focus(files, 28, dwelling: true, needsFull: true, previous: 0)
+        #expect(await eventually { rig.decoder.calls(files[30]).contains(.full) })
+        await rig.focus(files, 30, needsFull: true, previous: 28)
+        #expect(await eventually { log.events.contains { $0.url == files[30] && $0.kind == .readyAwait } })
+        gate.open()
+        #expect(await eventually { await rig.state(files[30]) == .full })
+        #expect(await rig.settle())
+        #expect(log.events.contains { $0.url == files[30] && $0.kind == .readyFailed })
+        #expect(rig.decoder.calls(files[30]).filter { $0 == .full }.count == 2)
+        #expect(await rig.cache.entry(files[30])?.failure == nil)
         await rig.clear()
     }
 

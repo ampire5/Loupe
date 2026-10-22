@@ -22,6 +22,8 @@ public struct CacheTraceEvent: Sendable {
         /// A full job found the entry's ready decode (`CacheGoal.ready`) in progress and waits for it, to upload it
         /// rather than decode the file a second time.
         case readyAwait
+        /// A ready decode failed and was dropped quietly; the photo is not marked failed (its full job decodes itself).
+        case readyFailed
         /// The upload of a decoded level into the pyramid began (room made) / finished.
         case uploadStart, uploadDone
         /// A decoded result was dropped (its goal left the plan and it did not fit, or something as sharp was resident).

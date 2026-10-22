@@ -205,6 +205,7 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     private var sizes: [String: PixelSize] = [:]
     private var latencies: [String: TimeInterval] = [:]
     private var failOnce: Set<String> = []
+    private var failFullOnce: Set<String> = []
     private var log: [DecoderCall] = []
     private var finished: [String: Date] = [:]
     private var probeGates: [String: BlockingGate] = [:]
@@ -237,6 +238,8 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     /// The most full decodes (full-decode previews included) that ever ran at the same time.
     var peakConcurrentFulls: Int { lock.withLock { fullsPeak } }
     func failOnce(_ url: URL) { lock.withLock { _ = failOnce.insert(url.lastPathComponent) } }
+    /// The next full decode of `url` (only: previews are spared) fails, after its gates.
+    func failFullOnce(_ url: URL) { lock.withLock { _ = failFullOnce.insert(url.lastPathComponent) } }
     /// `probe` of `url` blocks its pool thread on `gate` (after it is logged).
     func gateProbe(_ url: URL, _ gate: BlockingGate) { lock.withLock { probeGates[url.lastPathComponent] = gate } }
     /// Preview and full decodes of `url` block on `gate` (after they are logged).
@@ -263,7 +266,7 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
         }
         gates.forEach { $0.wait() }
         if latency > 0 { Thread.sleep(forTimeInterval: latency) }
-        if fail { throw DecodeError.unreadable }
+        if fail || full && lock.withLock({ failFullOnce.remove(name) != nil }) { throw DecodeError.outOfMemory }
     }
 
     private func image(_ info: ImageInfo, level: Int) throws -> LevelImage {

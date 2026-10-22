@@ -386,7 +386,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         if goal == .ready {
             // A full decode in flight keeps its pixels as the ready decode when it is done (and uses one in flight):
             // the file is never decoded twice side by side.
-            guard e.jobs[.ready] == nil, e.jobs[.full] == nil, e.ready == nil else { return }
+            guard e.jobs[.ready] == nil, e.jobs[.full] == nil, e.ready == nil, !e.readyFailed else { return }
             guard e.data != nil || e.read != nil || mayRead else { return }
             launch(url, e, goal)
             return

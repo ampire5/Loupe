@@ -134,6 +134,9 @@ final class CacheEntry<Pyramid: AnyObject & Sendable> {
     /// background (`CacheGoal.ready`): stepping onto the photo uploads it instead of decoding the file. Counted in
     /// `ImageCache.usedSystemBytes`; never drawn from.
     var ready: LevelImage?
+    /// A ready decode of the entry failed (dropped quietly, the photo not marked failed): none is started again until a
+    /// full decode of the file succeeds or the entry is reset.
+    var readyFailed = false
     var failure: String?
     var timings = LoadTimings()
     /// The read in flight; decode jobs await it, so the file is read once.

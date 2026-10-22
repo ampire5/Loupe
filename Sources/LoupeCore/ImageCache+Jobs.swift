@@ -106,12 +106,7 @@ extension ImageCache {
     /// read → probe → (first look) → decode → upload, for one (url, goal) with goal `coarse`, `preview` or `full`.
     private func runJob(_ url: URL, _ e: CacheEntry<Pyramid>, _ goal: CacheGoal, phase: JobPhase) async {
         do {
-            let data: Data
-            if let cached = e.data {
-                data = cached
-            } else {
-                data = try await readTask(url, e).value
-            }
+            let data = try await fileBytes(url, e)
             guard isWanted(url, e, goal) else { return }
 
             let (decoder, info) = try await probe(url, e, goal, data, phase: phase)
@@ -157,35 +152,27 @@ extension ImageCache {
             let wanted = goal == .coarse ? l.coarse : goal == .preview ? l.lfit : 0
             let start = ContinuousClock.now
             let p = priority(url, goal, phase)
-            let trace = self.trace
             // Neighbours decode with fewer libjxl threads, leaving the current photo room (`jxl-threads-other`).
             let roleDecoder = decoder.forRole(p.forCurrent ? .current : .other)
-            emit(url, .decodeWait, goal)
-            // At most two progressive full decodes, one reserved for the current photo (spec §11.1.6); the gate is
-            // taken before the decode slot, so a job waiting for it holds no slot, and is released as soon as the
-            // decode (and its buffers) is done. Previews made from a full decode (JXL without a DC image: ~590 MB of
-            // buffer at 147 MP) go through the same gate.
+            // Previews made from a full decode (JXL without a DC image: ~590 MB of buffer at 147 MP) go through the
+            // gate of big decodes too.
             let serial = goal == .full ? info.isProgressive
                                        : roleDecoder.previewNeedsFullDecode(data, info: info, level: wanted)
-            if serial { try await progressiveFull.acquireSlot(forCurrent: p.forCurrent, rank: p.rank) }
-            let image: LevelImage
-            do {
-                image = try await pool.run(forCurrent: p.forCurrent, rank: p.rank) { () throws -> LevelImage in
-                    phase.markBusy()
-                    trace?(CacheTraceEvent(url: url, kind: .decodeStart, goal: goal))
-                    if goal == .full { return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0) }
-                    return try roleDecoder.preview(data, info: info, level: wanted)
-                }
-            } catch {
-                if serial { progressiveFull.releaseSlot(forCurrent: p.forCurrent) }
-                throw error
+            let busy: @Sendable () -> Bool = { phase.markBusy(); return true }
+            let image = try await decode(url, goal, gated: serial, gateForCurrent: p.forCurrent, on: pool,
+                                         forCurrent: p.forCurrent, rank: p.rank, begin: busy) {
+                if goal == .full { return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0) }
+                return try roleDecoder.preview(data, info: info, level: wanted)
             }
-            if serial { progressiveFull.releaseSlot(forCurrent: p.forCurrent) }
-            emit(url, .decodeDone, goal, level: image.level)
             guard isAlive(url, e) else { return }
             // Coarser than asked would leave the goal unmet and the job restarting forever.
             guard image.level <= wanted, image.level < l.grid.levelCount else { throw DecodeError.unreadable }
-            if goal == .full { e.timings.fullMs = start.millisecondsElapsed } else { e.timings.previewMs = start.millisecondsElapsed }
+            if goal == .full {
+                e.timings.fullMs = start.millisecondsElapsed
+                e.readyFailed = false   // the file decodes: a ready decode may be tried again
+            } else {
+                e.timings.previewMs = start.millisecondsElapsed
+            }
             notify(url)
             try await upload(image, url, e, goal, grid: l.grid, phase: phase)
             // On a discrete card the decode stays in system memory when the plan wants it ready (spec «Два яруса
@@ -218,19 +205,43 @@ extension ImageCache {
         return isAlive(url, e)
     }
 
+    /// The entry's compressed bytes: resident, or from its read (started if needed, shared with its other jobs).
+    private func fileBytes(_ url: URL, _ e: CacheEntry<Pyramid>) async throws -> Data {
+        if let cached = e.data { return cached }
+        return try await readTask(url, e).value
+    }
+
+    /// One decode of `goal` on a slot of `pool`, after the gate of big decodes when `gated`. At most two progressive
+    /// full decodes at a time, one reserved for the current photo (spec §11.1.6): the gate is taken (as
+    /// `gateForCurrent`) before the decode slot, so a job waiting for it holds no slot, and released as soon as the
+    /// decode (and its buffers) is done. `begin` runs first on the pool thread and marks the job busy; false gives the
+    /// decode up before it starts (CancellationError).
+    private func decode(_ url: URL, _ goal: CacheGoal, gated: Bool, gateForCurrent: Bool, on pool: DecodePool,
+                        forCurrent: Bool, rank: Int, begin: @escaping @Sendable () -> Bool,
+                        _ work: @escaping @Sendable () throws -> LevelImage) async throws -> LevelImage {
+        let trace = self.trace
+        emit(url, .decodeWait, goal)
+        if gated { try await progressiveFull.acquireSlot(forCurrent: gateForCurrent, rank: rank) }
+        defer { if gated { progressiveFull.releaseSlot(forCurrent: gateForCurrent) } }
+        let image = try await pool.run(forCurrent: forCurrent, rank: rank) { () throws -> LevelImage in
+            guard begin() else { throw CancellationError() }
+            trace?(CacheTraceEvent(url: url, kind: .decodeStart, goal: goal))
+            return try work()
+        }
+        emit(url, .decodeDone, goal, level: image.level)
+        return image
+    }
+
     /// read → probe → full decode, kept as the entry's ready decode (`CacheEntry.ready`) and uploaded nowhere: a
     /// discrete card's background decode, one at a time at `.utility` (`readyPool`), with the neighbours' decoder
     /// role. Progressive JPEGs go through the gate of big decodes first, as `.full` does. A full job of the entry
-    /// in flight decodes the same pixels and keeps them, so this one then gives way before its decode.
+    /// in flight decodes the same pixels and keeps them, so this one then gives way before its decode. Speculative:
+    /// a failure is dropped quietly (`readyFailed`, no further ready decode of the entry) and never marks the photo
+    /// failed; its full decode, when wanted, decodes the file itself and reports what it finds.
     private func runReadyJob(_ url: URL, _ e: CacheEntry<Pyramid>, phase: JobPhase) async {
         let goal = CacheGoal.ready
         do {
-            let data: Data
-            if let cached = e.data {
-                data = cached
-            } else {
-                data = try await readTask(url, e).value
-            }
+            let data = try await fileBytes(url, e)
             guard isWanted(url, e, goal) else { return }
 
             let (decoder, info) = try await probe(url, e, goal, data, phase: phase)
@@ -239,25 +250,12 @@ extension ImageCache {
 
             let start = ContinuousClock.now
             let p = priority(url, goal, phase)
-            let trace = self.trace
             let roleDecoder = decoder.forRole(.other)
-            emit(url, .decodeWait, goal)
             // Background work even for the current photo: never the big-decode slot reserved for the current one.
-            let serial = info.isProgressive
-            if serial { try await progressiveFull.acquireSlot(forCurrent: false, rank: p.rank) }
-            let image: LevelImage
-            do {
-                image = try await readyPool.run(forCurrent: p.forCurrent, rank: p.rank) { () throws -> LevelImage in
-                    guard phase.beginIfLive() else { throw CancellationError() }
-                    trace?(CacheTraceEvent(url: url, kind: .decodeStart, goal: goal))
-                    return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0)
-                }
-            } catch {
-                if serial { progressiveFull.releaseSlot(forCurrent: false) }
-                throw error
+            let image = try await decode(url, goal, gated: info.isProgressive, gateForCurrent: false, on: readyPool,
+                                         forCurrent: p.forCurrent, rank: p.rank, begin: phase.beginIfLive) {
+                LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0)
             }
-            if serial { progressiveFull.releaseSlot(forCurrent: false) }
-            emit(url, .decodeDone, goal, level: 0)
             guard isAlive(url, e), e.ready == nil else { return }
             // Planned, or a full job waits for it (it uploads it next): kept, room made. Left the plan meanwhile: kept
             // only if it fits as things stand (as an unplanned upload).
@@ -270,9 +268,11 @@ extension ImageCache {
             e.timings.fullMs = start.millisecondsElapsed
             evictToFit()
         } catch {
-            guard !(error is CancellationError), isWanted(url, e, goal), e.failure == nil else { return }
-            e.failure = LoadErrorText.message(name: url.lastPathComponent, error: error, size: e.info?.pixelSize)
-            notify(url)
+            // A read failure is already the entry's (`readTask`); a bad header or a decode error is left to the
+            // entry's other jobs, which hit it too. Not retried: no ready job of the entry restarts in a loop.
+            guard !(error is CancellationError), entries[url] === e else { return }
+            e.readyFailed = true
+            emit(url, .readyFailed, goal)
         }
     }
 
