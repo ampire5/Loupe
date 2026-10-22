@@ -1097,14 +1097,16 @@ import LoupeRender
             if freshOpen == e.url { freshOpen = nil }
             if collapseView?.page == e.url { collapseView = nil }
             if let restore, restore.file == e.url {
-                // The pair's other page has a stand-in size: the saved view (recorded at the pair's real size) is
-                // decided once that page's size is in (`relayout`), while the view stays untouched (a zoom key pressed
-                // during the load, a zoom or pan since an earlier show drop it).
-                if let waiting = restore.waiting(atShowOf: next.imageSize, provisional: shownLayoutProvisional,
+                // The pair's other page has a stand-in size, or none yet (the photo alone until its header is in):
+                // the saved view (recorded at the pair's real size) is decided once that page's size is in
+                // (`relayout`), while the view stays untouched (a zoom key pressed during the load, a zoom or pan since
+                // an earlier show drop it).
+                let provisional = pairProvisional
+                if let waiting = restore.waiting(atShowOf: next.imageSize, provisional: provisional,
                                                  before: judgedTransform, shown: next) {
                     DebugLog.log("saved view of \(e.url.lastPathComponent) waits for the pair's size")
                     self.restore = waiting
-                } else if shownLayoutProvisional, !restore.view.applies(to: next.imageSize) {
+                } else if provisional, !restore.view.applies(to: next.imageSize) {
                     DebugLog.log("saved view of \(e.url.lastPathComponent) not restored (zoomed while it waited)")
                     self.restore = nil
                 } else {
@@ -1393,7 +1395,7 @@ import LoupeRender
         } else if let e = entry, e.url == laidOut, let own = ownSize(e) {
             let size = layoutSize(own), now = shownPageRect
             var next: ViewTransform?
-            if let restore, restore.file == e.url, !shownLayoutProvisional {
+            if let restore, restore.file == e.url, !pairProvisional {
                 settleZoom()
                 next = restored(e.url, size: size, over: transform)
                 DebugLog.log("saved view of \(e.url.lastPathComponent) "
@@ -1419,13 +1421,26 @@ import LoupeRender
     /// stand-in size (not read yet).
     private func makeLayout() -> (layout: SpreadLayout, provisional: Bool)? {
         guard let e = entry, let own = ownSize(e), let layout = layout(of: e.url, size: own) else { return nil }
-        // Read: its header is in, or it failed (then it keeps the stand-in for good).
+        return (layout, !companionRead)
+    }
+
+    /// The page beside the photo on screen (the current companion while that is the current photo) is read: its header
+    /// is in, or it failed (then it keeps the stand-in for good). False without one.
+    private var companionRead: Bool {
         let other = entry?.url == playlist?.current ? companionURL : shownCompanion?.url
-        let read = [shownCompanion, latestCompanion].contains { page in
+        return [shownCompanion, latestCompanion].contains { page in
             guard let page, page.url == other else { return false }
             return page.info != nil || page.failure != nil
         }
-        return (layout, !read)
+    }
+
+    /// The photo on screen is laid out at a size its pair does not keep (`SpreadSizes.isProvisional`): its other page
+    /// has a stand-in size, or no size at all yet (no header, no store aspect: the photo shows alone until it comes). A
+    /// saved view of the pair waits meanwhile (`show`) and is decided in `relayout` once this is false.
+    private var pairProvisional: Bool {
+        let planned = entry != nil && entry?.url == playlist?.current && companionURL != nil
+        return SpreadSizes.isProvisional(standIn: shownLayoutProvisional, companionPlanned: planned,
+                                         companionRead: companionRead)
     }
 
     /// The pair `url` (the photo on screen, or the current one about to be; `own` its size) is laid out in, nil for one

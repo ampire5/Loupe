@@ -231,6 +231,34 @@ private let arrived = ViewTransform(imageSize: CGSize(width: 900, height: 600), 
     #expect(waiting.following(from: first.withMode(.free(3)), to: carried) == nil)
 }
 
+/// A pair's other page with no header and no store aspect yet (a folder reopened, a session restored while the store's
+/// aspects load): the photo shows alone at its own size, and the saved view of the pair waits for that page's header
+/// instead of being judged against the photo's size and dropped for good; the pair's real size then restores it. A
+/// page that failed (laid out at a stand-in for good) or turned out wide (the pair collapses, no page planned) decides
+/// it at once.
+@Test func savedPairViewRestoresAfterTheCompanionHeaderArrivesLate() {
+    let page = CGSize(width: 1000, height: 1500)
+    let pair = SpreadLayout(first: page, second: page, rightToLeft: false).virtualSize
+    let saved = SavedView(mode: .actual(2), center: CGPoint(x: 0.3, y: 0.6), imageSize: pair)
+    let r = ViewRestore(file: waitURL, view: saved, arrival: arrived)
+    let alone = arrived.withImageSize(page)
+    // Without the wait the view is dropped: the photo's own size never fits the pair's.
+    #expect(r.waiting(atShowOf: page, provisional: false, before: arrived, shown: alone) == nil)
+    #expect(r.target(imageSize: page) == nil)
+    // The first show: no layout yet, the page planned beside it unread.
+    let pending = SpreadSizes.isProvisional(standIn: false, companionPlanned: true, companionRead: false)
+    #expect(pending)
+    let waiting = r.waiting(atShowOf: page, provisional: pending, before: arrived, shown: alone)
+    #expect(waiting != nil)
+    // The header is in (or the page failed): the pair's layout is final and the saved view applies to it.
+    #expect(!SpreadSizes.isProvisional(standIn: false, companionPlanned: true, companionRead: true))
+    let restored = waiting?.transform(for: waitURL, imageSize: pair, over: alone.withImageSize(pair))
+    #expect(restored?.mode == .actual(2) && restored?.center == CGPoint(x: 0.3, y: 0.6))
+    // A stand-in still waits; a wide page's collapse (no page planned) decides it.
+    #expect(SpreadSizes.isProvisional(standIn: true, companionPlanned: true, companionRead: false))
+    #expect(!SpreadSizes.isProvisional(standIn: false, companionPlanned: false, companionRead: false))
+}
+
 /// The first page alone after its pair: carried at the show from the window of then, so a resize meanwhile keeps the
 /// current view size; a zoom key meanwhile, another photo or size drop it.
 @Test func collapseFollowsTheWindowAndYieldsToAZoomKey() {
