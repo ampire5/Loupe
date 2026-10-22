@@ -393,8 +393,11 @@ private final class FakeListing: @unchecked Sendable {
         #expect(!resolved.isSet)
     }
 
-    /// Review fix: a running cover makes no thumbnail while the viewer is busy, and goes on once it is idle.
-    @Test func waitsWhileViewerBusy() async {
+    /// Review fix: a running cover makes no thumbnail while the viewer is busy, and goes on once it is idle; the
+    /// store's queue starts no card meanwhile. `.current` is also what a two-page pair reports while its other page
+    /// reads (`ImageCache.isCurrent`).
+    @Test(arguments: [CacheActivity.neighbours, .current])
+    func waitsWhileViewerBusy(_ busy: CacheActivity) async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let reader = ThumbReader(), listing = FakeListing()
@@ -402,12 +405,19 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/f", files: ["1.jpg", "2.jpg"])
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        await store.setViewerActivity(.neighbours)
+        await store.setViewerActivity(busy)
+        let queued = LockedFlag()
+        await store.coverQueue.want(["/photos/g"], visible: 1, isNetwork: { _ in false }) { _ in
+            queued.set()
+            return true
+        }
         let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
         try? await Task.sleep(for: .milliseconds(200))
         #expect(reader.reads.isEmpty)
+        #expect(!queued.isSet)
         await store.setViewerActivity(.idle)
         #expect(await task.value?.count == 2)
+        #expect(await eventually { queued.isSet })
     }
 
     /// Fix round 2: a share's resolves and listings that hang fill their own lanes; a local folder still resolves
