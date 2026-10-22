@@ -275,12 +275,13 @@ private final class FakeListing: @unchecked Sendable {
             return CoverNames(files: ["1.jpg", "2.jpg", "3.jpg"], folders: [])
         }
         let store = store(reader, dir: dir)
-        // A second: under a loaded test run the listing's thread may start late, and give no name before 200 ms.
-        await store.setCoverListing(slow, networkTimeout: .seconds(1))
+        // Three seconds: under a loaded test run (every suite in parallel on an 8-core Intel Mac) the listing's utility
+        // thread started more than a second late and gave no name in time.
+        await store.setCoverListing(slow, networkTimeout: .seconds(3))
         let start = ContinuousClock.now
         let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false,
                                              in: loc("/photos/f", network: true), maxPixel: 64)
-        #expect(ContinuousClock.now - start < .seconds(5))   // the listing goes on for 10
+        #expect(ContinuousClock.now - start < .seconds(8))   // the listing goes on for 10
         #expect(images?.count == 2)
         #expect(await eventually { stopped.isSet })
     }
