@@ -145,6 +145,15 @@ extension StripPlacement {
     }
 
     /// The reveal chevron's tip.
+    /// The tool capsule's centre along the strip (user, 2026-10-23: under the pointer): where the pointer entered the
+    /// strip, kept `inset` from either end of a strip `length` long; a capsule wider than the room sits in the middle.
+    /// An `entry` of `.infinity` (none yet) puts it at the trailing end.
+    public static func capsuleCentre(entry: Double, width: Double, length: Double, inset: Double) -> Double {
+        let low = inset + width / 2, high = length - inset - width / 2
+        guard low <= high else { return length / 2 }
+        return min(max(entry, low), high)
+    }
+
     public static let revealHelp = "Show the strip (T)"
     /// `⇧T` in full screen, where the mode does not change.
     public static let fullScreenToast = "In full screen the strip is always over the photo"

@@ -182,3 +182,19 @@ private func input(
     #expect(!StripPlacement.clearsBarHidden(from: .over, to: .beside))
     #expect(StripPlacement.flag(.hidden, fullScreen: false) == nil)
 }
+
+// MARK: The capsule under the pointer
+
+@Test func capsuleStandsWhereThePointerEntered() {
+    #expect(StripPlacement.capsuleCentre(entry: 300, width: 100, length: 1000, inset: 8) == 300)
+}
+
+@Test func capsuleKeepsInsideTheStripsEnds() {
+    #expect(StripPlacement.capsuleCentre(entry: 10, width: 100, length: 1000, inset: 8) == 58)
+    #expect(StripPlacement.capsuleCentre(entry: 990, width: 100, length: 1000, inset: 8) == 942)
+    #expect(StripPlacement.capsuleCentre(entry: .infinity, width: 100, length: 1000, inset: 8) == 942)   // none yet
+}
+
+@Test func capsuleWiderThanTheStripSitsInTheMiddle() {
+    #expect(StripPlacement.capsuleCentre(entry: 30, width: 100, length: 90, inset: 8) == 45)
+}
