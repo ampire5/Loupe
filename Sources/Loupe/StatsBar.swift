@@ -51,7 +51,7 @@ import LoupeCore
         wantsLayer = true
         fill.wantsLayer = true
         addSubview(fill)   // first: under the text
-        label.font = Chrome.Text.digits(.small)   // digits do not jitter while zooming
+        label.font = Chrome.Text.digits(.label)   // digits do not jitter while zooming
         label.textColor = Chrome.Palette.overMedia.text
         label.lineBreakMode = .byTruncatingMiddle
         label.translatesAutoresizingMaskIntoConstraints = false

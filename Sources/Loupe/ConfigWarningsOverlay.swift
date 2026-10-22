@@ -24,6 +24,7 @@ import LoupeCore
     override init(frame: NSRect) {
         super.init(frame: frame)
         isHidden = true
+        clipsToBounds = true
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         NSLayoutConstraint.activate([
