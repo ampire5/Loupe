@@ -175,3 +175,10 @@ private func input(
     #expect(StripPlacement.revealHelp == "Show the strip (T)")
     #expect(StripPlacement.fullScreenToast == "In full screen the strip is always over the photo")
 }
+
+@Test func leavingHiddenClearsTheBesideFlag() {
+    #expect(StripPlacement.clearsBarHidden(from: .hidden, to: .beside))
+    #expect(!StripPlacement.clearsBarHidden(from: .beside, to: .over))
+    #expect(!StripPlacement.clearsBarHidden(from: .over, to: .beside))
+    #expect(StripPlacement.flag(.hidden, fullScreen: false) == nil)
+}

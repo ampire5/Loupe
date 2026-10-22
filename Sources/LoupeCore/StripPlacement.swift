@@ -83,6 +83,11 @@ public struct StripPlacement: Equatable, Sendable {
         if fullScreen { return nil }
         return mode == .beside ? .over : .beside
     }
+
+    /// Leaving `hidden` for `beside` clears T's beside flag, so the strip appears instead of staying hidden.
+    public static func clearsBarHidden(from: StripWindowMode, to: StripWindowMode) -> Bool {
+        from == .hidden && to == .beside
+    }
 }
 
 // MARK: What T does, and the capsule's buttons

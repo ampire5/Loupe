@@ -1481,8 +1481,9 @@ import UniformTypeIdentifiers
             return canGoBack
         case #selector(toggleThumbnailStrip(_:)):
             item.state = strip.isPinned ? .on : .off
+            return strip.canTogglePin
         case #selector(toggleStripPlacement(_:)):
-            item.state = Settings.shared.config.stripWindow == .beside ? .on : .off
+            item.state = Settings.shared.config.stripWindow == .beside && !isFullScreen ? .on : .off
         case #selector(toggleStatsBar(_:)):
             item.state = statsMode != .hidden ? .on : .off
         case #selector(toggleInfoPanel(_:)):
