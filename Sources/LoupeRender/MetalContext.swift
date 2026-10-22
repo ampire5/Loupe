@@ -42,6 +42,7 @@ public final class MetalContext: @unchecked Sendable {
     private var metalFXPipelines: [MetalFXKey: MTLRenderPipelineState] = [:]
     private var ewaPipelineStates: [EWAKey: MTLComputePipelineState] = [:]
     private var panIndicatorsState: MTLComputePipelineState?
+    private var convertCubeState: MTLComputePipelineState?
     /// `curveTables(for:)`, oldest first; at most `curveTableLimit` curves.
     private var curveTables: [ColorCurve: CurveTables] = [:]
     private var curveOrder: [ColorCurve] = []
@@ -75,12 +76,14 @@ public final class MetalContext: @unchecked Sendable {
         let alpha: Bool
         let curveTable: Bool
         let colorLUT: Bool
+        let cut: Bool
     }
 
     private struct EWAKey: Hashable {
         let alpha: Bool
         let curveTable: Bool
         let colorLUT: Bool
+        let cut: Bool
     }
 
     private init() {
@@ -132,6 +135,17 @@ public final class MetalContext: @unchecked Sendable {
         if let panIndicatorsState { return panIndicatorsState }
         let state = Self.computePipeline(device: device, library: library, name: "panIndicators")
         panIndicatorsState = state
+        return state
+    }
+
+    /// The kernel that converts a colour cube into another space (`TileRenderer.conversion`), compiled on first use (the
+    /// first spread of two colour spaces). Thread-safe.
+    var convertCube: MTLComputePipelineState {
+        lock.lock()
+        defer { lock.unlock() }
+        if let convertCubeState { return convertCubeState }
+        let state = Self.computePipeline(device: device, library: library, name: "convertCube")
+        convertCubeState = state
         return state
     }
 
@@ -286,16 +300,17 @@ public final class MetalContext: @unchecked Sendable {
     /// for exactly that and the dispatch can never be refused for too many threads. `alpha`: the `HAS_ALPHA` variant,
     /// `curveTable` the `CURVE_TABLE` one, `colorLUT` the `COLOR_LUT` one (64 at most, then).
     public func resamplePipeline(kernel: ResampleKernel, upscale: Bool, alpha: Bool = false,
-                                 curveTable: Bool = false, colorLUT: Bool = false) -> MTLComputePipelineState {
-        let key = ResampleKey(kernel: kernel, upscale: upscale, alpha: alpha, curveTable: curveTable, colorLUT: colorLUT)
+                                 curveTable: Bool = false, colorLUT: Bool = false,
+                                 cut: Bool = false) -> MTLComputePipelineState {
+        let key = ResampleKey(kernel: kernel, upscale: upscale, alpha: alpha, curveTable: curveTable, colorLUT: colorLUT, cut: cut)
         lock.lock()
         defer { lock.unlock() }
         if let cached = resamplePipelines[key] { return cached }
         let d = MTLComputePipelineDescriptor()
         d.label = "resample \(kernel.rawValue) \(upscale ? "up" : "down")\(alpha ? " alpha" : "")\(curveTable ? " table" : "")"
-            + "\(colorLUT ? " cube" : "")"
+            + "\(colorLUT ? " cube" : "")\(cut ? " cut" : "")"
         d.computeFunction = Self.resampleFunction(library, kernel: kernel, upscale: upscale, alpha: alpha,
-                                                  curveTable: curveTable, colorLUT: colorLUT)
+                                                  curveTable: curveTable, colorLUT: colorLUT, cut: cut)
         d.maxTotalThreadsPerThreadgroup = 256
         let state: MTLComputePipelineState
         do {
@@ -312,7 +327,8 @@ public final class MetalContext: @unchecked Sendable {
     /// `HAS_ALPHA` (index 2) `alpha`, `CURVE_TABLE` (index 3) `curveTable`, `COLOR_LUT` (index 4) `colorLUT`. Internal
     /// so tests can reflect on it.
     static func resampleFunction(_ library: MTLLibrary, kernel: ResampleKernel, upscale: Bool,
-                                 alpha: Bool = false, curveTable: Bool = false, colorLUT: Bool = false) -> MTLFunction {
+                                 alpha: Bool = false, curveTable: Bool = false, colorLUT: Bool = false,
+                                 cut: Bool = false) -> MTLFunction {
         let constants = MTLFunctionConstantValues()
         var index = Int32(ResampleKernel.allCases.firstIndex(of: kernel)!)
         var taps = Int32(kernel.support * (upscale ? 2 : 4))
@@ -322,6 +338,9 @@ public final class MetalContext: @unchecked Sendable {
         constants.setConstantValue(&hasAlpha, type: .bool, index: 2)
         constants.setConstantValue(&table, type: .bool, index: 3)
         constants.setConstantValue(&cube, type: .bool, index: 4)
+        // Set only for a spread's page: unset, the kernel compiles as before (`VIEWPORT_CUT` undefined).
+        var viewportCut = true
+        if cut { constants.setConstantValue(&viewportCut, type: .bool, index: 6) }
         do {
             return try library.makeFunction(name: "resample", constantValues: constants)
         } catch {
@@ -363,14 +382,16 @@ public final class MetalContext: @unchecked Sendable {
     /// `resampleEWA` (`upscale = ewa-lanczos`), compiled on first use (and its `HAS_ALPHA` variant when `alpha`, its
     /// `CURVE_TABLE` one when `curveTable`, its `COLOR_LUT` one when `colorLUT`). Thread-safe. Limited to 16 x 16
     /// threadgroups, as `resamplePipeline`.
-    public func ewaPipeline(alpha: Bool = false, curveTable: Bool = false, colorLUT: Bool = false) -> MTLComputePipelineState {
-        let key = EWAKey(alpha: alpha, curveTable: curveTable, colorLUT: colorLUT)
+    public func ewaPipeline(alpha: Bool = false, curveTable: Bool = false, colorLUT: Bool = false,
+                            cut: Bool = false) -> MTLComputePipelineState {
+        let key = EWAKey(alpha: alpha, curveTable: curveTable, colorLUT: colorLUT, cut: cut)
         lock.lock()
         defer { lock.unlock() }
         if let cached = ewaPipelineStates[key] { return cached }
         let d = MTLComputePipelineDescriptor()
         d.label = "resampleEWA\(alpha ? " alpha" : "")\(curveTable ? " table" : "")\(colorLUT ? " cube" : "")"
-        d.computeFunction = Self.function(library, "resampleEWA", alpha: alpha, curveTable: curveTable, colorLUT: colorLUT)
+            + "\(cut ? " cut" : "")"
+        d.computeFunction = Self.function(library, "resampleEWA", alpha: alpha, curveTable: curveTable, colorLUT: colorLUT, cut: cut)
         d.maxTotalThreadsPerThreadgroup = 256
         do {
             let state = try device.makeComputePipelineState(descriptor: d, options: [], reflection: nil)
@@ -389,12 +410,14 @@ public final class MetalContext: @unchecked Sendable {
     /// A function with the `HAS_ALPHA` (index 2), `CURVE_TABLE` (index 3) and `COLOR_LUT` (index 4) constants, which
     /// those functions need set either way. Internal so tests can reflect on it.
     static func function(_ library: MTLLibrary, _ name: String, alpha: Bool, curveTable: Bool = false,
-                         colorLUT: Bool = false) -> MTLFunction {
+                         colorLUT: Bool = false, cut: Bool = false) -> MTLFunction {
         let constants = MTLFunctionConstantValues()
         var hasAlpha = alpha, table = curveTable, cube = colorLUT
         constants.setConstantValue(&hasAlpha, type: .bool, index: 2)
         constants.setConstantValue(&table, type: .bool, index: 3)
         constants.setConstantValue(&cube, type: .bool, index: 4)
+        var viewportCut = true
+        if cut { constants.setConstantValue(&viewportCut, type: .bool, index: 6) }   // `VIEWPORT_CUT`, EWA's
         do {
             return try library.makeFunction(name: name, constantValues: constants)
         } catch {

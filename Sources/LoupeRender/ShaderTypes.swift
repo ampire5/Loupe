@@ -21,7 +21,7 @@ struct TileInstance {
     var slice: UInt32                 // TileGrid.slice: index in the level's texture array
 }
 
-/// Per-draw uniforms (vertex buffer 1, and fragment buffer 0 of the nearest pass). 64 bytes, alignment 16. View
+/// Per-draw uniforms (vertex buffer 1, and fragment buffer 0 of the nearest pass). 80 bytes, alignment 16. View
 /// coordinates are physical pixels, origin top-left, y down: `view = oriented * levelToViewScale + levelToViewOffset`,
 /// where the oriented level position is the stored one mapped back through the orientation:
 /// `stored = matrix * oriented + shift`.
@@ -33,9 +33,12 @@ struct TileUniforms {
     var orient: SIMD4<Int32>          // ImageOrientation.matrix (a, b, c, d)
     var shift: SIMD2<Float>           // ImageOrientation.translation of the level's extent, stored level px
     var viewToLevelScale: SIMD2<Float> // 1 / levelToViewScale (the nearest pass's reciprocal)
+    var extent = SIMD2<Float>(0, 0)   // the image's stored extent in level px (for `bleed`)
+    var bleed: Float = 0              // > 0: the image's edge corners move this many level px outwards (a viewport cut)
+    var pad: Float = 0
 }
 
-/// Parameters of one `resample` dispatch (compute buffer 0). 96 bytes, alignment 16 (`float4` aligns to 16 in MSL,
+/// Parameters of one `resample` dispatch (compute buffer 0). 112 bytes, alignment 16 (`float4` aligns to 16 in MSL,
 /// and `SIMD4<Float>` does in Swift). View coordinates as in `TileUniforms`: `view = oriented * levelToViewScale +
 /// levelToViewOffset`, `stored = matrix * oriented + shift`, the same numbers the tile pass gets.
 struct ResampleParams {
@@ -52,6 +55,8 @@ struct ResampleParams {
     var shift: SIMD2<Float>              // ImageOrientation.translation of the level's extent, stored level px
     var origin = SIMD2<UInt32>(0, 0)     // where dispatch px (0, 0) is written: (0, 0), or a viewport's corner; the
                                          // offset and the backdrop's anchor are then given less it (`encodeResample`)
+    var cut = SIMD4<Float>(0, 0, 0, 0)   // VIEWPORT_CUT pipelines: the viewport in dispatch px (min x, min y, max x,
+                                         // max y)
 }
 
 /// Parameters of the `metalfxComposeFragment` pass (fragment buffer 0). 48 bytes, alignment 16. Input texel i is

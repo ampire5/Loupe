@@ -31,14 +31,17 @@ import Testing
     #expect(MemoryLayout<TileInstance>.offset(of: \.slice) == 24)
 
     // int4 aligns to 16, so the struct does too.
-    #expect(MemoryLayout<TileUniforms>.size == 64 && MemoryLayout<TileUniforms>.stride == 64)
+    #expect(MemoryLayout<TileUniforms>.size == 80 && MemoryLayout<TileUniforms>.stride == 80)
     #expect(MemoryLayout<TileUniforms>.alignment == 16)
     #expect(MemoryLayout<TileUniforms>.offset(of: \.levelSize) == 24)
     #expect(MemoryLayout<TileUniforms>.offset(of: \.orient) == 32)
     #expect(MemoryLayout<TileUniforms>.offset(of: \.shift) == 48)
+    #expect(MemoryLayout<TileUniforms>.offset(of: \.extent) == 64)
+    #expect(MemoryLayout<TileUniforms>.offset(of: \.bleed) == 72)
 
     // float4 aligns to 16, so the struct does too and `background` starts at 48.
-    #expect(MemoryLayout<ResampleParams>.size == 96 && MemoryLayout<ResampleParams>.stride == 96)
+    #expect(MemoryLayout<ResampleParams>.size == 112 && MemoryLayout<ResampleParams>.stride == 112)
+    #expect(MemoryLayout<ResampleParams>.offset(of: \.cut) == 96)
     #expect(MemoryLayout<ResampleParams>.alignment == 16)
     #expect(MemoryLayout<ResampleParams>.offset(of: \.levelToViewOffset) == 8)
     #expect(MemoryLayout<ResampleParams>.offset(of: \.levelSize) == 16)
@@ -293,7 +296,8 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
     #expect(members(instances) == ["contentOrigin": 0, "contentSize": 8, "slotOrigin": 16, "slice": 24])
     #expect(uniforms.bufferDataSize == MemoryLayout<TileUniforms>.stride)
     #expect(members(uniforms) == ["levelToViewScale": 0, "levelToViewOffset": 8, "viewSize": 16, "levelSize": 24,
-                                  "orient": 32, "shift": 48, "viewToLevelScale": 56])
+                                  "orient": 32, "shift": 48, "viewToLevelScale": 56, "extent": 64,
+                                  "bleed": 72, "pad": 76])
     let backdrop = try #require(renderReflection?.fragmentBindings.first { $0.name == "t" } as? MTLBufferBinding)
     let backdropMembers = ["first": 0, "second": 16, "anchor": 32, "invCell": 40, "pad": 44]
     #expect(backdrop.index == 1 && backdrop.bufferDataSize == MemoryLayout<TransparencyParams>.stride)
@@ -310,7 +314,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
     #expect(resample.bufferDataSize == MemoryLayout<ResampleParams>.stride)
     #expect(members(resample) == ["levelToViewScale": 0, "pad0": 4, "levelToViewOffset": 8, "levelSize": 16, "extent": 24,
                                   "viewSize": 32, "columns": 40, "antiringing": 44, "background": 48, "orient": 64,
-                                  "shift": 80, "origin": 88])
+                                  "shift": 80, "origin": 88, "cut": 96])
 
     let fx = MTLRenderPipelineDescriptor()
     fx.vertexFunction = c.library.makeFunction(name: "metalfxVertex")
