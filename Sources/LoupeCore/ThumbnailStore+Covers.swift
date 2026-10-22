@@ -253,23 +253,34 @@ extension ThumbnailStore {
     /// system, so it never hangs): the mount point above its path, as written (a symlink to a share counts as local,
     /// which only costs it the local lane's time limit). True when no mount point matches.
     @Sendable static func mountIsNetwork(_ url: URL) -> Bool {
+        !(mount(of: url)?.local ?? false)
+    }
+
+    /// The mount point of `url`'s share (nil on a local volume, or when no mount point matches), from the mount table.
+    @Sendable static func networkMountPoint(_ url: URL) -> String? {
+        guard let mount = mount(of: url), !mount.local else { return nil }
+        return mount.point
+    }
+
+    /// The mount point above `url`'s path, as written, and whether it is local (`MNT_NOWAIT`: no file system asked).
+    static func mount(of url: URL) -> (point: String, local: Bool)? {
         let room = getfsstat(nil, 0, MNT_NOWAIT)
-        guard room > 0 else { return true }
+        guard room > 0 else { return nil }
         let blank = statfs()
         var mounts = Array(repeating: blank, count: Int(room) + 4)
         let count = mounts.withUnsafeMutableBufferPointer {
             getfsstat($0.baseAddress, Int32($0.count * MemoryLayout<statfs>.stride), MNT_NOWAIT)
         }
         let path = url.standardizedFileURL.path
-        var best: (length: Int, local: Bool)?
+        var best: (point: String, local: Bool)?
         for index in 0..<max(0, Int(count)) {
             let mountPoint = ThumbnailLocation.string(from: &mounts[index].f_mntonname)
             guard path == mountPoint || path.hasPrefix(mountPoint == "/" ? "/" : mountPoint + "/") else { continue }
-            if mountPoint.count > best?.length ?? -1 {
-                best = (mountPoint.count, mounts[index].f_flags & UInt32(MNT_LOCAL) != 0)
+            if mountPoint.count > best?.point.count ?? -1 {
+                best = (mountPoint, mounts[index].f_flags & UInt32(MNT_LOCAL) != 0)
             }
         }
-        return !(best?.local ?? false)
+        return best
     }
 
     /// The pictures of a folder's or zip's card (`folderCard`'s), for callers that show no summary. Nil for "not now",
@@ -289,63 +300,88 @@ extension ThumbnailStore {
     /// it, the one last viewed there first), and its summary (folder cards spec, "Сводка папки"). `location` is where
     /// the catalog keeps the folder's files (from the folder Home shows: `folderLocation(shown)`'s `.subfolder(name)`;
     /// nil: none). `network` says whether it is on a share when there is no location (`CoverPlace.unknown`); nil: from
-    /// the location, or a share without one. `modified` is the folder's (or zip's) date as its parent's listing gave it.
+    /// the location, or from the mount table without one. `modified` is the folder's (or zip's) date as its parent's
+    /// listing gave it.
     ///
-    /// Four of the folder's photos in the catalog are its pictures whatever a listing does. A summary in the catalog
-    /// made at that date needs no listing; else the folder is listed once a session for it (limited to
-    /// `coverListingTimeout` on a share, `coverLocalListingTimeout` elsewhere; not at all while its share is offline):
-    /// with stat on a local volume (the summary with dates and size), names only on a share (counts; the dates and size
-    /// of a summary kept from a visit stay), a zip's directory read once. A listing that does not end (time out, lane
-    /// full, part only) or fails keeps the stored summary. Without four photos in the catalog the listing's picks are
+    /// Four of the folder's photos in the catalog are its pictures, at once, without a listing. A summary in the
+    /// catalog made at that date needs none either; else the card goes out with `summaryPending` and the next call for
+    /// the folder lists it, once a session (limited to `coverListingTimeout` on a share, `coverLocalListingTimeout`
+    /// elsewhere; while its share is offline only as the probe of `coverOfflineProbeInterval`): with stat on a local
+    /// volume (the summary with dates and size), names only on a share (counts; the dates and size of a summary kept
+    /// from a visit stay), a zip's directory read once. A listing that does not end (time out, lane full, part only)
+    /// or fails keeps the stored summary. Without four photos in the catalog the listing's picks are
     /// made into thumbnails and kept in the catalog, like `cover`'s; a folder without photos shows one of each of its
     /// first four subfolders' (two levels down at most).
     ///
     /// Empty pictures when there is nothing to show; then the folder is not listed again this session: found empty, not
     /// listable, or listed `coverTimeoutsAllowed` times without a name in time. A malformed zip is `.broken`; a card on
     /// a share that is offline (`coverOfflineTimeouts` listings on it in a row without a name in time or with an I/O
-    /// error, or its volume gone) is `.offline` until a listing on it answers. Nil for "not now": no pictures yet and
-    /// its lane full of hung calls, or its listing gave no name in time (on a share that is not offline). Nothing here
-    /// asks the system but the listing. New thumbnails wait while the viewer is busy; cancelling the task stops the
-    /// listing and the reads.
+    /// error, or its volume gone) is `.offline` until anything on it answers (`volumeAnswered`). Nil for "not now": no
+    /// pictures yet and its lane full of hung calls, or its listing gave no name in time (on a share that is not
+    /// offline). Nothing here asks the system but the listing. New thumbnails wait while the viewer is busy;
+    /// cancelling the task stops the listing and the reads.
     public func folderCard(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
                            maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> FolderCard? {
-        let network = network ?? location?.isNetwork ?? true
-        let key = Self.memoKey(folder, modified), volume = Self.volumeKey(folder, location)
+        // Without a location, a share as the mount table says (which never hangs).
+        let network = network ?? location?.isNetwork ?? coverVolumeIsNetwork(folder)
+        let key = Self.memoKey(folder, modified)
+        let volume = network ? Self.volumeKey(folder, location) : nil
         let stored = location.flatMap { storedSummary(at: $0) }
         let fresh = stored.map { $0.folderModified != nil && $0.folderModified == modified } ?? false
-        // Not listed for the summary this session (at this date), nor while its share is offline.
-        let wantsListing = !fresh && !summaryTried.contains(key) && !(network && offlineVolumes.contains(volume))
-        func problem(_ own: CardProblem?) -> CardProblem? {
-            network && offlineVolumes.contains(volume) ? .offline : own
-        }
-        if emptyCovers.contains(key) {
-            return FolderCard(images: [], summary: stored, problem: problem(coverProblems[key]))
-        }
-        // The catalog's four: the pictures, whatever the listing for the summary does.
+        let wantsSummary = !fresh && !summaryTried.contains(key)
+        func problem(_ own: CardProblem?) -> CardProblem? { isOffline(volume) ? .offline : own }
+        // The catalog's four: the pictures at once, whatever becomes of the summary's listing.
         if let location, let images = await catalogCells(location, count: Self.coverPhotos, lastViewed: lastViewed,
                                                          maxPixel: maxPixel) {
-            guard wantsListing, !Task.isCancelled else {
+            // Listed on a call of its own, the one after this (`summaryPending`); not while its share is offline but
+            // for a probe now and then.
+            guard wantsSummary, mayList(on: volume, probe: false) else {
+                summaryDue.remove(key)
                 return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]))
+            }
+            guard summaryDue.contains(key) else {
+                noteSummaryDue(key)
+                return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]),
+                                  summaryPending: true)
+            }
+            guard !Task.isCancelled else {
+                return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]),
+                                  summaryPending: true)
+            }
+            summaryDue.remove(key)
+            // Its share went offline since, and its probe is someone else's: done without the listing.
+            guard mayList(on: volume, probe: true) else {
+                return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]))
+            }
+            let result = await coverListing(folder, archive: archive, network: network, key: key, volume: volume,
+                                            forSummary: true)
+            // A card that left meanwhile keeps its try (and its follow-up).
+            guard !Task.isCancelled else {
+                noteSummaryDue(key)
+                return FolderCard(images: images, summary: stored, problem: problem(coverProblems[key]),
+                                  summaryPending: true)
             }
             noteSummaryTried(key)
             let listing: CoverListing?
-            switch await coverListing(folder, archive: archive, network: network, key: key, volume: volume,
-                                      forSummary: true) {
+            switch result {
             case .listed(let listed, complete: true): listing = listed
             case .listed, .settled, .notNow: listing = nil
             }
             return card(images, listing: listing, problem: problem(coverProblems[key]), modified: modified,
                         location: location)
         }
+        if emptyCovers.contains(key) {
+            return FolderCard(images: [], summary: stored, problem: problem(coverProblems[key]))
+        }
         guard let made = await folderCover(folder, archive: archive, location: location, network: network,
                                            maxPixel: maxPixel, lastViewed: lastViewed, modified: modified,
                                            count: Self.coverPhotos, depth: 0, catalogChecked: true,
-                                           mustList: wantsListing) else {
+                                           mustList: wantsSummary) else {
             // On a share that is offline the card says so, pictures or not.
-            guard network, offlineVolumes.contains(volume) else { return nil }
+            guard isOffline(volume) else { return nil }
             return FolderCard(images: [], summary: stored, problem: .offline)
         }
-        if made.listed { noteSummaryTried(key) }
+        if made.listed, !Task.isCancelled { noteSummaryTried(key) }
         return card(made.images, listing: made.listing, problem: problem(made.problem), modified: modified,
                     location: location)
     }
@@ -363,8 +399,13 @@ extension ThumbnailStore {
     }
 
     /// Listings on a share in a row without a name in time (or with an I/O error) before the share is offline: every
-    /// card on it says so, and none is listed for its summary until a listing on it answers.
+    /// card on it says so, and none is listed for its summary until anything on it answers (`noteVolumeAnswered`) but
+    /// for a probe every `coverOfflineProbeInterval`.
     static let coverOfflineTimeouts = 2
+    /// How often an offline share's cards may probe it with a summary's listing: one listing on it per this, so a
+    /// share that came back is found again within it while a dead one costs a thread per this at most (the share's
+    /// listing time limit is 2 s of 30).
+    public static let coverOfflineProbeInterval: Duration = .seconds(30)
     /// Shares whose offline state is kept at most (then forgotten at once): a few are mounted at a time.
     static let coverVolumeLimit = 64
 
@@ -393,7 +434,7 @@ extension ThumbnailStore {
     /// answers; a share's volume gone makes it offline; a malformed zip is broken. `forSummary`: the pictures came from
     /// the catalog, so a failure or a time out leaves the folder's own notes (empty for the session, time outs)
     /// alone.
-    private func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String,
+    private func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String?,
                               forSummary: Bool) async -> CoverListingResult {
         let lister = coverLister, dated = !network
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
@@ -401,7 +442,7 @@ extension ThumbnailStore {
             part in try lister(folder, archive, dated, part)
         }
         func timedOut() -> CoverListingResult {
-            if network { noteVolumeTimeout(volume) }
+            noteVolumeTimeout(volume)
             guard !forSummary else { return .notNow }
             coverTimeouts[key, default: 0] += 1
             guard coverTimeouts[key, default: 0] >= Self.coverTimeoutsAllowed else { return .notNow }
@@ -411,7 +452,7 @@ extension ThumbnailStore {
         }
         switch outcome {
         case .value(let listed, let complete):
-            if network { noteVolumeAnswered(volume) }
+            noteVolumeAnswered(volume)
             if !forSummary { coverTimeouts[key] = nil }
             setProblem(nil, for: key)
             return .listed(listed, complete: complete)
@@ -421,6 +462,9 @@ extension ThumbnailStore {
                 markVolumeOffline(volume)
             } else if network, Self.isConnectionError(error) {
                 return timedOut()
+            } else {
+                // No such file, no permission, a malformed zip: the share answered.
+                noteVolumeAnswered(volume)
             }
             let problem: CardProblem? = error is ArchiveError ? .broken : nil
             setProblem(problem, for: key)
@@ -448,25 +492,60 @@ extension ThumbnailStore {
                 EHOSTUNREACH, ESTALE].contains(code)
     }
 
-    /// The key of a card's volume for its offline state: the catalog's volume, else the folder Home shows.
-    nonisolated static func volumeKey(_ folder: URL, _ location: ThumbnailLocation?) -> String {
-        location?.volume ?? "path:" + folder.standardizedFileURL.deletingLastPathComponent().path
+    /// The key of a share's card's volume for its offline state: the catalog's volume, else the share's mount point
+    /// (nil when the mount table puts the folder on no share).
+    nonisolated static func volumeKey(_ folder: URL, _ location: ThumbnailLocation?) -> String? {
+        location?.volume ?? networkMountPoint(folder)
     }
 
-    private func noteVolumeTimeout(_ volume: String) {
+    /// Tests: how often an offline share may be probed.
+    func setCoverProbeInterval(_ interval: Duration) {
+        coverProbeInterval = interval
+    }
+
+    /// Something on the share of `folder` answered (the browser's own listing of it, say): it is not offline, and its
+    /// time outs in a row start again. `location`: where the catalog keeps `folder`'s files, as for its cards (nil:
+    /// the mount table's share).
+    public func volumeAnswered(_ folder: URL, in location: ThumbnailLocation?) {
+        noteVolumeAnswered(Self.volumeKey(folder, location))
+    }
+
+    func isOffline(_ volume: String?) -> Bool {
+        volume.map { offlineVolumes[$0] != nil } ?? false
+    }
+
+    /// Whether a card on `volume` may be listed for its summary: always unless the share is offline, then once per
+    /// `coverProbeInterval` (`probe`: this is that listing; else only asking).
+    private func mayList(on volume: String?, probe: Bool) -> Bool {
+        guard let volume, let since = offlineVolumes[volume] else { return true }
+        guard ContinuousClock.now - since >= coverProbeInterval else { return false }
+        if probe { offlineVolumes[volume] = .now }
+        return true
+    }
+
+    private func noteVolumeTimeout(_ volume: String?) {
+        guard let volume else { return }
         if coverVolumeTimeouts.count >= Self.coverVolumeLimit { coverVolumeTimeouts.removeAll() }
         coverVolumeTimeouts[volume, default: 0] += 1
         if coverVolumeTimeouts[volume, default: 0] >= Self.coverOfflineTimeouts { markVolumeOffline(volume) }
     }
 
-    private func markVolumeOffline(_ volume: String) {
+    private func markVolumeOffline(_ volume: String?) {
+        guard let volume else { return }
         if offlineVolumes.count >= Self.coverVolumeLimit { offlineVolumes.removeAll() }
-        offlineVolumes.insert(volume)
+        offlineVolumes[volume] = .now
     }
 
-    private func noteVolumeAnswered(_ volume: String) {
+    func noteVolumeAnswered(_ volume: String?) {
+        guard let volume else { return }
         coverVolumeTimeouts[volume] = nil
-        offlineVolumes.remove(volume)
+        offlineVolumes[volume] = nil
+    }
+
+    /// The folder's card went out with `summaryPending`: its next call lists it.
+    private func noteSummaryDue(_ key: String) {
+        if summaryDue.count >= Self.coverPickLimit { summaryDue.removeAll() }
+        summaryDue.insert(key)
     }
 
     /// The folder was listed for its summary this session (at this date): not again, whatever came of it.
@@ -504,7 +583,7 @@ extension ThumbnailStore {
         }
         let listed: CoverListing, complete: Bool
         switch await coverListing(folder, archive: archive, network: network, key: key,
-                                  volume: Self.volumeKey(folder, location), forSummary: false) {
+                                  volume: network ? Self.volumeKey(folder, location) : nil, forSummary: false) {
         case .listed(let value, let ended): (listed, complete) = (value, ended)
         case .settled(let problem): return CoverMade(images: [], listed: true, problem: problem)
         case .notNow: return nil

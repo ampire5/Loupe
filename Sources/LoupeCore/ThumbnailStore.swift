@@ -149,10 +149,15 @@ public actor ThumbnailStore {
     /// Folders (by `memoKey`) listed for their summary this session, however it ended: not again. At most
     /// `coverPickLimit` (then forgotten at once).
     var summaryTried: Set<String> = []
-    /// Shares' listings in a row without a name in time (or with an I/O error), and the shares offline, by
-    /// `volumeKey`; at most `coverVolumeLimit` each.
+    /// Folders (by `memoKey`) whose card went out with the catalog's pictures and `summaryPending`: the next call lists
+    /// them. At most `coverPickLimit` (then forgotten at once).
+    var summaryDue: Set<String> = []
+    /// Shares' listings in a row without a name in time (or with an I/O error), by `volumeKey`; and the shares
+    /// offline, with when they were last listed (marked, or probed: `coverProbeInterval`). At most `coverVolumeLimit`
+    /// each.
     var coverVolumeTimeouts: [String: Int] = [:]
-    var offlineVolumes: Set<String> = []
+    var offlineVolumes: [String: ContinuousClock.Instant] = [:]
+    var coverProbeInterval = ThumbnailStore.coverOfflineProbeInterval
     /// Folder summaries made by covers, waiting for the next batch (`commit`), by volume and path; read before the
     /// catalog. At most `summaryBatch`: a full batch is written at once.
     var pendingSummaries: [String: (location: ThumbnailLocation, summary: FolderSummary)] = [:]

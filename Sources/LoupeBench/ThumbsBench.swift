@@ -19,8 +19,9 @@ import LoupeCore
 // with them), then once more from a fresh store on the same catalog (the next session: a fresh summary and the four
 // thumbnails, no listing, no read). Between the two, a pass on the catalog with its summaries removed: the first launch
 // after folder cards came (pictures from the catalog, each folder listed for its summary). Each card gets its folder's
-// date as the parent's listing gives it. Prints covers per second, the time until the first 12 cards have their cover
-// and summary, and the process's CPU time per pass.
+// date as the parent's listing gives it; a card whose summary is pending (pictures from the catalog at once) stays in
+// the queue for its follow-up, as Home's does. Prints covers per second, the time until the first 12 cards have their
+// pictures and until they have their summary, and the process's CPU time per pass.
 
 enum ThumbsBench {
     static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>\n"
@@ -180,8 +181,9 @@ extension ThumbsBench {
         })
 
         print("### covers: \(subfolders.count) subfolders, listings \(o.listings), decodes \(o.decodes), size \(o.size), F_NOCACHE\n")
-        print("| pass | covers | pictures | summaries | first \(firstCards) s | s | covers/s | CPU s | cores busy |")
-        print("|---|---|---|---|---|---|---|---|---|")
+        print("| pass | covers | pictures | summaries | first \(firstCards) pictures s | first \(firstCards) summaries s "
+              + "| s | covers/s | CPU s | cores busy |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
         for pass in ["made", "no summaries", "catalog"] {
             if pass == "no summaries" {
                 // The first launch after the update: the catalog has the thumbnails, no summary yet.
@@ -195,9 +197,9 @@ extension ThumbsBench {
             let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size, limitBytes: 2 << 30,
                                        idleDelay: .zero, decodes: o.decodes)
             let queue = CoverQueue(listingLimit: o.listings, resumeDelay: .zero)
-            let pictures = LockedLines(), summaries = LockedLines()
+            let times = CardTimes()
             let ids = subfolders.map(\.path)
-            let firstIDs = Set(ids.prefix(firstCards)), firstDone = LockedLines()
+            let firstIDs = Set(ids.prefix(firstCards))
             let cpu = cpuTimeMs()
             let start = ContinuousClock.now
             var place = await store.folderLocation(root)
@@ -220,28 +222,52 @@ extension ThumbsBench {
                                                         in: shown?.subfolder(folder.lastPathComponent),
                                                         network: network, maxPixel: 256,
                                                         modified: dates[id] ?? nil) else { return false }
-                if card.summary != nil { summaries.add(id) }
-                if firstIDs.contains(id) { firstDone.add(String(msSince(start))) }
-                pictures.add("\(card.images.count)")
+                // As Home will: the pictures as they come; a card whose summary is pending stays in the queue ("not
+                // done"), which asks again at its pace (`CoverQueue.defaultRetryDelay`).
+                times.pictures(id, card.images.count, at: msSince(start))
+                guard !card.summaryPending else { return false }
+                times.done(id, summary: card.summary != nil, at: msSince(start))
                 return true
             }
             let deadline = start + .seconds(60 + 5 * ids.count)
-            while pictures.all.count < ids.count, ContinuousClock.now < deadline {
+            while times.doneCount < ids.count, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(5))
             }
             let seconds = msSince(start) / 1000, cpuUsed = (cpuTimeMs() - cpu) / 1000
-            let made = pictures.all.compactMap(Int.init).reduce(0, +)
-            let first = firstDone.all.count == firstCards ? firstDone.all.compactMap(Double.init).max().map {
-                String(format: "%.2f", $0 / 1000)
-            } ?? "–" : "–"
-            print("| \(pass) | \(pictures.all.count) | \(made) | \(summaries.all.count) | \(first) "
-                  + "| \(String(format: "%.2f", seconds)) "
-                  + "| \(String(format: "%.1f", Double(pictures.all.count) / seconds)) | \(String(format: "%.1f", cpuUsed)) "
+            func first(_ at: [String: Double]) -> String {
+                let firsts = firstIDs.compactMap { at[$0] }
+                return firsts.count == firstCards ? String(format: "%.2f", firsts.max()! / 1000) : "–"
+            }
+            print("| \(pass) | \(times.doneCount) | \(times.pictureCount) | \(times.summaryCount) "
+                  + "| \(first(times.picturesAt)) | \(first(times.summariesAt)) | \(String(format: "%.2f", seconds)) "
+                  + "| \(String(format: "%.1f", Double(times.doneCount) / seconds)) | \(String(format: "%.1f", cpuUsed)) "
                   + "| \(String(format: "%.1f", cpuUsed / seconds)) |")
             // The summaries go to the catalog with the store's next batch (`commitDelay`, 1 s): before the next session.
             try? await Task.sleep(for: .seconds(1.5))
         }
         print()
+    }
+}
+
+/// When each card had its pictures and its summary, from the cover queue's tasks.
+final class CardTimes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var shown: [String: (count: Int, at: Double)] = [:]
+    private var finished: [String: (summary: Bool, at: Double)] = [:]
+
+    /// The first delivery with pictures counts.
+    func pictures(_ id: String, _ count: Int, at ms: Double) {
+        lock.withLock { if shown[id] == nil, count > 0 { shown[id] = (count, ms) } }
+    }
+
+    func done(_ id: String, summary: Bool, at ms: Double) { lock.withLock { finished[id] = (summary, ms) } }
+
+    var doneCount: Int { lock.withLock { finished.count } }
+    var pictureCount: Int { lock.withLock { shown.values.reduce(0) { $0 + $1.count } } }
+    var summaryCount: Int { lock.withLock { finished.values.filter(\.summary).count } }
+    var picturesAt: [String: Double] { lock.withLock { shown.mapValues(\.at) } }
+    var summariesAt: [String: Double] {
+        lock.withLock { finished.filter(\.value.summary).mapValues(\.at) }
     }
 }
 

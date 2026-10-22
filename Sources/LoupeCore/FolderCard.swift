@@ -45,13 +45,17 @@ public struct FolderCard: Sendable {
     /// The photos' modification dates from this pass's listing with stat (a local volume); nil when the card came
     /// from the catalog, on a share and for a zip.
     public var photoDates: [Date]?
+    /// The pictures came from the catalog at once and the folder is still to be listed for its summary: the next
+    /// `folderCard` for it does that (the cover queue keeps the card, its work "not done", and asks again at its pace).
+    public var summaryPending: Bool
 
     public init(images: [CGImage], summary: FolderSummary? = nil, problem: CardProblem? = nil,
-                photoDates: [Date]? = nil) {
+                photoDates: [Date]? = nil, summaryPending: Bool = false) {
         self.images = images
         self.summary = summary
         self.problem = problem
         self.photoDates = photoDates
+        self.summaryPending = summaryPending
     }
 }
 

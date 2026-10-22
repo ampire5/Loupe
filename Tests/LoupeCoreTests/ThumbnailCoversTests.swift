@@ -1075,8 +1075,14 @@ private final class FakeDatedListing: @unchecked Sendable {
         let next = self.store(reader, dir: dir)
         await next.setCoverListing(dated: listing.lister)
         listing.set("/photos/f", files: (names + ["7.jpg"]).map { .init(name: $0, date: Self.day(3), size: 10) })
+        // The pictures from the catalog at once, with the older summary; the count follows on the next call.
+        let first = try #require(await next.folderCard(folder, archive: false, in: loc("/photos/f"), maxPixel: 64,
+                                                       modified: Self.day(4)))
+        #expect(first.summaryPending && first.images.count == 4 && first.summary?.photos == 6)
+        #expect(listing.calls == ["/photos/f"])
         let card = try #require(await next.folderCard(folder, archive: false, in: loc("/photos/f"), maxPixel: 64,
                                                       modified: Self.day(4)))
+        #expect(!card.summaryPending)
         #expect(listing.calls == ["/photos/f", "/photos/f"])
         #expect(card.images.count == 4)
         #expect(card.summary?.photos == 7)
@@ -1167,7 +1173,9 @@ private final class FakeDatedListing: @unchecked Sendable {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let store = store(ThumbReader(), dir: dir)
-        await store.setCoverListing(dated: { _, _, _, _ in throw CocoaError(.fileNoSuchFile) })
+        // Answers at once; a generous limit, as a loaded machine may start the utility thread late.
+        await store.setCoverListing(dated: { _, _, _, _ in throw CocoaError(.fileNoSuchFile) },
+                                    networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in false }
         let card = try #require(await store.folderCard(URL(fileURLWithPath: "/net/gone"), archive: false,
                                                        in: loc("/net/gone", network: true), maxPixel: 64))
@@ -1255,18 +1263,22 @@ private final class FakeDatedListing: @unchecked Sendable {
             throw CancellationError()
         }, networkTimeout: .milliseconds(50))
         await store.setCoverVolumes { _ in true }
-        let folder = URL(fileURLWithPath: "/net/f")
+        let folder = URL(fileURLWithPath: "/net/f"), lane = CoverLane(network: true, resolving: false)
         let card = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
                                                        modified: Self.day))
-        #expect(card.images.count == 4)
-        #expect(card.summary == nil)
+        #expect(card.images.count == 4 && card.summaryPending && card.summary == nil)
+        #expect(store.coverThreads.count(lane) == 0)   // not listed: the pictures went out at once
         let again = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
                                                         modified: Self.day))
-        #expect(again.images.count == 4)
-        #expect(await eventually { calls.count == 1 })
-        try? await Task.sleep(for: .milliseconds(100))
-        #expect(calls.count == 1)
+        #expect(again.images.count == 4 && !again.summaryPending && again.summary == nil)
+        #expect(store.coverThreads.count(lane) == 1)   // the summary's listing, hung
+        let third = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64,
+                                                        modified: Self.day))
+        #expect(third.images.count == 4 && !third.summaryPending)
+        #expect(store.coverThreads.count(lane) == 1)   // tried once this session: no second listing
         gate.signal()
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        #expect(calls.count == 1)
     }
 
     /// A share listing only part of a big folder in time: the pictures from the catalog, no summary from a part, and
@@ -1284,18 +1296,19 @@ private final class FakeDatedListing: @unchecked Sendable {
             throw CancellationError()
         }, networkTimeout: .milliseconds(50))
         await store.setCoverVolumes { _ in true }
-        let folder = URL(fileURLWithPath: "/net/big")
-        for _ in 0..<2 {
+        let folder = URL(fileURLWithPath: "/net/big"), lane = CoverLane(network: true, resolving: false)
+        for pending in [true, false, false] {
             let card = try #require(await store.folderCard(folder, archive: false, in: loc("/net/big"), maxPixel: 64,
                                                            modified: Self.day))
             #expect(card.images.count == 4)
             #expect(card.summary == nil)
+            #expect(card.summaryPending == pending)
         }
-        // The listing's thread may start late on a loaded machine: one in all, no more.
-        #expect(await eventually { calls.count == 1 })
-        try? await Task.sleep(for: .milliseconds(100))
-        #expect(calls.count == 1)
+        // One listing in all, still held by its thread: the third call listed nothing.
+        #expect(store.coverThreads.count(lane) == 1)
         gate.signal()
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        #expect(calls.count == 1)
     }
 
     /// A listing that fails keeps the stored summary (however old) and the catalog's pictures.
@@ -1310,6 +1323,9 @@ private final class FakeDatedListing: @unchecked Sendable {
                                 datesKnown: true)
         await store.putFolderSummaries([(loc("/p/f"), old)])
         await store.setCoverListing(dated: { _, _, _, _ in throw POSIXError(.EACCES) })
+        let first = try #require(await store.folderCard(URL(fileURLWithPath: "/p/f"), archive: false, in: loc("/p/f"),
+                                                        maxPixel: 64, modified: Self.day.addingTimeInterval(60)))
+        #expect(first.summaryPending && first.summary == old)
         let card = try #require(await store.folderCard(URL(fileURLWithPath: "/p/f"), archive: false, in: loc("/p/f"),
                                                        maxPixel: 64, modified: Self.day.addingTimeInterval(60)))
         #expect(card.images.count == 4)
@@ -1363,7 +1379,8 @@ private final class FakeDatedListing: @unchecked Sendable {
         defer { try? fm.removeItem(at: dir) }
         let errors = LockedErrors()
         let store = store(ThumbReader(), dir: dir)
-        await store.setCoverListing(dated: { folder, _, _, _ in throw errors.error(for: folder.lastPathComponent) })
+        await store.setCoverListing(dated: { folder, _, _, _ in throw errors.error(for: folder.lastPathComponent) },
+                                    networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in true }
         errors.set("bad.zip", ArchiveError.damaged)
         errors.set("locked.zip", POSIXError(.EACCES))
@@ -1472,4 +1489,209 @@ final class LockedErrors: @unchecked Sendable {
     private var errors: [String: Error] = [:]
     func set(_ name: String, _ error: Error) { lock.withLock { errors[name] = error } }
     func error(for name: String) -> Error { lock.withLock { errors[name] ?? CocoaError(.fileReadUnknown) } }
+}
+
+/// Fix round 2 of the folder cards' task 6: the catalog's pictures go out at once and the facts follow on the next
+/// call; a share comes back as soon as it answers anything.
+@Suite struct FolderCardFollowUpTests {
+    private let fm = FileManager.default
+
+    private func tempDir() -> URL { fm.temporaryDirectory.appendingPathComponent("loupe-folder-card-\(UUID().uuidString)") }
+
+    private func store(_ reader: ThumbReader, dir: URL) -> ThumbnailStore {
+        ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                       locate: { url in
+                           ThumbnailLocation(volume: url.path.hasPrefix("/net/") ? "net:share" : "test",
+                                             folder: url.deletingLastPathComponent().path, name: url.lastPathComponent)
+                       }, idleDelay: .zero, commitDelay: .seconds(3600))
+    }
+
+    private func loc(_ folder: String) -> ThumbnailLocation {
+        ThumbnailLocation(volume: folder.hasPrefix("/net/") ? "net:share" : "test", folder: folder, name: "_")
+    }
+
+    private func catalogued(_ store: ThumbnailStore, _ reader: ThumbReader, in folder: String) async {
+        for name in (1...4).map({ "\($0).jpg" }) {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent(name)
+            reader.add(url, TestJPEGs.gradient(width: 40, height: 30))
+            _ = await store.cover(url, maxPixel: 64)
+        }
+    }
+
+    /// A share made offline by two listings that hang (their threads wait at `gate`).
+    private func offline(_ store: ThumbnailStore, gate: DispatchSemaphore, names: [String] = ["h1", "h2"]) async {
+        await store.setCoverListing(dated: { _, _, _, _ in
+            gate.wait()
+            throw CancellationError()
+        }, networkTimeout: .milliseconds(50))
+        for name in names {
+            _ = await store.folderCard(URL(fileURLWithPath: "/net/\(name)"), archive: false, in: loc("/net/\(name)"),
+                                       maxPixel: 64)
+        }
+    }
+
+    /// Four thumbnails in the catalog and no fresh summary, on a share and on a local volume: the first call gives the
+    /// pictures at once without a listing, the summary pending; the next lists and brings it.
+    @Test(arguments: ["/net/f", "/p/f"])
+    func catalogPicturesGoOutAtOnce(_ path: String) async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), calls = TryCounter()
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: path)
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            return CoverListing(names: CoverNames(files: (1...4).map { "\($0).jpg" }, folders: []))
+        }, networkTimeout: .seconds(30))
+        await store.setCoverVolumes { $0.path.hasPrefix("/net/") }
+        let folder = URL(fileURLWithPath: path)
+        let first = try #require(await store.folderCard(folder, archive: false, in: loc(path), maxPixel: 64))
+        #expect(first.images.count == 4 && first.summaryPending && first.summary == nil)
+        #expect(calls.count == 0)   // a listing would have ended before the card came back
+        let next = try #require(await store.folderCard(folder, archive: false, in: loc(path), maxPixel: 64))
+        #expect(next.images.count == 4 && !next.summaryPending)
+        #expect(next.summary?.photos == 4)
+        #expect(calls.count == 1)
+    }
+
+    /// A card whose follow-up is cancelled (it left the screen) keeps its try: the next follow-up lists.
+    @Test func cancelledFollowUpKeepsItsTry() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), calls = TryCounter(), started = LockedFlag(), gate = DispatchSemaphore(value: 0)
+        let store = store(reader, dir: dir)
+        await catalogued(store, reader, in: "/p/f")
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            if calls.count == 1 {
+                started.set()
+                gate.wait()
+            }
+            return CoverListing(names: CoverNames(files: ["1.jpg"], folders: []))
+        }, localTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/p/f")
+        #expect(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64)?.summaryPending == true)
+        let task = Task { await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64) }
+        #expect(await eventually { started.isSet })
+        task.cancel()
+        _ = await task.value
+        gate.signal()
+        var card = try #require(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64))
+        if card.summaryPending {   // the cancelled try was put back as due, or asked for again
+            card = try #require(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64))
+        }
+        #expect(!card.summaryPending && card.summary?.photos == 1)
+        #expect(calls.count == 2)
+    }
+
+    /// An offline share comes back with the open folder's listing on it, and with the browser telling of one.
+    @Test func openFolderListingBringsTheShareBack() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let gate = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await offline(store, gate: gate)
+        #expect(await store.offlineVolumes["net:share"] != nil)
+        // A time limit no loaded machine's late thread runs out of, for the open folder's resolve.
+        await store.setCoverListing(dated: { _, _, _, _ in CoverListing(names: CoverNames(files: [], folders: [])) },
+                                    networkTimeout: .seconds(30))
+        await store.putOpenFolderSummary(URL(fileURLWithPath: "/net/open"), listing: [])
+        #expect(await store.offlineVolumes["net:share"] == nil)
+        for _ in 0..<2 { gate.signal() }
+        let lane = CoverLane(network: true, resolving: false)
+        #expect(await eventually { store.coverThreads.count(lane) == 0 })
+        await offline(store, gate: gate, names: ["h3", "h4"])
+        #expect(await store.offlineVolumes["net:share"] != nil)
+        await store.volumeAnswered(URL(fileURLWithPath: "/net/shown"), in: loc("/net/shown"))
+        #expect(await store.offlineVolumes["net:share"] == nil)
+        for _ in 0..<2 { gate.signal() }
+    }
+
+    /// "No such file" or "no permission" from a share is an answer: its time outs in a row start again.
+    @Test func answerOfAnErrorClearsTheTimeOuts() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let gate = DispatchSemaphore(value: 0)
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        let lister: ThumbnailStore.DatedCoverLister = { folder, _, _, _ in
+            if folder.lastPathComponent == "gone" { throw POSIXError(.ENOENT) }
+            gate.wait()
+            throw CancellationError()
+        }
+        // Short limits for the listings that hang, a generous one for the answer (a loaded machine starts threads late).
+        func limit(_ timeout: Duration) async { await store.setCoverListing(dated: lister, networkTimeout: timeout) }
+        await limit(.milliseconds(50))
+        func card(_ name: String) async -> FolderCard? {
+            await store.folderCard(URL(fileURLWithPath: "/net/\(name)"), archive: false, in: loc("/net/\(name)"),
+                                   maxPixel: 64)
+        }
+        #expect(await card("t1") == nil)
+        #expect(await store.coverVolumeTimeouts["net:share"] == 1)
+        await limit(.seconds(30))
+        #expect(await card("gone")?.problem == nil)
+        #expect(await store.coverVolumeTimeouts["net:share"] == nil)
+        await limit(.milliseconds(50))
+        #expect(await card("t2") == nil)   // one time out again: not offline
+        #expect(await store.offlineVolumes["net:share"] == nil)
+        for _ in 0..<2 { gate.signal() }
+    }
+
+    /// While a share is offline its cards are not listed for their summary, but one probe a while goes through the
+    /// summary's follow-up: when the share answers it, the share is back.
+    @Test func probeBringsTheShareBack() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), gate = DispatchSemaphore(value: 0), calls = TryCounter()
+        let store = store(reader, dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await catalogued(store, reader, in: "/net/f")
+        await offline(store, gate: gate)
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            return CoverListing(names: CoverNames(files: (1...4).map { "\($0).jpg" }, folders: []))
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/net/f")
+        // Within the probe interval: the pictures, offline, nothing pending and nothing listed.
+        let dim = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64))
+        #expect(dim.images.count == 4 && dim.problem == .offline && !dim.summaryPending)
+        #expect(calls.count == 0)
+        await store.setCoverProbeInterval(.zero)
+        let due = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64))
+        #expect(due.summaryPending && due.problem == .offline)
+        let back = try #require(await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64))
+        #expect(back.problem == nil && back.summary?.photos == 4)
+        #expect(calls.count == 1)
+        for _ in 0..<2 { gate.signal() }
+    }
+
+    /// Without a location a card's volume and share-ness come from the mount table: a local folder that cannot be
+    /// listed dims nothing.
+    @Test func localFolderWithoutLocationDimsNothing() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let store = store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in false }
+        await store.setCoverListing(dated: { folder, _, _, _ in
+            if folder.lastPathComponent == "a" { throw POSIXError(.ENOENT) }
+            return CoverListing(names: CoverNames(files: [], folders: []))
+        })
+        #expect(await store.folderCard(URL(fileURLWithPath: "/p/a"), archive: false, in: nil, maxPixel: 64)?.problem == nil)
+        #expect(await store.folderCard(URL(fileURLWithPath: "/p/b"), archive: false, in: nil, maxPixel: 64)?.problem == nil)
+        #expect(await store.offlineVolumes.isEmpty)
+    }
+
+    /// A folder given up earlier this session shows its pictures once the catalog has four of them.
+    @Test func givenUpFolderRecoversFromTheCatalog() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: { _, _, _, _ in throw POSIXError(.EACCES) })
+        let folder = URL(fileURLWithPath: "/p/f")
+        #expect(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64)?.images.isEmpty == true)
+        await catalogued(store, reader, in: "/p/f")
+        #expect(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64)?.images.count == 4)
+    }
 }

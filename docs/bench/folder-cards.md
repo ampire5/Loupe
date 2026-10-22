@@ -41,21 +41,24 @@ Reading:
 ## First launch after the update: thumbnails in the catalog, no summary yet
 
 A third pass between the two (`no summaries`): the catalog of the made pass with its `folder_summaries` rows removed.
-Each card's pictures come from the catalog at once; the folder is listed once for its summary (with dates on a local
-volume), whatever that listing does to the pictures. Same machine and data, after the review fixes (the catalog's
-pictures never wait on the summary listing's outcome; a share goes offline as a whole), three runs:
+Each card's pictures come from the catalog at once, without a listing, its summary pending (`FolderCard.summaryPending`);
+the bench, as Home will, keeps such a card in the queue ("not done"), and the queue's next call for it, at its pace
+(`CoverQueue.defaultRetryDelay`, 1 s), lists the folder once for its summary (with dates on a local volume). Same
+machine and data, three runs; "pictures" is the time until the first 12 cards have their pictures, "summaries" until
+they have their summary too:
 
-| data | pass | first 12 | all 24 | CPU |
-|---|---|---|---|---|
-| 200 | made | 0.28 / 0.29 / 0.30 | 0.61–0.71 | 1.8–2.0 |
-| 200 | no summaries | 0.07 / 0.08 / 0.09 | 0.16–0.20 | 0.3 |
-| 200 | catalog | 0.05 / 0.05 / 0.05 | 0.10–0.11 | 0.2 |
-| 2000 | made | 0.66 / 0.66 / 0.66 | 1.34–1.38 | 3.3 |
-| 2000 | no summaries | 0.30 / 0.30 / 0.31 | 0.61 | 1.2 |
-| 2000 | catalog | 0.05 / 0.05 / 0.05 | 0.10–0.11 | 0.2 |
+| data | pass | first 12 pictures | first 12 summaries | all 24 done | CPU |
+|---|---|---|---|---|---|
+| 200 | made | 0.28 / 0.33 / 0.37 | same | 0.60–0.71 | 1.8–1.9 |
+| 200 | no summaries | 0.05 / 0.05 / 0.06 | 1.08 / 1.09 / 1.09 | 1.17–1.18 | 0.5 |
+| 200 | catalog | 0.05 / 0.05 / 0.06 | same | 0.10–0.13 | 0.2 |
+| 2000 | made | 0.69 / 0.70 / 0.78 | same | 1.41–1.58 | 3.5–3.8 |
+| 2000 | no summaries | 0.05 / 0.05 / 0.06 | 1.31 / 1.33 / 1.35 | 1.61–1.71 | 1.4–1.5 |
+| 2000 | catalog | 0.05 / 0.05 / 0.08 | same | 0.11–0.13 | 0.2 |
 
-The first launch costs one listing per folder, once: 0.03–0.25 s more than a session with summaries for the first 12
-cards, then the summaries are in the catalog and later sessions are the `catalog` row.
+The pictures of the first launch come as fast as with summaries in the catalog; the facts follow about a second later
+(the queue's retry delay, then the listing), once, and later sessions are the `catalog` row. On a share the pictures
+never wait on its listings at all; the summary's listing runs at the share lane's pace, one at a time.
 
 ## Summary batches
 

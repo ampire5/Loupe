@@ -37,7 +37,10 @@ extension ThumbnailStore {
                                    modified: try? fresh.resourceValues(forKeys: [.contentModificationDateKey])
                                        .contentModificationDate)
         }
-        guard case .value(let place, _) = outcome, let location = place.location else { return }
+        guard case .value(let place, _) = outcome else { return }
+        // The folder's share answered.
+        if network { noteVolumeAnswered(Self.volumeKey(folder, place.location)) }
+        guard let location = place.location else { return }
         let summary = await Self.offActor(qos: Self.coverQoS) {
             FolderSummary.of(listing: entries, folderModified: place.modified)
         }
