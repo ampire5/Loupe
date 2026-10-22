@@ -44,8 +44,14 @@ public struct SpreadLayout: Equatable, Sendable {
         return scale * Double(virtualSize.height) / pageHeight
     }
 
-    /// Two pages fit a view that is at least as wide as it is tall; a narrower one shows one page.
+    /// The narrowest view (width / height) that shows two pages (spread spec, «Узкое окно»). Any landscape window
+    /// passes, the strip beside it or not: it is the viewer's own view, in pixels, that is measured, never the photo.
+    /// Below it, a portrait monitor or a window made tall, a pair of portrait pages would be drawn smaller than one
+    /// page alone, so one page shows.
+    public static let minimumViewAspect = 1.0
+
+    /// Two pages fit a view at least as wide as it is tall (`minimumViewAspect`); a narrower one shows one page.
     public static func showsTwo(viewSize: CGSize) -> Bool {
-        viewSize.height > 0 && viewSize.width / viewSize.height >= 1.0
+        viewSize.height > 0 && viewSize.width / viewSize.height >= minimumViewAspect
     }
 }
