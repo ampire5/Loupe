@@ -4,8 +4,8 @@ import LoupeCore
 
 /// Home's Folders tab on Loupe's data (file browser spec §4.2): listings from `BrowserListingSource` (the last eight
 /// kept in memory, so Back and Up show at once), a `FolderWatcher` on the open folder, thumbnails from the strip's
-/// store (the folder's files as one more window's request), folder covers like Recent's, the sort in folder
-/// settings, and rename and Trash through `BrowserFileActions`.
+/// store (the folder's files as one more window's request), folder and zip covers from the store's cover queue (folder
+/// covers spec), the sort in folder settings, and rename and Trash through `BrowserFileActions`.
 @MainActor final class FolderBrowserSource {
     weak var view: HomeBrowserView?
     /// Opens a photo, a folder or a zip in the viewer, here or in a new tab or window.
@@ -39,6 +39,29 @@ import LoupeCore
     private var waiting: [URL: String] = [:]
     private var pictureTask: Task<Void, Never>?
     private var maxPixel = 440
+
+    /// How a folder's or zip's card shows its photos (`folder-cover`); a change makes the covers in view again.
+    var coverLayout = HomeMosaic.Layout.hero {
+        didSet { if coverLayout != oldValue { remakeCovers() } }
+    }
+    /// The folder on screen, for its cards' covers, and where the catalog keeps its files: resolved once, off the main
+    /// thread (`ThumbnailStore.shownFolderPlace`); nil while it is being resolved.
+    private var coverFolder: String?
+    private var coverPlace: CoverPlace?
+    private var placeTask: Task<Void, Never>?
+    /// The folder and zip cards that want a cover (those in view first), kept until the place is known.
+    private var coverWant: CoverWant?
+    /// Cards given a cover in the folder on screen: made again when the layout changes.
+    private var covered: [String: BrowserEntry] = [:]
+    /// The last `CoverQueue.want` sent: each goes after it, so the queue sees them in order.
+    private var coverSend: Task<Void, Never>?
+
+    private struct CoverWant {
+        var cards: [BrowserEntry]
+        var visible: Int
+        var width: CGFloat
+        var scale: CGFloat
+    }
     private var observer: NSObjectProtocol?
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
@@ -63,11 +86,12 @@ import LoupeCore
     var isPaused = false {
         didSet {
             watcher.isPaused = isPaused
-            guard isPaused else { return }
+            guard isPaused else { return sendCovers() }
             // Nothing of the browser's goes on reading while the viewer shows what was clicked.
             pictureTask?.cancel()
             waiting.removeAll()
             Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
+            send(covers: [])
         }
     }
 
@@ -75,6 +99,7 @@ import LoupeCore
     func leave() {
         _ = gate.begin(nil)
         stopWatching()
+        showCovers(of: nil)
         pictureTask?.cancel()
         waiting.removeAll()
         Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
@@ -84,6 +109,7 @@ import LoupeCore
         isPaused = true
         _ = gate.begin(nil)
         stopWatching()
+        showCovers(of: nil)
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
@@ -144,6 +170,7 @@ import LoupeCore
         // The Places page is the browser's place now: a folder's listing and watch stop.
         let token = gate.begin(nil)
         stopWatching()
+        showCovers(of: nil)
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor [weak self] in
                 guard let entries = await self?.places(), let self, !Task.isCancelled, self.gate.isCurrent(token) else { return }
@@ -170,6 +197,8 @@ import LoupeCore
         let archives = Settings.shared.config.archiveFolders
         let token = gate.begin(path)
         stopWatching()
+        // A zip's listing is its photos: no cards with covers.
+        showCovers(of: ArchivePath.isArchive(folder) ? nil : folder)
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor [weak self] in
                 /// Still the place on screen: else nothing of this listing reaches the source's state or the view.
@@ -285,51 +314,129 @@ import LoupeCore
 
     // MARK: Pictures
 
-    func wantImages(_ ids: [String], width: CGFloat) {
-        maxPixel = Int((width * (view?.window?.backingScaleFactor ?? 2)).rounded())
+    func wantImages(_ ids: [String], width: CGFloat) { wantImages(ids, visible: ids.count, width: width) }
+
+    /// The first `visible` of `ids` are in view, the rest is the margin around it. Photos come from the strip's store,
+    /// those in view first; folder and zip cards go to the cover queue.
+    func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
+        let scale = view?.window?.backingScaleFactor ?? 2
+        maxPixel = Int((width * scale).rounded())
         let wanted = ids.compactMap { shown[$0] }
-        sendRequest(visible: wanted.filter { $0.kind == .file }.map(\.url))
+        let inView = Set(ids.prefix(visible))
+        let files = wanted.filter { $0.kind == .file }
+        sendRequest(visible: files.filter { inView.contains($0.id) }.map(\.url))
+        let cards = wanted.filter { $0.kind == .folder || $0.kind == .archive }
+        coverWant = CoverWant(cards: cards, visible: cards.filter { inView.contains($0.id) }.count, width: width, scale: scale)
+        sendCovers()
         pictureTask?.cancel()
         let maxPixel = maxPixel
         pictureTask = Task { @MainActor [weak self] in
-            for entry in wanted {
+            for entry in files {
                 guard let self, !Task.isCancelled else { return }
-                switch entry.kind {
-                case .file:
-                    if let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel) {
-                        self.view?.setImage(image, for: entry.id)
-                    } else {
-                        self.waiting[entry.url.standardizedFileURL] = entry.id
-                    }
-                case .folder, .archive:
-                    let image = await self.mosaic(of: entry, maxPixel: maxPixel)
-                    guard !Task.isCancelled else { return }
-                    if let image { self.view?.setImage(image, for: entry.id) }
-                case .place, .collection:
-                    break
+                if let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel) {
+                    self.view?.setImage(image, for: entry.id)
+                } else {
+                    self.waiting[entry.url.standardizedFileURL] = entry.id
                 }
             }
         }
     }
 
-    /// A folder's or zip's picture: up to four of its photos that already have thumbnails, the one last viewed there
-    /// first, as a mosaic of the card's shape. From the catalog alone: no listing and no read of the folder, which on a
-    /// slow share would queue in front of what the user clicks. A folder never opened shows the folder symbol.
-    private func mosaic(of entry: BrowserEntry, maxPixel: Int) async -> CGImage? {
-        let folder = entry.url
-        var photos = await thumbnails.folderSamples(folder, limit: 4)
-        // A zip's entry name is one path component already ("caps∕0001.jpg").
-        if let remembered = positions.fileName(in: folder).map({ folder.appendingPathComponent($0) }) {
-            photos = [remembered] + photos.filter { $0.lastPathComponent != remembered.lastPathComponent }
+    // MARK: Covers
+
+    /// The folder on screen changed (nil: none, the places or one of Home's own sources): the old one's covers stop
+    /// and the new one is resolved, off the main thread, for its cards' (`ThumbnailStore.shownFolderPlace`).
+    private func showCovers(of folder: URL?) {
+        let path = folder?.standardizedFileURL.path
+        guard path != coverFolder else { return }
+        placeTask?.cancel()
+        placeTask = nil
+        coverFolder = path
+        coverPlace = nil
+        coverWant = nil
+        covered = [:]
+        send(covers: [])
+        guard let folder, let path else { return }
+        let thumbnails = self.thumbnails
+        placeTask = Task { @MainActor [weak self] in
+            let place = await thumbnails.shownFolderPlace(folder)
+            guard let self, !Task.isCancelled, self.coverFolder == path, place != .notNow else { return }
+            self.coverPlace = place
+            self.sendCovers()
         }
-        var images: [CGImage] = []
-        for photo in photos.prefix(4) {
-            guard !Task.isCancelled else { return nil }
-            // Each picture fills a half or a quarter: half the card's pixels are enough.
-            if let cell = await thumbnails.catalogThumbnail(photo, maxPixel: max(64, maxPixel / 2)) { images.append(cell) }
+    }
+
+    /// The wanted folder and zip cards to the store's cover queue, once the folder on screen is resolved. Each card's
+    /// work makes its cover (`ThumbnailStore.folderCover`: from the catalog when it has the photos, else from a
+    /// listing of names, both off the main thread) in the chosen layout, and gives it to the card; nil from it is "not
+    /// now", and the queue tries again later.
+    private func sendCovers() {
+        guard !isPaused, let want = coverWant, let place = coverPlace else { return }
+        let shownLocation: ThumbnailLocation?, network: Bool
+        switch place {
+        case .located(let location): (shownLocation, network) = (location, location.isNetwork)
+        case .unknown(let onShare): (shownLocation, network) = (nil, onShare)
+        case .notNow: return
         }
-        let side = CGFloat(maxPixel)   // a collection card's picture is square
-        return HomeMosaic.make(images, size: CGSize(width: side, height: side))
+        // The remembered photo of each folder first (a zip's entry name is one path component already).
+        let cards = Dictionary(want.cards.map { ($0.id, ($0, positions.fileName(in: $0.url))) }, uniquingKeysWith: { a, _ in a })
+        let layout = coverLayout, side = want.width, scale = want.scale
+        let pixels = Int((side * scale).rounded())
+        // A grid's cells are a half or a quarter of the card: half its pixels are enough. The other layouts' first
+        // picture fills most of it.
+        let cellPixels = layout == .grid && side >= HomeMosaic.narrowWidth ? max(64, pixels / 2) : pixels
+        let thumbnails = self.thumbnails
+        let deliver: @MainActor (String, BrowserEntry, CGImage) -> Void = { [weak self] id, entry, mosaic in
+            guard let self, self.shown[id] != nil else { return }
+            self.covered[id] = entry
+            self.view?.setImage(mosaic, for: id)
+        }
+        send(covers: want.cards.map(\.id), visible: want.visible, network: network) { id in
+            guard let card = cards[id] else { return true }
+            let (entry, lastViewed) = card
+            guard let images = await thumbnails.folderCover(entry.url, archive: entry.kind == .archive,
+                                                            in: shownLocation?.subfolder(entry.url.lastPathComponent),
+                                                            network: network, maxPixel: cellPixels,
+                                                            lastViewed: lastViewed) else { return false }
+            // No photos: the card keeps its symbol.
+            guard !Task.isCancelled, !images.isEmpty,
+                  let mosaic = HomeMosaic.make(images, size: CGSize(width: side, height: side), layout: layout,
+                                               scale: scale) else { return true }
+            await deliver(id, entry, mosaic)
+            return true
+        }
+    }
+
+    /// This browser's cards for the cover queue (its client id is the browser's thumbnail window), after the last ones
+    /// sent: an empty list stops them all.
+    private func send(covers ids: [String], visible: Int = 0, network: Bool = false,
+                      work: @escaping @Sendable (String) async -> Bool = { _ in true }) {
+        let queue = thumbnails.coverQueue, client = thumbnailWindow, previous = coverSend
+        coverSend = Task {
+            await previous?.value
+            await queue.want(ids, visible: visible, client: client, isNetwork: { _ in network }, work: work)
+        }
+    }
+
+    /// The layout changed: the covers in view are made again (from the catalog, now), before those still waiting.
+    private func remakeCovers() {
+        guard var want = coverWant ?? noCoverWant() else { return }
+        let waiting = Set(want.cards.map(\.id))
+        let again = (view?.visibleIDs ?? []).compactMap { covered[$0] }.filter { !waiting.contains($0.id) }
+        covered = [:]
+        guard !again.isEmpty else { return }
+        want.cards = again + want.cards
+        want.visible += again.count
+        coverWant = want
+        // Forget what the queue made: those cards are wanted again.
+        send(covers: [])
+        sendCovers()
+    }
+
+    /// A request for no cards at the browser's size, for a layout change when none waits.
+    private func noCoverWant() -> CoverWant? {
+        guard let width = view?.slotWidth else { return nil }
+        return CoverWant(cards: [], visible: 0, width: width, scale: view?.window?.backingScaleFactor ?? 2)
     }
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.

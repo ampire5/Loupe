@@ -185,7 +185,10 @@ extension ThumbsBench {
             let cpu = cpuTimeMs()
             let start = ContinuousClock.now
             var place = await store.folderLocation(root)
-            while place == .notNow {   // the app asks again later; a bench can wait
+            // The app asks again later; a bench waits, but not for good: three local time limits at most.
+            let resolveDeadline = start + ThumbnailStore.coverLocalListingTimeout * 3
+            while place == .notNow {
+                guard ContinuousClock.now < resolveDeadline else { fail("\(o.folder) did not resolve in time") }
                 try? await Task.sleep(for: .milliseconds(100))
                 place = await store.folderLocation(root)
             }

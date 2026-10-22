@@ -919,7 +919,7 @@ import UniformTypeIdentifiers
     /// The folder a restored session tab had in the browser, opened on Folders' next show.
     private var restoreBrowserAt: URL?
 
-    /// `browser-card-size`, `grid-style`, `grid-names`: on every show and every settings change.
+    /// `browser-card-size`, `grid-style`, `grid-names`, `folder-cover`: on every show and every settings change.
     private func applyBrowserSettings() {
         guard let homeView else { return }
         let config = Settings.shared.config
@@ -927,6 +927,9 @@ import UniformTypeIdentifiers
         view.cardSize = CGFloat(config.browserCardSize)
         view.style = config.gridStyle
         view.names = config.gridNames
+        let coverLayout = HomeMosaic.Layout(rawValue: config.folderCover.rawValue) ?? .hero
+        homeSources?.folders.coverLayout = coverLayout
+        homeSources?.collections.coverLayout = coverLayout
         homeView.sidebarWidth = CGFloat(config.homeSidebarWidth)
         homeView.sidebarCompactChains = config.homeSidebarCompact
         homeView.sidebarCompactIndent = config.homeSidebarIndent == .compact

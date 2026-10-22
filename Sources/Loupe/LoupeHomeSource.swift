@@ -36,11 +36,14 @@ import LoupeCore
     func parent(of folder: URL) -> BrowserLocation { folders.parent(of: folder) }
     func symbol(for entry: BrowserEntry) -> String { folders.symbol(for: entry) }
 
-    func wantImages(_ ids: [String], width: CGFloat) {
+    func wantImages(_ ids: [String], width: CGFloat) { wantImages(ids, visible: ids.count, width: width) }
+
+    /// The first `visible` of `ids` are in view: a folder's cards in view get their covers before the margin's.
+    func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
         if case .source = view?.location {
             collections.wantImages(ids, width: width)
         } else {
-            folders.wantImages(ids, width: width)
+            folders.wantImages(ids, visible: visible, width: width)
         }
     }
 

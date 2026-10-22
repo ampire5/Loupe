@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 124)
+        #expect(Config.keys.count == 125)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -91,6 +91,19 @@ struct PagesTests {
         }
     }
 
+    /// Home's folder cover layouts: one pop-up, with the narrow cards' rule in its description (folder covers spec).
+    @Test func folderCoverRow() {
+        guard case .choice(let items) = row("folder-cover")?.kind else {
+            Issue.record("folder-cover is not a choice")
+            return
+        }
+        #expect(items.map(\.word) == ["grid", "hero", "stack", "single"])
+        #expect(items.map(\.title) == ["Grid", "Hero", "Stack", "Single"])
+        #expect(row("folder-cover")?.description
+                == "How a folder's card shows what is inside. Narrow cards always show one photo.")
+        #expect(SettingsPanel.pages().first { $0.id == "general" }?.keys.contains("folder-cover") == true)
+    }
+
     /// The pop-ups of the enumerations offer the whole set (spec §11).
     @Test func choicesOfferTheWholeSet() {
         func set(_ key: String) -> Set<String> { Set(words(key)) }
@@ -98,6 +111,7 @@ struct PagesTests {
         #expect(set("open-in") == ["tab", "window", "replace"])
         #expect(set("new-window-fullscreen") == ["follow", "no"])
         #expect(set("cache-idle-keep") == ["full", "preview"])
+        #expect(set("folder-cover") == Set(FolderCoverLayout.allCases.map(\.rawValue)))
         #expect(set("folder-view-memory") == ["folder", "photo", "no"])
         #expect(set("folder-scroll-direction") == ["natural", "reversed"])
         #expect(set("pan-indicators") == Set(PanIndicatorMode.allCases.map(\.rawValue)))

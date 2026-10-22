@@ -11,7 +11,9 @@ import Foundation
 /// new cover starts; those running wait before their next thumbnail (`ThumbnailStore.folderCover`). A cover that
 /// cannot be made now (a share hung) says so and is tried again after `retryDelay`, rather than being done empty.
 ///
-/// Only the ids of the last `want` are kept: what waits is bounded by the cards on screen and in the margin.
+/// Each window's Home is a `client` of the one queue (the limits are the app's, not a window's): a client's `want`
+/// replaces its own cards only, and the cards in view in every window go before any margin. Only the ids of each
+/// client's last `want` are kept: what waits is bounded by the cards on screen and in the margins.
 public actor CoverQueue {
     /// Covers in flight on local volumes. `LoupeBench thumbs --covers` on a local SSD folder of 48 subfolders of 40
     /// progressive 3456 x 2160 JPEGs (i7-10700K, 8 cores, 3 thumbnail decode slots; 4 thumbnails a cover, ~155 ms of
@@ -33,8 +35,14 @@ public actor CoverQueue {
     public static let defaultRetryDelay: Duration = .seconds(1)
     public static let defaultMaxRetryDelay: Duration = .seconds(60)
 
-    private struct Item {
+    /// A card of a client: two windows may show the same folder.
+    private struct Key: Hashable {
+        let client: Int
         let id: String
+    }
+
+    private struct Item {
+        let key: Key
         let network: Bool
         let visible: Bool
         let work: @Sendable (String) async -> Bool
@@ -51,17 +59,20 @@ public actor CoverQueue {
     private let resumeDelay: Duration
     private let retryDelay: Duration
     private let maxRetryDelay: Duration
-    /// The cards of the last `want`, in their order (visible first); those running or done are skipped.
+    /// The cards of each client's last `want`, in their order (visible first).
+    private var clients: [Int: [Item]] = [:]
+    /// Every client's cards in the order they start: the visible ones of all, then the margins; those running or done
+    /// are skipped.
     private var wanted: [Item] = []
-    private var running: [String: Running] = [:]
+    private var running: [Key: Running] = [:]
     /// Cancelled tasks still ending, by token: they hold their place in the limits.
     private var ending: [UInt64: Bool] = [:]
     /// Covers made for cards still wanted: not made again on the next `want`.
-    private var done: Set<String> = []
+    private var done: Set<Key> = []
     /// Cards whose work said "not now": not started again before then.
-    private var retryAt: [String: ContinuousClock.Instant] = [:]
+    private var retryAt: [Key: ContinuousClock.Instant] = [:]
     /// "Not now"s in a row per card still wanted, for the growing delay.
-    private var notNows: [String: Int] = [:]
+    private var notNows: [Key: Int] = [:]
     private var retryWake: Task<Void, Never>?
     private var paused = false
     /// Bumped by every `pause`: a resume scheduled before is stale.
@@ -79,30 +90,34 @@ public actor CoverQueue {
         self.maxRetryDelay = max(retryDelay, maxRetryDelay)
     }
 
-    /// The cards that want a cover now, in the order they start: the `visible` ones on screen first, then the margin.
-    /// A card running or waiting that is not among them is cancelled or dropped; one already done stays done while
-    /// it stays wanted. `isNetwork` must answer without touching the disk (it runs on the queue for every id;
+    /// The cards of `client` that want a cover now, in the order they start: the `visible` ones on screen first, then
+    /// the margin. A card of the client's running or waiting that is not among them is cancelled or dropped; one
+    /// already done stays done while it stays wanted. Other clients' cards are left as they are. `isNetwork` must answer without touching the disk (it runs on the queue for every id;
     /// `ThumbnailLocation.isNetwork` of the folder Home shows). `work` makes and delivers the card's cover, at
     /// `.utility` for a visible card and `.background` for the margin's, should end soon once cancelled, and returns
     /// false for "not now": the card is tried again after `retryDelay`, twice that after the next "not now", and so on
     /// up to `maxRetryDelay`, while it stays wanted.
-    public func want(_ ids: [String], visible: Int, isNetwork: (String) -> Bool,
+    public func want(_ ids: [String], visible: Int, client: Int = 0, isNetwork: (String) -> Bool,
                      work: @escaping @Sendable (String) async -> Bool) {
-        let wantedIDs = Set(ids)
-        for (id, job) in running where !wantedIDs.contains(id) {
+        let keys = Set(ids.map { Key(client: client, id: $0) })
+        func gone(_ key: Key) -> Bool { key.client == client && !keys.contains(key) }
+        for (key, job) in running where gone(key) {
             job.task.cancel()
             ending[job.token] = job.network
-            running[id] = nil
+            running[key] = nil
         }
-        done.formIntersection(wantedIDs)
-        retryAt = retryAt.filter { wantedIDs.contains($0.key) }
-        notNows = notNows.filter { wantedIDs.contains($0.key) }
+        done = done.filter { !gone($0) }
+        retryAt = retryAt.filter { !gone($0.key) }
+        notNows = notNows.filter { !gone($0.key) }
         var seen: Set<String> = []
         // A repeated id counts once, at its first place.
-        wanted = ids.enumerated().compactMap { index, id in
+        let items = ids.enumerated().compactMap { index, id -> Item? in
             guard seen.insert(id).inserted else { return nil }
-            return Item(id: id, network: isNetwork(id), visible: index < visible, work: work)
+            return Item(key: Key(client: client, id: id), network: isNetwork(id), visible: index < visible, work: work)
         }
+        clients[client] = items.isEmpty ? nil : items
+        let all = clients.keys.sorted().flatMap { clients[$0]! }
+        wanted = all.filter(\.visible) + all.filter { !$0.visible }
         pump()
     }
 
@@ -138,7 +153,7 @@ public actor CoverQueue {
     }
 
     /// Covers wanted and waiting to start (or to be tried again), for tests.
-    var pendingCount: Int { wanted.filter { running[$0.id] == nil && !done.contains($0.id) }.count }
+    var pendingCount: Int { wanted.filter { running[$0.key] == nil && !done.contains($0.key) }.count }
     /// Covers in flight, cancelled ones still ending included, for tests.
     var runningCount: Int { running.count + ending.count }
 
@@ -151,13 +166,13 @@ public actor CoverQueue {
         let now = ContinuousClock.now
         var local = inFlight(network: false), network = inFlight(network: true)
         var nextRetry: ContinuousClock.Instant?
-        for item in wanted where running[item.id] == nil && !done.contains(item.id) {
-            if let at = retryAt[item.id], at > now {
+        for item in wanted where running[item.key] == nil && !done.contains(item.key) {
+            if let at = retryAt[item.key], at > now {
                 nextRetry = min(nextRetry ?? at, at)
                 continue
             }
             if item.network ? network < networkListingLimit : local < listingLimit {
-                retryAt[item.id] = nil
+                retryAt[item.key] = nil
                 start(item)
                 if item.network { network += 1 } else { local += 1 }
             }
@@ -180,15 +195,21 @@ public actor CoverQueue {
 
     private func start(_ item: Item) {
         nextToken += 1
-        let token = nextToken, id = item.id, work = item.work
+        let token = nextToken, key = item.key, work = item.work
         let task = Task(priority: item.visible ? .utility : .background) {
-            let made = await work(id)
-            self.finished(id, token: token, made: made)
+            let made = await work(key.id)
+            self.finished(key, token: token, made: made)
         }
-        running[id] = Running(token: token, network: item.network, task: task)
+        running[key] = Running(token: token, network: item.network, task: task)
     }
 
-    private func finished(_ id: String, token: UInt64, made: Bool) {
+    /// How long a card waits after its `notNows`-th "not now" in a row (the first: 1): `base`, doubled at each further
+    /// one, never past `cap`.
+    nonisolated static func retryDelay(after notNows: Int, base: Duration, cap: Duration) -> Duration {
+        min(base * (1 << min(max(notNows - 1, 0), 16)), cap)
+    }
+
+    private func finished(_ id: Key, token: UInt64, made: Bool) {
         if ending.removeValue(forKey: token) == nil, running[id]?.token == token {
             running[id] = nil
             if made {
@@ -197,7 +218,7 @@ public actor CoverQueue {
             } else {
                 let times = notNows[id, default: 0]
                 notNows[id] = times + 1
-                retryAt[id] = .now + min(retryDelay * (1 << min(times, 16)), maxRetryDelay)
+                retryAt[id] = .now + Self.retryDelay(after: times + 1, base: retryDelay, cap: maxRetryDelay)
             }
         }
         pump()
