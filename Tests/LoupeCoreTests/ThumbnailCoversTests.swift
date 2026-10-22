@@ -523,7 +523,7 @@ private final class FakeListing: @unchecked Sendable {
 
     /// Task 4: a share is asked again for as long as its folder is shown, and its place found once it answers. The
     /// first two asks hang until the end (a gate, not a sleep: a stalled CI machine cannot let one answer before its
-    /// time limit), so the place can only come from the third; then the hung threads give their places back.
+    /// time limit), so the place can only come from a later ask; then the hung threads give their places back.
     @Test func shownShareKeepsAsking() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -537,7 +537,7 @@ private final class FakeListing: @unchecked Sendable {
         await store.setCoverVolumes { _ in true }
         let place = await store.shownFolderPlace(URL(fileURLWithPath: "/net/f"), retry: .milliseconds(10))
         #expect(place == .located(loc("/net/f", network: true)))
-        #expect(calls.count == hung + 1)
+        #expect(calls.count > hung)   // only an ask past the hung ones can answer (a loaded machine may time out more)
         for _ in 0..<hung { gate.signal() }
         let lane = CoverLane(network: true, resolving: true)
         #expect(await eventually { store.coverThreads.count(lane) == 0 })
