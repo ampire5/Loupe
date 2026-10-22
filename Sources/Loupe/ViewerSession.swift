@@ -595,12 +595,15 @@ import LoupeRender
         let navigator = self.navigator, stash = stashNavigator
         let archives = Settings.shared.config.archiveFolders
         let folder = current.deletingLastPathComponent()
+        // Siblings in the order Home shows their parent in.
+        let siblingSort = BrowserSort.forFolder(folder.standardizedFileURL.deletingLastPathComponent(),
+                                                settings: Settings.shared.folderSettings)
         folderTask = Task { [weak self] in
             let result: Result<FolderTarget?, Error>
             do {
                 // A gallery opened from a Stash list steps through that list (Stash spec §2.3); any other folder by disk.
                 let target = if let stash { try await stash.neighbour(of: folder, step: step) }
-                             else { try await navigator.neighbour(of: folder, step: step, archives: archives) }
+                             else { try await navigator.neighbour(of: folder, step: step, archives: archives, sort: siblingSort) }
                 result = .success(target)
             } catch {
                 result = .failure(error)
