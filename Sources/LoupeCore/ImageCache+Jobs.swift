@@ -48,10 +48,11 @@ extension ImageCache {
         return task
     }
 
-    /// Where `url`'s read queues: the current photo first (0), a neighbour at its first position in the plan (the
-    /// current photo's items come first, so that is never 0), anything unplanned last.
+    /// Where `url`'s read queues: the current photo and its pair's other page first (0, `isCurrent`), a neighbour at
+    /// its first position in the plan (the current photo's items come first, so that is never 0), anything unplanned
+    /// last.
     func readPriority(_ url: URL) -> Int {
-        url == currentURL ? 0 : planned[url]?.values.min() ?? Int.max
+        isCurrent(url) ? 0 : planned[url]?.values.min() ?? Int.max
     }
 
     /// Moves a read in flight to its rank in the latest plan (the current photo's to the front), when that changed.
@@ -68,7 +69,7 @@ extension ImageCache {
         nextJobID += 1
         runningJobs += 1
         let id = nextJobID
-        let phase = JobPhase(forCurrent: url == currentURL)
+        let phase = JobPhase(forCurrent: isCurrent(url))
         let task = Task {
             await runJob(url, e, goal, phase: phase)
             if e.jobs[goal]?.id == id { e.jobs[goal] = nil }
@@ -93,7 +94,7 @@ extension ImageCache {
     /// The priority to queue with, read live right before each `pool.run`: whether the photo is current now,
     /// and the goal's position in the latest plan. Marks the job as waiting (restartable) in that class.
     private func priority(_ url: URL, _ goal: CacheGoal, _ phase: JobPhase) -> (forCurrent: Bool, rank: Int) {
-        let forCurrent = url == currentURL
+        let forCurrent = isCurrent(url)
         phase.markWaiting(forCurrent: forCurrent)
         return (forCurrent, planned[url]?[goal] ?? Int.max)
     }
@@ -116,7 +117,7 @@ extension ImageCache {
             let l = levels(info, url)
 
             // The current photo's first look (progressive JPEG): a coarse picture within tens of ms.
-            if goal == .preview && url == currentURL && !isSatisfied(url, e, .preview) {
+            if goal == .preview && isCurrent(url) && !isSatisfied(url, e, .preview) {
                 let start = ContinuousClock.now
                 let p = priority(url, goal, phase)
                 let trace = self.trace

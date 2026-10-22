@@ -10,6 +10,13 @@ extension ImageCache {
     var files: [URL] { active.flatMap { sessions[$0]?.files } ?? [] }
     var focus: CacheFocus? { active.flatMap { sessions[$0]?.focus } }
     var currentURL: URL? { active.flatMap { sessions[$0]?.currentURL } }
+    /// The other page of the active session's pair on screen (spread), nil for one page.
+    var companionURL: URL? { active.flatMap { sessions[$0]?.companionURL } }
+
+    /// `url` is on screen in the active session: its current photo or the other page of its pair (spread spec,
+    /// «Кэш»: both pages are current). Both read at once, first in the read queue, decode in the current class (the
+    /// reserved slot, JXL's current threads, the first look) and count as `.current` activity.
+    func isCurrent(_ url: URL) -> Bool { url == currentURL || url == companionURL }
 
     /// Adds a session, inactive and invisible until `setActivity`. `onUpdate` is called on every change of an entry
     /// its playlist lists or it pins (any thread); the session hops to main and re-reads. Registering again replaces
@@ -128,6 +135,7 @@ extension ImageCache {
         }
         s.focus = focus
         let current = files.indices.contains(focus.current) ? files[focus.current] : nil
+        s.companionURL = focus.companion.flatMap { files.indices.contains($0) ? files[$0] : nil }
         if current != s.currentURL {
             s.stampCheck?.cancel()
             s.stampCheck = nil
@@ -164,7 +172,8 @@ extension ImageCache {
         guard let after = limits.idleTrim else { return }
         let idle = Set(CacheOwners.idle(owners, now: now, after: after))
         guard !idle.isEmpty else { return }
-        let current = Set(idle.compactMap { sessions[$0]?.currentURL })
+        // The current photo and the other page of its pair, both on screen.
+        let current = Set(idle.flatMap { id in [sessions[id]?.currentURL, sessions[id]?.companionURL].compactMap { $0 } })
         let spared = CacheOwners.protected(owners)
             .union(sessions.flatMap { id, s in idle.contains(id) ? [] : s.pinnedPages })
         var freed = 0
@@ -220,6 +229,8 @@ struct CacheSessionState {
     var pinnedPages: [URL] { [pinned, pinnedCompanion].compactMap { $0 } }
     var focus: CacheFocus?
     var currentURL: URL?
+    /// The focus's `companion` (the other page of the pair on screen), as current as `currentURL`.
+    var companionURL: URL?
     /// `becameCurrent` ran for `currentURL` while the session was active. A scrub only passes over photos, so it is
     /// put off until the focus stops scrubbing on one: the stamp check is I/O, which a scrub starts none of.
     var arrived = false
