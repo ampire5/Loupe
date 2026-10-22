@@ -354,12 +354,13 @@ extension ThumbnailStore {
         let fresh = stored.map { $0.folderModified != nil && $0.folderModified == modified } ?? false
         let wantsSummary = !fresh && !summaryTried.contains(key)
         let place = CardPlace(folder: folder, archive: archive, network: network, key: key, volume: volume,
-                              modified: modified)
+                              modified: modified, maxPixel: maxPixel)
         // The catalog's four (or all of a smaller folder's): the pictures at once, whatever becomes of the summary's
         // listing.
-        if let location, let images = await catalogCells(location, count: Self.catalogCount(stored),
-                                                         lastViewed: lastViewed, maxPixel: maxPixel) {
-            return await summaryFollowUp(images, place, location: location, stored: stored, wants: wantsSummary)
+        if let location, let cells = await catalogCells(location, count: Self.catalogCount(stored),
+                                                        lastViewed: lastViewed, maxPixel: maxPixel) {
+            return await summaryFollowUp(cells.images, place, location: location, stored: stored, wants: wantsSummary,
+                                         pictured: cells.names, lastViewed: lastViewed)
         }
         if emptyCovers.contains(key) {
             return FolderCard(images: [], summary: stored, problem: isOffline(volume) ? .offline : coverProblems[key])
@@ -411,6 +412,7 @@ extension ThumbnailStore {
         var key: String
         var volume: String?
         var modified: Date?
+        var maxPixel = 0
     }
 
     /// A card whose pictures came without a listing (the catalog's four, a remembered pick) and its summary: the
@@ -420,8 +422,12 @@ extension ThumbnailStore {
     /// error, the share's volume gone, the probe's turn taken), or a card that left meanwhile, keeps the summary due:
     /// pending, and the queue asks again at its pace (its retry delay growing to a minute); while the share is
     /// offline only a call that may take its probe (`coverOfflineProbeInterval`) lists.
+    ///
+    /// `pictured`: the catalog's names the pictures are of. A complete listing that lacks one (deleted or renamed
+    /// since its thumbnail was made, which the catalog cannot tell) gives the card the listing's pick instead.
     private func summaryFollowUp(_ images: [CGImage], _ place: CardPlace, location: ThumbnailLocation,
-                                 stored: FolderSummary?, wants: Bool) async -> FolderCard {
+                                 stored: FolderSummary?, wants: Bool, pictured: [String] = [],
+                                 lastViewed: String? = nil) async -> FolderCard {
         let key = place.key, volume = place.volume
         func pending() -> FolderCard {
             FolderCard(images: images, summary: storedSummary(at: location),
@@ -452,6 +458,13 @@ extension ThumbnailStore {
             return pending()
         }
         noteSummaryTried(key)
+        var images = images
+        if let listing, !Set(pictured).isSubset(of: Set(listing.names.files)), !Task.isCancelled,
+           let made = await pictures(of: listing, place.folder, location: location, network: place.network,
+                                     volume: volume, maxPixel: place.maxPixel, lastViewed: lastViewed,
+                                     modified: place.modified, count: Self.coverPhotos, depth: 0, complete: true) {
+            images = made
+        }
         return card(images, listing: listing, problem: isOffline(volume) ? .offline : coverProblems[key],
                     modified: place.modified, location: location)
     }
@@ -746,8 +759,8 @@ extension ThumbnailStore {
         guard !emptyCovers.contains(key) else { return CoverMade(images: [], problem: coverProblems[key]) }
         guard !Task.isCancelled else { return nil }
         if !checked, let location {
-            if let images = await catalogCells(location, count: count, lastViewed: lastViewed, maxPixel: maxPixel) {
-                return CoverMade(images: images)
+            if let cells = await catalogCells(location, count: count, lastViewed: lastViewed, maxPixel: maxPixel) {
+                return CoverMade(images: cells.images)
             }
             switch await pickedCover(folder, key: key, location: location, network: network, volume: volume,
                                      maxPixel: maxPixel, lastViewed: lastViewed, modified: modified, count: count,
@@ -764,6 +777,20 @@ extension ThumbnailStore {
         case .settled(let problem): return CoverMade(images: [], listed: true, problem: problem)
         case .notNow: return nil
         }
+        let summarized = complete && depth == 0 ? listed : nil
+        guard let images = await pictures(of: listed, folder, location: location, network: network, volume: volume,
+                                          maxPixel: maxPixel, lastViewed: lastViewed, modified: modified, count: count,
+                                          depth: depth, complete: complete) else { return nil }
+        return CoverMade(images: images, listing: summarized, listed: true)
+    }
+
+    /// The pictures of a listing's pick (remembered for the folder when the listing is complete): its photos made
+    /// into thumbnails (or read from the catalog), else one of each of its first subfolders'; none for an empty
+    /// folder (given up for the session when complete). Nil: a subfolder's cover not now.
+    private func pictures(of listed: CoverListing, _ folder: URL, location: ThumbnailLocation?, network: Bool,
+                          volume: String?, maxPixel: Int, lastViewed: String?, modified: Date?, count: Int, depth: Int,
+                          complete: Bool) async -> [CGImage]? {
+        let key = Self.memoKey(folder, modified)
         let names = listed.names
         let plan = await Self.offActor(qos: Self.coverQoS) {
             CoverSampling.plan(names: Self.finderSorted(names.files), directories: Self.finderSorted(names.folders),
@@ -776,7 +803,6 @@ extension ThumbnailStore {
             case .empty: break
             }
         }
-        let summarized = complete && depth == 0 ? listed : nil
         switch plan {
         case .photos(let picked):
             var images: [CGImage] = []
@@ -787,22 +813,21 @@ extension ThumbnailStore {
                     images.append(image)
                 }
             }
-            return CoverMade(images: images, listing: summarized, listed: true)
+            return images
         case .subfolders(let subfolders):
-            guard let images = await subfolderCover(folder, Array(subfolders), location: location, network: network,
-                                                    volume: volume, maxPixel: maxPixel, count: count, depth: depth,
-                                                    complete: complete, modified: modified) else { return nil }
-            return CoverMade(images: images, listing: summarized, listed: true)
+            return await subfolderCover(folder, Array(subfolders), location: location, network: network, volume: volume,
+                                        maxPixel: maxPixel, count: count, depth: depth, complete: complete,
+                                        modified: modified)
         case .empty:
             if complete { emptyCovers.insert(key) }
-            return CoverMade(images: [], listing: summarized, listed: true)
+            return []
         }
     }
 
     /// `count` photos of the folder at `location` with a thumbnail in the catalog, spread across them as Finder sorts
-    /// them, the one last viewed first, decoded; nil when there are fewer.
+    /// them, the one last viewed first, decoded, and their names; nil when there are fewer.
     private func catalogCells(_ location: ThumbnailLocation, count: Int, lastViewed: String?,
-                              maxPixel: Int) async -> [CGImage]? {
+                              maxPixel: Int) async -> (images: [CGImage], names: [String])? {
         guard let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
               names.count >= count else { return nil }
         // Sorting thousands of names takes a while: not on the actor.
@@ -813,7 +838,7 @@ extension ThumbnailStore {
         for name in picked where !Task.isCancelled {
             if let image = await storedCell(at: location.sibling(name), maxPixel: maxPixel) { images.append(image) }
         }
-        return images
+        return (images, Array(picked))
     }
 
     /// Notes (or, nil, clears) what a folder's card has against it, keeping the notes bounded.

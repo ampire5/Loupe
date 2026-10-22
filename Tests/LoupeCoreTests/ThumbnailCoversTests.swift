@@ -879,6 +879,16 @@ final class FolderResults: @unchecked Sendable {
 }
 
 /// A flag set from another thread.
+final class LockedNames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [String]
+    init(_ names: [String]) { self.names = names }
+    var value: [String] {
+        get { lock.withLock { names } }
+        set { lock.withLock { names = newValue } }
+    }
+}
+
 final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
@@ -2256,6 +2266,37 @@ final class LockedErrors: @unchecked Sendable {
         let back = try #require(await card("a.jpg"))
         #expect(back.images.count == 1)
         #expect(calls.count == listed)   // from the catalog: the folder is not listed for its picture again
+    }
+
+    /// A folder of a few photos is covered from the catalog's thumbnails of all of them; one of those photos deleted
+    /// or renamed since, the catalog still has its thumbnail. When the summary's follow-up lists the folder and the
+    /// listing lacks a pictured name, the card's pictures come from the listing's pick instead.
+    @Test func smallFolderDropsAPhotoTheListingLacks() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), names = LockedNames(["a.jpg", "b.jpg"])
+        let store = await store(reader, dir: dir)
+        reader.add(URL(fileURLWithPath: "/p/two/a.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        reader.add(URL(fileURLWithPath: "/p/two/b.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        reader.add(URL(fileURLWithPath: "/p/two/c.jpg"), TestJPEGs.gradient(width: 60, height: 20))   // 3:1, told apart
+        await store.setCoverListing(dated: { _, _, _, _ in
+            CoverListing(names: CoverNames(files: names.value, folders: []))
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/p/two")
+        func card(_ modified: Date) async -> FolderCard? {
+            await store.folderCard(folder, archive: false, in: loc("/p/two"), maxPixel: 64, modified: modified)
+        }
+        let first = try #require(await card(Self.day))
+        #expect(first.images.count == 2 && first.summary?.photos == 2)
+        // b.jpg deleted, c.jpg added: the folder's date moves on.
+        names.value = ["a.jpg", "c.jpg"]
+        let later = Self.day.addingTimeInterval(60)
+        let fromCatalog = try #require(await card(later))
+        #expect(fromCatalog.summaryPending && fromCatalog.images.count == 2)
+        let listed = try #require(await card(later))
+        #expect(!listed.summaryPending && listed.summary?.photos == 2)
+        let wide = listed.images.filter { $0.width >= 2 * $0.height }
+        #expect(listed.images.count == 2 && wide.count == 1)   // c.jpg is pictured, b.jpg no longer
     }
 }
 
