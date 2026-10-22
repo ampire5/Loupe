@@ -162,7 +162,7 @@ public struct KeyMap: Sendable, Equatable {
         .fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .zoomIn, .zoomOut,
         .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance,
-        .toggleStrip, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
+        .toggleStrip, .toggleStripPlacement, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
     ]
 
     /// An action's bindings in the order the cheat sheet and the menus show them: plain (and ⇧) keys first, then the ⌥
@@ -310,6 +310,8 @@ public struct KeyMap: Sendable, Equatable {
         ("Strip: press and drag", "Move the strip; the photo in the middle opens"),
         ("Strip: two-finger swipe sideways", "Move the strip; the photo in the middle opens"),
         ("Strip: drag its top edge", "Resize the strip"),
+        ("Strip: buttons above its right end", "Beside or over the photo (⇧T); pin or hide (T)"),
+        ("Chevron at the bottom edge", "Show the hidden strip (T)"),
     ]
 
     /// Today's `ViewerView.keyDown`, as a table.

@@ -116,3 +116,62 @@ private func input(
         } } }
     }
 }
+
+/// T flips the beside strip's `hidden`, a floating strip's `pinned`, and nothing in a window's hidden mode.
+@Test func tFlipsOneFlagPerMode() {
+    #expect(StripPlacement.flag(.beside, fullScreen: false) == .hidden)
+    #expect(StripPlacement.flag(.over, fullScreen: false) == .pinned)
+    #expect(StripPlacement.flag(.hidden, fullScreen: false) == nil)
+    for mode in [StripWindowMode.over, .beside, .hidden] {
+        #expect(StripPlacement.flag(mode, fullScreen: true) == .pinned)
+    }
+}
+
+/// The menu checkmark reads only the current mode's flag.
+@Test func holdsReadsTheModesFlagOnly() {
+    #expect(StripPlacement.holds(.beside, fullScreen: false, hidden: false, pinned: false))
+    #expect(!StripPlacement.holds(.beside, fullScreen: false, hidden: true, pinned: true))
+    #expect(StripPlacement.holds(.over, fullScreen: false, hidden: true, pinned: true))
+    #expect(!StripPlacement.holds(.over, fullScreen: false, hidden: false, pinned: false))
+    #expect(StripPlacement.holds(.beside, fullScreen: true, hidden: true, pinned: true))
+    #expect(!StripPlacement.holds(.beside, fullScreen: true, hidden: false, pinned: false))
+    #expect(!StripPlacement.holds(.hidden, fullScreen: false, hidden: false, pinned: true))
+}
+
+@Test func capsuleToolsBeside() {
+    let tools = StripPlacement(input(.beside, over: true)).tools(mode: .beside)
+    #expect(tools.map(\.symbol) == ["rectangle.bottomthird.inset.filled", "chevron.down"])
+    #expect(tools.map(\.help) == ["Let the strip float over the photo (⇧T)", "Hide the strip (T)"])
+    #expect(tools.map(\.isOn) == [true, false])
+    #expect(tools.map(\.action) == [.place, .pin])
+}
+
+@Test func capsuleToolsOver() {
+    let loose = StripPlacement(input(.over, over: true, edge: true)).tools(mode: .over)
+    #expect(loose.map(\.symbol) == ["rectangle.on.rectangle", "pin"])
+    #expect(loose.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Pin the strip (T)"])
+    #expect(loose.map(\.isOn) == [false, false])
+    let pinned = StripPlacement(input(.over, pinned: true, over: true)).tools(mode: .over)
+    #expect(pinned.map(\.symbol) == ["rectangle.on.rectangle", "pin.fill"])
+    #expect(pinned.map(\.help) == ["Keep the strip beside the photo (⇧T)", "Unpin the strip (T)"])
+    #expect(pinned.map(\.isOn) == [false, true])
+}
+
+/// Full screen: only T's pin, whatever the window's mode.
+@Test func capsuleToolsFullScreenHaveNoPlaceButton() {
+    for mode in [StripWindowMode.over, .beside, .hidden] {
+        let tools = StripPlacement(input(mode, fullScreen: true, pinned: true, over: true)).tools(mode: mode)
+        #expect(tools.map(\.symbol) == ["pin.fill"])
+        #expect(tools.map(\.action) == [.pin])
+    }
+}
+
+@Test func noToolsWithoutACapsule() {
+    #expect(StripPlacement(input(.hidden, over: true)).tools(mode: .hidden).isEmpty)
+    #expect(StripPlacement(input(.beside, hidden: true, over: true)).tools(mode: .beside).isEmpty)
+}
+
+@Test func stripTexts() {
+    #expect(StripPlacement.revealHelp == "Show the strip (T)")
+    #expect(StripPlacement.fullScreenToast == "In full screen the strip is always over the photo")
+}

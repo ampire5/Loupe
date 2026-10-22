@@ -278,7 +278,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .zoomIn: ("+", []), .zoomOut: ("-", []),
         .cycleFilter: ("s", []), .saveFilters: ("s", .shift), .toggleAntiring: ("a", []), .saveAntiring: ("a", .shift),
         .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
-        .toggleStrip: ("t", []), .cycleStats: ("i", []), .cheatSheet: ("?", []),
+        .toggleStrip: ("t", []), .toggleStripPlacement: ("t", .shift), .cycleStats: ("i", []), .cheatSheet: ("?", []),
         .toggleKeepZoom: ("l", []), .saveKeepZoom: ("l", .shift),
         .toggleZoomCarry: ("k", []), .saveZoomCarry: ("k", .shift),
         .cyclePanIndicators: ("p", []), .savePanIndicators: ("p", .shift),
@@ -320,4 +320,13 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     #expect(KeyMap.standard.bindings.filter { $0.action == .browse }.flatMap(\.keyCodes).sorted() == [36, 76])
     #expect(InputConf.action(named: "browse") == .browse)
     #expect(map.label(.browse).group == .navigation)
+}
+
+/// View › Strip Beside the Photo shows ⇧T; the cheat sheet names the capsule and the reveal chevron.
+@Test func stripPlacementHasAMenuKeyAndHelp() {
+    let key = KeyMap.standard.menuKey(.toggleStripPlacement)
+    #expect(key?.keyEquivalent == "t" && key?.modifiers == .shift)
+    #expect(KeyMap.standard.menuKey(.toggleStrip)?.modifiers == [])
+    #expect(KeyMap.gestures.contains { $0.input == "Chevron at the bottom edge" && $0.title == "Show the hidden strip (T)" })
+    #expect(KeyMap.gestures.contains { $0.input.hasPrefix("Strip: buttons") && $0.title.contains("(⇧T)") })
 }

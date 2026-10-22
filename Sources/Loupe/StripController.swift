@@ -15,14 +15,20 @@ extension Notification.Name {
 /// in step with the session's playlist and position, moves the strip under its fixed centre and fills its cells from
 /// the `ThumbnailStore`.
 ///
-/// Showing: with `strip-window=beside` (the default) the strip is a band of its own under the picture (the window
-/// controller anchors the viewer to its top), shown until `T` or the chevron hides it (`stripBarHidden`). In full
-/// screen, and in a window with `overlay`, it floats over the bottom of the picture and is visible while it is
-/// pinned (`T`, persisted as `stripPinned`), while the mouse is within the strip's whole height of the window's
-/// bottom edge, while its top edge is being dragged, while it moves, or while the cursor is over it; it hides
+/// Showing follows `StripPlacement` (filmstrip spec §2). With `strip-window=beside` (the default) the strip is a band
+/// of its own under the picture (the window controller anchors the viewer to its top), shown until `T` hides it
+/// (`stripBarHidden`); hidden, a bare chevron (`FilmstripRevealView`) 6 pt above the window's bottom edge shows while
+/// the mouse is within 24 pt of that edge and brings it back. In full screen, and in a window with `over`, it floats
+/// over the bottom of the picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the
+/// mouse is within the strip's whole height of the window's bottom edge or over the strip or its capsule, while its
+/// top edge is being dragged, while it moves, or while the cursor is over a cell (`revealedByEdge`); it hides
 /// `strip-hide-delay` ms after none of these holds. While the `?` cheat sheet is open (`staysShown`) a strip on screen
-/// stays too. `off` never shows it in a window. The chevron over the strip (or at the bottom edge while the strip is
-/// hidden) shows while the mouse is over the bottom third of the window and does what `T` does.
+/// stays too. `hidden` never shows it in a window, and `T` does nothing there.
+///
+/// The glass tool capsule (`FilmstripToolsView`) sits 6 pt above the strip's right end while the pointer is over the
+/// strip or the capsule, and leaves `strip-hide-delay` ms after it with the strip's fade: "where the strip is" (`⇧T`,
+/// not in full screen) and `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
+/// over) to loupe.conf; in full screen it only says the strip is always over the photo there.
 ///
 /// At rest the current file is at the centre, expanded to its photo's proportions. A step to a neighbour (the wheel,
 /// the arrows) moves the strip there with a short animation; a jump farther puts it there at once. A two-finger
@@ -45,17 +51,21 @@ extension Notification.Name {
 @MainActor final class StripController: NSObject {
     static let pinnedKey = "stripPinned"
     static let barHiddenKey = "stripBarHidden"
-    /// The chevron's gap to the strip's top, or to the window's bottom while the strip is hidden.
-    private static let chevronGap: CGFloat = 6
+    /// The capsule's gap to the strip's top edge; the reveal chevron's to the window's bottom edge.
+    private static let capsuleGap: CGFloat = 6
+    private static let revealGap: CGFloat = 6
+    /// How near the window's bottom edge the pointer brings up the reveal chevron.
+    private static let revealZone: CGFloat = 24
 
     let view = FilmstripView()
-    private let chevron = NSButton()
+    /// The glass capsule of the strip's buttons, over the strip's right end.
+    private let tools = FilmstripToolsView()
+    /// The chevron that brings a hidden `beside` strip back.
+    private let reveal = FilmstripRevealView()
     private let session: ViewerSession
     private let store: ThumbnailStore
     private let aspects: StripAspects
     private var heightConstraint: NSLayoutConstraint!
-    private var chevronAboveStrip: NSLayoutConstraint?
-    private var chevronAtBottom: NSLayoutConstraint?
 
     private var mode = StripWindowMode.beside
     private var cellHeight: CGFloat = 68
@@ -80,8 +90,17 @@ extension Notification.Name {
 
     /// The cursor is in the bottom zone (the band's height above the window's bottom edge, shown or not).
     private var mouseNearBottom = false
-    /// The cursor is over the window's bottom third: the chevron shows.
-    private var mouseInLowerThird = false
+    /// The cursor is within `revealZone` of the window's bottom edge: a hidden `beside` strip's chevron shows.
+    private var mouseNearEdge = false
+    /// The cursor is over the strip on screen or over the capsule on screen (the strip's hit zone).
+    private var mouseOverStrip = false
+    /// `mouseOverStrip`, let go `strip-hide-delay` after the cursor left: the capsule stays that long.
+    private var capsuleHeld = false
+    private var capsuleRelease: Task<Void, Never>?
+    /// The capsule's buttons as last given to `tools`, and whether it is shown; the reveal chevron's too.
+    private var shownTools: [StripPlacement.Tool] = []
+    private var toolsShown = false
+    private var revealShown = false
     /// The strip's top edge is being dragged: the pointer is above the band then, and the strip stays.
     private var resizing = false
     /// The cell height when the drag began: what a cut-off drag goes back to, and what tells a drag that
@@ -115,8 +134,10 @@ extension Notification.Name {
     private var inViewSince: [Int: ContinuousClock.Instant] = [:]
     private var dwellTask: Task<Void, Never>?
 
-    /// The strip took or gave back its own space below the picture (`bar` in a window).
+    /// The strip took or gave back its own space below the picture (`beside` in a window).
     var onReservesSpaceChange: (() -> Void)?
+    /// Says something in the window's toast (`⇧T` in full screen).
+    var onToast: ((String) -> Void)?
     /// `isShown` changed (at the start of a fade): the info panel ends above a strip on screen.
     var onShownChange: (() -> Void)?
     /// Whether the viewer's scroll guard says the rest of this precise scroll's gesture does nothing
@@ -125,7 +146,7 @@ extension Notification.Name {
     var isScrollSpent: (NSEvent) -> Bool = { _ in false }
 
     /// Whether the viewer must end at the strip's top instead of the window's bottom.
-    var reservesSpace: Bool { !isFullScreen && mode == .beside && !barHidden }
+    var reservesSpace: Bool { placement.reservesSpace }
 
     /// The band's height: cells plus padding.
     var bandHeight: CGFloat { cellHeight + 2 * FilmstripView.padding }
@@ -180,33 +201,30 @@ extension Notification.Name {
     }
 
     /// Mouse moves anywhere in `container` (the window's content view) tell whether the cursor is near the
-    /// bottom edge; the chevron goes into it, over the strip.
+    /// bottom edge or over the strip; the capsule and the reveal chevron go into it, just over the strip (under
+    /// whatever the window puts over the strip later, the cheat sheet included).
     func attach(to container: NSView) {
         self.container = container
         container.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
                                                                         .activeInKeyWindow, .inVisibleRect],
                                                  owner: self))
-        chevron.isBordered = false
-        chevron.title = ""
-        chevron.imagePosition = .imageOnly
-        chevron.imageScaling = .scaleProportionallyUpOrDown
-        chevron.contentTintColor = NSColor(white: 1, alpha: 0.75)
-        chevron.target = self
-        chevron.action = #selector(chevronClicked)
-        chevron.alphaValue = 0
-        chevron.isHidden = true
-        chevron.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(chevron, positioned: .above, relativeTo: view)
-        let above = chevron.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Self.chevronGap)
-        let bottom = chevron.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.chevronGap)
-        chevronAboveStrip = above
-        chevronAtBottom = bottom
+        tools.setShown(false, animated: false)
+        tools.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(tools, positioned: .above, relativeTo: view)
+        reveal.setShown(false, animated: false)
+        reveal.toolTip = StripPlacement.revealHelp
+        reveal.onReveal = { [weak self] in self?.togglePin() }
+        reveal.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(reveal, positioned: .above, relativeTo: view)
         NSLayoutConstraint.activate([
-            chevron.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            chevron.widthAnchor.constraint(equalToConstant: 18),
-            chevron.heightAnchor.constraint(equalToConstant: 9),
+            tools.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -FilmstripView.padding),
+            tools.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Self.capsuleGap),
+            reveal.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            reveal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.revealGap),
+            reveal.widthAnchor.constraint(equalToConstant: FilmstripRevealView.size.width),
+            reveal.heightAnchor.constraint(equalToConstant: FilmstripRevealView.size.height),
         ])
-        updateChevron()
+        update()
     }
 
     /// The window closes: no timers, no more notifications.
@@ -220,6 +238,7 @@ extension Notification.Name {
         scrollRest?.cancel()
         dwellTask?.cancel()
         hideTask?.cancel()
+        capsuleRelease?.cancel()
         hoverState.cancel()
         aspects.close()
         loads.values.forEach { $0.cancel() }
@@ -274,7 +293,7 @@ extension Notification.Name {
     }
 
     /// A drag of the top edge: the height follows the pointer within the allowed range. Layout runs now, so the
-    /// strip (and, in `bar` mode, the viewer above it) is at the new height before the next drag event.
+    /// strip (and, in `beside` mode, the viewer above it) is at the new height before the next drag event.
     private func resize(toBandHeight band: CGFloat) {
         guard !closed else { return }
         let height = CGFloat(Config.clampedStripHeight(Double(band - 2 * FilmstripView.padding)))
@@ -317,28 +336,43 @@ extension Notification.Name {
         endMotion()
         isFullScreen = on
         mouseNearBottom = false
+        mouseNearEdge = false
         if reservesSpace != reserved { onReservesSpaceChange?() }
-        update()
+        update()   // the capsule loses or gets back its "where" button at once
     }
 
-    /// `T`, View › Thumbnail Strip and the chevron: a bar hides or comes back, an overlay is pinned or let go.
+    /// `T`, View › Thumbnail Strip, the capsule's T button and the reveal chevron: a `beside` strip hides or comes
+    /// back, a floating one is pinned or let go; nothing in a window's `hidden` mode. Each flips only its own flag.
     func togglePin() {
-        if placement == .beside {
+        switch StripPlacement.flag(mode, fullScreen: isFullScreen) {
+        case .hidden?:
             barHidden.toggle()
-            DebugLog.log("strip bar \(barHidden ? "hidden" : "shown")")
+            DebugLog.log("strip beside \(barHidden ? "hidden" : "shown")")
             onReservesSpaceChange?()
-        } else {
+        case .pinned?:
             pinned.toggle()
             DebugLog.log("strip \(pinned ? "pinned" : "unpinned")")
+        case nil:
+            return
         }
         // Let go with nothing else holding it: it goes now, the user asked for that.
         update(hideAtOnce: true)
     }
 
-    /// Whether `T` holds the strip on screen: a bar not hidden, a pinned overlay.
-    var isPinned: Bool { placement == .beside ? !barHidden : pinned }
+    /// `⇧T`, View › Strip Beside the Photo and the capsule's "where" button: beside ↔ over (hidden → beside), written
+    /// to loupe.conf (`Settings` pushes it back to every strip). Full screen keeps the strip over the photo: a toast.
+    func togglePlacement() {
+        guard !closed else { return }
+        guard let next = StripPlacement.toggledMode(mode, fullScreen: isFullScreen) else {
+            onToast?(StripPlacement.fullScreenToast)
+            return
+        }
+        DebugLog.log("strip-window \(mode.rawValue) -> \(next.rawValue)")
+        Settings.shared.setStripWindow(next)
+    }
 
-    @objc private func chevronClicked() { togglePin() }
+    /// Whether `T` holds the strip on screen (View › Thumbnail Strip's checkmark): beside not hidden, a float pinned.
+    var isPinned: Bool { StripPlacement.holds(mode, fullScreen: isFullScreen, hidden: barHidden, pinned: pinned) }
 
     /// Set while the cheat sheet is open: a strip on screen does not hide under it (the sheet's Mouse & Trackpad column
     /// talks about it), and a hidden one does not come up for it. Cleared, the usual delay starts.
@@ -348,25 +382,32 @@ extension Notification.Name {
 
     // MARK: Showing
 
-    private var placement: StripWindowMode { isFullScreen ? .over : mode }
+    /// The strip floats over the picture: full screen, or `over` in a window.
+    private var floats: Bool { isFullScreen || mode == .over }
 
-    /// Shows the strip when something holds it, otherwise hides it after the delay (at once for `hideAtOnce`).
+    /// A floating strip is out: the mouse reached the bottom band or is over the strip or its capsule, a cell is
+    /// hovered, the edge is dragged, the strip moves, or the cheat sheet keeps it.
+    private var revealedByEdge: Bool {
+        mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing || isMoving || (staysShown && isShown)
+    }
+
+    private var placement: StripPlacement {
+        StripPlacement(.init(mode: mode, fullScreen: isFullScreen, hidden: barHidden, pinned: pinned,
+                             pointerOverStrip: capsuleHeld, pointerNearBottom: mouseNearEdge,
+                             revealedByEdge: revealedByEdge))
+    }
+
+    /// Shows the strip when `StripPlacement` says so, otherwise hides it: a floating strip after the delay (at once
+    /// for `hideAtOnce`), any other at once. Then the capsule and the reveal chevron follow.
     private func update(hideAtOnce: Bool = false) {
         guard !closed else { return }
-        view.isOverlay = placement == .over
-        let holds: Bool
-        switch placement {
-        case .hidden: holds = false
-        case .beside: holds = !barHidden || resizing
-        case .over:
-            holds = pinned || mouseNearBottom || hoverState.file != nil || resizing || isMoving
-                || (staysShown && isShown)
-        }
-        if holds {
+        view.isOverlay = floats
+        let p = placement
+        if p.visible {
             hideTask?.cancel()
             hideTask = nil
             show()
-        } else if placement != .over || hideAtOnce {
+        } else if !floats || hideAtOnce {
             hideTask?.cancel()
             hideTask = nil
             hide()
@@ -377,9 +418,11 @@ extension Notification.Name {
                 guard !Task.isCancelled, let self else { return }
                 self.hideTask = nil
                 self.hide()
+                self.update()   // the capsule goes with it
             }
         }
-        updateChevron()
+        updateTools(p)
+        updateReveal(p)
     }
 
     private func show() {
@@ -431,34 +474,47 @@ extension Notification.Name {
         onShownChange?()
     }
 
-    /// The chevron: over the strip while it is on screen, at the bottom edge while not, down or up as `T` would go;
-    /// shown while the mouse is over the window's bottom third, never with `strip-window=hidden` in a window.
-    private func updateChevron() {
+    /// The capsule: its buttons as `StripPlacement.tools` has them (rebuilt only when they change: full screen drops
+    /// the "where" button at once), shown while the pointer is over the strip or held there (`capsuleHeld`) and the
+    /// strip is on screen. "On screen" rather than `visible`: a floating strip waiting out its delay still shows its
+    /// capsule, and both go together.
+    private func updateTools(_ p: StripPlacement) {
         guard container != nil else { return }
-        let wanted = mouseInLowerThird && placement != .hidden
-        let symbol = isShown ? "chevron.down" : "chevron.up"
-        if chevron.image?.accessibilityDescription != symbol {
-            chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol)
-        }
-        chevron.toolTip = isShown ? "Hide the thumbnails (T)" : "Show the thumbnails (T)"
-        if isShown {
-            chevronAtBottom?.isActive = false
-            chevronAboveStrip?.isActive = true
-        } else {
-            chevronAboveStrip?.isActive = false
-            chevronAtBottom?.isActive = true
-        }
-        guard wanted != (chevron.alphaValue > 0 && !chevron.isHidden) else { return }
-        if wanted { chevron.isHidden = false }
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = wanted ? fadeIn : fadeOut
-            chevron.animator().alphaValue = wanted ? 1 : 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !(self.mouseInLowerThird && self.placement != .hidden) else { return }
-                self.chevron.isHidden = true
+        let wanted = p.tools(mode: mode)
+        if wanted != shownTools {
+            shownTools = wanted
+            tools.tools = wanted.map { tool in
+                FilmstripTool(symbol: tool.symbol, help: tool.help, isOn: tool.isOn) { [weak self] in
+                    switch tool.action {
+                    case .place: self?.togglePlacement()
+                    case .pin: self?.togglePin()
+                    }
+                }
             }
-        })
+        }
+        setToolsShown(isShown && capsuleHeld && p.pin != nil)
+    }
+
+    /// Fades the capsule with the strip's `strip-fade-in` / `strip-fade-out`; it takes clicks only while wanted.
+    private func setToolsShown(_ shown: Bool) {
+        guard shown != toolsShown else { return }
+        toolsShown = shown
+        let from = tools.alphaValue
+        tools.setShown(shown, animated: false)   // its hit test; the fade is ours, from where it was
+        let duration = shown ? fadeIn : fadeOut
+        guard duration > 0 else { return }
+        tools.alphaValue = from
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            tools.animator().alphaValue = shown ? 1 : 0
+        }
+    }
+
+    /// The reveal chevron: a hidden `beside` strip in a window, the mouse near the bottom edge.
+    private func updateReveal(_ p: StripPlacement) {
+        guard container != nil, p.showsReveal != revealShown else { return }
+        revealShown = p.showsReveal
+        reveal.setShown(revealShown, animated: true)
     }
 
     /// The store makes the visible cells' thumbnails first; none while the strip is hidden.
@@ -476,38 +532,50 @@ extension Notification.Name {
         if isShown { view.trackOutside(event) }
         let p = container.convert(event.locationInWindow, from: nil)
         let inside = container.bounds.contains(p)
-        let near = inside && p.y - container.bounds.minY <= bandHeight
-        let lower = inside && p.y - container.bounds.minY <= container.bounds.height / 3
-        if lower != mouseInLowerThird {
-            mouseInLowerThird = lower
-            updateChevron()
-        }
-        guard near != mouseNearBottom else { return }
-        mouseNearBottom = near
-        update()
+        let height = p.y - container.bounds.minY
+        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && tools.frame.contains(p)))
+        pointer(nearBottom: inside && height <= bandHeight, nearEdge: inside && height <= Self.revealZone, overStrip: over)
     }
 
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
 
     @objc(mouseExited:) func mouseExited(with event: NSEvent) {
         if !dragging { hover(nil) }   // a drag keeps its hover
-        if mouseInLowerThird {
-            mouseInLowerThird = false
-            updateChevron()
-        }
-        guard mouseNearBottom else { return }
-        mouseNearBottom = false
-        update()
+        pointer(nearBottom: false, nearEdge: false, overStrip: false)
     }
 
     /// The window is no longer key: mouse moves stop arriving, so what they said is stale.
     func windowDidResignKey() {
         view.cancelResize()
         endMotion()
-        mouseNearBottom = false
-        mouseInLowerThird = false
         hover(nil)
-        updateChevron()
+        pointer(nearBottom: false, nearEdge: false, overStrip: false)
+    }
+
+    /// Where the pointer is now. Leaving the strip lets the capsule go `strip-hide-delay` later, as a floating strip
+    /// goes; coming back keeps it.
+    private func pointer(nearBottom: Bool, nearEdge: Bool, overStrip: Bool) {
+        guard nearBottom != mouseNearBottom || nearEdge != mouseNearEdge || overStrip != mouseOverStrip else { return }
+        mouseNearBottom = nearBottom
+        mouseNearEdge = nearEdge
+        if overStrip != mouseOverStrip {
+            mouseOverStrip = overStrip
+            capsuleRelease?.cancel()
+            capsuleRelease = nil
+            if overStrip {
+                capsuleHeld = true
+            } else if capsuleHeld {
+                let delay = hideDelay
+                capsuleRelease = Task { [weak self] in
+                    try? await Task.sleep(for: delay)
+                    guard !Task.isCancelled, let self, !self.closed else { return }
+                    self.capsuleRelease = nil
+                    self.capsuleHeld = false
+                    self.update()
+                }
+            }
+        }
+        update()
     }
 
     // MARK: Session

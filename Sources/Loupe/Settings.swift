@@ -522,6 +522,12 @@ extension Notification.Name {
         change("strip-height") { $0.stripHeight = Config.clampedStripHeight(Double(pt)) }
     }
 
+    /// `⇧T`, View › Strip Beside the Photo and the strip's "where" button: writes `strip-window` (and only it, in the
+    /// new spelling) and tells every strip, as the other View toggles do.
+    func setStripWindow(_ mode: StripWindowMode) {
+        change("strip-window") { $0.stripWindow = mode }
+    }
+
     /// `⇧S` / `⇧A`: makes `values` (key → text, as in loupe.conf) the file's own, writing those keys and no others.
     /// False when the file could not be written; unlike a menu `change`, the session then goes back to the file's
     /// contents, so no window draws a default that was never saved.
