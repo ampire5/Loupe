@@ -11,13 +11,14 @@ Sides:
 
 - **Before**: the spec state of the branch (pan-lts before the hardware defaults), one budget: `cache-memory` 4 GiB
   for files and pyramids together.
-- **After, waiting** (93a5644): the hardware defaults with two tiers. Graphics tier (pyramids) = half the card's Metal working set,
-  4.29 GB (4088 MiB); system tier (`cache-memory`, compressed files and ready decodes) = a fifth of the memory,
-  13.69 GB (13 056 MiB). Ready decodes one at a time at `.utility` on two threads; a full job that finds the photo's
-  ready decode in progress waits for it.
-- **After, overtake** (introduced in ca004df, measured at 6cc6a34, which also gives up a ready job still queued): the same, but the photo on screen waits for its ready decode only when that is
-  expected to end no later than a decode of its own (running ms/MP figures), else decodes at once; a ready job still
-  queued is given up. Four runs: the first had a step not sharp in time, so two more were made.
+- **After, waiting (93a5644)**: the hardware defaults with two tiers. Graphics tier (pyramids) = half the card's
+  Metal working set, 4.29 GB (4088 MiB); system tier (`cache-memory`, compressed files and ready decodes) = a fifth
+  of the memory, 13.69 GB (13 056 MiB). Ready decodes one at a time at `.utility` on two threads; a full job that
+  finds the photo's ready decode in progress waits for it.
+- **After, overtake** (introduced in ca004df, measured at 6cc6a34, which also gives up a ready job still queued): the
+  same, but the photo on screen waits for its ready decode only when that is expected to end no later than a decode
+  of its own (running ms/MP figures), else decodes at once; a ready job still queued is given up. Four runs: the
+  first had a step not sharp in time, so two more were made.
 - **After, waiting (d581405)**: the overtake removed, the photo on screen waits for its ready decode again; a ready
   job still queued (not decoding yet) is still given up. Two runs.
 
@@ -35,12 +36,12 @@ CPU time for the script; RAM = peak `phys_footprint`, GPU = peak `MTLDevice.curr
 |---|---|---|---:|---:|---|---|---:|---:|---:|
 | 100-steps | before | 1 | 29 | 0 | 1 / 206 / 725 | – | 160.5 | 1.57 | 6.65 |
 | 100-steps | before | 2 | 29 | 0 | 1 / 35 / 578 | – | 153.6 | 1.53 | 6.65 |
-| 100-steps | after | 1 | 29 | 0 | 1 / 1 / 783 | – | 144.5 | 12.56 | 6.58 |
-| 100-steps | after | 2 | 29 | 0 | 1 / 2 / 1126 | – | 148.2 | 12.61 | 6.58 |
+| 100-steps | waiting (93a5644) | 1 | 29 | 0 | 1 / 1 / 783 | – | 144.5 | 12.56 | 6.58 |
+| 100-steps | waiting (93a5644) | 2 | 29 | 0 | 1 / 2 / 1126 | – | 148.2 | 12.61 | 6.58 |
 | back-fast | before | 1 | 19 | 10 | 1 / 628 / 729 | 4 of 14, 1 / 628 | 166.0 | 1.73 | 6.65 |
 | back-fast | before | 2 | 18 | 11 | 1 / 593 / 803 | 3 of 14, 1 / 593 | 162.2 | 1.69 | 6.65 |
-| back-fast | after | 1 | 29 | 0 | 1 / 230 / 245 | 14 of 14, 198 / 245 | 136.6 | 12.55 | 6.58 |
-| back-fast | after | 2 | 29 | 0 | 1 / 241 / 1255 | 14 of 14, 172 / 244 | 137.0 | 12.55 | 6.65 |
+| back-fast | waiting (93a5644) | 1 | 29 | 0 | 1 / 230 / 245 | 14 of 14, 198 / 245 | 136.6 | 12.55 | 6.58 |
+| back-fast | waiting (93a5644) | 2 | 29 | 0 | 1 / 241 / 1255 | 14 of 14, 172 / 244 | 137.0 | 12.55 | 6.65 |
 | 100-steps | overtake | 1 | 28 | 1 | 1 / 2 / 278 | – | 151.9 | 12.56 | 6.58 |
 | 100-steps | overtake | 2 | 29 | 0 | 1 / 1 / 567 | – | 139.5 | 12.56 | 6.52 |
 | 100-steps | overtake | 3 | 29 | 0 | 1 / 2 / 796 | – | 149.5 | 12.60 | 6.97 |
@@ -60,25 +61,32 @@ job did with that decode:
 | side | 100-steps | back-fast |
 |---|---|---|
 | before | 725, 578 | 729, 803 |
-| after, waiting | 783, 1126 (waited, both) | 1, 1255 (–, waited) |
+| waiting (93a5644) | 783, 1126 (waited, both) | 1, 1255 (–, waited) |
 | overtake | not sharp in 1.5 s (overtook), 567 (waited), 796 (overtook), 747 (waited) | 785 (overtook), 1 (–), 787 (overtook), 2 (–) |
 | waiting (d581405) | 1, 1 (–, both) | 1, 1 (–, both) |
 
-After (both versions), from `CacheStats`: graphics tier peak 3849–3911 MiB of 4088; system tier peak 11 391 MiB of 13 056; 20 ready
-decodes held at the peak (every photo of the folder).
+After (every version), from `CacheStats`: graphics tier peak 3849–3911 MiB of 4088; system tier peak 11 391 MiB of
+13 056; 20 ready decodes held at the peak (every photo of the folder).
+
+In flight, beyond that: the system tier bounds what the cache holds, not the decodes being made. Up to four full
+decodes run at once (three on the decode pool, one ready decode), each ~0.6 GB of output at 147 MP plus libjxl's own
+buffers, so the process can stand ~2.5–3 GB above the tier for a moment (`ImageCache.readyPool`). That accounts for
+the one 15.3 GB RAM peak against the cache's 11 391 MiB (100-steps, d581405 run 2).
 
 Reading:
 
 - **A step back is an upload.** back-fast: 29 of 29 sharp against 18–19; the 14 back steps 172–198 ms p50 and
   244–245 ms max to sharp (the upload of a ready decode), against 10–11 of 14 not sharp before the next step.
-- **Graphics memory as before.** The card peaks at 6.52–6.65 GB on both sides: the graphics tier (4.29 GB) plus
-  what is on screen and being uploaded, below the ~7.6 GB where panning starts to stall (spec, «Замер потолка
-  карты»); one overtake run peaked at 6.97 GB.
-- **Less CPU.** 100-steps 144–148 s against 154–161, back-fast 137 s against 162–166: a step back no longer decodes
-  the file again.
+- **Graphics memory as before.** The card peaks at 6.52–6.65 GB on both sides, 6.58 GB in all four final runs
+  (d581405): the graphics tier (4.29 GB) plus what is on screen and being uploaded, below the ~7.6 GB where panning
+  starts to stall (spec, the measurement of the card's ceiling); one overtake run peaked at 6.97 GB.
+- **Less CPU.** Final runs (d581405): 100-steps 144–147 s against 154–161, back-fast 135–136 s against 162–166: a
+  step back no longer decodes the file again (93a5644: 144–148 s and 137 s).
 - **System memory is what buys it**: 12.6 GB peak against 1.5–1.7 (`cache-memory`, a fifth of 64 GB, holds every
-  photo of this folder ready).
-- **100-steps: more steps instant, one step slower.** 28 of 29 steps were already sharp when reached (22–26 before),
+  photo of this folder ready). One final run peaked at 15.3 GB: transient, from the decodes in flight (above), not
+  from what the cache holds.
+- **100-steps at 93a5644: more steps instant, one step slower** (superseded by d581405, below: no step waits there,
+  and the first step is instant). 28 of 29 steps were already sharp when reached (22–26 before),
   p90 1–2 ms against 35–206. The exception is the first step after opening: its photo's ready decode had started in
   the background during the open (two threads, `.utility`, 2.4–2.8 s for 147 MP), and the full job for it waits for
   that decode rather than decode the file a second time (trace `readyAwait`, ~1 ms after the step). That step took
@@ -97,8 +105,10 @@ Reading:
   progress (no `readyAwait`): the ready job of the photo after the first was still queued when its full job came and
   was given up, so that photo was decoded during the open and the first step was already sharp (1 ms; 29 of 29 hits
   in 100-steps). 100-steps max 1–2 ms against 578–725 before the tiers; back-fast 29 of 29, back steps 184–186 ms
-  p50 and 237–309 ms max (one run over the ~260 ms of the prototype); CPU 144–147 s and 135–136 s. One RAM peak of
-  15.3 GB (100-steps run 2; 12.6 GB otherwise), the GPU 6.58 GB in all four.
+  p50 and 237–309 ms max; CPU 144–147 s and 135–136 s. The 309 ms is one sample in two runs (the overtake runs
+  reached 292 ms), the noise level rather than a change against the prototype's ~260 ms. One RAM peak of 15.3 GB
+  (100-steps run 2, transient, from the decodes in flight; 12.6 GB otherwise), the GPU 6.58 GB in all four.
 - A first run of "after" had the bench's defaults without the graphics tier (`CacheLimits()` instead of the app's
-  `CacheLimits(config:)`): one 13.7 GB budget for everything put 19.5 GB (18 594 MiB) on the card and made forward steps 0.36–0.54 s p50, up to 1.25 s.
-  The replay now takes its defaults the way the app does.
+  `CacheLimits(config:)`): one 13.7 GB budget for everything put 19.5 GB (18 594 MiB) on the card and made forward
+  steps 0.36–0.54 s p50, up to 1.25 s. The replay now takes its defaults the way the app does, and `CacheLimits()`
+  itself now carries the Mac's graphics tier.
