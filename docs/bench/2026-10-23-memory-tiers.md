@@ -100,7 +100,7 @@ Reading:
   Elsewhere the overtake version matches the waiting one: back-fast 29 of 29, back steps 166–195 ms p50 and
   230–292 ms max, CPU 133–152 s.
 - **The overtake was removed** (user decision on these numbers): the photo on screen waits for its ready decode
-  again, as in «After, waiting»; a ready job still queued is given up. Its rows stay as the measurement behind it.
+  again, as in «After, waiting (93a5644)»; a ready job still queued is given up. Its rows stay as the measurement behind it.
 - **Waiting again (d581405): no step waited.** In both runs of both scripts no full job met a ready decode in
   progress (no `readyAwait`): the ready job of the photo after the first was still queued when its full job came and
   was given up, so that photo was decoded during the open and the first step was already sharp (1 ms; 29 of 29 hits

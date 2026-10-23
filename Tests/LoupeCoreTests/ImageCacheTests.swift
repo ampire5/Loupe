@@ -1318,6 +1318,8 @@ struct ImageCacheTests {
         })
         #expect(await eventually { atLeast(.preview, await rig.state(files[1])) })
         #expect(await rig.cache.inspect([files[1]])[0]?.jobs[.ready] == true, "fixture: n1's ready job is queued")
+        // Only n2's running ready decode counts, as the neighbours'; n1's queued one counts for nothing.
+        #expect(await eventually { await rig.cache.activity == .neighbours })
 
         limits.full = 1
         await rig.cache.setLimits(limits)
@@ -1330,6 +1332,31 @@ struct ImageCacheTests {
         held.open()
         #expect(await rig.settle())
         #expect(rig.decoder.calls(files[1]).filter { $0 == .full }.count == 1)
+        await rig.clear()
+    }
+
+    /// n1's ready decode fails, so none is planned for it; stepping onto it at 100 %, its full decode succeeds and is
+    /// kept as the ready one (the job replans once the file decodes), rather than made again in the background.
+    @Test func fullDecodeAfterAFailedReadyIsKeptReady() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let rig = Rig(limits: limits)
+        let files = fileURLs(10)
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        rig.decoder.failFullOnce(files[1])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { log.events.contains { $0.url == files[1] && $0.kind == .readyFailed } })
+        #expect(await rig.settle())
+        let failed = rig.decoder.calls(files[1]).filter { $0 == .full }.count
+        #expect(failed == 1, "fixture: the one failed ready decode")
+
+        await rig.focus(files, 1, needsFull: true, previous: 0)
+        #expect(await eventually { await rig.state(files[1]) == .full })
+        #expect(await rig.settle())
+        #expect(rig.decoder.calls(files[1]).filter { $0 == .full }.count == failed + 1)
+        #expect(await rig.cache.holdsReady(files[1]))
         await rig.clear()
     }
 
@@ -1357,6 +1384,11 @@ struct ImageCacheTests {
         #expect(await rig.cache.stats().readyCount == ready)
         await rig.clear()
     }
+}
+
+extension ImageCache {
+    /// Test hook: the entry of `url` holds a ready decode (`CacheEntry.ready`).
+    func holdsReady(_ url: URL) -> Bool { entries[url]?.ready != nil }
 }
 
 private final class TraceEvents: @unchecked Sendable {
