@@ -8,13 +8,17 @@ public struct WalkProgress: Equatable, Sendable {
     public var stopped: String?
     /// Why it waits now, for the popover (`ThumbsWalk.waitingForShare`); nil while it goes on.
     public var waiting: String?
+    /// Whether the walk is under way (from its start until it ended, done, stopped or cancelled): the popover then
+    /// offers "Stop preparing".
+    public var running: Bool
 
     public init(folders: WorkCount = WorkCount(), files: WorkCount = WorkCount(), stopped: String? = nil,
-                waiting: String? = nil) {
+                waiting: String? = nil, running: Bool = false) {
         self.folders = folders
         self.files = files
         self.stopped = stopped
         self.waiting = waiting
+        self.running = running
     }
 }
 
@@ -45,8 +49,6 @@ public actor ThumbsWalk {
     /// Photos stamped on a share before they reach the walk window: the window's folder is synced into the catalog
     /// again at each chunk, so a chunk is a few dozen photos, about a second of a share's stats at two at a time.
     static let stampChunk = 64
-    /// How often stamps waiting for the queue's pause look again.
-    static let pausePoll: Duration = .milliseconds(100)
     /// `WalkProgress.waiting` while the share does not answer.
     public static let waitingForShare = "Waiting for the share"
 
@@ -130,7 +132,7 @@ public actor ThumbsWalk {
 
     private func run(_ root: URL, location: ThumbnailLocation?, depth: Int) async {
         network = await store.isOnShare(root, in: location)
-        progress = WalkProgress(folders: WorkCount(done: 0, total: 1))
+        progress = WalkProgress(folders: WorkCount(done: 0, total: 1), running: true)
         announce()
         var places = [Place(url: root, location: location, level: 0)]
         var next = 0
@@ -174,6 +176,7 @@ public actor ThumbsWalk {
         await store.setWalkWindow(nil, stamps: [:])
         await want()
         if progress.waiting != nil { progress.waiting = nil }
+        progress.running = false
         announce()
     }
 
@@ -314,11 +317,11 @@ public actor ThumbsWalk {
         return nil
     }
 
-    /// Waits while the cover queue's work ahead is paused (the viewer busy; the user's pause to come); false once the
-    /// walk is cancelled.
+    /// Waits while the cover queue's work ahead is paused (the viewer busy, the user's pause), on the queue's resume
+    /// (`CoverQueue.waitWhileAheadPaused`), no poll; false once the walk is cancelled.
     private func waitWhilePaused() async -> Bool {
-        while await queue.aheadPaused {
-            guard (try? await Task.sleep(for: Self.pausePoll)) != nil else { return false }
+        while !Task.isCancelled, await queue.aheadPaused {
+            await queue.waitWhileAheadPaused()
         }
         return !Task.isCancelled
     }

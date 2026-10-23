@@ -192,6 +192,7 @@ private final class StampReader: FileReading, @unchecked Sendable {
         #expect(progress.folders == WorkCount(done: 3, total: 3))
         #expect(progress.files == WorkCount(done: 6, total: 6))
         #expect(progress.stopped == nil)
+        #expect(!progress.running)
         // Made and kept in the catalog (the window is gone with the walk).
         for folder in ["/t", "/t/a", "/t/a/b"] {
             #expect(await store.folderSamples(URL(fileURLWithPath: folder), limit: 10).count == 2)
@@ -273,8 +274,10 @@ private final class StampReader: FileReading, @unchecked Sendable {
         let walk = ThumbsWalk(store: store, queue: store.coverQueue, client: 7)
         await walk.start(URL(fileURLWithPath: "/c"), location: loc("/c"), depth: 2)
         #expect(await eventually { await store.walkWindow != nil })
+        #expect(await walk.progress.running)
         await walk.cancel()
         await walk.finished()
+        #expect(await !walk.progress.running)
         // Those already on their threads end; nothing starts after.
         #expect(await eventually { await store.coverQueue.runningCount == 0 })
         let calls = tree.calls
@@ -320,6 +323,33 @@ private final class StampReader: FileReading, @unchecked Sendable {
         try? await Task.sleep(for: .milliseconds(100))
         #expect(reader.stamps == stamps)
         #expect(stamps < ThumbsWalk.stampChunk + 20)
+    }
+
+    /// The user's pause during a share's stamps: the walk waits on the queue's resume (no poll), and goes on to the
+    /// end once the pause is lifted.
+    @Test func walkWaitsForTheResume() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let inner = ThumbReader(), tree = FakeTree(reader: inner)
+        tree.set("/p", photos: 40)
+        let reader = StampReader(inner, queued: .milliseconds(10))
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: tree.lister)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverStat { _ in nil }
+        let queue = store.coverQueue
+        let walk = ThumbsWalk(store: store, queue: queue, client: 7)
+        await walk.start(URL(fileURLWithPath: "/p"), location: nil, depth: 0)
+        #expect(await eventually { reader.stamps > 0 })
+        await queue.pauseAhead(true)
+        #expect(await eventually { await queue.aheadWaiterCount >= 1 })
+        let stamps = reader.stamps
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(reader.stamps <= stamps + ThumbnailStore.maxReads)   // those in flight end; none starts
+        await queue.pauseAhead(false)
+        await walk.finished()
+        #expect(await walk.progress.files == WorkCount(done: 40, total: 40))
+        #expect(await queue.aheadWaiterCount == 0)
     }
 
     /// Home's cards in view on the share go before the walk: the walk's first listing waits for them.

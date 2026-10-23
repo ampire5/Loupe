@@ -431,6 +431,37 @@ private final class TryCount: @unchecked Sendable {
         #expect(log.started.last == "v1/a")
     }
 
+    /// Work that waits for the work ahead (the walk's stamps) waits on the queue's resume, not a poll: it returns at
+    /// once while nothing holds it, stays while either pause holds, and goes on when the last one ends or its task is
+    /// cancelled.
+    @Test func aheadWaitersWakeOnResume() async {
+        let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1, resumeDelay: .milliseconds(20))
+        await queue.waitWhileAheadPaused()   // nothing holds it: at once
+        await queue.pauseAhead(true)
+        await queue.pause(true)
+        let woke = Locked(false)
+        let waiter = Task {
+            await queue.waitWhileAheadPaused()
+            woke.update { $0 = true }
+        }
+        #expect(await eventually { await queue.aheadWaiterCount == 1 })
+        await queue.pauseAhead(false)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(!woke.get)   // the viewer's pause still holds
+        await queue.pause(false)
+        #expect(await eventually { woke.get })   // after the resume delay
+        await waiter.value
+        #expect(await queue.aheadWaiterCount == 0)
+        // Cancelled while waiting: it returns, and its place goes.
+        await queue.pauseAhead(true)
+        let cancelled = Task { await queue.waitWhileAheadPaused() }
+        #expect(await eventually { await queue.aheadWaiterCount == 1 })
+        cancelled.cancel()
+        await cancelled.value
+        #expect(await eventually { await queue.aheadWaiterCount == 0 })
+        #expect(await queue.aheadPaused)
+    }
+
     /// The viewer's pause and the user's are apart: the end of one leaves the other.
     @Test func browsingResumeKeepsTheUsersPause() async {
         let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1, resumeDelay: .zero)

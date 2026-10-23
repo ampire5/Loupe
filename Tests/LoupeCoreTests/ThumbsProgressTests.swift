@@ -134,4 +134,62 @@ import Testing
 
         #expect(ThumbsProgress().state == nil)
     }
+
+    /// The popover's state is there whether or not anything is being prepared (View › Thumbnails… for any folder):
+    /// done, it has the counts and says it is not working, so the pill stays out; with nothing at all, zeros.
+    @Test func displayStateEvenWhenDone() {
+        let done = ThumbsProgress(inView: WorkCount(done: 24, total: 24), rest: WorkCount(done: 216, total: 216),
+                                  photos: WorkCount(done: 240, total: 240), subfolders: WorkCount(done: 48, total: 48))
+        #expect(done.state == nil)
+        let shown = done.display
+        #expect(!shown.working)
+        #expect(shown.rows == [.init(title: "In view", done: 24, total: 24),
+                               .init(title: "Rest of folder", done: 216, total: 216),
+                               .init(title: "Subfolders", done: 48, total: 48)])
+        let none = ThumbsProgress().display
+        #expect(!none.working)
+        #expect(none.rows.map(\.total) == [0, 0, 0])
+        var paused = done
+        paused.paused = .user
+        #expect(paused.display.pausedByUser && paused.display.pauseNote == "Paused")
+        let running = ThumbsProgress(photos: WorkCount(done: 1, total: 2))
+        #expect(running.display.working)
+        #expect(running.display == running.state)
+    }
+
+    /// While the subtree walk runs (for this window) the popover's button stops it; once it ended, it prepares again.
+    @Test func runningWalkOffersStop() {
+        let generator = GeneratorProgress(all: WorkCount(done: 10, total: 10))
+        var walk = WalkProgress(folders: WorkCount(done: 1, total: 4))
+        walk.running = true
+        let running = ThumbsProgress.join(generator: generator, covers: Self.covers(), walk: walk, pausedByUser: false,
+                                          browsing: false)
+        #expect(running.subtreeRunning)
+        #expect(running.state?.subtreeRunning == true)
+        walk.running = false
+        let ended = ThumbsProgress.join(generator: generator, covers: Self.covers(), walk: walk, pausedByUser: false,
+                                        browsing: false)
+        #expect(!ended.subtreeRunning)
+        #expect(!ended.display.subtreeRunning)
+        let none = ThumbsProgress.join(generator: generator, covers: Self.covers(), walk: nil, pausedByUser: false,
+                                       browsing: false)
+        #expect(!none.subtreeRunning)
+    }
+
+    /// The visible cards' subfolders waiting on a share that does not answer say so, as the walk does; the walk's own
+    /// word wins, and nothing is said once the subfolders are done.
+    @Test func aheadWaitingForTheShareIsSaid() {
+        let generator = GeneratorProgress(all: WorkCount(done: 10, total: 10))
+        let waiting = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 0, total: 12)),
+                                          walk: nil, pausedByUser: false, browsing: false, aheadWaitsForShare: true)
+        #expect(waiting.walkNote == ThumbsWalk.waitingForShare)
+        #expect(waiting.state?.pauseNote == ThumbsWalk.waitingForShare)
+        let done = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 12, total: 12)),
+                                       walk: nil, pausedByUser: false, browsing: false, aheadWaitsForShare: true)
+        #expect(done.walkNote == nil)
+        let stopped = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 0, total: 12)),
+                                          walk: WalkProgress(folders: WorkCount(done: 3, total: 9), stopped: "Too many folders"),
+                                          pausedByUser: false, browsing: false, aheadWaitsForShare: true)
+        #expect(stopped.walkNote == "Too many folders")
+    }
 }

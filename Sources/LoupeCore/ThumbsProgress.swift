@@ -43,17 +43,23 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// The visible cards' subfolders (a cover and a summary each), with the walk's folders while it runs.
     public var subfolders: WorkCount
     public var paused: Pause?
-    /// The walk's word for the popover (`WalkProgress.waiting`, else `stopped`); nil without one.
+    /// The word for the popover about the subfolders: the walk's (`WalkProgress.waiting`, else `stopped`), else
+    /// "Waiting for the share" while the visible cards' subfolders wait on a share that does not answer; nil without
+    /// one.
     public var walkNote: String?
+    /// The subtree walk of this window is under way (`WalkProgress.running`): the popover offers "Stop preparing".
+    public var subtreeRunning: Bool
 
     public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), photos: WorkCount = WorkCount(),
-                subfolders: WorkCount = WorkCount(), paused: Pause? = nil, walkNote: String? = nil) {
+                subfolders: WorkCount = WorkCount(), paused: Pause? = nil, walkNote: String? = nil,
+                subtreeRunning: Bool = false) {
         self.inView = inView
         self.rest = rest
         self.photos = photos
         self.subfolders = subfolders
         self.paused = paused
         self.walkNote = walkNote
+        self.subtreeRunning = subtreeRunning
     }
 
     /// The photos while some are still to be made, then the subfolders; nil once both are done.
@@ -86,9 +92,11 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// One progress from the generator's counts of the window's photos (`ThumbnailStore.generatorProgress`), the
     /// cover queue's of Home's client (`CoverQueue.progress`), the walk's while one runs (`ThumbsWalk.progress`; nil:
     /// none for this window) and the pauses: the user's wins when both hold. A walk that stopped early ("Too many
-    /// folders") leaves no folder counted as still to do.
+    /// folders") leaves no folder counted as still to do. `aheadWaitsForShare`: the share of the folder on screen is
+    /// offline (`ThumbnailStore.isShareOffline`), so its cards' subfolders still to do wait for it, and the popover says
+    /// so as the walk does.
     public static func join(generator: GeneratorProgress, covers: CoverProgress, walk: WalkProgress?, pausedByUser: Bool,
-                            browsing: Bool) -> ThumbsProgress {
+                            browsing: Bool, aheadWaitsForShare: Bool = false) -> ThumbsProgress {
         var subfolders = covers.ahead
         if let walk {
             subfolders.done += walk.folders.done
@@ -98,27 +106,35 @@ public struct ThumbsProgress: Equatable, Sendable {
                                total: covers.inView.total + covers.margin.total + generator.visible.total)
         let rest = WorkCount(done: generator.all.done - generator.visible.done,
                              total: generator.all.total - generator.visible.total)
+        let aheadWaits = aheadWaitsForShare && covers.ahead.done < covers.ahead.total
         return ThumbsProgress(inView: inView, rest: rest, photos: generator.all, subfolders: subfolders,
                               paused: pausedByUser ? .user : browsing ? .browsing : nil,
-                              walkNote: walk.flatMap { $0.waiting ?? $0.stopped })
+                              walkNote: walk.flatMap { $0.waiting ?? $0.stopped } ?? (aheadWaits ? ThumbsWalk.waitingForShare : nil),
+                              subtreeRunning: walk?.running ?? false)
     }
 
     /// What the toolbar's pill and its popover draw (`HomeBrowserView.setProgress`): the text and the current stage's
     /// share, the rows "In view", "Rest of folder", "Subfolders", and the note under them: "Paused" (the user's),
     /// "Paused while you browse" (the viewer's), else the walk's word. Nil once all is done.
     public var state: ThumbsProgressState? {
-        guard let text, let current else { return nil }
+        stage == nil ? nil : display
+    }
+
+    /// The same, whether or not anything is still to do (View › Thumbnails… for any folder): once all is done (or
+    /// with nothing at all) not `working`, so the pill stays out while the popover shows the counts.
+    public var display: ThumbsProgressState {
         let note: String? = switch paused {
         case .user: "Paused"
         case .browsing: "Paused while you browse"
         case nil: walkNote
         }
+        let count = current
         return ThumbsProgressState(
-            fraction: current.total > 0 ? Double(current.done) / Double(current.total) : 0, text: text,
+            fraction: count.map { $0.total > 0 ? Double($0.done) / Double($0.total) : 0 } ?? 0, text: text ?? "",
             paused: paused != nil,
             rows: [.init(title: "In view", done: inView.done, total: inView.total),
                    .init(title: "Rest of folder", done: rest.done, total: rest.total),
                    .init(title: "Subfolders", done: subfolders.done, total: subfolders.total)],
-            pauseNote: note, pausedByUser: paused == .user)
+            pauseNote: note, pausedByUser: paused == .user, working: stage != nil, subtreeRunning: subtreeRunning)
     }
 }

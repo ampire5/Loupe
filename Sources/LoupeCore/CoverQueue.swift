@@ -100,6 +100,9 @@ public actor CoverQueue {
     private(set) var pauseGeneration = 0
     private var resumeWake: Task<Void, Never>?
     private var nextToken: UInt64 = 0
+    /// Work waiting for the work ahead to go again (`waitWhileAheadPaused`), woken when no pause holds it.
+    private var aheadWaiters: [UInt64: CheckedContinuation<Void, Never>] = [:]
+    private var nextWaiter: UInt64 = 0
 
     public init(listingLimit: Int = CoverQueue.listingLimit, networkListingLimit: Int = CoverQueue.networkListingLimit,
                 resumeDelay: Duration = CoverQueue.defaultResumeDelay, retryDelay: Duration = CoverQueue.defaultRetryDelay,
@@ -219,6 +222,40 @@ public actor CoverQueue {
     /// viewer is busy (`pause`) and until its resume delay has passed, and while the user paused it (`pauseAhead`).
     public var aheadPaused: Bool { paused || aheadHeld }
 
+    /// Returns once work ahead may go (`aheadPaused` false), at once when it may now, or when the calling task is
+    /// cancelled: the subtree walk's stamps wait on this resume, not on a poll.
+    public func waitWhileAheadPaused() async {
+        guard aheadPaused, !Task.isCancelled else { return }
+        nextWaiter += 1
+        let id = nextWaiter
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if !aheadPaused || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    aheadWaiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.wakeWaiter(id) }
+        }
+    }
+
+    /// Waiters for the work ahead (tests).
+    var aheadWaiterCount: Int { aheadWaiters.count }
+
+    private func wakeWaiter(_ id: UInt64) {
+        aheadWaiters.removeValue(forKey: id)?.resume()
+    }
+
+    /// No pause holds the work ahead any more: its waiters go on.
+    private func wakeAheadWaiters() {
+        guard !aheadPaused, !aheadWaiters.isEmpty else { return }
+        let waiters = aheadWaiters
+        aheadWaiters = [:]
+        for waiter in waiters.values { waiter.resume() }
+    }
+
     /// Whether the viewer's pause holds now (`pause`, until its resume delay has passed): "Paused while you browse".
     public var browsingPaused: Bool { paused }
 
@@ -232,8 +269,10 @@ public actor CoverQueue {
         pump()
     }
 
-    /// A pause began or ended: every client's progress reads otherwise.
+    /// A pause began or ended: every client's progress reads otherwise, and work waiting for the work ahead goes on
+    /// if nothing holds it now.
     private func announceAll() {
+        wakeAheadWaiters()
         guard let onProgress else { return }
         for client in clients.keys.sorted() { onProgress(client) }
     }
