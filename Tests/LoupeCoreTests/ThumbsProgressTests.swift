@@ -49,8 +49,62 @@ import Testing
         #expect(progress.rest == WorkCount(done: 96, total: 216))
         #expect(progress.subfolders == WorkCount(done: 0, total: 48))
         #expect(progress.photos == WorkCount(done: 106, total: 232))
-        #expect(progress.current == WorkCount(done: 106, total: 232))
-        #expect(progress.text == "Thumbnails 106 / 232")
+        // What is in view comes first: the pill names it while some of it is still to be made.
+        #expect(progress.current == WorkCount(done: 18, total: 24))
+        #expect(progress.text == "In view 18 / 24")
+    }
+
+    /// The covers of the cards in view and the margin are work (stages 1–2): with nothing else to do the pill is lit
+    /// and names them, its ring their share.
+    @Test func stateWhileCoversInViewArePending() throws {
+        let progress = ThumbsProgress.join(generator: GeneratorProgress(all: WorkCount(done: 10, total: 10)),
+                                           covers: Self.covers(inView: WorkCount(done: 2, total: 6),
+                                                               margin: WorkCount(done: 0, total: 2)),
+                                           walk: nil, pausedByUser: false, browsing: false)
+        #expect(progress.stage == .inView)
+        #expect(progress.text == "In view 2 / 8")
+        let state = try #require(progress.state)
+        #expect(state.working)
+        #expect(state.fraction == 0.25)
+        #expect(state.text == "In view 2 / 8")
+        var paused = progress
+        paused.paused = .user
+        #expect(paused.text == "Paused · 2 / 8")
+    }
+
+    /// The stages in their order: what is in view, then the folder's photos, then the subfolders.
+    @Test func inViewStageComesFirst() {
+        func stage(inView: WorkCount, photos: WorkCount, ahead: WorkCount) -> ThumbsProgress {
+            ThumbsProgress.join(generator: GeneratorProgress(visible: WorkCount(done: inView.done, total: inView.total),
+                                                             all: photos),
+                                covers: Self.covers(ahead: ahead), walk: nil, pausedByUser: false, browsing: false)
+        }
+        let all = stage(inView: WorkCount(done: 1, total: 4), photos: WorkCount(done: 1, total: 40),
+                        ahead: WorkCount(done: 0, total: 9))
+        #expect(all.stage == .inView)
+        #expect(all.text == "In view 1 / 4")
+        let photos = stage(inView: WorkCount(done: 4, total: 4), photos: WorkCount(done: 4, total: 40),
+                           ahead: WorkCount(done: 0, total: 9))
+        #expect(photos.stage == .thumbnails)
+        #expect(photos.text == "Thumbnails 4 / 40")
+        let subfolders = stage(inView: WorkCount(done: 4, total: 4), photos: WorkCount(done: 40, total: 40),
+                               ahead: WorkCount(done: 3, total: 9))
+        #expect(subfolders.stage == .subfolders)
+        #expect(subfolders.text == "Subfolders 3 / 9")
+    }
+
+    /// On a share the listing comes names only first: the generator has no stamped photo yet (its counts are zeros),
+    /// but the photos in view are waiting to be made, so they count in view and the state is working.
+    @Test func visiblePhotosOfANamesOnlyListingCountInView() throws {
+        let progress = ThumbsProgress.join(generator: GeneratorProgress(), covers: Self.covers(), walk: nil,
+                                           pausedByUser: false, browsing: false, unlistedInView: 6)
+        #expect(progress.inView == WorkCount(done: 0, total: 6))
+        #expect(progress.stage == .inView)
+        #expect(progress.text == "In view 0 / 6")
+        #expect(try #require(progress.state).working)
+        let none = ThumbsProgress.join(generator: GeneratorProgress(), covers: Self.covers(), walk: nil,
+                                       pausedByUser: false, browsing: false)
+        #expect(none.state == nil)
     }
 
     @Test func browsingPauseIsReported() {

@@ -17,8 +17,9 @@ public struct GeneratorProgress: Equatable, Sendable {
 /// тулбаре"): one value joined from the three counters (the generator's for the window, the cover queue's for the
 /// client, the subtree walk's for the command) and the pauses.
 ///
-/// The pill names the current stage: the folder's photos (all of them, those in view too) while some are still to be
-/// made ("Thumbnails 120 / 480"), then the subfolders ("Subfolders 5 / 48"); paused, "Paused · 120 / 480"; nothing once both are done.
+/// The pill names the current stage: what is in view and the margin (the cards' covers and the photos) while some of it
+/// is still to be made ("In view 6 / 24"), then the folder's photos (all of them, those in view too: "Thumbnails 120 /
+/// 480"), then the subfolders ("Subfolders 5 / 48"); paused, "Paused · 120 / 480"; nothing once all are done.
 public struct ThumbsProgress: Equatable, Sendable {
     /// Why the work ahead waits: the user's pause (the popover's "Pause"), or the viewer busy ("Paused while you
     /// browse").
@@ -28,6 +29,9 @@ public struct ThumbsProgress: Equatable, Sendable {
 
     /// The stage the pill names.
     public enum Stage: Equatable, Sendable {
+        /// The covers of the cards in view and the margin, and the photos in view and the margin (stages 1–2): what
+        /// the user is looking at, so work as much as the rest.
+        case inView
         /// The folder's photos (stage 3).
         case thumbnails
         /// The visible cards' subfolders (stage 4), and the walk's folders on command (stage 5).
@@ -62,8 +66,10 @@ public struct ThumbsProgress: Equatable, Sendable {
         self.subtreeRunning = subtreeRunning
     }
 
-    /// The photos while some are still to be made, then the subfolders; nil once both are done.
+    /// What is in view while some of it is still to be made, then the photos, then the subfolders; nil once all are
+    /// done.
     public var stage: Stage? {
+        if inView.done < inView.total { return .inView }
         if photos.done < photos.total { return .thumbnails }
         if subfolders.done < subfolders.total { return .subfolders }
         return nil
@@ -72,18 +78,20 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// The current stage's count (the pill's ring is its share), nil once all is done.
     public var current: WorkCount? {
         switch stage {
+        case .inView: inView
         case .thumbnails: photos
         case .subfolders: subfolders
         case nil: nil
         }
     }
 
-    /// The pill's text: "Thumbnails 120 / 480", "Subfolders 5 / 48", "Paused · 120 / 480"; nil once all is done.
+    /// The pill's text: "In view 6 / 24", "Thumbnails 120 / 480", "Subfolders 5 / 48", "Paused · 120 / 480"; nil once all is done.
     public var text: String? {
         guard let stage, let current else { return nil }
         let count = "\(current.done) / \(current.total)"
         if paused != nil { return "Paused · \(count)" }
         switch stage {
+        case .inView: return "In view \(count)"
         case .thumbnails: return "Thumbnails \(count)"
         case .subfolders: return "Subfolders \(count)"
         }
@@ -94,16 +102,19 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// none for this window) and the pauses: the user's wins when both hold. A walk that stopped early ("Too many
     /// folders") leaves no folder counted as still to do. `aheadWaitsForShare`: the share of the folder on screen is
     /// offline (`ThumbnailStore.isShareOffline`), so its cards' subfolders still to do wait for it, and the popover says
-    /// so as the walk does.
+    /// so as the walk does. `unlistedInView`: the photos in view and the margin that the generator does not count yet
+    /// because the folder's listing is still names only (a share's first pass gives no stamps): they wait to be made,
+    /// so they count in view, none of them done.
     public static func join(generator: GeneratorProgress, covers: CoverProgress, walk: WalkProgress?, pausedByUser: Bool,
-                            browsing: Bool, aheadWaitsForShare: Bool = false) -> ThumbsProgress {
+                            browsing: Bool, aheadWaitsForShare: Bool = false, unlistedInView: Int = 0) -> ThumbsProgress {
         var subfolders = covers.ahead
         if let walk {
             subfolders.done += walk.folders.done
             subfolders.total += walk.stopped == nil ? walk.folders.total : walk.folders.done
         }
         let inView = WorkCount(done: covers.inView.done + covers.margin.done + generator.visible.done,
-                               total: covers.inView.total + covers.margin.total + generator.visible.total)
+                               total: covers.inView.total + covers.margin.total + generator.visible.total
+                                   + unlistedInView)
         let rest = WorkCount(done: generator.all.done - generator.visible.done,
                              total: generator.all.total - generator.visible.total)
         let aheadWaits = aheadWaitsForShare && covers.ahead.done < covers.ahead.total

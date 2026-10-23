@@ -496,6 +496,7 @@ extension Notification.Name {
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
         lastInView = []
+        requestedVisible = []
         stopQueuedCovers()
         progressMayHaveChanged()
         guard let folder, let path else { return }
@@ -775,6 +776,7 @@ extension Notification.Name {
     /// `files`: those in view first, then the margin's.
     private func sendRequest(_ files: [URL]) {
         guard !isPaused, !shownFiles.isEmpty else { return }
+        requestedVisible = files
         let index = Dictionary(shownFiles.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         let shownIndices = files.compactMap { index[$0] }
         let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
@@ -1043,6 +1045,9 @@ extension Notification.Name {
     private static let progressInterval: Duration = .milliseconds(250)
     private var progressTask: Task<Void, Never>?
     private var lastProgress: ThumbsProgress?
+    /// The photos of the last request in view and the margin: before the complete listing (names only, no stamps)
+    /// the generator does not count them, so the progress counts those without a stamp in view.
+    private var requestedVisible: [URL] = []
     private var lastProgressLocation: BrowserLocation?
 
     /// A count may have changed: the progress is read once `progressInterval` has passed, whatever else changes
@@ -1077,8 +1082,11 @@ extension Notification.Name {
         let walked = await walk?.progress
         // The visible cards' subfolders still to do on a share that does not answer: the popover says they wait.
         let shareAway = covers.ahead.done < covers.ahead.total ? await thumbnails.isShareOffline(folder, in: location) : false
+        // Names only so far (a share's first pass): the photos in view wait for their stamps, then to be made.
+        let unlisted = shownDated ? 0 : requestedVisible.reduce(0) { $0 + (stamps[$1] == nil ? 1 : 0) }
         return ThumbsProgress.join(generator: generator, covers: covers, walk: walked,
-                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing, aheadWaitsForShare: shareAway)
+                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing, aheadWaitsForShare: shareAway,
+                                   unlistedInView: unlisted)
     }
 }
 
