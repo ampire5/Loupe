@@ -59,6 +59,18 @@ import Testing
         #expect(!card.done && card.new == 12)
     }
 
+    /// Recency: the visit's date goes to the card; a Recent stand-in brings its `opened`; no visit, no date.
+    @Test func visitedDateReachesTheSummary() {
+        let facts = FolderCardFacts(summary: FolderSummary(photos: 10, folders: 0, bytes: 1))
+        let visit = FolderVisit(index: 3, count: 10, visited: t0 + 500)
+        #expect(facts.cardSummary(visit: visit, config: Config()).visited == t0 + 500)
+        let entry = RecentEntry(path: "/p/a", kind: .folder, gallery: nil, title: nil, file: "x.jpg", index: 9,
+                                count: 40, opened: t0 + 7, hidden: false)
+        let standIn = FolderCardFacts.visit(nil, recent: entry)
+        #expect(facts.cardSummary(visit: standIn, config: Config()).visited == t0 + 7)
+        #expect(facts.cardSummary(visit: nil, config: Config()).visited == nil)
+    }
+
     /// D5: the first run after the update has no visits yet, but Recent has where each recent folder was: its
     /// progress comes from there (spec: from the one place it is in); a visit, once there, wins.
     @Test func recentStandsInForAMissingVisit() {
