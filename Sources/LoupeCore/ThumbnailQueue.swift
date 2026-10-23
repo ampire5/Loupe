@@ -35,8 +35,10 @@ public struct ThumbnailRequest: Sendable, Equatable {
 public enum ThumbnailQueue {
     /// Files to generate, most urgent first. Each file appears once, at its first position; `skip` (thumbnails
     /// that already exist or are being made) never appears. `trailing` (the walk's window) goes after every request,
-    /// its visible cells then outward from its current file, as a window's.
-    public static func order(_ requests: [ThumbnailRequest], skip: Set<URL>, trailing: ThumbnailRequest? = nil) -> [URL] {
+    /// its visible cells then outward from its current file, as a window's. `visibleOnly` (the user paused the work
+    /// ahead): only the requests' visible cells, nothing outward and no `trailing`.
+    public static func order(_ requests: [ThumbnailRequest], skip: Set<URL>, trailing: ThumbnailRequest? = nil,
+                             visibleOnly: Bool = false) -> [URL] {
         // The key window(s) first, the others by how recently they were key; ties keep the order given (stable).
         let others = requests.enumerated().filter { !$0.element.isKey }
             .sorted { ($0.element.lastActive, $1.offset) > ($1.element.lastActive, $0.offset) }.map(\.element)
@@ -56,11 +58,11 @@ public enum ThumbnailQueue {
                     add(request.files[index])
                 }
             }
-            for request in group {
+            for request in group where !visibleOnly {
                 outward(request, add)
             }
         }
-        if let trailing {
+        if let trailing, !visibleOnly {
             for index in trailing.visible where trailing.files.indices.contains(index) { add(trailing.files[index]) }
             outward(trailing, add)
         }

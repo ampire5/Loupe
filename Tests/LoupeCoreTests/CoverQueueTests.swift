@@ -412,6 +412,67 @@ private final class TryCount: @unchecked Sendable {
         #expect(heard.all.count >= 3)   // the want, and each card done
         #expect(Set(heard.all) == [7])
     }
+
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): the cards in view and the margin go on, the
+    /// work ahead waits, and the walk's check says so; off again, the work ahead starts.
+    @Test func pauseKeepsTheViewAlive() async {
+        let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1, resumeDelay: .zero)
+        let log = CoverLog()
+        await queue.pauseAhead(true)
+        #expect(await queue.aheadPaused)
+        await queue.want(["v1", "m1"], visible: 1, ahead: ["v1/a"], isNetwork: { _ in false },
+                         work: Self.work(log, time: .zero))
+        #expect(await eventually { log.ended.count == 2 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(Set(log.started) == ["v1", "m1"])
+        await queue.pauseAhead(false)
+        #expect(await !queue.aheadPaused)
+        #expect(await eventually { log.ended.count == 3 })
+        #expect(log.started.last == "v1/a")
+    }
+
+    /// The viewer's pause and the user's are apart: the end of one leaves the other.
+    @Test func browsingResumeKeepsTheUsersPause() async {
+        let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1, resumeDelay: .zero)
+        let log = CoverLog()
+        await queue.pauseAhead(true)
+        await queue.pause(true)
+        #expect(await queue.browsingPaused)
+        await queue.want(["v1"], visible: 1, ahead: ["v1/a"], isNetwork: { _ in false }, work: Self.work(log, time: .zero))
+        await queue.pause(false)
+        #expect(await !queue.browsingPaused)
+        #expect(await eventually { log.ended.count == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(log.started == ["v1"])
+        #expect(await queue.aheadPaused)
+    }
+
+    /// Either pause beginning or ending changes what every client's progress shows: each is told, once per change.
+    @Test func pausesAreAnnounced() async {
+        let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1, resumeDelay: .zero)
+        let heard = HeardClients()
+        let slow: @Sendable (String) async -> Bool = { _ in
+            try? await Task.sleep(for: .seconds(60))
+            return true
+        }
+        await queue.want(["a"], visible: 1, client: 1, isNetwork: { _ in false }, work: slow)
+        await queue.want(["b"], visible: 1, client: 2, isNetwork: { _ in false }, work: slow)
+        await queue.setOnProgress { heard.add($0) }
+        await queue.pause(true)
+        #expect(heard.all.count == 2)
+        #expect(Set(heard.all) == [1, 2])
+        await queue.pause(true)   // no change: no word
+        #expect(heard.all.count == 2)
+        await queue.pause(false)
+        #expect(heard.all.count == 4)
+        await queue.pauseAhead(true)
+        #expect(heard.all.count == 6)
+        await queue.pauseAhead(true)
+        #expect(heard.all.count == 6)
+        await queue.setOnProgress { _ in }
+        await queue.want([], visible: 0, client: 1, isNetwork: { _ in false }, work: slow)
+        await queue.want([], visible: 0, client: 2, isNetwork: { _ in false }, work: slow)
+    }
 }
 
 /// Clients the progress handler heard.

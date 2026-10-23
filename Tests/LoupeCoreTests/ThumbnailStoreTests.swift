@@ -520,6 +520,43 @@ final class Locked<T>: @unchecked Sendable {
         #expect(await eventually { await allReady(store, files) })
     }
 
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): a window's visible files (Home's: those in
+    /// view and the margin) are made, the rest of its folder and the walk's window wait, and the cover queue's work
+    /// ahead with them; off again, they come.
+    @Test func aheadPauseKeepsTheVisibleFiles() async throws {
+        let reader = ThumbReader()
+        let files = photos(6, in: reader)
+        let walked = photos(2, folder: "/photos/walked", in: reader)
+        let store = store(reader, dir: nil)
+        await store.pauseAhead(true)
+        #expect(await store.coverQueue.aheadPaused)
+        await store.setWalkWindow(request(walked), stamps: reader.stamps)
+        await store.setRequest(window: 1, request(files, current: 1, visible: [1, 4]), stamps: reader.stamps)
+        #expect(await eventually { await allReady(store, [files[1], files[4]]) })
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(Set(reader.reads) == [files[1], files[4]])
+        await store.pauseAhead(false)
+        #expect(await !store.coverQueue.aheadPaused)
+        #expect(await eventually { await allReady(store, files + walked) })
+    }
+
+    /// The rest of the folder's count: the window's stamped files with a thumbnail (or whose making failed) of all of
+    /// them; the walk's window is not counted.
+    @Test func generatorProgressCountsTheListing() async throws {
+        let reader = ThumbReader()
+        let files = photos(4, in: reader)
+        let walked = photos(2, folder: "/photos/walked", in: reader)
+        reader.fail(files[3])
+        let store = store(reader, dir: nil)
+        #expect(await store.generatorProgress(window: 1) == WorkCount())
+        await store.setViewerActivity(.neighbours)
+        await store.setWalkWindow(request(walked), stamps: reader.stamps)
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await store.generatorProgress(window: 1) == WorkCount(done: 0, total: 4))
+        await store.setViewerActivity(.idle)
+        #expect(await eventually { await store.generatorProgress(window: 1) == WorkCount(done: 4, total: 4) })
+    }
+
     // MARK: - Sources
 
     @Test func secondOpenComesFromDB() async throws {

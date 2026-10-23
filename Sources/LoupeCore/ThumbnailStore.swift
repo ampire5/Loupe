@@ -249,6 +249,8 @@ public actor ThumbnailStore {
     var queue: [URL] = []
     var queuePosition = 0
     var queueIsStale = true
+    /// The user paused the work ahead (`pauseAhead`): only the windows' visible files are made.
+    var aheadPaused = false
 
     /// `directory == nil` or `limitBytes == 0`: memory only, nothing is written anywhere (and with limit 0,
     /// databases an earlier session left in `directory` are deleted). The database opens on first use, not

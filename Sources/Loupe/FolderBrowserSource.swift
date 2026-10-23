@@ -6,6 +6,9 @@ extension Notification.Name {
     /// A share that was offline answered again (`ThumbnailStore.setOnVolumeAnswered`); the object is its key (`String`).
     /// Posted on the main thread; every window's Home asks again for that share's dimmed cards.
     static let coverVolumeAnswered = Notification.Name("local.loupe.coverVolumeAnswered")
+    /// Some count of Home's preparation may have changed (a cover queue's client, the subtree walk, a pause): every
+    /// window's Home reads its progress anew. Posted on the main thread.
+    static let thumbsProgressChanged = Notification.Name("local.loupe.thumbsProgressChanged")
 }
 
 /// Home's Folders tab on Loupe's data (file browser spec §4.2): listings from `BrowserListingSource` (the last eight
@@ -113,8 +116,12 @@ extension Notification.Name {
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 guard let url = note.object as? URL else { return }
+                self?.progressMayHaveChanged()
                 self?.thumbnailChanged(url)
             }
+        })
+        observers.append(center.addObserver(forName: .thumbsProgressChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.progressMayHaveChanged() }
         })
         observers.append(center.addObserver(forName: .coverVolumeAnswered, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
@@ -131,8 +138,11 @@ extension Notification.Name {
             guard isPaused else {
                 // Back from the viewer: the visits and the two-page keys may have changed.
                 showSummaries()
+                progressMayHaveChanged()
                 return sendCovers()
             }
+            progressTask?.cancel()
+            progressTask = nil
             // Nothing of the browser's goes on reading while the viewer shows what was clicked.
             pictureTask?.cancel()
             waiting.removeAll()
@@ -460,6 +470,7 @@ extension Notification.Name {
         lastAsked = []
         lastInView = []
         stopQueuedCovers()
+        progressMayHaveChanged()
         guard let folder, let path else { return }
         let thumbnails = self.thumbnails
         placeTask = Task { @MainActor [weak self] in
@@ -806,6 +817,8 @@ extension Notification.Name {
     /// The app's one subtree walk (thumbs-ahead spec, stage 5) on the store's cover queue, as a client of its own: a
     /// walk asked from any window ends the one before.
     private static var walk: ThumbsWalk?
+    /// The window whose command started the walk: its progress counts the walk's folders.
+    private static weak var walkOwner: FolderBrowserSource?
 
     /// "Prepare thumbnails of folder and subfolders": the walk from this card's folder down to `thumbs-depth`, where
     /// the catalog keeps it as for its card.
@@ -815,8 +828,14 @@ extension Notification.Name {
             let made = ThumbsWalk(store: thumbnails, queue: thumbnails.coverQueue, client: Self.nextWindow)
             Self.nextWindow += 1
             Self.walk = made
+            Task {
+                await made.setOnProgress { _ in
+                    Task { @MainActor in NotificationCenter.default.post(name: .thumbsProgressChanged, object: nil) }
+                }
+            }
             return made
         }()
+        Self.walkOwner = self
         let location = shownLocation?.subfolder(entry.url.lastPathComponent)
         let depth = Settings.shared.config.thumbsDepth, folder = entry.url
         Task { await walk.start(folder, location: location, depth: depth) }
@@ -938,6 +957,65 @@ extension Notification.Name {
         settings?.set(CardStyle.settingKey, style.rawValue, for: folder)
     }
 
+    // MARK: Progress
+
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): the app's, for the session (a new folder or
+    /// window keeps it), never written to loupe.conf.
+    private(set) static var aheadPausedByUser = false
+    /// The last pause sent to the store: each goes after it, so the store sees them in order.
+    private static var pauseSend: Task<Void, Never>?
+
+    /// The popover's "Pause" / "Resume": the store makes only what is in view and the margin, the cover queue holds the
+    /// work ahead and the walk (`ThumbnailStore.pauseAhead`); every window's progress reads anew.
+    func pauseAhead(_ on: Bool) {
+        guard Self.aheadPausedByUser != on else { return }
+        Self.aheadPausedByUser = on
+        let thumbnails = self.thumbnails, previous = Self.pauseSend
+        Self.pauseSend = Task {
+            await previous?.value
+            await thumbnails.pauseAhead(on)
+        }
+        NotificationCenter.default.post(name: .thumbsProgressChanged, object: nil)
+    }
+
+    /// How far Home's preparation of the folder on screen is, for the toolbar's pill (`HomeBrowserView.setProgress`,
+    /// thumbs-ahead plan Task 9): told only when it changed, at most every `progressInterval`; nothing to do (no
+    /// stage) when the browser shows no folder.
+    var onProgress: ((ThumbsProgress) -> Void)? {
+        didSet { progressMayHaveChanged() }
+    }
+    /// At most four a second (thumbs-ahead spec, "Данные"): the counters change with every thumbnail and card made.
+    private static let progressInterval: Duration = .milliseconds(250)
+    private var progressTask: Task<Void, Never>?
+    private var lastProgress: ThumbsProgress?
+
+    /// A count may have changed: the progress is read once `progressInterval` has passed, whatever else changes
+    /// meanwhile. Nothing while no one listens or the browser is hidden.
+    private func progressMayHaveChanged() {
+        guard onProgress != nil, !isPaused, progressTask == nil else { return }
+        progressTask = Task { @MainActor [weak self] in
+            guard (try? await Task.sleep(for: Self.progressInterval)) != nil, let self else { return }
+            self.progressTask = nil
+            let progress = await self.currentProgress()
+            guard !self.isPaused, progress != self.lastProgress else { return }
+            self.lastProgress = progress
+            self.onProgress?(progress)
+        }
+    }
+
+    /// The three counters joined (`ThumbsProgress.join`): the generator's for the browser's window, the cover queue's
+    /// for its client, the walk's when this window started it, and the pauses.
+    private func currentProgress() async -> ThumbsProgress {
+        guard case .folder = view?.location else { return ThumbsProgress() }
+        let thumbnails = self.thumbnails, window = thumbnailWindow
+        let walk = Self.walkOwner === self ? Self.walk : nil
+        let generator = await thumbnails.generatorProgress(window: window)
+        let covers = await thumbnails.coverQueue.progress(client: window)
+        let browsing = await thumbnails.coverQueue.browsingPaused
+        let walked = await walk?.progress
+        return ThumbsProgress.join(generator: generator, covers: covers, walk: walked,
+                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing)
+    }
 }
 
 extension HomeMosaic.Layout {

@@ -203,6 +203,10 @@ import UniformTypeIdentifiers
             await store.setOnVolumeAnswered { volume in
                 Task { @MainActor in NotificationCenter.default.post(name: .coverVolumeAnswered, object: volume) }
             }
+            // Some client's covers counted anew, or a pause began or ended: Home's progress (coalesced there).
+            await store.coverQueue.setOnProgress { _ in
+                Task { @MainActor in NotificationCenter.default.post(name: .thumbsProgressChanged, object: nil) }
+            }
             await withCheckedContinuation { (first: CheckedContinuation<Void, Never>) in
                 Task {
                     await cache.setOnActivity { sink.yield($0) }   // yields the current activity at once

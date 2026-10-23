@@ -18,7 +18,8 @@ import Foundation
 /// After every client's margin comes the work ahead (thumbs-ahead spec, stage 4): the direct subfolders of the cards
 /// in view, whose covers and summaries go to the catalog only, so that entering a folder finds its cards made. They
 /// share the same limits (one listing at a time on a share, whatever the tier) and leave with the card they belong
-/// to: the caller sends a card's subfolders only while it is in view.
+/// to: the caller sends a card's subfolders only while it is in view. The user's pause (`pauseAhead`) holds only them
+/// (and the subtree walk), never the cards in view or the margins.
 public actor CoverQueue {
     /// Covers in flight on local volumes. `LoupeBench thumbs --covers` on a local SSD folder of 48 subfolders of 40
     /// progressive 3456 x 2160 JPEGs (i7-10700K, 8 cores, 3 thumbnail decode slots; 4 thumbnails a cover, ~155 ms of
@@ -93,6 +94,8 @@ public actor CoverQueue {
     private var notNows: [Key: Int] = [:]
     private var retryWake: Task<Void, Never>?
     private var paused = false
+    /// The user's pause of the work ahead (`pauseAhead`): the ahead tier waits, the cards in view and margins go on.
+    private var aheadHeld = false
     /// Bumped by every `pause`: a resume scheduled before is stale.
     private(set) var pauseGeneration = 0
     private var resumeWake: Task<Void, Never>?
@@ -183,12 +186,16 @@ public actor CoverQueue {
         resumeWake?.cancel()
         resumeWake = nil
         if on {
-            paused = true
+            if !paused {
+                paused = true
+                announceAll()
+            }
             return
         }
         guard paused else { return }
         guard resumeDelay > .zero else {
             paused = false
+            announceAll()
             return pump()
         }
         let delay = resumeDelay, generation = pauseGeneration
@@ -198,9 +205,22 @@ public actor CoverQueue {
         }
     }
 
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"; on for the session until turned off): the
+    /// ahead tier starts nothing new (those running end as they are), the subtree walk waits (`aheadPaused`), and the
+    /// cards in view and every margin go on, or the pause would leave an empty grid.
+    public func pauseAhead(_ on: Bool) {
+        guard aheadHeld != on else { return }
+        aheadHeld = on
+        announceAll()
+        if !on { pump() }
+    }
+
     /// Whether work ahead waits now (the subtree walk's stamps and listings too, thumbs-ahead plan R3): while the
-    /// viewer is busy (`pause`) and until its resume delay has passed.
-    public var aheadPaused: Bool { paused }
+    /// viewer is busy (`pause`) and until its resume delay has passed, and while the user paused it (`pauseAhead`).
+    public var aheadPaused: Bool { paused || aheadHeld }
+
+    /// Whether the viewer's pause holds now (`pause`, until its resume delay has passed): "Paused while you browse".
+    public var browsingPaused: Bool { paused }
 
     /// The end of a resume delay; stale (and ignored) when `pause` was called again since it was scheduled, even if
     /// its wake had already left the timer.
@@ -208,7 +228,14 @@ public actor CoverQueue {
         guard generation == pauseGeneration else { return }
         resumeWake = nil
         paused = false
+        announceAll()
         pump()
+    }
+
+    /// A pause began or ended: every client's progress reads otherwise.
+    private func announceAll() {
+        guard let onProgress else { return }
+        for client in clients.keys.sorted() { onProgress(client) }
     }
 
     /// Covers wanted and waiting to start (or to be tried again), for tests.
@@ -226,6 +253,7 @@ public actor CoverQueue {
         var local = inFlight(network: false), network = inFlight(network: true)
         var nextRetry: ContinuousClock.Instant?
         for item in wanted where running[item.key] == nil && !done.contains(item.key) {
+            if aheadHeld, item.tier == .ahead { break }   // the ahead tier comes last in `wanted`
             if let at = retryAt[item.key], at > now {
                 nextRetry = min(nextRetry ?? at, at)
                 continue

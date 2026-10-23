@@ -42,6 +42,34 @@ extension ThumbnailStore {
         }
     }
 
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): only the windows' visible files are made
+    /// (Home's request has those in view and the margin there), not the rest of their folders nor the walk's window,
+    /// and the cover queue holds its work ahead and the walk. Jobs already running end as they are (a few files at
+    /// most: `jobLimit`). Off again, all of it comes back in its order.
+    public func pauseAhead(_ on: Bool) async {
+        if aheadPaused != on {
+            aheadPaused = on
+            queueIsStale = true
+            pump()
+        }
+        await coverQueue.pauseAhead(on)
+    }
+
+    /// How far the generator is with window `window`'s folder (thumbs-ahead stage 3): its stamped files with a
+    /// thumbnail, or whose making failed this session, or that the size limit evicted (made again only at the next
+    /// opening), of all its stamped files. The walk's window is not counted. Zero of zero for a window it does not have.
+    public func generatorProgress(window: Int) -> WorkCount {
+        var count = WorkCount()
+        guard let listings = windows[window]?.listings else { return count }
+        for listing in listings.values {
+            for file in listing {
+                count.total += 1
+                if status(file.url) != .pending || evicted.contains(file.url) { count.done += 1 }
+            }
+        }
+        return count
+    }
+
     func idleWoke() {
         idleWake = nil
         pump()
@@ -52,7 +80,7 @@ extension ThumbnailStore {
             // Files in flight are left out: they come back through `finish` if they stay pending.
             let skip = stored.union(made.keys).union(unavailable).union(evicted).union(jobs.values.map(\.url))
             let requests = windows.sorted { $0.key < $1.key }.map(\.value.request)
-            queue = ThumbnailQueue.order(requests, skip: skip, trailing: walkWindow?.request)
+            queue = ThumbnailQueue.order(requests, skip: skip, trailing: walkWindow?.request, visibleOnly: aheadPaused)
             queuePosition = 0
             queueIsStale = false
         }
