@@ -333,6 +333,7 @@ extension Notification.Name {
                     let (changes, sink) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
                     self.watchChanges = sink
                     self.watcher.watch(folder)
+                    var failing = false
                     for await _ in changes {
                         // A change heard after the place was left (or the stream ended) lists nothing.
                         guard wanted() else { return }
@@ -345,11 +346,25 @@ extension Notification.Name {
                             self.keep(listing, for: path)
                             self.keepSummary(of: folder, entries)
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: true)
+                            failing = false
                         } catch {
                             guard wanted() else { return }
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: false)
-                            await self.folderGone(folder)
-                            return
+                            // Gone only when the system says so and the parent answers; a share that times out or
+                            // dropped keeps the grid, the next poll tries again (`FolderRelistFailure`).
+                            let parent = folder.deletingLastPathComponent().path
+                            let answers = await HomeGrid.availability(of: [parent], timeout: .seconds(1)) { path in
+                                guard let dir = opendir(path) else { return false }
+                                closedir(dir)
+                                return true
+                            }[parent] == .some(true)
+                            guard wanted() else { return }
+                            if FolderRelistFailure(error, parentAnswers: answers) == .gone {
+                                await self.folderGone(folder)
+                                return
+                            }
+                            if !failing { self.view?.showToast("Folder not answering: \(folder.lastPathComponent)") }
+                            failing = true
                         }
                     }
                 } catch {

@@ -78,12 +78,15 @@ extension ThumbnailStore {
     }
 
     /// Where Home's folder on screen is, as its covers resolved it (`shownFolderPlace`): its photos' folder needs no
-    /// second resolve. `folder` is the folder itself; its files' folder key is the same URL as theirs.
-    /// A key the mount table gave (`shareLocated`) is replaced by it, so a share path through a symlink ends on the
-    /// resolved key whatever came first; a folder open under the other key is opened under this one.
+    /// second resolve. `folder` is the folder itself; its files' folder key is the same URL as theirs. A key the mount
+    /// table gave (`shareLocated`) is replaced by it, so a share path through a symlink ends on the resolved key
+    /// whatever came first, and a provisional folder open under the other key is looked up again under this one. A
+    /// folder already synced under the mount table's key keeps it for the session: syncing it again under the
+    /// resolved one would leave the first rows behind as a second folder in the catalog.
     public func knowLocation(of folder: URL, _ location: ThumbnailLocation) {
         let dir = folder.appendingPathComponent("_").deletingLastPathComponent()
         guard locations[dir] == nil || shareLocated.contains(dir) else { return }
+        if let open = folders[dir], !open.provisional { return }
         shareLocated.remove(dir)
         let before = locations[dir]
         locations[dir] = location
@@ -95,19 +98,14 @@ extension ThumbnailStore {
             stored.remove(file.url)
         }
         folders[dir]?.location = location
-        if open.provisional {
-            lookUpProvisional(dir, open.asked, location: location, fresh: true)
-        } else {
-            sync(dir)
-        }
-        replan()
+        lookUpProvisional(dir, open.asked, location: location, fresh: true)
     }
 
     /// `url`'s location on a share from the mount table (`getfsstat` with `MNT_NOWAIT`, which asks no file system):
     /// the share's key and the folder under its mount point, as `ThumbnailLocation.resolve` would give without its
     /// `realpath` and `statfs` on the share. Nil off a share or with no mount point above it. The path is taken as
     /// written: one through a symlink inside the share gets the link's folder, not the real one `resolve` gives; Home's
-    /// resolved place replaces it once known (`knowLocation`).
+    /// resolved place replaces it once known, unless the folder was synced under it already (`knowLocation`).
     @Sendable public static func shareLocation(_ url: URL) -> ThumbnailLocation? {
         shareLocation(of: url.standardizedFileURL.path, in: mounts())
     }

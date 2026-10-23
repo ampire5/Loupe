@@ -1586,4 +1586,28 @@ final class Locked<T>: @unchecked Sendable {
         await second.knowLocation(of: folder, try #require(Self.testLocate(folder.appendingPathComponent("_"))))
         for url in files { #expect(await second.cell(url, maxPixel: 16) != nil, "\(url.lastPathComponent)") }
     }
+
+    /// A folder already synced under the mount table's key keeps it for the session: the resolved place does not
+    /// catalog it a second time under another key.
+    @Test func syncedFolderKeepsTheMountTablesKey() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(2, in: reader)
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: Self.testLocate,
+                                   shareLocate: {
+                                       ThumbnailLocation(volume: "net:link", folder: "/a", name: $0.lastPathComponent)
+                                   },
+                                   idleDelay: .zero, commitDelay: .milliseconds(5), decodes: 1)
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(store, files) })
+        let before = try ThumbnailDatabase(directory: dir, thumbSize: 32).catalogedFiles()
+        #expect(before.count == 2)
+        let folder = files[0].deletingLastPathComponent()
+        await store.knowLocation(of: folder, try #require(Self.testLocate(folder.appendingPathComponent("_"))))
+        let after = try ThumbnailDatabase(directory: dir, thumbSize: 32).catalogedFiles()
+        #expect(after.count == 2)
+        #expect(Set(after.map(\.location.volume)) == ["net:link"])
+        for url in files { #expect(await store.status(url) == .ready) }
+    }
 }
