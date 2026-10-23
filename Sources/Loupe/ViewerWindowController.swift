@@ -614,7 +614,7 @@ import UniformTypeIdentifiers
         session.entersFromOutside = true
         session.openFolder(url) { [weak self] entered in
             guard !entered, let self else { return }
-            self.restoreBrowserAt = url
+            self.restoreBrowserAt = (url, nil)
             self.showHome(tab: .folders)
         }
     }
@@ -635,8 +635,17 @@ import UniformTypeIdentifiers
         if let homeView, isShowingHome {
             // A gallery under Home is not kept: entering it again would cover Home.
             let under = viewerTab().flatMap { tab -> SessionSnapshot.Tab? in if case .file = tab { tab } else { nil } }
-            let folder: String? = if hasBrowsed, case .folder(let url) = homeView.browser.lastBrowsed { url.path } else { nil }
-            return .homeKeeping(shownTab, folder: folder, under: under)
+            let browser = homeView.browser
+            // A restored folder not shown yet (its Home tab is on Recent) is kept as it came.
+            if !hasBrowsed, let restore = restoreBrowserAt {
+                return .homeKeeping(shownTab, folder: restore.folder.path, under: under, browser: restore.browser)
+            }
+            let folder: String? = if hasBrowsed, case .folder(let url) = browser.lastBrowsed { url.path } else { nil }
+            // The selection and the scroll while the folder is on screen; the tab's own Square / Aspect always.
+            let onFolder = folder != nil && browser.location == browser.lastBrowsed
+            let state = SessionSnapshot.Browser(selection: onFolder ? browser.selection : nil,
+                                                anchor: onFolder ? browser.anchor : nil, style: tabGridStyle.own)
+            return .homeKeeping(shownTab, folder: folder, under: under, browser: state)
         }
         return viewerTab() ?? .home(.recent)
     }
@@ -689,9 +698,10 @@ import UniformTypeIdentifiers
             restoredTab = tab   // until the gallery is entered
         case .home(let home):
             showHome(tab: home)
-        case .homeOver(let home, let folder, let under):
+        case .homeOver(let home, let folder, let under, let browser):
             if let under { openSessionTab(under) }
-            restoreBrowserAt = folder.map { URL(fileURLWithPath: $0) }
+            restoreBrowserAt = folder.map { (URL(fileURLWithPath: $0), browser) }
+            tabGridStyle.restore(browser?.style, memory: Settings.shared.config.gridStyleMemory)
             showHome(tab: home)
         }
     }
@@ -770,7 +780,8 @@ import UniformTypeIdentifiers
                 browser.show(start.location, selecting: start.select)
             } else if let restore = restoreBrowserAt {
                 restoreBrowserAt = nil
-                browser.show(.folder(restore), selecting: nil)
+                browser.show(.folder(restore.folder), selecting: restore.browser?.selection,
+                             anchor: restore.browser?.anchor)
             } else if !hasBrowsed {
                 startBrowser(browser, last: (registry?.browserPlaces ?? BrowserPlaces(database: nil)).lastFolder)
             } else if HomeCollections.tab(of: browser.location) != .folders {
@@ -973,8 +984,9 @@ import UniformTypeIdentifiers
     /// Where the next Folders show opens the browser (Return on a photo); nil: where it was.
     private var browseAt: (location: BrowserLocation, select: String)?
 
-    /// The folder a restored session tab had in the browser, opened on Folders' next show.
-    private var restoreBrowserAt: URL?
+    /// The folder a restored session tab had in the browser, with its selection and scroll, opened on Folders' next
+    /// show.
+    private var restoreBrowserAt: (folder: URL, browser: SessionSnapshot.Browser?)?
 
     /// loupe.conf's `folder-cards` as `applyBrowserSettings` last applied it.
     private var shownFolderCards: CardStyle?

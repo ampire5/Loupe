@@ -40,6 +40,12 @@ public struct TabGridStyle: Equatable, Sendable {
         }
     }
 
+    /// A session's tab comes back with its own choice (`SessionSnapshot.Browser.style`), under `tab` only: under
+    /// `folder` and `global` the style is not the tab's.
+    public mutating func restore(_ style: GridStyle?, memory: GridStyleMemory) {
+        if memory == .tab { own = style }
+    }
+
     /// Where a toggle is saved: nowhere (the tab's own), in the folder's settings, or as loupe.conf's `grid-style`.
     public enum Save: Equatable, Sendable {
         case none

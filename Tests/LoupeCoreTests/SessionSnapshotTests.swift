@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
+import HomeScreenModel
 @testable import LoupeCore
 
 @Suite struct SessionSnapshotTests {
@@ -33,7 +34,7 @@ import Testing
         let photo = SessionSnapshot.Tab.file(path: "/p/a/1.jpg", view: "fit")
         #expect(SessionSnapshot.Tab.homeKeeping(.recent, folder: nil, under: nil) == .home(.recent))
         let over = SessionSnapshot.Tab.homeKeeping(.folders, folder: "/p/b", under: photo)
-        #expect(over == .homeOver(.folders, folder: "/p/b", under: photo))
+        #expect(over == .homeOver(.folders, folder: "/p/b", under: photo, browser: nil))
         let s = SessionSnapshot(windows: [.init(frame: .zero, screen: nil, fullScreen: false, selected: 0,
                                                 tabs: [over, .homeKeeping(.recent, folder: "/p/c", under: nil)])])
         #expect(SessionSnapshot.decode(s.encoded()) == s)
@@ -44,6 +45,26 @@ import Testing
     @Test func homeOfAnEarlierLoupeDecodes() {
         let json = #"{"v":1,"windows":[{"frame":[[0,0],[10,10]],"fullScreen":false,"selected":0,"tabs":[{"home":{"_0":"recent"}}]}]}"#
         #expect(SessionSnapshot.decode(Data(json.utf8))?.windows.first?.tabs == [.home(.recent)])
+    }
+
+    /// Home's browser in a tab: the selection, the scroll anchor and the tab's own Square / Aspect go with its folder.
+    @Test func browserStateRoundTrips() {
+        let browser = SessionSnapshot.Browser(selection: "/p/b/3.jpg",
+                                              anchor: BrowserAnchor(id: "/p/b/9.jpg", offset: 14.5, index: 9),
+                                              style: .square)
+        let over = SessionSnapshot.Tab.homeKeeping(.folders, folder: "/p/b", under: nil, browser: browser)
+        #expect(over == .homeOver(.folders, folder: "/p/b", under: nil, browser: browser))
+        let s = SessionSnapshot(windows: [.init(frame: .zero, screen: nil, fullScreen: false, selected: 0, tabs: [over])])
+        #expect(SessionSnapshot.decode(s.encoded()) == s)
+        #expect(SessionSnapshot.Browser(selection: nil, anchor: nil, style: nil).isEmpty)
+        #expect(!browser.isEmpty)
+    }
+
+    /// A Home tab saved before the browser's state was kept loads, without it.
+    @Test func homeOverOfAnEarlierLoupeDecodes() {
+        let json = #"{"v":1,"windows":[{"frame":[[0,0],[10,10]],"fullScreen":false,"selected":0,"tabs":[{"homeOver":{"_0":"folders","folder":"/p/b"}}]}]}"#
+        #expect(SessionSnapshot.decode(Data(json.utf8))?.windows.first?.tabs
+                == [.homeOver(.folders, folder: "/p/b", under: nil, browser: nil)])
     }
 
     @Test func newerVersionOrGarbageIsNil() {

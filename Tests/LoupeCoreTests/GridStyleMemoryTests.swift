@@ -66,4 +66,22 @@ import Testing
         #expect(tab.style(memory: .global, global: .aspect, folder: dir("/photos"), settings: settings) == .aspect)
         #expect(tab.choose(.square, memory: .global, folder: dir("/photos")) == .global(.square))
     }
+
+    /// A session's tab gives its own Square / Aspect back only under `tab`; under `folder` and `global` it is not the
+    /// tab's to keep.
+    @Test func sessionRestoresTheTabsOwnInTabModeOnly() {
+        let settings = FolderSettings(database: nil)
+        var tab = TabGridStyle()
+        tab.restore(.square, memory: .tab)
+        #expect(tab.own == .square)
+        #expect(tab.style(memory: .tab, global: .aspect, folder: dir("/photos"), settings: settings) == .square)
+        for memory in [GridStyleMemory.folder, .global] {
+            var other = TabGridStyle()
+            other.restore(.square, memory: memory)
+            #expect(other.own == nil)
+        }
+        var none = TabGridStyle()
+        none.restore(nil, memory: .tab)
+        #expect(none.own == nil)
+    }
 }

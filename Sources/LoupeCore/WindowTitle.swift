@@ -16,7 +16,7 @@ public enum WindowTitle {
         switch tab {
         case .file(let path, _): ArchivePath.shortName(URL(fileURLWithPath: path))
         case .gallery(_, _, _, _, let file, _): file ?? "Stash"
-        case .home(let home), .homeOver(let home, _, _): title(of: home)
+        case .home(let home), .homeOver(let home, _, _, _): title(of: home)
         }
     }
 
