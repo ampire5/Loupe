@@ -857,7 +857,7 @@ import UniformTypeIdentifiers
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
         // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done.
         folders.onProgress = { [weak browser] progress in
-            browser?.setProgress(progress.state, delay: .seconds(Settings.shared.config.thumbsPillDelay))
+            browser?.setProgress(progress.state, delay: Config.pillDelay(seconds: Settings.shared.config.thumbsPillDelay))
         }
         folders.confirmDelete = { [weak self] name, answer in
             guard let window = self?.window else { answer(false); return }

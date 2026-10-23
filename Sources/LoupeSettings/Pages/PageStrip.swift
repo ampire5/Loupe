@@ -67,7 +67,7 @@ extension SettingsPanel {
                         + "goes into. 0–3, 0 = the folder itself; default 1."),
             .number("thumbs-pill-delay", "Show progress after", unit: "s", step: 0.5, symbol: "clock.badge",
                     description: "How long background work runs before its progress pill shows. 0 = at once; "
-                        + "default 1."),
+                        + "up to 60; default 1."),
         ]),
     ])
 }

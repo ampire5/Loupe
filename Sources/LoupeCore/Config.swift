@@ -459,8 +459,18 @@ public struct Config: Equatable, Sendable {
     public var thumbsAhead = ThumbsAhead.folder
     /// `thumbs-depth`: how many levels of subfolders the "Prepare..." command goes into, 0...3 (0: the folder itself).
     public var thumbsDepth = 1
-    /// `thumbs-pill-delay`: seconds of background work before the progress pill shows, 0 or more.
+    /// `thumbs-pill-delay`: seconds of background work before the progress pill shows, 0...60 (capped like the
+    /// other duration keys; it becomes a `Duration`, and `Duration.seconds` traps on a huge value).
     public var thumbsPillDelay = 1.0
+    public static let thumbsPillDelayRange: ClosedRange<Double> = 0...60
+
+    /// The pill delay as a `Duration`, clamped into `thumbsPillDelayRange` (a non-finite value gives the default 1 s),
+    /// so the conversion never traps whatever the stored number.
+    public static func pillDelay(seconds: Double) -> Duration {
+        guard seconds.isFinite else { return .seconds(1) }
+        let s = min(max(seconds, thumbsPillDelayRange.lowerBound), thumbsPillDelayRange.upperBound)
+        return .milliseconds(Int((s * 1000).rounded()))
+    }
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
@@ -1024,7 +1034,7 @@ public struct Config: Equatable, Sendable {
         case "thumbs-depth":
             if let v = Int(value), (0...3).contains(v) { thumbsDepth = v } else { return .badValue }
         case "thumbs-pill-delay":
-            if let v = Double(value), v.isFinite, v >= 0 { thumbsPillDelay = v } else { return .badValue }
+            if let v = Double(value), Self.thumbsPillDelayRange.contains(v) { thumbsPillDelay = v } else { return .badValue }
         case "recent-count":
             if let v = Int(value), (0...200).contains(v) { recentCount = v } else { return .badValue }
         case "session-restore":

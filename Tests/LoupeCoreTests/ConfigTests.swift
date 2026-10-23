@@ -1665,6 +1665,20 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config.keys.contains("thumbs-pill-delay"))
 }
 
+/// `thumbs-pill-delay` is capped at 60 s like the other duration keys: a huge value (it becomes a `Duration`, and
+/// `Duration.seconds(1e300)` traps) is refused and the old value kept.
+@Test func thumbsPillDelayIsCappedAtSixtySeconds() {
+    var c = Config()
+    #expect(c.set("thumbs-pill-delay", "60") == .ok && c.thumbsPillDelay == 60)
+    #expect(c.set("thumbs-pill-delay", "60.5") == .badValue && c.thumbsPillDelay == 60)
+    #expect(c.set("thumbs-pill-delay", "1e300") == .badValue && c.thumbsPillDelay == 60)
+    #expect(Config.thumbsPillDelayRange == 0...60)
+    #expect(Config.pillDelay(seconds: 1e300) == .seconds(60))
+    #expect(Config.pillDelay(seconds: -3) == .zero)
+    #expect(Config.pillDelay(seconds: .nan) == .seconds(1))
+    #expect(Config.pillDelay(seconds: 2.5) == .milliseconds(2500))
+}
+
 /// Home's own folder keys (`browser-sort`, `folder-cards`) live in folder settings beside the viewer's: a folder's
 /// config takes no part of them and reports none as ignored (the window warned "ignored browser-sort=…" once per
 /// folder).
