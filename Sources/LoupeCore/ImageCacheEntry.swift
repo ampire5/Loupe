@@ -134,6 +134,9 @@ final class CacheEntry<Pyramid: AnyObject & Sendable> {
     /// background (`CacheGoal.ready`): stepping onto the photo uploads it instead of decoding the file. Counted in
     /// `ImageCache.usedSystemBytes`; never drawn from.
     var ready: LevelImage?
+    /// Full jobs waiting for the entry's ready decode in flight (`awaitReadyDecode`): it is kept for them, planned
+    /// or not, since they upload it next.
+    var readyWaiters = 0
     /// A ready decode of the entry failed (dropped quietly, the photo not marked failed): none is started again until a
     /// full decode of the file succeeds or the entry is reset.
     var readyFailed = false
@@ -176,6 +179,7 @@ final class JobPhase: @unchecked Sendable {
     private var waiting = true
     private var current: Bool
     private var abandoned = false
+    private var decodeStart: ContinuousClock.Instant?
 
     init(forCurrent: Bool) { current = forCurrent }
 
@@ -191,9 +195,13 @@ final class JobPhase: @unchecked Sendable {
         lock.withLock {
             guard !abandoned else { return false }
             waiting = false
+            decodeStart = .now
             return true
         }
     }
+
+    /// When the work started by `beginIfLive` began (nil: not begun, e.g. a ready job still probing).
+    var decodingSince: ContinuousClock.Instant? { lock.withLock { decodeStart } }
 
     /// Gives the job up if it is still waiting: its work then never starts (`beginIfLive`). False once it began.
     func abandonIfWaiting() -> Bool {

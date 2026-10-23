@@ -140,7 +140,7 @@ extension ImageCache {
             }
             guard !isSatisfied(url, e, goal) else { return }
             if goal == .full {
-                guard await awaitReadyDecode(url, e) else { return }
+                guard await awaitReadyDecode(url, e, info) else { return }
                 // A discrete card's ready decode: uploaded as it is, no decode.
                 if let ready = e.ready {
                     notify(url)
@@ -159,11 +159,12 @@ extension ImageCache {
             let serial = goal == .full ? info.isProgressive
                                        : roleDecoder.previewNeedsFullDecode(data, info: info, level: wanted)
             let busy: @Sendable () -> Bool = { phase.markBusy(); return true }
-            let image = try await decode(url, goal, gated: serial, gateForCurrent: p.forCurrent, on: pool,
-                                         forCurrent: p.forCurrent, rank: p.rank, begin: busy) {
+            let (image, decodeMs) = try await decode(url, goal, gated: serial, gateForCurrent: p.forCurrent, on: pool,
+                                                     forCurrent: p.forCurrent, rank: p.rank, begin: busy) {
                 if goal == .full { return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0) }
                 return try roleDecoder.preview(data, info: info, level: wanted)
             }
+            if goal == .full && p.forCurrent { currentDecodeSpeed = Self.average(currentDecodeSpeed, decodeMs, info) }
             guard isAlive(url, e) else { return }
             // Coarser than asked would leave the goal unmet and the job restarting forever.
             guard image.level <= wanted, image.level < l.grid.levelCount else { throw DecodeError.unreadable }
@@ -192,7 +193,14 @@ extension ImageCache {
     /// this job decodes sooner and keeps the result; one past waiting (probing or decoding) is waited for, so its
     /// decode is uploaded rather than made twice (a probing one gives way to this job and ends at once). False when
     /// this job is no longer alive afterwards.
-    private func awaitReadyDecode(_ url: URL, _ e: CacheEntry<Pyramid>) async -> Bool {
+    ///
+    /// The one deliberate overlap: the photo on screen does not wait for a ready decode expected to take longer than
+    /// a decode of its own (`overtakesReady`). The background yields to the foreground: a ready decode runs at
+    /// `.utility` on the neighbours' threads (2.4–2.8 s for 147 MP JPEG XL on the i7-10700K against ~0.6 s at the
+    /// current role; waiting for it made the first step after opening 0.06–0.55 s slower, Task 7's bench). It cannot
+    /// be stopped mid-decode, so it runs on and its result is kept only if still planned and none is held by then;
+    /// the cost is a transient second decode (CPU, and a second full-size buffer until it ends).
+    private func awaitReadyDecode(_ url: URL, _ e: CacheEntry<Pyramid>, _ info: ImageInfo) async -> Bool {
         guard e.ready == nil, let job = e.jobs[.ready] else { return true }
         if job.phase.abandonIfWaiting() {
             job.task.cancel()
@@ -200,9 +208,35 @@ extension ImageCache {
             emit(url, .jobCancelled, .ready)
             return true
         }
+        if isCurrent(url) && overtakesReady(job, info) {
+            emit(url, .readyOvertaken, .full)
+            return true
+        }
         emit(url, .readyAwait, .full)
+        e.readyWaiters += 1
         await job.task.value
+        e.readyWaiters -= 1
         return isAlive(url, e)
+    }
+
+    /// Whether the current photo's full job decodes rather than wait for `job`, its ready decode in flight: unless
+    /// the ready decode's expected remaining time (its measured speed × the photo's pixels, minus how long it has
+    /// been decoding) is no more than a current-role decode's (`currentDecodeSpeed` × pixels). Without a measured
+    /// ready speed it is assumed not to finish sooner. A ready job still probing gives way right after its probe, so
+    /// it is waited for.
+    private func overtakesReady(_ job: CacheJob, _ info: ImageInfo) -> Bool {
+        guard let since = job.phase.decodingSince else { return false }
+        let speeds = fixedDecodeSpeeds ?? (readyDecodeSpeed, currentDecodeSpeed)
+        guard let ready = speeds.ready, let current = speeds.current else { return true }
+        let megapixels = Double(info.pixelSize.width) * Double(info.pixelSize.height) / 1e6
+        return ready * megapixels - since.millisecondsElapsed > current * megapixels
+    }
+
+    /// A running average of decode speed in ms per megapixel, `ms` being one decode of `info`'s full size.
+    static func average(_ speed: Double?, _ ms: Double, _ info: ImageInfo) -> Double {
+        let sample = ms / max(Double(info.pixelSize.width) * Double(info.pixelSize.height) / 1e6, 1e-6)
+        guard let speed else { return sample }
+        return speed + (sample - speed) / 4
     }
 
     /// The entry's compressed bytes: resident, or from its read (started if needed, shared with its other jobs).
@@ -218,18 +252,20 @@ extension ImageCache {
     /// decode up before it starts (CancellationError).
     private func decode(_ url: URL, _ goal: CacheGoal, gated: Bool, gateForCurrent: Bool, on pool: DecodePool,
                         forCurrent: Bool, rank: Int, begin: @escaping @Sendable () -> Bool,
-                        _ work: @escaping @Sendable () throws -> LevelImage) async throws -> LevelImage {
+                        _ work: @escaping @Sendable () throws -> LevelImage) async throws -> (LevelImage, ms: Double) {
         let trace = self.trace
         emit(url, .decodeWait, goal)
         if gated { try await progressiveFull.acquireSlot(forCurrent: gateForCurrent, rank: rank) }
         defer { if gated { progressiveFull.releaseSlot(forCurrent: gateForCurrent) } }
-        let image = try await pool.run(forCurrent: forCurrent, rank: rank) { () throws -> LevelImage in
+        let (image, ms) = try await pool.run(forCurrent: forCurrent, rank: rank) { () throws -> (LevelImage, Double) in
             guard begin() else { throw CancellationError() }
             trace?(CacheTraceEvent(url: url, kind: .decodeStart, goal: goal))
-            return try work()
+            let start = ContinuousClock.now
+            let image = try work()
+            return (image, start.millisecondsElapsed)
         }
         emit(url, .decodeDone, goal, level: image.level)
-        return image
+        return (image, ms)
     }
 
     /// read → probe → full decode, kept as the entry's ready decode (`CacheEntry.ready`) and uploaded nowhere: a
@@ -252,15 +288,24 @@ extension ImageCache {
             let p = priority(url, goal, phase)
             let roleDecoder = decoder.forRole(.other)
             // Background work even for the current photo: never the big-decode slot reserved for the current one.
-            let image = try await decode(url, goal, gated: info.isProgressive, gateForCurrent: false, on: readyPool,
-                                         forCurrent: p.forCurrent, rank: p.rank, begin: phase.beginIfLive) {
+            let (image, decodeMs) = try await decode(url, goal, gated: info.isProgressive, gateForCurrent: false,
+                                                     on: readyPool, forCurrent: p.forCurrent, rank: p.rank,
+                                                     begin: phase.beginIfLive) {
                 LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0)
             }
-            guard isAlive(url, e), e.ready == nil else { return }
-            // Planned, or a full job waits for it (it uploads it next): kept, room made. Left the plan meanwhile: kept
-            // only if it fits as things stand (as an unplanned upload).
-            let wanted = planned[url]?[goal] != nil || e.jobs[.full] != nil
-            guard wanted || usedSystemBytes() + image.image.buffer.length <= effectiveMemory else {
+            readyDecodeSpeed = Self.average(readyDecodeSpeed, decodeMs, info)
+            guard isAlive(url, e) else { return }
+            // One already held (the current photo's full job overtook this decode and kept its own): dropped.
+            guard e.ready == nil else {
+                emit(url, .uploadSkipped, goal, level: 0)
+                return
+            }
+            // Planned, or a full job waits for it (it uploads it next): kept, room made. Overtaken by a full job of
+            // the current photo that decodes on its own: kept only if planned. Left the plan meanwhile: kept only if
+            // it fits as things stand (as an unplanned upload).
+            let overtaken = e.jobs[.full] != nil && e.readyWaiters == 0
+            let wanted = planned[url]?[goal] != nil || e.readyWaiters > 0
+            guard wanted || !overtaken && usedSystemBytes() + image.image.buffer.length <= effectiveMemory else {
                 emit(url, .uploadSkipped, goal, level: 0)
                 return
             }

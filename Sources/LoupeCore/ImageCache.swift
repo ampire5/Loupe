@@ -67,6 +67,13 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// 162–166; a ready decode here takes 2.4–2.8 s, so a full job that finds one in progress waits for it: the
     /// first step after opening took 0.78–1.26 s to sharp against 0.58–0.80 s before.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
+    /// Measured full-decode speeds in ms per megapixel, running averages: ready decodes (`.other` role at `.utility`:
+    /// 2.4–2.8 s for 147 MP JPEG XL on the i7-10700K, Task 7's bench) and the current photo's full decodes (current
+    /// role: ~0.6 s for the same). nil until one completes. `overtakesReady` compares them.
+    var readyDecodeSpeed: Double?
+    var currentDecodeSpeed: Double?
+    /// Test hook: figures used instead of the measured ones (`setDecodeSpeeds`).
+    var fixedDecodeSpeeds: (ready: Double?, current: Double?)?
     var entries: [URL: CacheEntry<Pyramid>] = [:]
     /// The latest plan per URL: goal → position in the plan (the decode rank).
     var planned: [URL: [CacheGoal: Int]] = [:]
@@ -235,6 +242,9 @@ public actor ImageCache<Loader: PyramidLoader> {
     }
 
     /// Test hook: nothing in flight (no read, job task — cancelled ones included — or stamp check).
+    /// Test hook: decode speeds (ms per megapixel) `overtakesReady` uses instead of the measured ones.
+    func setDecodeSpeeds(ready: Double?, current: Double?) { fixedDecodeSpeeds = (ready, current) }
+
     var isIdle: Bool { stampChecks == 0 && runningJobs == 0 && entries.values.allSatisfy { $0.read == nil } }
 
     // MARK: Levels and state

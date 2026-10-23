@@ -211,6 +211,7 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     private var probeGates: [String: BlockingGate] = [:]
     private var decodeGates: [String: BlockingGate] = [:]
     private var fullGates: [String: BlockingGate] = [:]
+    private var fullCallGates: [String: [BlockingGate?]] = [:]
     private var allDecodesGate: BlockingGate?
     private var progressive: Set<String> = []
     private var fullPreviews: Set<String> = []
@@ -246,6 +247,10 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     func gateDecodes(_ url: URL, _ gate: BlockingGate) { lock.withLock { decodeGates[url.lastPathComponent] = gate } }
     /// Full decodes of `url` (only) block on `gate`.
     func gateFull(_ url: URL, _ gate: BlockingGate) { lock.withLock { fullGates[url.lastPathComponent] = gate } }
+    /// The n-th full decode of `url` from now blocks on `gates[n]` (nil: does not block); later ones do not.
+    func gateFullCalls(_ url: URL, _ gates: [BlockingGate?]) {
+        lock.withLock { fullCallGates[url.lastPathComponent] = gates }
+    }
     /// Every preview and full decode blocks on `gate`; nil lifts it for decodes not yet started.
     func gateAllDecodes(_ gate: BlockingGate?) { lock.withLock { allDecodesGate = gate } }
 
@@ -262,7 +267,9 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
     private func work(_ name: String, full: Bool = false) throws {
         let (latency, fail, gates) = lock.withLock { () -> (TimeInterval, Bool, [BlockingGate]) in
             (latencies[name] ?? 0, failOnce.remove(name) != nil,
-             [decodeGates[name], allDecodesGate, full ? fullGates[name] : nil].compactMap { $0 })
+             [decodeGates[name], allDecodesGate, full ? fullGates[name] : nil,
+              full ? fullCallGates[name]?.isEmpty == false ? fullCallGates[name]!.removeFirst() : nil : nil]
+                .compactMap { $0 })
         }
         gates.forEach { $0.wait() }
         if latency > 0 { Thread.sleep(forTimeInterval: latency) }
