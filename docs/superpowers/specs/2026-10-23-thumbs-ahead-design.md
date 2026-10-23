@@ -106,7 +106,8 @@
 
 ## Настройки (решение 5)
 
-Performance › Thumbnails, по правилу «настройки вместо констант»:
+Страница Strip (там уже живут строки хранимых эскизов; доска говорила «Performance › Thumbnails» — такой страницы
+нет), группа «Prepare ahead», по правилу «настройки вместо констант»:
 
 - `thumbs-ahead = folder | visible | off`, по умолчанию `folder`: `folder` — стадии 1–4; `visible` — 1–2;
   `off` — только то, что в кадре, без запаса. Описание: «Prepare thumbnails ahead: for the whole folder (default), for
