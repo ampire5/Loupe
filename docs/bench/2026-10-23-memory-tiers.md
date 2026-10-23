@@ -11,9 +11,13 @@ Sides:
 
 - **Before**: the spec state of the branch (pan-lts before the hardware defaults), one budget: `cache-memory` 4 GiB
   for files and pyramids together.
-- **After**: the hardware defaults with two tiers. Graphics tier (pyramids) = half the card's Metal working set,
+- **After, waiting** (93a5644): the hardware defaults with two tiers. Graphics tier (pyramids) = half the card's Metal working set,
   4.29 GB (4088 MiB); system tier (`cache-memory`, compressed files and ready decodes) = a fifth of the memory,
-  13.69 GB (13 056 MiB). Ready decodes one at a time at `.utility` on two threads.
+  13.69 GB (13 056 MiB). Ready decodes one at a time at `.utility` on two threads; a full job that finds the photo's
+  ready decode in progress waits for it.
+- **After, overtake** (6cc6a34): the same, but the photo on screen waits for its ready decode only when that is
+  expected to end no later than a decode of its own (running ms/MP figures), else decodes at once; a ready job still
+  queued is given up. Four runs: the first had a step not sharp in time, so two more were made.
 
 Machine: iMac, Intel i7-10700K (8 cores, 16 threads), AMD Radeon Pro 5500 XT 8 GB (Metal working set 8.57 GB),
 64 GB memory, 5K screen, macOS 26; release build; other apps open, the machine ~86 % idle before each run.
@@ -35,17 +39,34 @@ CPU time for the script; RAM = peak `phys_footprint`, GPU = peak `MTLDevice.curr
 | back-fast | before | 2 | 18 | 11 | 1 / 593 / 803 | 3 of 14, 1 / 593 | 162.2 | 1.69 | 6.65 |
 | back-fast | after | 1 | 29 | 0 | 1 / 230 / 245 | 14 of 14, 198 / 245 | 136.6 | 12.55 | 6.58 |
 | back-fast | after | 2 | 29 | 0 | 1 / 241 / 1255 | 14 of 14, 172 / 244 | 137.0 | 12.55 | 6.65 |
+| 100-steps | overtake | 1 | 28 | 1 | 1 / 2 / 278 | – | 151.9 | 12.56 | 6.58 |
+| 100-steps | overtake | 2 | 29 | 0 | 1 / 1 / 567 | – | 139.5 | 12.56 | 6.52 |
+| 100-steps | overtake | 3 | 29 | 0 | 1 / 2 / 796 | – | 149.5 | 12.60 | 6.97 |
+| 100-steps | overtake | 4 | 29 | 0 | 1 / 1 / 747 | – | 144.9 | 12.54 | 6.58 |
+| back-fast | overtake | 1 | 29 | 0 | 1 / 230 / 785 | 14 of 14, 166 / 230 | 144.0 | 12.63 | 6.52 |
+| back-fast | overtake | 2 | 29 | 0 | 1 / 222 / 292 | 14 of 14, 181 / 292 | 133.3 | 12.55 | 6.52 |
+| back-fast | overtake | 3 | 29 | 0 | 1 / 261 / 787 | 14 of 14, 195 / 260 | 148.7 | 12.55 | 6.58 |
+| back-fast | overtake | 4 | 29 | 0 | 1 / 252 / 278 | 14 of 14, 174 / 278 | 142.1 | 12.55 | 6.58 |
 
-After, from `CacheStats`: graphics tier peak 3867–3911 MiB of 4088; system tier peak 11 391 MiB of 13 056; 20 ready
+The first step after opening (its photo's ready decode began during the 2 s open), ms to sharp, and what its full
+job did with that decode:
+
+| side | 100-steps | back-fast |
+|---|---|---|
+| before | 725, 578 | 729, 803 |
+| after, waiting | 783, 1126 (waited, both) | 1, 1255 (–, waited) |
+| overtake | not sharp in 1.5 s (overtook), 567 (waited), 796 (overtook), 747 (waited) | 785 (overtook), 1 (–), 787 (overtook), 2 (–) |
+
+After (both versions), from `CacheStats`: graphics tier peak 3849–3911 MiB of 4088; system tier peak 11 391 MiB of 13 056; 20 ready
 decodes held at the peak (every photo of the folder).
 
 Reading:
 
 - **A step back is an upload.** back-fast: 29 of 29 sharp against 18–19; the 14 back steps 172–198 ms p50 and
   244–245 ms max to sharp (the upload of a ready decode), against 10–11 of 14 not sharp before the next step.
-- **Graphics memory as before.** The card peaks at 6.58–6.65 GB on both sides: the graphics tier (4.29 GB) plus
+- **Graphics memory as before.** The card peaks at 6.52–6.65 GB on both sides: the graphics tier (4.29 GB) plus
   what is on screen and being uploaded, below the ~7.6 GB where panning starts to stall (spec, «Замер потолка
-  карты»).
+  карты»); one overtake run peaked at 6.97 GB.
 - **Less CPU.** 100-steps 144–148 s against 154–161, back-fast 137 s against 162–166: a step back no longer decodes
   the file again.
 - **System memory is what buys it**: 12.6 GB peak against 1.5–1.7 (`cache-memory`, a fifth of 64 GB, holds every
@@ -57,6 +78,12 @@ Reading:
   783 and 1126 ms to sharp against 725 and 578 before; in back-fast run 2 the same first step took 1255 ms (729 and
   803 before). The other full jobs that awaited a ready decode (back-fast run 2, steps 3 and 4) did it while the photo
   was still a neighbour, 1.3–1.4 s before the step, and their steps were instant.
+- **The overtake does not win that step back.** An overtaking decode at the current role runs beside the ready
+  decode it overtook (which cannot be stopped mid-decode) and the neighbours' work: the step took 785–796 ms to
+  sharp, and in one run of four the photo was not sharp before the next step 1.5 s later (its full level landed at
+  the end of the step). When the expected times said wait, it waited: 567 and 747 ms. Before the tiers: 578–803 ms.
+  Elsewhere the overtake version matches the waiting one: back-fast 29 of 29, back steps 166–195 ms p50 and
+  230–292 ms max, CPU 133–152 s.
 - A first run of "after" had the bench's defaults without the graphics tier (`CacheLimits()` instead of the app's
   `CacheLimits(config:)`): one 13.7 GB budget for everything put 19.5 GB (18 594 MiB) on the card and made forward steps 0.36–0.54 s p50, up to 1.25 s.
   The replay now takes its defaults the way the app does.

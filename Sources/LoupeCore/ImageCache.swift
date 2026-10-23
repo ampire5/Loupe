@@ -67,7 +67,10 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// 162–166. A ready decode here takes 2.4–2.8 s against ~0.6 s at the current role: when the photo on screen's
     /// full job always waited for one in progress, the first step after opening took 0.78–1.26 s to sharp against
     /// 0.58–0.80 s before, so it now waits only for one expected to end sooner than its own decode and otherwise
-    /// decodes at once (`awaitReadyDecode`, `overtakesReady`); neighbours' full jobs wait.
+    /// decodes at once (`awaitReadyDecode`, `overtakesReady`); neighbours' full jobs wait. Measured with the
+    /// overtake (four runs each): that step took 785–796 ms when it overtook (the ready decode runs on beside it) and
+    /// once missed the next step 1.5 s later, 567–747 ms when it waited; back-fast unchanged (29 of 29, a step back
+    /// 166–195 ms p50, 230–292 ms max).
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
     /// Measured full-decode speeds in ms per megapixel, running averages: ready decodes (`.other` role at `.utility`:
     /// 2.4–2.8 s for 147 MP JPEG XL on the i7-10700K, Task 7's bench) and the current photo's full decodes (current
