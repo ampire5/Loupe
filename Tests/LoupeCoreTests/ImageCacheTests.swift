@@ -79,7 +79,7 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
-    @Test func stuckReadDoesNotBlockOthers() async {
+    @Test func neighboursWaitForAStuckCurrentRead() async {
         let rig = Rig()
         let files = fileURLs(10)
         let gate = AsyncGate()
@@ -625,32 +625,33 @@ struct ImageCacheTests {
     }
 
     /// Progressive JPEG full decodes (≈ 1.5 GB of libjpeg buffers each at 147 MP) run at most two at a time, one
-    /// slot reserved for the current photo (spec §11.1.6): with the neighbours' (n1 = 6, p1 = 4 with
-    /// `cache-full = 2`) held, only one of them runs, and the current photo's full still starts and finishes.
+    /// slot reserved for the current photo (spec §11.1.6). After a dwell on 5 the neighbours' fulls (p1 = 4, n1 = 6
+    /// with `cache-full = 2`) are held, one of them in the gate; a step to 7 brings the current photo's full while that
+    /// neighbour still holds its slot: it starts and finishes all the same, and no second neighbour full runs.
     @Test func progressiveFullDecodesLimited() async {
         var limits = CacheLimits.at3G
         limits.full = 2
         let rig = Rig(limits: limits)
-        let files = fileURLs(10)
+        let files = fileURLs(12)
         let neighbours = BlockingGate(), current = BlockingGate()
         for url in files { rig.decoder.setProgressive(url) }
-        rig.decoder.gateFull(files[4], neighbours)
-        rig.decoder.gateFull(files[6], neighbours)
-        // The current full is held too (its preview is not: neighbours read only after it, V7), so the neighbours have
-        // every chance at both slots of the gate.
-        rig.decoder.gateFull(files[5], current)
+        for i in [4, 6, 8] { rig.decoder.gateFull(files[i], neighbours) }
+        rig.decoder.gateFull(files[7], current)
         await rig.focus(files, 5, dwelling: true)
+        #expect(await eventually { await rig.state(files[5]) == .full })
         #expect(await eventually { rig.decoder.calls(files[4]).contains(.full) || rig.decoder.calls(files[6]).contains(.full) })
-        #expect(await eventually { rig.decoder.calls(files[5]).contains(.full) }, "the current full waited for a neighbour's")
-        current.open()
-        #expect(await eventually { await rig.state(files[5]) == .full }, "the current full waited for a neighbour's")
-        try? await Task.sleep(for: .milliseconds(50))   // every chance for the second neighbour to start
-        let started = [4, 6].filter { rig.decoder.calls(files[$0]).contains(.full) }
+
+        await rig.focus(files, 7, direction: 1, dwelling: true, previous: 5)
+        #expect(await eventually { rig.decoder.calls(files[7]).contains(.full) }, "the current full waited for a neighbour's")
+        try? await Task.sleep(for: .milliseconds(50))   // every chance for a second neighbour full to start
+        let started = [4, 6, 8].filter { rig.decoder.calls(files[$0]).contains(.full) }
         #expect(started.count == 1, "neighbour fulls running together: \(started)")
+        current.open()
+        #expect(await eventually { await rig.state(files[7]) == .full })
         neighbours.open()
         #expect(await eventually {
-            let four = await rig.state(files[4]), six = await rig.state(files[6])
-            return four == .full && six == .full
+            let six = await rig.state(files[6]), eight = await rig.state(files[8])
+            return six == .full && eight == .full
         })
         #expect(await rig.settle())
         #expect(rig.decoder.peakConcurrentFulls <= 2, "peak \(rig.decoder.peakConcurrentFulls)")
@@ -713,6 +714,8 @@ struct ImageCacheTests {
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 6 })
         #expect(queue.queuedPriority(files[5]).map { $0 > 0 } == true)
+        #expect(await eventually { queue.started.count >= 2 })
+        guard queue.started.count >= 2 else { return }
         let holder = queue.started[1]
         await rig.focus(files, 5)
         #expect(await eventually { queue.queuedPriority(files[5]) == 0 })
@@ -735,6 +738,8 @@ struct ImageCacheTests {
         let gap = queue.delaySubmit(files[5])
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 5 && queue.hasArrived(files[5]) })
+        #expect(await eventually { queue.started.count >= 2 })
+        guard queue.started.count >= 2 else { return }
         let holder = queue.started[1]
         await rig.focus(files, 5)
         gap.open()
@@ -1679,6 +1684,8 @@ extension ImageCacheTests {
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 6 })
         let waiting = Set(files.filter { queue.queuedPriority($0) != nil })
+        #expect(await eventually { queue.started.count >= 2 })
+        guard queue.started.count >= 2 else { return }
         let holder = queue.started[1]
         // The current photo's own work (its full decode after the dwell) is done before the scrub.
         #expect(await eventually { await rig.state(files[0]) == .full })

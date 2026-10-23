@@ -650,7 +650,8 @@ public actor ImageCache<Loader: PyramidLoader> {
     // MARK: Freshness and retries
 
     /// The new current photo: a failed one is retried (once per visit); a cached one is checked against the
-    /// file on disk. The check queues behind the current photo's read (priority 1) and is dropped when the photo
+    /// file on disk. The check queues behind the current photo's read (priority 1), as the current photo's I/O (the
+    /// reader's thread kept for it; running neighbour reads pause for this one stat), and is dropped when the photo
     /// stops being current, or its session active, before it runs.
     func becameCurrent(_ url: URL, of session: CacheSessionID) {
         guard let e = entries[url] else { return }
@@ -660,7 +661,9 @@ public actor ImageCache<Loader: PyramidLoader> {
             stampChecks += 1
             updateActivity()
             sessions[session]?.stampCheck = Task {
-                let now = try? await reader.stamp(url, priority: 1)
+                let priority = ReadPriority(1)
+                priority.isCurrent = true
+                let now = try? await reader.stamp(url, priority: priority)
                 stampChecks -= 1
                 updateActivity()
                 guard !Task.isCancelled, let now, now != old, entries[url] === e else { return }

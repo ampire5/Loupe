@@ -29,7 +29,8 @@ private struct StuckMark {
 ///
 /// Within the viewer's share one thread is the current photo's (`ReadPriority.isCurrent`, read when a job is picked):
 /// neighbour reads run on at most `viewerThreads - 1`, so a photo stepped to never waits for a free thread behind
-/// neighbour reads already running (a running read is never preempted, and a share's reads can take seconds). And
+/// neighbour reads already running (a running read is never preempted, and a share's reads can take seconds); when
+/// the viewer's share is full all the same, a current read takes any idle thread of the pool. And
 /// while a current read runs, running neighbour reads pause before their next chunk (`yieldToCurrent`), their bytes so
 /// far kept, so the current read has the share's bandwidth to itself; they go on once no current read runs.
 ///
@@ -39,13 +40,12 @@ private struct StuckMark {
 /// jobs are refused before any I/O, so only another volume hanging as well can take them.
 final class IOPool: @unchecked Sendable {
     static let tick: DispatchTimeInterval = .milliseconds(500)
-    /// Two, one of them the current photo's (`neighbourLimit`). Measured (i7-10700K, 8 cores, 64 GB, macOS 26), V7: a
-    /// share simulated on local JPEGs of 10–19 MiB, each 1 MiB chunk holding one shared 100 MiB/s link for 10 ms; three
-    /// neighbour reads running, the current photo's read asked for 100 ms later had its bytes back after 466–782 ms
-    /// (p50 ≈ 530) with both viewer threads open to neighbours and no pause, after 128–274 ms (p50 ≈ 200; the file
-    /// alone needs 100–186 ms) with a thread kept for it and the neighbours paused. On a local SSD (files are mapped:
-    /// no thread is held), `LoupeBench replay --script jumpfar --screen 5120x2880` over 165 baseline JPEGs of 4–25 MP,
-    /// 14 MB on average, release build: landings sharp after 199–314 ms against 209–308 ms before, no change.
+    /// Two, one of them the current photo's (`neighbourLimit`). Measured with `LoupeBench sharesim`
+    /// (docs/bench/2026-10-23-current-first.md; i7-10700K, 8 cores, 64 GB, macOS 26): a share simulated on local JPEGs
+    /// of 10–19 MiB at 100 MiB/s shared by all reads; three neighbour reads running, the current photo's read asked
+    /// for 100 ms later had its bytes back after 471–818 ms with both viewer threads open to neighbours and no pause,
+    /// after 128–266 ms (the file alone needs 100–186 ms) with a thread kept for it and the neighbours paused. On a
+    /// local SSD (files are mapped: no thread is held), `replay --script jumpfar`: no change.
     static let viewerThreads = 2
 
     private let threads: Int
@@ -179,11 +179,17 @@ final class IOPool: @unchecked Sendable {
         let neighbours = running.reduce(0) { $0 + (!$1.background && !$1.priority.isCurrent ? 1 : 0) }
         let foregroundRoom = running.count - background < foregroundLimit
         let neighbourRoom = foregroundRoom && neighbours < neighbourLimit
+        // A current read may also take an idle thread of the background share: the viewer's two can both hold
+        // non-current reads (a photo stepped to after a dwell, still reading when the user steps again, is the next
+        // photo's neighbour now), and a running read is never preempted. The thumbnails' reads are cancelled while the
+        // current photo reads (`ThumbnailStore.setViewerActivity`), so those threads are usually free; never more
+        // threads than the pool has.
+        let currentRoom = foregroundRoom || running.count < live
         let backgroundRoom = background < backgroundLimit
         var best: (index: Int, value: Int, background: Bool)?
         for (i, job) in queue.enumerated() {
             let isBackground = job.priority.isBackground
-            let room = isBackground ? backgroundRoom : job.priority.isCurrent ? foregroundRoom : neighbourRoom
+            let room = isBackground ? backgroundRoom : job.priority.isCurrent ? currentRoom : neighbourRoom
             guard room else { continue }
             let value = job.priority.value
             if best == nil || value < best!.value { best = (i, value, isBackground) }

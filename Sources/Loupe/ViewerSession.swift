@@ -895,15 +895,20 @@ import LoupeRender
         }
     }
 
+    /// The mode the current photo arrives in before its header is known: the saved one while a saved view waits
+    /// (assuming its size), else the one `PhotoSwitchView` gives it (which does not depend on the size).
+    private var arrivalMode: ZoomMode {
+        restore.map { transform(showing: $0.file, size: $0.view.imageSize, over: judgedTransform).mode }
+            ?? playlist.map { transform(showing: $0.current, size: judgedTransform.imageSize, over: judgedTransform).mode }
+            ?? judgedTransform.mode
+    }
+
     /// Whether the current mode needs a level finer than Lfit for the current photo. Before its header is known:
     /// whether the mode is not a fit mode (the saved one, while a saved view waits, assuming its size; else the one
     /// `PhotoSwitchView` gives it, which does not depend on the size).
     private func needsFull() -> Bool {
         guard let latest, let info = latest.info, latest.url == playlist?.current else {
-            let mode = restore.map { transform(showing: $0.file, size: $0.view.imageSize, over: judgedTransform).mode }
-                ?? playlist.map { transform(showing: $0.current, size: judgedTransform.imageSize, over: judgedTransform).mode }
-                ?? judgedTransform.mode
-            switch mode {
+            switch arrivalMode {
             case .fit, .fitWidth, .fitHeight: return false
             case .free(let r): return r > 1
             case .fill, .actual: return true
@@ -1037,7 +1042,11 @@ import LoupeRender
     /// replaces the strip's cell or the blank once it lands (`previewsCurrent`).
     private func putStandIn(for url: URL, shownBefore: URL?) {
         let setting = Settings.shared.config.switchPreview
-        let picture = setting == .thumb ? cellPicture?(url) : nil
+        // The strip's cell stands in only where it lies as the photo will: one page at Fit (the stand-in is drawn
+        // fitted). Zoomed or in a two-page folder, the blank placeholder until the stored thumbnail (seeded into the
+        // pyramid, laid out by the transform) or the photo itself.
+        let cellFits = arrivalMode == .fit && !folderSpread.on
+        let picture = setting == .thumb && cellFits ? cellPicture?(url) : nil
         let action = ShowPolicy.atNavigation(shownURL: shownBefore, currentURL: url, showable: entry?.url == url,
                                              seedAvailable: picture != nil, setting: setting)
         let next: SwitchStandIn?

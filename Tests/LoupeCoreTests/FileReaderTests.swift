@@ -496,22 +496,25 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     #expect(try await third.value.data.count == mib / 4)
 }
 
-/// The viewer's own reads keep to two threads, as before the thumbnails' threads were added: a third waits even
-/// with threads idle, while a background read still finds one.
+/// The viewer's reads that are not current keep to the viewer's two threads, as before the thumbnails' threads were
+/// added: with both held, a neighbour read waits even with threads idle, while a background read still finds one.
+/// A current read does not wait (fix round 1, I1): with the viewer's two full it takes an idle thread of the pool.
 @Test(.timeLimit(.minutes(1))) func viewerReadsUseTwoThreads() async throws {
     let files = try TempFiles()
     var urls: [String: URL] = [:]
-    for name in ["v1", "v2", "v3", "bg"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    for name in ["v1", "v2", "v3", "v4", "bg"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
     let gates = Gates()
     for name in ["v1", "v2"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
     let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
-    // Current reads (a pair's two pages): neighbours keep to one thread (`currentReadGetsTheReservedThread`).
     func current() -> ReadPriority { let p = ReadPriority(0); p.isCurrent = true; return p }
-    let held = ["v1", "v2"].map { name in Task { try await reader.read(urls[name]!, priority: current()) } }
+    // Held: a neighbour in a chunk (an ex-current read still running after a second step, say), then a current read
+    // (the neighbour, mid-chunk, cannot pause for it).
+    let neighbour = Task { try await reader.read(urls["v2"]!, priority: ReadPriority(2)) }
     await waitEntered(gates)
+    let held = [neighbour, Task { try await reader.read(urls["v1"]!, priority: current()) }]
     await waitEntered(gates)
-    let third = Task { try await reader.read(urls["v3"]!, priority: current()) }
+    let third = Task { try await reader.read(urls["v3"]!, priority: ReadPriority(3)) }
     try await waitQueued(reader, 1)
 
     let bg = urls["bg"]!
@@ -520,6 +523,11 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     }
     #expect(thumb.flatMap { try? $0.get() } == mib / 4)
     #expect(reader.queuedCount == 1)
+
+    let v4 = urls["v4"]!
+    let fourth = await within(.seconds(5)) { try await reader.read(v4, priority: current()).data.count }
+    #expect(fourth.flatMap { try? $0.get() } == mib / 4)
+    #expect(reader.queuedCount == 1, "the neighbour still waits")
 
     gates.releaseAll()
     for task in held { _ = try await task.value }

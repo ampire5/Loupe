@@ -671,6 +671,74 @@ extension ImageCacheSessionsTests {
         #expect(await eventually { await cache.isIdle })
     }
 
+    /// A share of `files` (`i.jpg` holding its name), a real FileReader over it whose reads of every file but `free`
+    /// park, and a cache over that reader with a trace.
+    private func slowShareRig(free: Set<String>, count: Int = 40) async throws
+        -> (dir: URL, files: [URL], share: SlowShare, cache: ImageCache<FakeLoader>, traced: Traced) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("loupe-v7-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let files = try (0..<count).map { i -> URL in
+            let url = dir.appendingPathComponent("\(i).jpg")
+            try Data(url.lastPathComponent.utf8).write(to: url)
+            return url
+        }
+        let share = SlowShare(free: free)
+        let reader = FileReader(threads: 4, timeout: .seconds(30), isLocal: { _ in false }, chunkReader: share.reader)
+        let decoder = FakeDecoder(size: rigPhoto)
+        let cache = ImageCache(loader: FakeLoader(), reader: reader, pool: DecodePool(), decoder: { _ in decoder },
+                               limits: CacheLimits.at3G)
+        let traced = Traced()
+        await cache.setTrace { traced.add($0) }
+        return (dir, files, share, cache, traced)
+    }
+
+    /// Fix round 1, I1: a step after a dwell takes the reserved thread with a read that then stays running when the
+    /// user steps again (it is the next photo's neighbour now, its flag cleared): both viewer threads hold non-current
+    /// reads. The second step's read still starts, on a thread of the pool the thumbnails would use.
+    @Test func secondStepReadsPastARunningExCurrentRead() async throws {
+        let rig = try await slowShareRig(free: ["0.jpg", "31.jpg"])
+        defer { rig.share.releaseAll(); try? FileManager.default.removeItem(at: rig.dir) }
+        func focus(_ current: Int, dwelling: Bool) async {
+            await rig.cache.setFocus(files: rig.files, focus: CacheFocus(count: rig.files.count, current: current,
+                                                                         direction: 1, dwelling: dwelling,
+                                                                         needsFull: false, screen: rigScreen))
+        }
+        await focus(0, dwelling: true)
+        #expect(await eventually { rig.share.parkedCount >= 1 })   // a neighbour holds one viewer thread
+        await focus(30, dwelling: false)
+        #expect(await eventually { rig.share.parkedCount >= 2 })   // 30's read the other one, parked too
+        await focus(31, dwelling: false)
+        #expect(await eventually { rig.traced.first(rig.files[31], .readDelivered) != nil })
+        #expect(rig.share.parkedCount >= 2, "the others stay parked")
+        rig.share.releaseAll()
+        await rig.cache.setFocus(files: [], focus: CacheFocus(count: 0, current: 0, direction: 1, dwelling: false,
+                                                              needsFull: false, screen: rigScreen))
+        #expect(await eventually { await rig.cache.isIdle })
+    }
+
+    /// Fix round 1, I2: the stamp check of a cached photo stepped back to is the current photo's I/O: it does not wait
+    /// behind a neighbour read holding the neighbours' thread (activity would stay `.current` meanwhile).
+    @Test func stampCheckOfTheCurrentPhotoIsCurrent() async throws {
+        let rig = try await slowShareRig(free: ["0.jpg", "30.jpg"])
+        defer { rig.share.releaseAll(); try? FileManager.default.removeItem(at: rig.dir) }
+        func focus(_ current: Int, dwelling: Bool) async {
+            await rig.cache.setFocus(files: rig.files, focus: CacheFocus(count: rig.files.count, current: current,
+                                                                         direction: 1, dwelling: dwelling,
+                                                                         needsFull: false, screen: rigScreen))
+        }
+        await focus(0, dwelling: true)
+        #expect(await eventually { rig.share.parkedCount >= 1 })   // a neighbour of 0 holds the neighbours' thread
+        await focus(30, dwelling: false)
+        #expect(await eventually { rig.traced.first(rig.files[30], .readDelivered) != nil })
+        await focus(30, dwelling: true)   // 30's neighbours read: they park behind the share as well
+        await focus(0, dwelling: false)   // back to a cached photo: its stamp is checked
+        #expect(await eventually { await rig.cache.stampChecks == 0 })
+        rig.share.releaseAll()
+        await rig.cache.setFocus(files: [], focus: CacheFocus(count: 0, current: 0, direction: 1, dwelling: false,
+                                                              needsFull: false, screen: rigScreen))
+        #expect(await eventually { await rig.cache.isIdle })
+    }
+
     /// Neighbours start reading only once the current photo's preview is up, not as soon as the dwell is: until then
     /// the share is the current photo's alone.
     @Test func neighboursReadAfterTheCurrentPreview() async {
