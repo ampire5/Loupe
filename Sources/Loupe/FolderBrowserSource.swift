@@ -163,6 +163,11 @@ extension Notification.Name {
                 // Back from the viewer: the visits and the two-page keys may have changed.
                 showSummaries()
                 progressMayHaveChanged()
+                // The browser keeps its cards (the folder on screen shown again asks for nothing): its last ask goes
+                // again, so the request is no longer held and the pictures still missing are waited for anew.
+                if case .folder = view?.location, let last = lastWant {
+                    return wantImages(last.ids, visible: last.visible, width: last.width)
+                }
                 return sendCovers()
             }
             progressTask?.cancel()
