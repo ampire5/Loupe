@@ -1,3 +1,4 @@
+import HomeScreenModel
 import Testing
 @testable import LoupeCore
 
@@ -80,5 +81,57 @@ import Testing
                                         walk: stopped, pausedByUser: false, browsing: false)
         #expect(after.subfolders == WorkCount(done: 12, total: 12))
         #expect(after.text == nil)
+    }
+    /// The walk's own word for the popover: why it waits ("Waiting for the share"), else why it stopped early.
+    @Test func theWalkSaysWhyItWaits() {
+        let generator = GeneratorProgress(all: WorkCount(done: 10, total: 10))
+        let waiting = ThumbsProgress.join(generator: generator, covers: Self.covers(),
+                                          walk: WalkProgress(folders: WorkCount(done: 1, total: 4), waiting: "Waiting for the share"),
+                                          pausedByUser: false, browsing: false)
+        #expect(waiting.walkNote == "Waiting for the share")
+        let stopped = ThumbsProgress.join(generator: generator, covers: Self.covers(),
+                                          walk: WalkProgress(folders: WorkCount(done: 3, total: 9), stopped: "Too many folders"),
+                                          pausedByUser: false, browsing: false)
+        #expect(stopped.walkNote == "Too many folders")
+        let none = ThumbsProgress.join(generator: generator, covers: Self.covers(), walk: nil, pausedByUser: false,
+                                       browsing: false)
+        #expect(none.walkNote == nil)
+    }
+
+    /// What the toolbar's pill and popover draw: the current stage's text and share, the three rows, the pause and its
+    /// note (the user's, the viewer's, else the walk's word); nothing once all is done.
+    @Test func stateForThePill() {
+        let running = ThumbsProgress(inView: WorkCount(done: 24, total: 24), rest: WorkCount(done: 96, total: 216),
+                                     photos: WorkCount(done: 120, total: 240), subfolders: WorkCount(done: 0, total: 48))
+        let state = running.state
+        #expect(state == ThumbsProgressState(fraction: 0.5, text: "Thumbnails 120 / 240", paused: false, rows: [
+            .init(title: "In view", done: 24, total: 24), .init(title: "Rest of folder", done: 96, total: 216),
+            .init(title: "Subfolders", done: 0, total: 48),
+        ], pauseNote: nil, pausedByUser: false))
+
+        var user = running
+        user.paused = .user
+        #expect(user.state?.paused == true)
+        #expect(user.state?.pausedByUser == true)
+        #expect(user.state?.pauseNote == "Paused")
+        #expect(user.state?.text == "Paused · 120 / 240")
+
+        var browsing = running
+        browsing.paused = .browsing
+        #expect(browsing.state?.paused == true)
+        #expect(browsing.state?.pausedByUser == false)
+        #expect(browsing.state?.pauseNote == "Paused while you browse")
+
+        var walking = running
+        walking.photos = WorkCount(done: 240, total: 240)
+        walking.subfolders = WorkCount(done: 12, total: 48)
+        walking.walkNote = "Waiting for the share"
+        #expect(walking.state?.fraction == 0.25)
+        #expect(walking.state?.text == "Subfolders 12 / 48")
+        #expect(walking.state?.pauseNote == "Waiting for the share")
+        walking.paused = .user
+        #expect(walking.state?.pauseNote == "Paused")
+
+        #expect(ThumbsProgress().state == nil)
     }
 }

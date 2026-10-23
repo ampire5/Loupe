@@ -855,6 +855,10 @@ import UniformTypeIdentifiers
         }
         folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
+        // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done.
+        folders.onProgress = { [weak browser] progress in
+            browser?.setProgress(progress.state, delay: .seconds(Settings.shared.config.thumbsPillDelay))
+        }
         folders.confirmDelete = { [weak self] name, answer in
             guard let window = self?.window else { answer(false); return }
             let alert = NSAlert()
@@ -895,6 +899,15 @@ import UniformTypeIdentifiers
         }
         homeView?.browser.chooseCardStyle(CardStyle.allCases[tag])
     }
+
+    /// View › Thumbnails…: the toolbar pill's popover (from the sort while a narrow window hides the pill).
+    @objc func showThumbsProgress(_ sender: Any?) {
+        guard canShowThumbsProgress else { return }
+        homeView?.browser.showProgressPopover()
+    }
+
+    /// Home's browser is on screen with thumbnails being prepared (its pill lit).
+    var canShowThumbsProgress: Bool { isShowingHome && homeView?.browser.canShowProgressPopover == true }
 
     /// Home is on screen on a folder: its folder cards' style can be chosen (the View items and ⌥⌘1–⌥⌘3 are theirs).
     var canChooseCardStyle: Bool { isShowingHome && homeView?.browser.canChooseCardStyle == true }
@@ -1538,6 +1551,8 @@ import UniformTypeIdentifiers
             item.state = browser?.canChooseCardStyle == true && CardStyle.allCases.indices.contains(item.tag)
                 && browser?.cardStyle == CardStyle.allCases[item.tag] ? .on : .off
             return canChooseCardStyle
+        case #selector(showThumbsProgress(_:)):
+            return canShowThumbsProgress
         case #selector(largerCards(_:)), #selector(smallerCards(_:)), #selector(defaultCardSize(_:)):
             return isShowingHome && !isShowingStash
         case #selector(toggleHomeSidebar(_:)):

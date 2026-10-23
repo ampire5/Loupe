@@ -747,6 +747,10 @@ import UniformTypeIdentifiers
             item.tag = index
         }
         view.delegate = CardStyleMenuReset.shared
+        // The toolbar pill's popover for the key window's Home (thumbs-ahead spec): also there while a narrow window
+        // hides the pill; off with nothing being prepared.
+        view.addItem(withTitle: "Thumbnails…", action: #selector(ViewerWindowController.showThumbsProgress(_:)),
+                     keyEquivalent: "")
         view.addItem(.separator())
         // AppKit retitles this item "Exit Full Screen" while the window is in full screen.
         let fullScreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")

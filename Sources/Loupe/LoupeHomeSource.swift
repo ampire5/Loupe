@@ -119,6 +119,16 @@ import LoupeCore
         if wasSource, old != new { collections.stopPictures() }
     }
 
+    /// Folder and zip cards get their facts and covers from the cover queue: they wait for them, shimmering, until
+    /// they come or the folders' source gives up on them (`FolderBrowserSource.noCover`).
+    var sendsCardFacts: Bool { true }
+
+    /// The progress popover's Pause / Resume: the user's pause of the work ahead, the session's (every window's).
+    func pauseThumbs(_ on: Bool, in location: BrowserLocation) { folders.pauseAhead(on) }
+
+    /// The progress popover's Prepare subfolders: the walk from the folder on screen.
+    func prepareSubtree(of location: BrowserLocation) { folders.prepareShownSubtree(of: location) }
+
     func pageFilterChosen(_ index: Int, in source: String) {
         if source == HomeCollections.stash { collections.onStashFilter?(index) }
     }

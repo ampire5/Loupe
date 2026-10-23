@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 
 /// How far the generator is with a window's folder (`ThumbnailStore.generatorProgress`): its photos in view and the
 /// margin (the request's visible ones), and all of them.
@@ -42,14 +43,17 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// The visible cards' subfolders (a cover and a summary each), with the walk's folders while it runs.
     public var subfolders: WorkCount
     public var paused: Pause?
+    /// The walk's word for the popover (`WalkProgress.waiting`, else `stopped`); nil without one.
+    public var walkNote: String?
 
     public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), photos: WorkCount = WorkCount(),
-                subfolders: WorkCount = WorkCount(), paused: Pause? = nil) {
+                subfolders: WorkCount = WorkCount(), paused: Pause? = nil, walkNote: String? = nil) {
         self.inView = inView
         self.rest = rest
         self.photos = photos
         self.subfolders = subfolders
         self.paused = paused
+        self.walkNote = walkNote
     }
 
     /// The photos while some are still to be made, then the subfolders; nil once both are done.
@@ -95,6 +99,26 @@ public struct ThumbsProgress: Equatable, Sendable {
         let rest = WorkCount(done: generator.all.done - generator.visible.done,
                              total: generator.all.total - generator.visible.total)
         return ThumbsProgress(inView: inView, rest: rest, photos: generator.all, subfolders: subfolders,
-                              paused: pausedByUser ? .user : browsing ? .browsing : nil)
+                              paused: pausedByUser ? .user : browsing ? .browsing : nil,
+                              walkNote: walk.flatMap { $0.waiting ?? $0.stopped })
+    }
+
+    /// What the toolbar's pill and its popover draw (`HomeBrowserView.setProgress`): the text and the current stage's
+    /// share, the rows "In view", "Rest of folder", "Subfolders", and the note under them: "Paused" (the user's),
+    /// "Paused while you browse" (the viewer's), else the walk's word. Nil once all is done.
+    public var state: ThumbsProgressState? {
+        guard let text, let current else { return nil }
+        let note: String? = switch paused {
+        case .user: "Paused"
+        case .browsing: "Paused while you browse"
+        case nil: walkNote
+        }
+        return ThumbsProgressState(
+            fraction: current.total > 0 ? Double(current.done) / Double(current.total) : 0, text: text,
+            paused: paused != nil,
+            rows: [.init(title: "In view", done: inView.done, total: inView.total),
+                   .init(title: "Rest of folder", done: rest.done, total: rest.total),
+                   .init(title: "Subfolders", done: subfolders.done, total: subfolders.total)],
+            pauseNote: note, pausedByUser: paused == .user)
     }
 }

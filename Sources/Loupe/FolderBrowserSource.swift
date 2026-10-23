@@ -99,6 +99,14 @@ extension Notification.Name {
     /// Cards whose "+N inside" is to be counted again (a subfolder made ahead wrote its summary), each once per
     /// `insideRefreshDelay` however many of its subfolders do.
     private var insideRefresh: [String: Task<Void, Never>] = [:]
+    /// Cards whose work is done without a cover to give (no photos, unreadable, none of its photos made): their cards
+    /// stop waiting (`HomeBrowserView.stopWaiting`), told again whenever they are asked for (laid out anew, Home shown
+    /// again). A card whose cover waits on a share is not among them: it keeps waiting. Until the folder changes.
+    private var noCover: Set<String> = []
+    /// The view's last ask as it came (before `thumbs-ahead = off` trims it), asked again when the setting changes.
+    private var lastWant: (ids: [String], visible: Int, width: CGFloat)?
+    /// `thumbs-ahead` as the asks so far followed it.
+    private var thumbsAhead = Settings.shared.config.thumbsAhead
     private var observers: [NSObjectProtocol] = []
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
@@ -129,6 +137,19 @@ extension Notification.Name {
                 self?.shareAnswered(volume)
             }
         })
+        observers.append(center.addObserver(forName: .settingsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.thumbsAheadMayHaveChanged() }
+        })
+    }
+
+    /// `thumbs-ahead` changed (the settings window, loupe.conf): the view's last ask is sent again under it, so the
+    /// margin and the subfolders ahead start or stop at once, no restart.
+    private func thumbsAheadMayHaveChanged() {
+        let now = Settings.shared.config.thumbsAhead
+        guard now != thumbsAhead else { return }
+        thumbsAhead = now
+        guard !isPaused, case .folder = view?.location, let last = lastWant else { return }
+        wantImages(last.ids, visible: last.visible, width: last.width)
     }
 
     /// The tab hid or the window closed: no polls, no thumbnails for it.
@@ -403,10 +424,9 @@ extension Notification.Name {
     /// The first `visible` of `ids` are in view, the rest is the margin around it. Photos come from the strip's store,
     /// those in view first; folder and zip cards go to the cover queue.
     func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
+        lastWant = (ids, visible, width)
         // `thumbs-ahead = off`: only what is in view, no margin.
-        if Settings.shared.config.thumbsAhead == .off, visible < ids.count {
-            return wantImages(Array(ids.prefix(visible)), visible: visible, width: width)
-        }
+        let ids = Settings.shared.config.thumbsAhead == .off ? Array(ids.prefix(visible)) : ids
         let scale = view?.window?.backingScaleFactor ?? 2
         maxPixel = Int((width * scale).rounded())
         let wanted = ids.compactMap { shown[$0] }
@@ -426,6 +446,8 @@ extension Notification.Name {
         lastAsked = cardIDs
         lastInView = Set(cardIDs.filter(inView.contains))
         for (id, image) in ask.cached { view?.setImage(image, for: id) }
+        let given = cardIDs.filter(noCover.contains)
+        if !given.isEmpty { view?.stopWaiting(for: given) }
         // A card laid out again has lost its facts in the view too.
         for id in cardIDs where facts[id] != nil { showSummary(id) }
         if !ask.forget.isEmpty {
@@ -466,6 +488,8 @@ extension Notification.Name {
         subfoldersAsked = []
         for task in insideRefresh.values { task.cancel() }
         insideRefresh = [:]
+        noCover = []
+        lastProgress = nil
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
         lastInView = []
@@ -528,9 +552,15 @@ extension Notification.Name {
             return (entry, self.positions.fileName(in: entry.url), self.shownDated, self.cards.pending.contains(id),
                     self.visit(of: entry.url)?.visited ?? Date())
         }
-        let deliver: @MainActor (String, CGImage?, FolderCardFacts, Bool) -> Void = { [weak self] id, mosaic, facts, again in
+        let deliver: @MainActor (String, CGImage?, FolderCardFacts, Bool, Bool) -> Void = {
+            [weak self] id, mosaic, facts, again, noCover in
             guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
             self.keepFacts(facts, for: id, again: again)
+            // Done without a picture (no photos, unreadable, none made): the card stops waiting for one.
+            if noCover {
+                self.noCover.insert(id)
+                self.view?.stopWaiting(for: [id])
+            }
             // A mosaic of another layout or size is not kept.
             guard let mosaic, self.shownCoverLayout == layout, self.coverSize?.width == side,
                   self.coverSize?.scale == scale else { return }
@@ -565,7 +595,7 @@ extension Notification.Name {
             }
             let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
             guard !Task.isCancelled else { return true }
-            await deliver(id, mosaic, facts, again)
+            await deliver(id, mosaic, facts, again, card.picture && mosaic == nil && !again)
             return !again
         }
         let aheadIDs = ahead.map(\.id)
@@ -828,6 +858,18 @@ extension Notification.Name {
     /// the catalog keeps it as for its card.
     private func prepareSubtree(_ entry: BrowserEntry) {
         guard entry.kind == .folder else { return }
+        prepareSubtree(of: entry.url, location: shownLocation?.subfolder(entry.url.lastPathComponent))
+    }
+
+    /// The popover's "Prepare subfolders": the walk from the folder on screen down to `thumbs-depth`.
+    func prepareShownSubtree(of location: BrowserLocation) {
+        guard case .folder(let folder) = location, !ArchivePath.isArchive(folder),
+              coverFolder == folder.standardizedFileURL.path else { return }
+        prepareSubtree(of: folder, location: shownLocation)
+    }
+
+    /// The walk from `folder` (where the catalog keeps it: `location`) down to `thumbs-depth`.
+    private func prepareSubtree(of folder: URL, location: ThumbnailLocation?) {
         let walk = Self.walk ?? {
             let made = ThumbsWalk(store: thumbnails, queue: thumbnails.coverQueue, client: Self.nextWindow)
             Self.nextWindow += 1
@@ -840,8 +882,7 @@ extension Notification.Name {
             return made
         }()
         Self.walkOwner = self
-        let location = shownLocation?.subfolder(entry.url.lastPathComponent)
-        let depth = Settings.shared.config.thumbsDepth, folder = entry.url
+        let depth = Settings.shared.config.thumbsDepth
         Task { await walk.start(folder, location: location, depth: depth) }
     }
 
@@ -1000,7 +1041,10 @@ extension Notification.Name {
         progressTask = Task { @MainActor [weak self] in
             guard (try? await Task.sleep(for: Self.progressInterval)) != nil, let self else { return }
             self.progressTask = nil
+            let location = self.view?.location
             let progress = await self.currentProgress()
+            // A late count of a place the browser has left is dropped, and the new place's is read.
+            guard self.view?.location == location else { return self.progressMayHaveChanged() }
             guard !self.isPaused, progress != self.lastProgress else { return }
             self.lastProgress = progress
             self.onProgress?(progress)
