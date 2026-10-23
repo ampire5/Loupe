@@ -198,6 +198,10 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 
 ## Install
 
+> **Frozen (2026-10-23).** Intel Macs on macOS 26 are built from `main` now: one branch, an x86_64 build with Xcode 26
+> next to the Apple Silicon one. This branch takes no more backports and no `-lts` releases; it stays for reference.
+> Fixes go to `main`.
+>
 > **This is the `lts/macos26` branch: Loupe for Intel Macs on macOS 26**, the last macOS for them, supported until
 > Apple ends macOS 26 security updates (expected autumn 2028). Fixes and selected features come over from `main`
 > ([LTS_POLICY.md](https://github.com/ampire5/FrameScrub/blob/lts/macos26/LTS_POLICY.md)). On Apple Silicon, use `main`.
