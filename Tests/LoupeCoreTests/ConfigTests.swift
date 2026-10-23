@@ -1109,6 +1109,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
     "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
@@ -1629,6 +1630,39 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(c.set("folder-cards", "cards") == .ok && c.folderCards == .cards)
     #expect(c.set("folder-cards", "") == .badValue && c.folderCards == .cards)
     #expect(Config.keys.contains("folder-cards"))
+}
+
+/// `thumbs-ahead`: how far Home prepares thumbnails beyond the cards in view (thumbs-ahead spec, decision 5).
+@Test func thumbsAheadParsesAndDefaults() {
+    let d = Config()
+    #expect(d.thumbsAhead == .folder && d.text(forKey: "thumbs-ahead") == "folder")
+    #expect(Config.parse("thumbs-ahead=visible").0.thumbsAhead == .visible)
+    #expect(Config.parse("thumbs-ahead=OFF").0.thumbsAhead == .off)
+    #expect(Config.parse("thumbs-ahead=nope").1 == ["loupe.conf:1: bad option 'thumbs-ahead=nope'"])
+    var c = Config()
+    #expect(c.set("thumbs-ahead", "nope") == .badValue && c.thumbsAhead == .folder)
+    #expect(Config.keys.contains("thumbs-ahead"))
+}
+
+/// `thumbs-depth`: how many levels below a folder the "Prepare..." command goes, 0...3, default 1.
+@Test func thumbsDepthIsClamped() {
+    #expect(Config().thumbsDepth == 1 && Config().text(forKey: "thumbs-depth") == "1")
+    var c = Config()
+    for v in [0, 3] { #expect(c.set("thumbs-depth", String(v)) == .ok && c.thumbsDepth == v) }
+    #expect(c.set("thumbs-depth", "4") == .badValue && c.thumbsDepth == 3)
+    #expect(c.set("thumbs-depth", "-1") == .badValue && c.thumbsDepth == 3)
+    #expect(Config.keys.contains("thumbs-depth"))
+}
+
+/// `thumbs-pill-delay`: seconds of work before the progress pill shows, default 1.
+@Test func thumbsPillDelayDefaultsToOneSecond() {
+    let d = Config()
+    #expect(d.thumbsPillDelay == 1 && d.text(forKey: "thumbs-pill-delay") == "1")
+    var c = Config()
+    #expect(c.set("thumbs-pill-delay", "0") == .ok && c.thumbsPillDelay == 0)
+    #expect(c.set("thumbs-pill-delay", "2.5") == .ok && c.text(forKey: "thumbs-pill-delay") == "2.5")
+    #expect(c.set("thumbs-pill-delay", "-1") == .badValue && c.thumbsPillDelay == 2.5)
+    #expect(Config.keys.contains("thumbs-pill-delay"))
 }
 
 /// Home's own folder keys (`browser-sort`, `folder-cards`) live in folder settings beside the viewer's: a folder's

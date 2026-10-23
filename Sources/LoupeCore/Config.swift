@@ -73,6 +73,12 @@ public enum SessionRestore: String, Sendable {
     case none, last
 }
 
+/// `thumbs-ahead`: how far Home prepares thumbnails beyond the cards in view. `folder` (the default): the whole folder
+/// and its subfolders' covers; `visible`: only the cards in view and their covers; `off`: what is on screen, no margin.
+public enum ThumbsAhead: String, CaseIterable, Sendable {
+    case folder, visible, off
+}
+
 /// `new-window-fullscreen`: how a new window opened from a full-screen one appears. `follow` (the default): in full
 /// screen too, in a Space of its own; `no`: as an ordinary window.
 public enum NewWindowFullScreen: String, Sendable {
@@ -448,6 +454,13 @@ public struct Config: Equatable, Sendable {
     /// facts, a compact card, a list row); the default for every folder, which keeps its own choice in its settings
     /// like its sort (`CardStyle.forFolder`; folder cards spec).
     public var folderCards = CardStyle.posters
+    /// `thumbs-ahead`: how far thumbnails are prepared beyond the cards in view (`ThumbsAhead`); the default is the
+    /// whole folder. Background work pauses while photos are browsed.
+    public var thumbsAhead = ThumbsAhead.folder
+    /// `thumbs-depth`: how many levels of subfolders the "Prepare..." command goes into, 0...3 (0: the folder itself).
+    public var thumbsDepth = 1
+    /// `thumbs-pill-delay`: seconds of background work before the progress pill shows, 0 or more.
+    public var thumbsPillDelay = 1.0
     /// `recent-count`: how many recent folders Home shows, 0...200 (0: no Recent section).
     public var recentCount = 24
     /// `session-restore`: Home or Last Session at a launch without a file (`SessionRestore`).
@@ -563,7 +576,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -713,6 +726,9 @@ public struct Config: Equatable, Sendable {
         case "grid-names": return gridNames.rawValue
         case "folder-cover": return folderCover.rawValue
         case "folder-cards": return folderCards.rawValue
+        case "thumbs-ahead": return thumbsAhead.rawValue
+        case "thumbs-depth": return String(thumbsDepth)
+        case "thumbs-pill-delay": return formatNumber(thumbsPillDelay)
         case "recent-count": return String(recentCount)
         case "session-restore": return sessionRestore.rawValue
         case "transparency": return transparency.rawValue
@@ -1003,6 +1019,12 @@ public struct Config: Equatable, Sendable {
             if let v = FolderCoverLayout(rawValue: value.lowercased()) { folderCover = v } else { return .badValue }
         case "folder-cards":
             if let v = CardStyle(rawValue: value.lowercased()) { folderCards = v } else { return .badValue }
+        case "thumbs-ahead":
+            if let v = ThumbsAhead(rawValue: value.lowercased()) { thumbsAhead = v } else { return .badValue }
+        case "thumbs-depth":
+            if let v = Int(value), (0...3).contains(v) { thumbsDepth = v } else { return .badValue }
+        case "thumbs-pill-delay":
+            if let v = Double(value), v.isFinite, v >= 0 { thumbsPillDelay = v } else { return .badValue }
         case "recent-count":
             if let v = Int(value), (0...200).contains(v) { recentCount = v } else { return .badValue }
         case "session-restore":

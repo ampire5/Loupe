@@ -55,5 +55,19 @@ extension SettingsPanel {
                     description: "~/Library/Caches/Loupe/Thumbs.db, ≈ 50 KB a thumbnail; the longest unseen go first. "
                         + "M or G, or bytes; 0 = in memory only until quit. Default 2G (≈ 40 000 photos)."),
         ]),
+        SettingsSection("Prepare ahead", rows: [
+            .choice("thumbs-ahead", "Prepare ahead", [
+                (word: "folder", title: "Whole folder"), (word: "visible", title: "Cards in view"),
+                (word: "off", title: "Off"),
+            ], symbol: "arrow.down.circle",
+            description: "Prepare thumbnails ahead: for the whole folder (default), for the cards in view, or not at "
+                + "all. Background work pauses while you browse photos."),
+            .number("thumbs-depth", "Prepare depth", step: 1, symbol: "arrow.down.right.and.arrow.up.left",
+                    description: "How many levels of subfolders Prepare thumbnails goes into. 0–3, 0 = the folder "
+                        + "itself; default 1."),
+            .number("thumbs-pill-delay", "Show progress after", unit: "s", step: 0.5, symbol: "clock.badge",
+                    description: "How long background work runs before its progress pill shows. 0 = at once; "
+                        + "default 1."),
+        ]),
     ])
 }
