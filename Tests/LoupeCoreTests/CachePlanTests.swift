@@ -500,7 +500,7 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
 /// 25 files of 12 MB). Not at a zoom that needs no more than the preview (unless the photo already holds one), and
 /// never on unified memory, where the pyramids already live in system memory.
 @Test func readyPlannedOnlyOnADiscreteCardAtFullZoom() {
-    let decoded = (big.width * 4 + 63) / 64 * 64 * big.height
+    let decoded = DecodedImage.byteCount(big)
     #expect(decoded == 588_672_000)
     let tiers = limits { $0.graphicsMemory = 4 << 30 }
     let items = plan(focus(needsFull: true), tiers)
@@ -521,4 +521,14 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     #expect(plan(focus(needsFull: false), tiers, kept).filter { $0.goal == .ready }.map(\.index) == [101])
     #expect(!plan(focus(needsFull: true), CacheLimits.at3G).contains { $0.goal == .ready })
     #expect(CacheGoal.allCases.filter(\.isPyramid) == [.coarse, .preview, .full])
+}
+
+/// A photo whose ready decode failed (`EntryFacts.readyFailed`) gets none planned, and its share of `cache-memory`
+/// goes to the next neighbour in line: n1 failed, so n3 (103) is planned where n1 was.
+@Test func failedReadyDecodeGivesBackItsShare() {
+    let tiers = limits { $0.graphicsMemory = 4 << 30 }
+    let failed: (Int) -> EntryFacts = { EntryFacts(pixelSize: big, fileSize: 12 * mb, readyFailed: $0 == 101) }
+    #expect(plan(focus(needsFull: true), tiers, failed).filter { $0.goal == .ready }.map(\.index) == [100, 99, 102, 103])
+    // Its file stays planned.
+    #expect(plan(focus(needsFull: true), tiers, failed).contains { $0.index == 101 && $0.goal == .bytes })
 }

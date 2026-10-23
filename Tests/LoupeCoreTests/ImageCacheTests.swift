@@ -1268,6 +1268,95 @@ struct ImageCacheTests {
         #expect(await rig.cache.stats().readyCount == 1)
         await rig.clear()
     }
+
+    /// A ready decode is background work: while one runs for the photo on screen (n1's, held, which the user stepped
+    /// onto at Fit) the cache reports `.neighbours`, not `.current`, so thumbnails and Home covers keep going. A
+    /// ready fill of a 147 MP photo takes seconds.
+    @Test func readyDecodeIsNeverCurrentActivity() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let rig = Rig(limits: limits)
+        let files = fileURLs(10)
+        let held = BlockingGate()
+        rig.decoder.gateFullCalls(files[1], [held])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { rig.decoder.calls(files[1]).contains(.full) })
+        #expect(await eventually { atLeast(.preview, await rig.state(files[1])) })
+        await rig.focus(files, 1, previous: 0)
+        #expect(await rig.cache.inspect([files[1]])[0]?.jobs[.ready] == false, "fixture: n1's ready decode runs")
+        // The step itself is the viewer's work (the photo's stamp check, say); once that is done, only the ready
+        // decode is left.
+        #expect(await eventually { await rig.cache.activity == .neighbours })
+        let log = ActivityLog()
+        await rig.cache.setOnActivity { log.add($0) }
+        held.open()
+        #expect(await rig.settle())
+        #expect(log.values == [.neighbours, .idle])
+        await rig.clear()
+    }
+
+    /// The full job's own check (`awaitReadyDecode`), not the replan's: n1's ready job is queued for the ready slot
+    /// (n2's ready decode holds it) in the right class and still planned, so the replan that raises `cache-full` to 1
+    /// keeps it, launches n1's full job, and that job gives the queued one up and decodes itself. One decode of n1.
+    @Test func fullJobAbandonsAQueuedReadyJob() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let rig = Rig(limits: limits)
+        let files = fileURLs(10)
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        let read = AsyncGate(), held = BlockingGate()
+        rig.reader.hang(files[1], on: read)
+        rig.decoder.gateFullCalls(files[2], [held])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { rig.decoder.calls(files[2]).contains(.full) }, "fixture: n2's ready decode holds the slot")
+        read.open()
+        #expect(await eventually {
+            log.events.contains { $0.url == files[1] && $0.kind == .decodeWait && $0.goal == .ready }
+        })
+        #expect(await eventually { atLeast(.preview, await rig.state(files[1])) })
+        #expect(await rig.cache.inspect([files[1]])[0]?.jobs[.ready] == true, "fixture: n1's ready job is queued")
+
+        limits.full = 1
+        await rig.cache.setLimits(limits)
+        #expect(await eventually { await rig.state(files[1]) == .full }, "sharp while n2's ready decode is held")
+        let events = log.events.filter { $0.url == files[1] }
+        let launched = events.firstIndex { $0.kind == .jobLaunched && $0.goal == .full }
+        let cancelled = events.firstIndex { $0.kind == .jobCancelled && $0.goal == .ready }
+        #expect(launched != nil && cancelled != nil && cancelled! > launched!, "given up by the full job, after its launch")
+        #expect(!events.contains { $0.kind == .readyAwait })
+        held.open()
+        #expect(await rig.settle())
+        #expect(rig.decoder.calls(files[1]).filter { $0 == .full }.count == 1)
+        await rig.clear()
+    }
+
+    /// A ready decode that finishes after its photo left the plan, with no full job waiting for it, is dropped: n1's,
+    /// held while the user jumps far away, is not kept.
+    @Test func lateUnplannedReadyDecodeIsDropped() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        let rig = Rig(limits: limits)
+        let files = fileURLs(40)
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        let held = BlockingGate()
+        rig.decoder.gateFullCalls(files[1], [held])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { rig.decoder.calls(files[1]).contains(.full) })
+        await rig.focus(files, 30, previous: 0)
+        #expect(await rig.cache.inspect([files[1]])[0]?.planned[.ready] == nil, "fixture: n1 left the plan")
+        #expect(await rig.cache.inspect([files[1]])[0]?.jobs[.ready] == false, "fixture: its ready decode runs")
+        let ready = await rig.cache.stats().readyCount
+        held.open()
+        #expect(await rig.settle())
+        #expect(log.events.contains { $0.url == files[1] && $0.kind == .uploadSkipped && $0.goal == .ready })
+        #expect(await rig.cache.stats().readyCount == ready)
+        await rig.clear()
+    }
 }
 
 private final class TraceEvents: @unchecked Sendable {

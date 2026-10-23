@@ -72,6 +72,25 @@ struct ImageCacheSessionsTests {
         #expect(updatesB.urls.allSatisfy { b.contains($0) })
     }
 
+    /// One budget (unified memory): a visible inactive window at 100 % wants its photo's full resolution (its short
+    /// plan), which the active window plans only as a file (a neighbour past `cache-previews`). The `.bytes` listed
+    /// first is no pyramid goal, so the full decode starts at once and waits for no preview, which nobody plans.
+    @Test func shortPlanFullStartsBehindAPlannedFile() async {
+        var limits = CacheLimits.at3G
+        limits.previews = 1
+        let rig = Rig(limits: limits)
+        #expect(await rig.cache.limits.graphicsMemory == nil)
+        let a = folder("a")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: true)
+        await rig.focus(sessionA, a, 0)
+        await rig.focus(sessionB, a, 1, needsFull: true)
+        #expect(await rig.cache.inspect([a[1]])[0]?.planned.keys.sorted() == [.bytes, .full])
+        #expect(await eventually { await rig.state(a[1]) == .full })
+        #expect(await rig.settle())
+        #expect(!rig.decoder.calls(a[1]).contains { if case .preview = $0 { true } else { false } })
+    }
+
     /// An inactive (and invisible) session's focus starts no read and no decode.
     @Test func inactiveStartsNothing() async {
         let rig = Rig()
