@@ -7,7 +7,8 @@ import LoupeRender
 /// What one viewer shows: the folder's playlist, the cache entry on screen and the view transform.
 /// Loading belongs to the process-wide `ImageCache` (M2 spec §4.5): the session tells it where the viewer is
 /// (`CacheFocus`), reads the current photo's entry and shows it once it is sharp enough (`ShowPolicy`); until
-/// then the previous photo stays with "Loading…". The photo on screen is pinned in the cache (`setPinned`), so it
+/// then a stand-in covers the previous photo (`standIn`, `switch-preview`) with "Loading…". The photo on screen is
+/// pinned in the cache (`setPinned`), so it
 /// is never evicted while shown. It knows nothing about AppKit or Metal layers, so a tab per
 /// session (M6) is just another instance.
 @MainActor final class ViewerSession {
@@ -82,6 +83,16 @@ import LoupeRender
     /// The screen shows only the photo's stretched thumbnail (its one resident level is the seeded one): the stats
     /// bar's `thumb` and the loading spinner.
     var showsThumbnailOnly: Bool { entry.map { $0.isSeededOnly && $0.failure == nil } ?? false }
+
+    /// What covers the photo on screen while the current one cannot be shown yet (`switch-preview`, decided on the
+    /// cache's first answer after a navigation, `ShowPolicy.atNavigation`): the strip's decoded cell of the new photo,
+    /// scaled up, or a blank placeholder. Nil while the screen shows the current photo, or keeps the one before
+    /// (`keep`). The window draws it over the viewer (`SwitchStandInView`).
+    private(set) var standIn: SwitchStandIn?
+
+    /// The strip's decoded cell picture of a file, nil when it holds none (set by the window controller): the
+    /// stand-in that needs no read or decode at all.
+    var cellPicture: ((URL) -> CGImage?)?
 
     /// `exif-orientation` as this session lays photos out: the transform's image size is the photo's `displaySize`
     /// with it, so it changes only together with the transform (`updateOrientationSetting`).
@@ -240,6 +251,9 @@ import LoupeRender
     /// navigation came since: it is shown as soon as it is what the wait asks for (`ShowPolicy.shownByStep`), and for
     /// `thumb` its stored thumbnail is seeded when nothing of it is resident, whatever `strip-jump-preview` says.
     private var stepWait: StepWait?
+    /// `switch-preview=thumb` put a stand-in up for the current photo and no other navigation came since: its stored
+    /// thumbnail is seeded and shown at once, as for a strip jump (`seedsCurrent`, `consider`).
+    private var previewsCurrent = false
     /// The file whose thumbnail is being turned into a seed: one at a time, so a fast sweep queues nothing; when it
     /// is done, the file under the cursor then is next.
     private var seeding: URL?
@@ -695,7 +709,7 @@ import LoupeRender
     /// Whether the current photo is shown as its stored thumbnail until decoded: a strip jump with
     /// `strip-jump-preview` on, or a wheel or key step with `thumb`.
     private var seedsCurrent: Bool {
-        (jumpedFromStrip && Settings.shared.config.stripJumpPreview) || stepWait == .thumb
+        (jumpedFromStrip && Settings.shared.config.stripJumpPreview) || stepWait == .thumb || previewsCurrent
     }
 
     /// Seeds the current photo from its stored thumbnail (`ThumbnailStore.seed`, no file read), when `seedsCurrent`
@@ -769,6 +783,9 @@ import LoupeRender
         cancelFolderRequest()   // any navigation outranks a folder switch still being resolved
         jumpedFromStrip = fromStrip
         stepWait = wait
+        // The stand-in of the photo before stays until the cache's first answer for this one decides (`received`), so
+        // a photo already cached appears within a frame without a blank flash between.
+        previewsCurrent = false
         self.direction = direction == 0 ? 1 : direction
         previousIndex = previous
         dwelling = false
@@ -1005,12 +1022,35 @@ import LoupeRender
     /// `refresh`'s answer: the cache's entry for `url` (nil: none yet), read after every cache call made before it.
     private func received(_ entry: CacheEntryView<TiledImage>?, of url: URL, atNavigation: Bool) {
         guard playlist?.current == url else { return }
+        let shownBefore = self.entry?.url
         if let entry {
             consider(entry, atNavigation: atNavigation)
         } else if self.entry?.url != url {
             loadingName = url.lastPathComponent
         }
-        if atNavigation, stepWait == .thumb { seedCurrent(ifNotResidentIn: entry) }
+        if atNavigation { putStandIn(for: url, shownBefore: shownBefore) }
+        if atNavigation, stepWait == .thumb || previewsCurrent { seedCurrent(ifNotResidentIn: entry) }
+    }
+
+    /// The first answer for `url` after a navigation (`received`) did not put it on screen: a stand-in covers the photo
+    /// before, as `switch-preview` says (`ShowPolicy.atNavigation`). `thumb` also seeds the stored thumbnail, which
+    /// replaces the strip's cell or the blank once it lands (`previewsCurrent`).
+    private func putStandIn(for url: URL, shownBefore: URL?) {
+        let setting = Settings.shared.config.switchPreview
+        let picture = setting == .thumb ? cellPicture?(url) : nil
+        let action = ShowPolicy.atNavigation(shownURL: shownBefore, currentURL: url, showable: entry?.url == url,
+                                             seedAvailable: picture != nil, setting: setting)
+        let next: SwitchStandIn?
+        switch action {
+        case .keep: next = nil
+        case .seed: next = picture.map { SwitchStandIn(url: url, picture: $0) }
+        case .placeholder: next = SwitchStandIn(url: url, picture: nil)
+        }
+        previewsCurrent = setting == .thumb && next != nil
+        if action != .keep { DebugLog.log("stand-in \(url.lastPathComponent): \(action == .seed ? "strip cell" : "blank")") }
+        guard next != standIn else { return }
+        standIn = next
+        onChange?()
     }
 
     /// Still open and `url` still the current photo.
@@ -1039,7 +1079,8 @@ import LoupeRender
             if let info = e.info, let pyramid = e.pyramid {
                 let levels = levels(for: info, of: e.url)
                 let finest = pyramid.finestResidentLevel
-                let jumpPreview = jumpedFromStrip && Settings.shared.config.stripJumpPreview && e.isSeededOnly
+                let jumpPreview = (jumpedFromStrip && Settings.shared.config.stripJumpPreview || previewsCurrent)
+                    && e.isSeededOnly
                 allowed = ShowPolicy.shouldShow(finestResident: finest, neededLevel: levels.needed,
                                                 previewLevel: levels.lfit, mode: Settings.shared.config.showBlurry,
                                                 jumpPreview: jumpPreview)
@@ -1079,6 +1120,8 @@ import LoupeRender
             if folderSpread.on { stripAspects.cellPictureArrived(e.url) }
         }
         entry = e
+        // The current photo is on screen: no stand-in over it any more.
+        if e.url == playlist?.current { standIn = nil }
         // The cache never evicts the photo on screen (spec §11.2): its levels stay while it is shown. The pin moves only
         // here (and with the pair's other page, `adoptCompanion`), so the old photo stays pinned (and on screen) until
         // the new one is shown. In a pair the transform is the virtual picture's (`layoutSize`).
@@ -1584,4 +1627,13 @@ import LoupeRender
         let text = parts.compactMap { label, ms in ms.map { "\(label) \(Int($0.rounded()))" } }.joined(separator: " ")
         return text.isEmpty ? "" : " [\(text) ms]"
     }
+}
+
+/// What covers the screen while the current photo cannot be shown yet (`ViewerSession.standIn`): `picture`, the strip's
+/// decoded cell of `url`, scaled up to fit; nil, a blank placeholder (with the loading spinner).
+struct SwitchStandIn: Equatable {
+    let url: URL
+    let picture: CGImage?
+
+    static func == (a: SwitchStandIn, b: SwitchStandIn) -> Bool { a.url == b.url && a.picture === b.picture }
 }

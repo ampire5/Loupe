@@ -63,9 +63,16 @@ extension SettingsPanel {
                     .choice("show-blurry", "Show before sharp", [
                         (word: "no", title: "Never"), (word: "fit", title: "In Fit"), (word: "always", title: "Always"),
                     ], symbol: "circle.dashed",
-                    description: "Never: only sharp for the scale, the previous photo stays until then; In Fit: a "
-                        + "softer far preview at once at Fit and smaller; Always: what is there at once, then "
-                        + "sharpened. Default Never."),
+                    description: "Never: only sharp for the scale; In Fit: a softer far preview at once at Fit and "
+                        + "smaller; Always: what is there at once, then sharpened. Until then, \u{201C}While the next "
+                        + "photo loads\u{201D} decides what is shown. Default Always."),
+                    .choice("switch-preview", "While the next photo loads", [
+                        (word: "thumb", title: "Thumbnail"), (word: "blank", title: "Blank"),
+                        (word: "keep", title: "Previous photo"),
+                    ], symbol: "square.dashed",
+                    description: "What stands in for a photo you go to that cannot be shown yet: its thumbnail, "
+                        + "scaled up (blank with a spinner while it has none); a blank screen with a spinner; or the "
+                        + "previous photo until the new one is ready. Default Thumbnail."),
                 ]),
             ]),
             SettingsSection("Catalog", rows: [

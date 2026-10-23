@@ -288,7 +288,9 @@ public struct Config: Equatable, Sendable {
     /// `cache-idle-keep`: what an idle tab's current photo keeps when it is trimmed (`CacheIdleKeep`).
     public var cacheIdleKeep = CacheIdleKeep.full
     /// `show-blurry`.
-    public var showBlurry = ShowBlurry.no
+    public var showBlurry = ShowBlurry.always
+    /// `switch-preview`: what stands in for a photo navigated to that cannot be shown yet (`SwitchPreview`).
+    public var switchPreview = SwitchPreview.thumb
     /// `jxl-threads-current`: libjxl worker threads for the current photo's decode, 1...16; by default one per
     /// performance core (`Machine`).
     public var jxlThreadsCurrent = Machine.jxlThreadsCurrent
@@ -566,7 +568,7 @@ public struct Config: Equatable, Sendable {
                               "thumb-wheel-zoom", "thumb-zoom-speed", "thumb-zoom-stops", "thumb-zoom-invert",
                               "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "cache-idle-trim", "cache-idle-keep",
                               "jxl-threads-current", "jxl-threads-other", "jxl-dc-preview",
-                              "show-blurry",
+                              "show-blurry", "switch-preview",
                               "wheel-step", "key-step", "wheel-direction", "cursor-autohide", "launch-reveal", "open-in",
                               "new-window-fullscreen", "background",
                               "transparency", "checker-size", "checker-colors",
@@ -688,6 +690,7 @@ public struct Config: Equatable, Sendable {
         case "cache-idle-trim": return String(cacheIdleTrimMinutes)
         case "cache-idle-keep": return cacheIdleKeep.rawValue
         case "show-blurry": return showBlurry.rawValue
+        case "switch-preview": return switchPreview.rawValue
         case "jxl-threads-current": return String(jxlThreadsCurrent)
         case "jxl-threads-other": return String(jxlThreadsOther)
         case "jxl-dc-preview": return jxlDCPreview ? "yes" : "no"
@@ -923,6 +926,8 @@ public struct Config: Equatable, Sendable {
             if let v = CacheIdleKeep(rawValue: value.lowercased()) { cacheIdleKeep = v } else { return .badValue }
         case "show-blurry":
             if let v = ShowBlurry(rawValue: value.lowercased()) { showBlurry = v } else { return .badValue }
+        case "switch-preview":
+            if let v = SwitchPreview(rawValue: value.lowercased()) { switchPreview = v } else { return .badValue }
         case "jxl-threads-current":
             if let v = Int(value), (1...16).contains(v) { jxlThreadsCurrent = v } else { return .badValue }
         case "jxl-threads-other":

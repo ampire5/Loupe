@@ -145,6 +145,9 @@ extension Notification.Name {
     /// the file differs or the size is off. Pictures in flight, and when each visible file came into view.
     private var given: [Int: (url: URL, maxPixel: Int)] = [:]
     private var loads: [Int: Task<Void, Never>] = [:]
+    /// The decoded picture each file's cell holds, by file (the same images the view shows, so no memory of their own):
+    /// the viewer's stand-in for a photo navigated to (`cellPicture`).
+    private var pictures: [URL: CGImage] = [:]
     private var inViewSince: [Int: ContinuousClock.Instant] = [:]
     private var dwellTask: Task<Void, Never>?
 
@@ -619,6 +622,9 @@ extension Notification.Name {
 
     // MARK: Session
 
+    /// The decoded picture `url`'s cell holds, nil while it holds none (never loaded, or forgotten far away).
+    func cellPicture(for url: URL) -> CGImage? { pictures[url] }
+
     /// Called on every session change (every frame of a pan), so it only compares.
     func sessionDidChange() {
         guard let list = session.playlist else { return }
@@ -682,6 +688,7 @@ extension Notification.Name {
         sessionScrubbing = false
         files = list
         indices = Dictionary(list.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        pictures = pictures.filter { indices[$0.key] != nil }
         aspects.setPlaylist(files)
         // The label showed a file of the old playlist (the interim one-file list replaced by the listing): the
         // hover comes back for the new file under the cursor on the next move.
@@ -807,6 +814,7 @@ extension Notification.Name {
         guard given.count > 400, let centre = view.visibleItems.first else { return }
         let reach = view.visibleItems.count + 150
         for file in Array(given.keys) where abs(file - centre) > reach {
+            if let url = given[file]?.url { pictures[url] = nil }
             given[file] = nil
             loads[file]?.cancel()
             loads[file] = nil
@@ -824,6 +832,7 @@ extension Notification.Name {
             self.loads[file] = nil
             // Another playlist meanwhile: this file is someone else's cell now.
             guard self.files.indices.contains(file), self.files[file] == url else { return }
+            self.pictures[url] = image
             if let image {
                 self.view.setImage(image, forItem: file)
                 self.aspects.cellPictureArrived(url)

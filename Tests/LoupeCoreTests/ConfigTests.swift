@@ -222,7 +222,7 @@ import Foundation
 @Test func cacheKeys() {
     let d = Config()
     #expect(d.cacheFull == 1 && d.cachePreviews == 20 && d.cacheFarPreviewsCoarse && d.cacheFiles == 24)
-    #expect(d.cacheMemory == HardwareAdvice.defaultCacheMemory(.current) && d.showBlurry == .no)
+    #expect(d.cacheMemory == HardwareAdvice.defaultCacheMemory(.current) && d.showBlurry == .always)
 
     var (c, w) = Config.parse("cache-memory=512M\ncache-full=2\ncache-previews=50\ncache-far-previews=full\ncache-files=0\nshow-blurry=fit")
     #expect(w.isEmpty)
@@ -262,8 +262,24 @@ import Foundation
     #expect(warnings.isEmpty && back == c)
 }
 
+/// `switch-preview`: what the screen shows the moment a navigation lands on a photo that cannot be shown yet, right
+/// after `show-blurry` in the file; `thumb` by default.
+@Test func switchPreviewKey() throws {
+    #expect(Config().switchPreview == .thumb)
+    for setting in [SwitchPreview.thumb, .blank, .keep] {
+        let (c, w) = Config.parse("switch-preview=\(setting.rawValue.uppercased())")
+        #expect(w.isEmpty && c.switchPreview == setting, "\(setting)")
+        #expect(c.text(forKey: "switch-preview") == setting.rawValue)
+    }
+    let (c, w) = Config.parse("switch-preview=photo")
+    #expect(w == ["loupe.conf:1: bad option 'switch-preview=photo'"])
+    #expect(c == Config())
+    let blurry = try #require(Config.keys.firstIndex(of: "show-blurry"))
+    #expect(Config.keys[blurry + 1] == "switch-preview")
+}
+
 /// `wheel-step`: what a wheel step waits for before the next notch may step (`StepGate`), right after
-/// `show-blurry` in the file.
+/// `switch-preview` in the file.
 @Test func wheelStepKey() throws {
     #expect(Config().wheelStep == .thumb)
     for wait in StepWait.allCases {
@@ -274,8 +290,8 @@ import Foundation
     let (c, w) = Config.parse("wheel-step=fast")
     #expect(w == ["loupe.conf:1: bad option 'wheel-step=fast'"])
     #expect(c == Config())
-    let blurry = try #require(Config.keys.firstIndex(of: "show-blurry"))
-    #expect(Config.keys[blurry + 1] == "wheel-step")
+    let preview = try #require(Config.keys.firstIndex(of: "switch-preview"))
+    #expect(Config.keys[preview + 1] == "wheel-step")
     var written = Config()
     written.wheelStep = .coarse
     let text = Config.keys.compactMap { k in written.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
@@ -1115,6 +1131,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
     "cache-full": ("2", "3"), "cache-previews": ("10", "0"), "cache-far-previews": ("full", "mid"),
     "cache-files": ("5", "51"), "cache-memory": ("2G", "0"), "show-blurry": ("fit", "sometimes"),
+    "switch-preview": ("blank", "photo"),
     "wheel-step": ("sharp", "slow"), "key-step": ("coarse", "slow"), "wheel-direction": ("device", "up"), "cursor-autohide": ("1500", "-1"),
     "background": ("#102030", "mauve"), "transparency": ("white", "grid"), "checker-size": ("16", "1"),
     "checker-colors": ("dark", "#fff"),

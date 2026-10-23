@@ -20,6 +20,8 @@ import UniformTypeIdentifiers
     private let statsBar = StatsBar()
     private let strip: StripController
     private let loadingIndicator = LoadingIndicator()
+    /// Over the viewer while the photo navigated to cannot be shown yet (`switch-preview`, `ViewerSession.standIn`).
+    private let standInView = SwitchStandInView()
     private let warningsOverlay = ConfigWarningsOverlay()
     private let cheatSheet = CheatSheetView()
     /// What `S`, `A` and their ⇧ forms just did, at the bottom centre.
@@ -151,6 +153,7 @@ import UniformTypeIdentifiers
         viewerView.translatesAutoresizingMaskIntoConstraints = false
         statsBar.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(viewerView)
+        container.addSubview(standInView)   // right over the picture, under everything else
         container.addSubview(statsBar)   // above the viewer in z-order, for the full-screen overlay
         // Above both: as a sibling over the viewer it wins its hit tests, so the viewer's hand cursor and cursor
         // autohide leave it alone (`isMouseOverPicture`).
@@ -188,6 +191,10 @@ import UniformTypeIdentifiers
             strip.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             warningsOverlay.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             overlayWidth, overlayFits, overlayShort,
+            standInView.leadingAnchor.constraint(equalTo: viewerView.leadingAnchor),
+            standInView.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor),
+            standInView.topAnchor.constraint(equalTo: viewerView.topAnchor),
+            standInView.bottomAnchor.constraint(equalTo: viewerView.bottomAnchor),
             loadingIndicator.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor, constant: -12),
             loadingIndicator.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -10),
             toast.centerXAnchor.constraint(equalTo: container.centerXAnchor),
@@ -205,6 +212,7 @@ import UniformTypeIdentifiers
         super.init(window: window)
 
         session.onChange = { [weak self] in self?.sessionDidChange() }
+        session.cellPicture = { [weak self] in self?.strip.cellPicture(for: $0) }
         // A Stash list step: the tab now shows that gallery (`tabFacts`).
         session.onListFolder = { [weak self] id, folder in
             guard let self else { return }
@@ -1345,6 +1353,7 @@ import UniformTypeIdentifiers
         appliedBackground = color
         window?.backgroundColor = NSColor(cgColor: color.cgColor)
         viewerView.setBackground(color)
+        updateLoadingIndicator()   // the stand-in's background
     }
 
     /// `transparency`, `checker-size`, `checker-colors` (and `background`, which `transparency=background` shows): live,
@@ -1414,8 +1423,14 @@ import UniformTypeIdentifiers
         viewerView.setResampling(settings)
     }
 
+    /// The stand-in over the viewer (`switch-preview`), and the spinner: always over the blank placeholder (nothing
+    /// else says a photo is coming), and as `strip-loading-indicator` says while only a thumbnail stands for it.
     private func updateLoadingIndicator() {
-        loadingIndicator.isSpinning = session.showsThumbnailOnly && Settings.shared.config.stripLoadingIndicator
+        let standIn = session.standIn
+        standInView.show(standIn, background: appliedBackground.cgColor)
+        let thumbnailOnly = session.showsThumbnailOnly || standIn?.picture != nil
+        loadingIndicator.isSpinning = (standIn != nil && standIn?.picture == nil)
+            || (thumbnailOnly && Settings.shared.config.stripLoadingIndicator)
     }
 
     /// The pixel size of the screen the window is on (the main screen before it is placed): previews are sized

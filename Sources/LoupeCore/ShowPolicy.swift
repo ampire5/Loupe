@@ -34,6 +34,23 @@ public enum ShowPolicy {
         }
     }
 
+    /// What the screen does the moment a navigation lands, on the cache's first answer for the new photo
+    /// (`switch-preview`). `shownURL`: the photo on screen (nil: none); `currentURL`: the photo navigated to;
+    /// `showable`: its entry may go on screen now (it refines what is shown, `shouldShow`, or a step's wait);
+    /// `seedAvailable`: a picture of it is at hand at once (the strip's decoded cell). A photo that may be shown, or
+    /// is already on screen, needs nothing (`.keep`: the usual show follows). Otherwise `thumb` shows the picture at
+    /// hand (`.seed`), else a blank placeholder; `blank` always the placeholder; `keep` leaves the photo before on
+    /// screen until the new one may be shown. Only `keep` ever leaves another photo on screen.
+    public static func atNavigation(shownURL: URL?, currentURL: URL, showable: Bool, seedAvailable: Bool,
+                                    setting: SwitchPreview) -> NavigationShow {
+        if showable || shownURL == currentURL { return .keep }
+        switch setting {
+        case .keep: return .keep
+        case .blank: return .placeholder
+        case .thumb: return seedAvailable ? .seed : .placeholder
+        }
+    }
+
     /// Whether `candidate`, the current photo's entry, only refines what is on screen (`shown`), so it takes the
     /// screen without asking `shouldShow` (a photo shown is never hidden; finer levels just arrive): the same
     /// pyramid, or, while the photo is on screen as its stretched thumbnail, any pyramid of that photo. The first
@@ -46,4 +63,22 @@ public enum ShowPolicy {
               let pyramid = candidate.pyramid else { return false }
         return shown.pyramid === pyramid || shown.isSeededOnly
     }
+}
+
+/// `switch-preview`: what the screen shows the moment a navigation (open, click, swipe, step, jump) lands on a photo
+/// that cannot be shown yet. `thumb` (the default): its thumbnail, scaled up (the strip's decoded cell at once, else
+/// the catalog's stored one), and a blank placeholder with the loading indicator while none is known; `blank`: the
+/// placeholder; `keep`: the photo before stays until the new one may be shown.
+public enum SwitchPreview: String, CaseIterable, Sendable {
+    case thumb, blank, keep
+}
+
+/// `ShowPolicy.atNavigation`'s answer.
+public enum NavigationShow: Equatable, Sendable {
+    /// Nothing to do: the screen keeps what it shows until the usual show (which may be at once).
+    case keep
+    /// The new photo's thumbnail stands in for it.
+    case seed
+    /// A blank placeholder (with the loading indicator) stands in for it.
+    case placeholder
 }

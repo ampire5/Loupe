@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 130)
+        #expect(Config.keys.count == 131)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -161,6 +161,7 @@ struct PagesTests {
         #expect(set("cache-full") == ["0", "1", "2"])
         #expect(set("cache-far-previews") == ["coarse", "full"])
         #expect(set("show-blurry") == ["no", "fit", "always"])
+        #expect(set("switch-preview") == ["thumb", "blank", "keep"])
         #expect(set("wheel-step") == Set(StepWait.allCases.map(\.rawValue)))
         #expect(set("key-step") == Set(StepWait.allCases.map(\.rawValue)))
         #expect(set("spread-direction") == ["ltr", "rtl"])

@@ -97,3 +97,47 @@ private func view(_ name: String, _ pyramid: Pyramid?, seeded: Bool = false,
     }
     #expect(!ShowPolicy.shownByStep(nil, finestResident: 4, seededOnly: false))
 }
+
+// MARK: - What the screen shows the moment a navigation lands (`switch-preview`)
+
+/// Unless `switch-preview=keep`, a navigation never leaves another photo on screen: the new photo itself when it may
+/// be shown, else a stand-in (its thumbnail when one is at hand, else a blank placeholder).
+@Test func navigationNeverKeepsAnotherPhoto() {
+    let a = URL(fileURLWithPath: "/p/a.jpg"), b = URL(fileURLWithPath: "/p/b.jpg")
+    for setting in [SwitchPreview.thumb, .blank] {
+        for seed in [false, true] {
+            let action = ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: false, seedAvailable: seed,
+                                                 setting: setting)
+            #expect(action != .keep, "\(setting) seed \(seed)")
+        }
+        // Nothing on screen yet (a launch): a stand-in too.
+        #expect(ShowPolicy.atNavigation(shownURL: nil, currentURL: b, showable: false, seedAvailable: false,
+                                        setting: setting) == .placeholder)
+    }
+    // `keep`: the photo before stays until the new one may be shown (the old behaviour, now only on request).
+    #expect(ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: false, seedAvailable: true,
+                                    setting: .keep) == .keep)
+}
+
+/// `thumb` seeds the thumbnail when one is at hand, else the placeholder; `blank` always the placeholder.
+@Test func navigationStandIn() {
+    let a = URL(fileURLWithPath: "/p/a.jpg"), b = URL(fileURLWithPath: "/p/b.jpg")
+    #expect(ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: false, seedAvailable: true,
+                                    setting: .thumb) == .seed)
+    #expect(ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: false, seedAvailable: false,
+                                    setting: .thumb) == .placeholder)
+    #expect(ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: false, seedAvailable: true,
+                                    setting: .blank) == .placeholder)
+}
+
+/// A photo the cache can show at once (resident, sharp enough) needs no stand-in, so a cached photo appears within
+/// a frame without a blank flash; nor does the photo already on screen.
+@Test func navigationShowableOrShownNeedsNoStandIn() {
+    let a = URL(fileURLWithPath: "/p/a.jpg"), b = URL(fileURLWithPath: "/p/b.jpg")
+    for setting in [SwitchPreview.thumb, .blank, .keep] {
+        #expect(ShowPolicy.atNavigation(shownURL: a, currentURL: b, showable: true, seedAvailable: true,
+                                        setting: setting) == .keep)
+        #expect(ShowPolicy.atNavigation(shownURL: b, currentURL: b, showable: false, seedAvailable: false,
+                                        setting: setting) == .keep)
+    }
+}

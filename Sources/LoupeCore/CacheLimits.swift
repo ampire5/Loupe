@@ -29,7 +29,7 @@ public struct CacheLimits: Equatable, Sendable {
     public var idleTrim: Duration? = .seconds(30 * 60)
     /// `cache-idle-keep`: what the trim leaves.
     public var idleKeep = CacheIdleKeep.full
-    public var showBlurry = ShowBlurry.no
+    public var showBlurry = ShowBlurry.always
     /// The card's own budget on a Mac with a discrete GPU (half its working set); nil: one budget, `memory`. By
     /// default this Mac's (`HardwareAdvice.graphicsMemory`), as `init(config:)` sets it, so the defaults agree.
     public var graphicsMemory: Int? = HardwareAdvice.graphicsMemory(.current)
