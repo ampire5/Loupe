@@ -6,7 +6,7 @@ import LoupeRender
 import Metal
 
 // LoupeBench render [--frames N] [--size WxH]… [--image WxH]… [--filter NAME]… [--orientation 1-8] [--alpha]
-//                   [--table] [--lut] [--lut-mix X] [--pan-indicators] [--columns zoom]
+//                   [--table] [--lut] [--lut-mix X] [--columns zoom]
 //
 // GPU time per frame of every resampling filter, through the real TileRenderer: a synthetic zone plate of 147 MP
 // (14000x10502, landscape: a portrait one is too narrow to cover a 6144 px view at m = 0.51) and one of 12 MP
@@ -23,16 +23,13 @@ import Metal
 // so every frame takes the CURVE_TABLE pipelines (M3b spec §4) and the upload goes through the curve's table (the same
 // pass). --lut draws every frame through a fixed colour cube (M3c spec §5: the COLOR_LUT pipelines; a contrast and
 // colour-cast cube made in code, `benchCube`); --lut-mix X (0...1, implies --lut) draws it as a transition from the
-// identity at that mix, two cube samples per pixel. --pan-indicators measures every cell twice on the same target, without and
-// with the two position pills of M4b spec §5 at alpha 1 (`TileRenderer.encodePanIndicators`, a horizontal and a vertical one,
-// their rects from a picture four times the view so both axes are pannable, the same in every column), and prints
-// "frame → with pills (+cost)". --columns zoom measures 800 %, 400 %, 200 %, 125 %, 100 % and Fit
+// identity at that mix, two cube samples per pixel. --columns zoom measures 800 %, 400 %, 200 %, 125 %, 100 % and Fit
 // instead of the default columns.
 
 enum RenderBench {
     static let usage =
         "usage: LoupeBench render [--frames N] [--size WxH]… [--image WxH]… [--filter NAME]… [--orientation 1-8] "
-        + "[--alpha] [--table] [--lut] [--lut-mix X] [--pan-indicators] [--columns zoom]"
+        + "[--alpha] [--table] [--lut] [--lut-mix X] [--columns zoom]"
     static let images = [PixelSize(width: 14000, height: 10502), PixelSize(width: 4000, height: 3000)]
     static let warmup = 5
 
@@ -46,8 +43,6 @@ enum RenderBench {
         var table = false
         /// The cube's mix (`--lut`: 1, `--lut-mix`); nil: no cube.
         var lutMix: Float?
-        /// `--pan-indicators`: every cell is the frame without and with the pills.
-        var panIndicators = false
         var columns = RenderBench.columns
     }
 
@@ -146,8 +141,6 @@ enum RenderBench {
                     fail("--lut-mix needs a number from 0 to 1")
                 }
                 o.lutMix = mix
-            case "--pan-indicators":
-                o.panIndicators = true
             case "--columns":
                 guard args.popFirst() == "zoom" else { fail("--columns needs zoom") }
                 o.columns = zoomColumns
@@ -165,7 +158,7 @@ enum RenderBench {
               + "orientation \(o.orientation.rawValue)\(o.alpha ? ", alpha over the checkerboard" : "")"
               + "\(o.table ? ", ProPhoto (table curve)" : "")"
               + "\(o.lutMix.map { $0 < 1 ? ", colour cube from the identity at mix \($0)" : ", colour cube" } ?? "")"
-              + "\(o.panIndicators ? ", cells: frame → with two pan indicator pills (+cost)" : "")\n")
+              + "\n")
         // The cube is uploaded once, as the app does per photo.
         let color = o.lutMix.map { mix -> ColorFrame in
             guard let lut = ColorLUT.make(benchCube()) else { fail("cannot make the colour cube's texture") }
@@ -202,17 +195,17 @@ enum RenderBench {
             print("alpha scan of the decoded buffer: median \(String(format: "%.1f", median(scans))) ms of 5\n")
             for size in o.sizes {
                 table(image: tiled, orientation: o.orientation, output: size, filters: filters, columns: o.columns,
-                      frames: o.frames, color: color, panIndicators: o.panIndicators)
+                      frames: o.frames, color: color)
             }
         }
     }
 
     private static func table(image: TiledImage, orientation: ImageOrientation, output: PixelSize, filters: [Filter],
-                              columns: [Column], frames: Int, color: ColorFrame?, panIndicators: Bool) {
+                              columns: [Column], frames: Int, color: ColorFrame?) {
         let renderer = TileRenderer(pixelFormat: .bgra8Unorm_srgb)
         renderer.backingScale = 2   // the checkerboard of an --alpha image: 16 px cells, as on a Retina screen
         renderer.color = color
-        let target = makeTarget(output, readable: panIndicators)
+        let target = makeTarget(output)
         let oriented = orientation.orientedSize(image.grid.imageSize)
         let imageSize = CGSize(width: oriented.width, height: oriented.height)
         let view = CGSize(width: output.width, height: output.height)
@@ -222,13 +215,6 @@ enum RenderBench {
             c.fit ? Column(title: c.title, scale: fitScale, magnify: fitScale > 1, fit: true) : c
         }
         // Downscale columns are only meaningful when the image covers the view at that scale (Fit always fits).
-        // The pills' rects: a picture four times the view at 100 % is pannable on both axes, so the real geometry gives
-        // both pills (they sit at the same place in every column; their cost does not depend on the frame under them).
-        let pills = PanIndicators.pills(
-            for: ViewTransform(imageSize: CGSize(width: view.width * 4, height: view.height * 4), viewSize: view,
-                               mode: .actual(1)),
-            backingScale: 2, in: CGRect(origin: .zero, size: view))
-        if panIndicators && pills.count != 2 { fail("expected two pills, got \(pills.count)") }
         let usable = resolved.filter { $0.magnify || $0.fit || coversView(imageSize, view, scale: $0.scale) }
 
         print("### output \(output.width)x\(output.height)\n")
@@ -265,13 +251,7 @@ enum RenderBench {
                 if filter.name == filters[0].name { levels.append("\(column.title): level \(level), m \(String(format: "%.2f", m))") }
                 let times = measure(renderer, image, transform, orientation, target, frames: frames)
                 if renderer.lastColorLUT != (color != nil) { fail("\(filter.name) at \(column.title): the cube was not drawn") }
-                if panIndicators {
-                    let withPills = measure(renderer, image, transform, orientation, target, frames: frames, pills: pills)
-                    let base = median(times), cost = median(withPills) - base
-                    cells.append(String(format: "%.2f → %.2f (%+.2f)", base, median(withPills), cost))
-                } else {
-                    cells.append(String(format: "%.2f / %.2f", median(times), percentile(times, 0.9)))
-                }
+                cells.append(String(format: "%.2f / %.2f", median(times), percentile(times, 0.9)))
             }
             print("| \(filter.name) | " + cells.joined(separator: " | ") + " |")
         }
@@ -299,15 +279,13 @@ enum RenderBench {
 
     /// GPU milliseconds of each of `frames` frames after the warm-up, one command buffer at a time.
     private static func measure(_ renderer: TileRenderer, _ image: TiledImage, _ transform: ViewTransform,
-                                _ orientation: ImageOrientation, _ target: MTLTexture, frames: Int,
-                                pills: [PanIndicatorPill] = []) -> [Double] {
+                                _ orientation: ImageOrientation, _ target: MTLTexture, frames: Int) -> [Double] {
         let queue = MetalContext.shared.queue
         var times: [Double] = []
         for i in 0..<(warmup + frames) {
             guard let commands = queue.makeCommandBuffer() else { fail("no command buffer") }
             renderer.encode(image: image, transform: transform, orientation: orientation, into: commands,
                             target: target)
-            renderer.encodePanIndicators(pills, alpha: 1, backingScale: 2, into: commands, target: target)
             commands.commit()
             commands.waitUntilCompleted()
             if let error = commands.error { fail("GPU error: \(error)") }
@@ -316,12 +294,11 @@ enum RenderBench {
         return times
     }
 
-    /// `readable`: the pills' kernel reads the frame it blends over (the app's drawable allows it too).
-    private static func makeTarget(_ size: PixelSize, readable: Bool = false) -> MTLTexture {
+    private static func makeTarget(_ size: PixelSize) -> MTLTexture {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: size.width,
                                                          height: size.height, mipmapped: false)
         d.storageMode = .private
-        d.usage = readable ? [.renderTarget, .shaderRead, .shaderWrite] : [.renderTarget, .shaderWrite]
+        d.usage = [.renderTarget, .shaderWrite]
         guard let texture = MetalContext.shared.device.makeTexture(descriptor: d) else { fail("cannot make a \(size.width)x\(size.height) target") }
         return texture
     }

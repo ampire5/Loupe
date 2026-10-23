@@ -148,8 +148,9 @@ struct PagesTests {
         #expect(row("grid-style-memory")?.title == "Square or Aspect")
         #expect(row("grid-style-memory")?.description
                 == "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its own until "
-                    + "it closes, a new one starts from Folders thumbnails. Per folder: saved for the folder and the "
-                    + "ones under it, like its sort. Everywhere: changes Folders thumbnails for all. Default Per tab.")
+                    + "it closes, a new one starts from the Folders thumbnails setting. Per folder: saved for the folder "
+                    + "and the ones under it, like its sort. Everywhere: changes the Folders thumbnails setting for "
+                    + "all. Default Per tab.")
         let keys = SettingsPanel.pages().first { $0.id == "general" }?.keys ?? []
         if let cards = keys.firstIndex(of: "folder-cards") {
             #expect(keys.firstIndex(of: "grid-style-memory") == cards + 1)

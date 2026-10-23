@@ -428,41 +428,6 @@ public final class TileRenderer {
         encoder.endEncoding()
     }
 
-    /// The pan position pills (M4b spec §5) over the finished frame in `target`: one `panIndicators` dispatch per pill over
-    /// its rect, in `commandBuffer` after the frame's own passes. Black at 50 %, a 1 physical px white outline at 60 %,
-    /// corners rounded to half the thickness, all times `alpha`. Encodes nothing for no pills or an alpha of 0.
-    /// `target` is read and written: the app's drawable has `framebufferOnly = false`, a test's needs `shaderRead` and
-    /// `shaderWrite`. The pills are in view pixels already, and the outline is one physical pixel whatever the window's
-    /// scale, so `backingScale` is only part of the call's contract (the caller's `PanIndicators.pills` took it).
-    public func encodePanIndicators(_ pills: [PanIndicatorPill], alpha: Float, backingScale: Double,
-                                    into commandBuffer: MTLCommandBuffer, target: MTLTexture) {
-        guard alpha > 0, !pills.isEmpty, target.width > 0, target.height > 0,
-              let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.label = "panIndicators"
-        encoder.setComputePipelineState(context.panIndicators)
-        encoder.setTexture(target, index: 0)
-        let encoded: UInt32 = Self.unormFormat(of: target.pixelFormat) == nil ? 1 : 0
-        for pill in pills {
-            let r = pill.rect
-            // The pixels the rect can touch (a pixel centre within half a pixel of the edge), inside the target.
-            let x0 = max(Int(r.minX.rounded(.down)), 0), y0 = max(Int(r.minY.rounded(.down)), 0)
-            let x1 = min(Int(r.maxX.rounded(.up)), target.width), y1 = min(Int(r.maxY.rounded(.up)), target.height)
-            guard x1 > x0, y1 > y0 else { continue }
-            var params = PanPillParams(rect: SIMD4(Float(r.minX), Float(r.minY), Float(r.maxX), Float(r.maxY)),
-                                       radius: Float(min(r.width, r.height) / 2), outline: 1, alpha: alpha,
-                                       encoded: encoded, origin: SIMD2(UInt32(x0), UInt32(y0)),
-                                       fill: SIMD4(0, 0, 0, Self.pillFillAlpha), line: SIMD4(1, 1, 1, Self.pillLineAlpha))
-            encoder.setBytes(&params, length: MemoryLayout<PanPillParams>.stride, index: 0)
-            encoder.dispatchThreads(MTLSize(width: x1 - x0, height: y1 - y0, depth: 1),
-                                    threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
-        }
-        encoder.endEncoding()
-    }
-
-    /// The pills' body (black) and outline (white) opacity, spec §5.1.
-    private static let pillFillAlpha: Float = 0.5
-    private static let pillLineAlpha: Float = 0.6
-
     /// The tile fragment pass: clears `target` and draws `frame`'s visible tiles, if any, bilinear or (`nearest`,
     /// pixel art) as hard level px. Tiles are stored ones, chosen by the stored rect under the view; the vertex shader
     /// turns their corners into the view. With a cut (a page of a spread, `encode`) the pass scissors to it and pushes

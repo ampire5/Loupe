@@ -112,8 +112,9 @@ extension SettingsPanel {
                     (word: "global", title: "Everywhere"),
                 ], symbol: "rectangle.grid.2x2",
                 description: "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its "
-                    + "own until it closes, a new one starts from Folders thumbnails. Per folder: saved for the folder "
-                    + "and the ones under it, like its sort. Everywhere: changes Folders thumbnails for all. "
+                    + "own until it closes, a new one starts from the Folders thumbnails setting. Per folder: saved for "
+                    + "the folder and the ones under it, like its sort. Everywhere: changes the Folders thumbnails "
+                    + "setting for all. "
                     + "Default Per tab."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),

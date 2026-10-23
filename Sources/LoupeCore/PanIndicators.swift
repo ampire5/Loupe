@@ -12,8 +12,7 @@ public struct PanIndicatorPill: Equatable, Sendable {
 }
 
 /// The pan position indicators' maths (M4b spec §5): where the pills stand and how opaque they are. Pure: the app draws
-/// the rectangles in an overlay over the window's content (`PanIndicatorsView`); `TileRenderer.encodePanIndicators`
-/// can composite them into a frame (the render bench).
+/// the rectangles in an overlay over the window's content (`PanIndicatorsView`).
 public enum PanIndicators {
     /// Pill thickness, distance from the area's edge and minimum length, in points (× the window's backing scale).
     public static let thicknessPoints = 5.0
@@ -95,6 +94,15 @@ public enum PanIndicators {
                                 onSwitch: Bool) -> Bool {
         guard sameImage else { return onSwitch }
         return imageSizeChanged || scaleChanged || visibleChanged
+    }
+
+    /// `rect` (points) with each edge on the nearest backing pixel (`backingScale` pixels per point), so a pill's
+    /// 1 px outline lands on whole pixels and stays crisp.
+    public static func pixelAligned(_ rect: CGRect, backingScale: Double) -> CGRect {
+        let scale = max(backingScale, 1)
+        func snap(_ v: Double) -> Double { (v * scale).rounded() / scale }
+        let minX = snap(rect.minX), minY = snap(rect.minY)
+        return CGRect(x: minX, y: minY, width: snap(rect.maxX) - minX, height: snap(rect.maxY) - minY)
     }
 
     /// The toast of the `P` key for `mode`, and of `⇧P`.

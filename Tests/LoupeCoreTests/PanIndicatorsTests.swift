@@ -148,3 +148,12 @@ private let hTrack = 8.0 ... 1574.0, vTrack = 8.0 ... 974.0
                                        visibleChanged: changed, onSwitch: true))
     }
 }
+
+/// A pill's layer frame snaps to the backing pixel grid, so its 1 px outline stays on whole pixels.
+@Test func pillFramesSnapToBackingPixels() {
+    let r = CGRect(x: 10.3, y: 20.8, width: 100.4, height: 5)
+    #expect(PanIndicators.pixelAligned(r, backingScale: 2) == CGRect(x: 10.5, y: 21, width: 100, height: 5))
+    #expect(PanIndicators.pixelAligned(r, backingScale: 1) == CGRect(x: 10, y: 21, width: 101, height: 5))
+    let aligned = CGRect(x: 4, y: 6.5, width: 20, height: 5)
+    #expect(PanIndicators.pixelAligned(aligned, backingScale: 2) == aligned)
+}

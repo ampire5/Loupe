@@ -48,7 +48,6 @@ public final class MetalContext: @unchecked Sendable {
     private var resamplePipelines: [ResampleKey: MTLComputePipelineState] = [:]
     private var metalFXPipelines: [MetalFXKey: MTLRenderPipelineState] = [:]
     private var ewaPipelineStates: [EWAKey: MTLComputePipelineState] = [:]
-    private var panIndicatorsState: MTLComputePipelineState?
     private var convertCubeState: MTLComputePipelineState?
     /// `curveTables(for:)`, oldest first; at most `curveTableLimit` curves.
     private var curveTables: [ColorCurve: CurveTables] = [:]
@@ -135,17 +134,6 @@ public final class MetalContext: @unchecked Sendable {
         downsampleLanczos = Self.computePipeline(device: device, library: library, name: "downsampleLanczos2x")
         uploadPremultipliedLinear = Self.computePipeline(device: device, library: library,
                                                          name: "uploadPremultipliedLinear")
-    }
-
-    /// The pan indicator pills' compositing kernel (`TileRenderer.encodePanIndicators`), compiled on first use (the first
-    /// frame with pills on screen), like the resample pipelines, so the launch path does not compile it. Thread-safe.
-    var panIndicators: MTLComputePipelineState {
-        lock.lock()
-        defer { lock.unlock() }
-        if let panIndicatorsState { return panIndicatorsState }
-        let state = Self.computePipeline(device: device, library: library, name: "panIndicators")
-        panIndicatorsState = state
-        return state
     }
 
     /// The kernel that converts a colour cube into another space (`TileRenderer.conversion`), compiled on first use (the

@@ -97,10 +97,13 @@ import QuartzCore
             pillLayers.append(pill)
         }
         while pillLayers.count > pills.count { pillLayers.removeLast().removeFromSuperlayer() }
-        let outline = 1 / max(window?.backingScaleFactor ?? 1, 1)
+        let scale = max(window?.backingScaleFactor ?? 1, 1)
+        let outline = 1 / scale
         for (layer, pill) in zip(pillLayers, pills) {
             let r = pill.rect   // origin top-left; the layer's is bottom-left
-            layer.frame = CGRect(x: r.minX, y: size.height - r.maxY, width: r.width, height: r.height)
+            // On whole backing pixels, so the 1 px outline stays crisp.
+            layer.frame = PanIndicators.pixelAligned(CGRect(x: r.minX, y: size.height - r.maxY, width: r.width,
+                                                            height: r.height), backingScale: scale)
             layer.cornerRadius = min(r.width, r.height) / 2
             layer.borderWidth = outline
         }

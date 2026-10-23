@@ -829,55 +829,6 @@ enum Shaders {
         w[i] = weights.sample(kEWALerp, r2[i] * ewaScale(cutoff2) + kEWABias).x;
     }
 
-    // ---- panIndicators --------------------------------------------------------------------
-    //
-    // The pan position pills (M4b spec §5.3): composited over the finished frame, in the same command buffer, one
-    // dispatch per pill over its rect only (dispatchThreads((width, height)), `origin` the rect's first pixel). Per
-    // pixel: the distance from its centre to the rounded rectangle (rect, corner radius), 1 px anti-aliasing, a
-    // `outline`-wide band inside the edge in the outline colour and the rest in the fill colour, then source-over.
-    // The target is read and written (the drawable, framebufferOnly = false): an _srgb one blends in linear light in
-    // hardware (read decodes, write encodes). On a non-_srgb target (`encoded` != 0, a defensive path: the app passes
-    // the drawable itself) the kernel decodes and encodes as sRGB itself. A CURVE_TABLE frame's bytes are the photo's
-    // own curve encoding, not sRGB, so they are blended as if sRGB-encoded, which is off by a few codes, invisible on
-    // a neutral black and white pill. The target's alpha is kept.
-    //   p [[buffer(0)]]: PanPillParams. target [[texture(0)]]: the finished frame.
-
-    struct PanPillParams {
-        float4 rect;      // view px: min x, min y, max x, max y
-        float radius;     // corner radius, view px
-        float outline;    // outline band width, view px
-        float alpha;      // opacity of the whole pill, 0...1
-        uint encoded;     // nonzero: the target holds sRGB-encoded values (not an _srgb view)
-        uint2 origin;     // first pixel of the dispatch
-        float2 pad;
-        float4 fill;      // colour (light) and alpha of the body
-        float4 line;      // colour and alpha of the outline
-    };
-
-    kernel void panIndicators(constant PanPillParams& p [[buffer(0)]],
-                              texture2d<float, access::read_write> target [[texture(0)]],
-                              uint2 gid [[thread_position_in_grid]])
-    {
-        uint2 px = p.origin + gid;
-        if (px.x >= target.get_width() || px.y >= target.get_height()) return;
-        float2 c = float2(px) + 0.5;
-        float2 centre = (p.rect.xy + p.rect.zw) * 0.5, half_ = (p.rect.zw - p.rect.xy) * 0.5;
-        float2 q = abs(c - centre) - (half_ - p.radius);
-        float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - p.radius;   // < 0 inside
-        float cover = saturate(0.5 - sd);
-        if (cover <= 0.0) return;
-        float edge = saturate(sd + p.outline + 0.5);   // how much of the pixel lies in the outline band
-        float4 src = mix(p.fill, p.line, edge);
-        float a = src.a * cover * p.alpha;
-        float4 dst = target.read(px);
-        if (p.encoded != 0) {
-            float3 lin = srgbToLinear(dst.rgb) * (1.0 - a) + src.rgb * a;
-            target.write(float4(linearToSRGB(lin), dst.a), px);
-        } else {
-            target.write(float4(dst.rgb * (1.0 - a) + src.rgb * a, dst.a), px);
-        }
-    }
-
     // ---- metalfxVertex / metalfxComposeFragment / metalfxFragment -------------------------
     //
     // upscale = metalfx (M3a spec §3.5), three passes. metalfxComposeFragment composes the view's region of the level

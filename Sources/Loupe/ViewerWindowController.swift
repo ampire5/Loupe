@@ -325,9 +325,13 @@ import UniformTypeIdentifiers
             }
         }
         windowObservers.append(settings)
-        // `S` or `A` here or in another window, which may show this folder or one above it.
+        // `S` or `A` here or in another window, which may show this folder or one above it; ⌥T in another window on
+        // this folder with `grid-style-memory` per folder (cheap and idempotent elsewhere).
         let folders = center.addObserver(forName: .folderSettingsChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateEffectiveConfig() }
+            MainActor.assumeIsolated {
+                self?.updateEffectiveConfig()
+                self?.applyGridStyle()
+            }
         }
         windowObservers.append(folders)
         // ⌘I in any window: the package shows or hides every window's panel; each window starts or stops its reads.

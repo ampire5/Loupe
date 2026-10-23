@@ -118,17 +118,3 @@ struct ColorLUTParams {
         self.mix = min(max(mix, 0), 1)
     }
 }
-
-/// Parameters of one `panIndicators` dispatch (compute buffer 0). 80 bytes, alignment 16. View coordinates are physical
-/// pixels, origin top-left.
-struct PanPillParams {
-    var rect: SIMD4<Float>            // min x, min y, max x, max y
-    var radius: Float                 // corner radius
-    var outline: Float                // outline band width, inside the edge
-    var alpha: Float                  // opacity of the whole pill
-    var encoded: UInt32               // nonzero: the target holds sRGB-encoded values (not an _srgb view)
-    var origin: SIMD2<UInt32>         // first pixel of the dispatch
-    var pad = SIMD2<Float>(0, 0)
-    var fill: SIMD4<Float>            // light and alpha of the body
-    var line: SIMD4<Float>            // light and alpha of the outline
-}
