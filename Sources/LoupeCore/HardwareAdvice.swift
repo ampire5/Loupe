@@ -22,7 +22,7 @@ public enum HardwareAdvice {
     /// cache is the card's memory too. The cache holds more on the card than this (the photo on screen, uploads in
     /// flight): `LoupeBench panload` on an i7-10700K iMac with a Radeon Pro 5500 XT 8 GB (working set 8.57 GB, 5K)
     /// panned smoothly up to ~6.6 GB on the card and stalled from ~7.6 GB; `replay --script 100,backfast` over 147 MP
-    /// JPEG XL with this tier (4.29 GB) peaked at 6.52–6.65 GB on the card (once 6.97 GB in twelve script runs), as the
+    /// JPEG XL with this tier (4.29 GB) peaked at 6.52–6.65 GB on the card (once 6.97 GB in sixteen script runs), as the
     /// single 4 GiB budget did before (6.65 GB; docs/bench/2026-10-23-memory-tiers.md).
     public static func graphicsMemory(_ p: MachineProfile) -> Int? {
         p.gpu.unifiedMemory ? nil : p.gpu.workingSetBytes / 2

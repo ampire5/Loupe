@@ -15,9 +15,11 @@ Sides:
   4.29 GB (4088 MiB); system tier (`cache-memory`, compressed files and ready decodes) = a fifth of the memory,
   13.69 GB (13 056 MiB). Ready decodes one at a time at `.utility` on two threads; a full job that finds the photo's
   ready decode in progress waits for it.
-- **After, overtake** (6cc6a34): the same, but the photo on screen waits for its ready decode only when that is
+- **After, overtake** (introduced in ca004df, measured at 6cc6a34, which also gives up a ready job still queued): the same, but the photo on screen waits for its ready decode only when that is
   expected to end no later than a decode of its own (running ms/MP figures), else decodes at once; a ready job still
   queued is given up. Four runs: the first had a step not sharp in time, so two more were made.
+- **After, waiting (d581405)**: the overtake removed, the photo on screen waits for its ready decode again; a ready
+  job still queued (not decoding yet) is still given up. Two runs.
 
 Machine: iMac, Intel i7-10700K (8 cores, 16 threads), AMD Radeon Pro 5500 XT 8 GB (Metal working set 8.57 GB),
 64 GB memory, 5K screen, macOS 26; release build; other apps open, the machine ~86 % idle before each run.
@@ -47,6 +49,10 @@ CPU time for the script; RAM = peak `phys_footprint`, GPU = peak `MTLDevice.curr
 | back-fast | overtake | 2 | 29 | 0 | 1 / 222 / 292 | 14 of 14, 181 / 292 | 133.3 | 12.55 | 6.52 |
 | back-fast | overtake | 3 | 29 | 0 | 1 / 261 / 787 | 14 of 14, 195 / 260 | 148.7 | 12.55 | 6.58 |
 | back-fast | overtake | 4 | 29 | 0 | 1 / 252 / 278 | 14 of 14, 174 / 278 | 142.1 | 12.55 | 6.58 |
+| 100-steps | waiting (d581405) | 1 | 29 | 0 | 1 / 1 / 2 | – | 147.2 | 12.56 | 6.58 |
+| 100-steps | waiting (d581405) | 2 | 29 | 0 | 1 / 1 / 1 | – | 143.9 | 15.32 | 6.58 |
+| back-fast | waiting (d581405) | 1 | 29 | 0 | 1 / 221 / 237 | 14 of 14, 186 / 237 | 135.8 | 12.55 | 6.58 |
+| back-fast | waiting (d581405) | 2 | 29 | 0 | 1 / 206 / 309 | 14 of 14, 184 / 309 | 135.0 | 12.55 | 6.58 |
 
 The first step after opening (its photo's ready decode began during the 2 s open), ms to sharp, and what its full
 job did with that decode:
@@ -56,6 +62,7 @@ job did with that decode:
 | before | 725, 578 | 729, 803 |
 | after, waiting | 783, 1126 (waited, both) | 1, 1255 (–, waited) |
 | overtake | not sharp in 1.5 s (overtook), 567 (waited), 796 (overtook), 747 (waited) | 785 (overtook), 1 (–), 787 (overtook), 2 (–) |
+| waiting (d581405) | 1, 1 (–, both) | 1, 1 (–, both) |
 
 After (both versions), from `CacheStats`: graphics tier peak 3849–3911 MiB of 4088; system tier peak 11 391 MiB of 13 056; 20 ready
 decodes held at the peak (every photo of the folder).
@@ -86,6 +93,12 @@ Reading:
   230–292 ms max, CPU 133–152 s.
 - **The overtake was removed** (user decision on these numbers): the photo on screen waits for its ready decode
   again, as in «After, waiting»; a ready job still queued is given up. Its rows stay as the measurement behind it.
+- **Waiting again (d581405): no step waited.** In both runs of both scripts no full job met a ready decode in
+  progress (no `readyAwait`): the ready job of the photo after the first was still queued when its full job came and
+  was given up, so that photo was decoded during the open and the first step was already sharp (1 ms; 29 of 29 hits
+  in 100-steps). 100-steps max 1–2 ms against 578–725 before the tiers; back-fast 29 of 29, back steps 184–186 ms
+  p50 and 237–309 ms max (one run over the ~260 ms of the prototype); CPU 144–147 s and 135–136 s. One RAM peak of
+  15.3 GB (100-steps run 2; 12.6 GB otherwise), the GPU 6.58 GB in all four.
 - A first run of "after" had the bench's defaults without the graphics tier (`CacheLimits()` instead of the app's
   `CacheLimits(config:)`): one 13.7 GB budget for everything put 19.5 GB (18 594 MiB) on the card and made forward steps 0.36–0.54 s p50, up to 1.25 s.
   The replay now takes its defaults the way the app does.

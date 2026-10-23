@@ -68,7 +68,10 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// A ready decode here takes 2.4–2.8 s against ~0.6 s at the current role, so the first step after opening took
     /// 567–1255 ms to sharp when it waited (base 578–803). Overtaking it, decoding at once at the current role, was
     /// tried and measured: that step took 785–796 ms and once missed the next step 1.5 s later, because the ready
-    /// decode cannot be stopped and the second decode runs beside it; no gain, so it was removed.
+    /// decode cannot be stopped and the second decode runs beside it; no gain, so it was removed. With a queued ready
+    /// job given up rather than waited for (d581405, two runs), no step met one in progress: the first step after
+    /// opening was already sharp, 100-steps max 1–2 ms, back-fast 29 of 29 with a step back 184–186 ms p50 and
+    /// 237–309 ms max.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
     var entries: [URL: CacheEntry<Pyramid>] = [:]
     /// The latest plan per URL: goal → position in the plan (the decode rank).
