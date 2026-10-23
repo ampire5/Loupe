@@ -217,17 +217,19 @@ extension Notification.Name {
         return memory.last { $0.path == path }?.listing
     }
 
-    /// The folders and zips in `folder` for the path's sibling menu: from a listing kept in memory, else names only off
-    /// the main thread (no stat, so a slow share answers as soon as it can); a cancelled request stops at the next part.
-    func folders(in folder: URL) async -> [BrowserEntry] {
+    /// The folders and zips in `folder` for the path's sibling menu and the sidebar's tree: from a listing kept in
+    /// memory, else names only off the main thread (no stat, so a slow share answers as soon as it can); a cancelled
+    /// request stops at the next part. A folder that cannot be listed (a share's error) throws: the tree leaves it
+    /// unlisted, to be asked again, rather than empty for good.
+    func folders(in folder: URL) async throws -> [BrowserEntry] {
         let path = folder.standardizedFileURL.path
         if let kept = memory.last(where: { $0.path == path })?.listing { return kept.entries.filter(\.isContainer) }
         let archives = Settings.shared.config.archiveFolders
         let task = Task.detached(priority: .userInitiated) {
-            (try? BrowserListingSource.names(folder, archives: archives) { _ in !Task.isCancelled }) ?? []
+            try BrowserListingSource.names(folder, archives: archives) { _ in !Task.isCancelled }
         }
-        return await withTaskCancellationHandler {
-            await task.value.filter(\.isContainer)
+        return try await withTaskCancellationHandler {
+            try await task.value.filter(\.isContainer)
         } onCancel: {
             task.cancel()
         }

@@ -34,7 +34,7 @@ import LoupeCore
 
     func lastListing(for location: BrowserLocation) -> BrowserListing? { folders.lastListing(for: location) }
 
-    func folders(in folder: URL) async -> [BrowserEntry] { await folders.folders(in: folder) }
+    func folders(in folder: URL) async throws -> [BrowserEntry] { try await folders.folders(in: folder) }
     func parent(of folder: URL) -> BrowserLocation { folders.parent(of: folder) }
     func symbol(for entry: BrowserEntry) -> String { folders.symbol(for: entry) }
 
