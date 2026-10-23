@@ -175,8 +175,10 @@ extension ThumbnailStore {
         return found
     }
 
+    /// A thumbnail shown: its access goes in the next batch (`last_access`), except one served before its folder's
+    /// stamps (`provisional`), which writes nothing.
     func touch(_ url: URL) {
-        guard let id = ids[url] else { return }
+        guard let id = ids[url], !provisional.contains(url) else { return }
         touched.insert(id)
         scheduleCommit()
     }

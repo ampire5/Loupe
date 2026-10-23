@@ -52,6 +52,9 @@ public actor ThumbnailStore {
     let decoder: @Sendable (Data) -> any ImageDecoder
     let cachedBytes: @Sendable (URL, FileStamp) async -> Data?
     let locate: @Sendable (URL) -> ThumbnailLocation?
+    /// A file's location on a share from the mount table alone, without asking the share (`shareLocation`); nil off a
+    /// share, where `locate` answers.
+    let shareLocate: @Sendable (URL) -> ThumbnailLocation?
     let idleDelay: Duration
     let commitDelay: Duration
     let readLimit: Int
@@ -78,6 +81,9 @@ public actor ThumbnailStore {
         var stamps: [URL: FileStamp]
         /// The request's stamped files by folder, in playlist order.
         var listings: [URL: [ListedFile]]
+        /// Folders of the request with no stamped file (a share's names-only listing): served from the catalog until
+        /// their stamps come (`openProvisional`).
+        var provisional: Set<URL> = []
     }
 
     struct Folder {
@@ -88,6 +94,9 @@ public actor ThumbnailStore {
         var partial = false
         /// Names listed without a stamp (the walk's photos whose stat failed): the catalog keeps their rows.
         var kept: Set<String> = []
+        /// Its files' names only so far: `listing` holds the catalog's rows of them with the stamps they were
+        /// catalogued at, nothing is written for it (no sync, no access) and nothing is made (`listed` has none).
+        var provisional = false
     }
 
     var windows: [Int: Window] = [:]
@@ -112,6 +121,10 @@ public actor ThumbnailStore {
     var ids: [URL: Int64] = [:]
     /// Listed files with a thumbnail in `Thumbs.db`.
     var stored: Set<URL> = []
+    /// Files of provisional folders with an id from the catalog (`Folder.provisional`): their showing is no access.
+    var provisional: Set<URL> = []
+    /// Files served provisionally whose real stamps differed (`open`), until the request that brought them takes them.
+    var provisionalChanged: Set<URL> = []
 
     // MARK: Thumbnails
 
@@ -267,6 +280,7 @@ public actor ThumbnailStore {
                 decoder: @escaping @Sendable (Data) -> any ImageDecoder = DecoderRegistry.decoder(for:),
                 cachedBytes: @escaping @Sendable (URL, FileStamp) async -> Data? = { _, _ in nil },
                 locate: @escaping @Sendable (URL) -> ThumbnailLocation? = { ThumbnailLocation.resolve($0) },
+                shareLocate: @escaping @Sendable (URL) -> ThumbnailLocation? = ThumbnailStore.shareLocation,
                 idleDelay: Duration = .milliseconds(100), commitDelay: Duration = .seconds(1),
                 readLimit: Int = maxReads, decodes: Int = defaultDecodes, memoryCap: Int = defaultMemoryCap,
                 log: (@Sendable (String) -> Void)? = nil) {
@@ -277,6 +291,7 @@ public actor ThumbnailStore {
         self.decoder = decoder
         self.cachedBytes = cachedBytes
         self.locate = locate
+        self.shareLocate = shareLocate
         self.idleDelay = idleDelay
         self.commitDelay = commitDelay
         self.readLimit = max(1, readLimit)
@@ -300,23 +315,34 @@ public actor ThumbnailStore {
     /// What window `window` (an id the caller picks) needs now; nil when it closed. A new listing (other files
     /// or other stamps) syncs its folders into the catalog, once even for several windows on one folder;
     /// anything else (position, visible cells, key window) only reorders the queue. Files without a stamp
-    /// (the one-file playlist shown before the listing arrives) wait for one.
-    public func setRequest(window: Int, _ request: ThumbnailRequest?, stamps: [URL: FileStamp]) async {
+    /// (the one-file playlist shown before the listing arrives) wait for one to be made; a folder with none stamped
+    /// (a share's names-only listing) serves what the catalog has of them meanwhile (`openProvisional`), read only.
+    /// Returns the files served that way whose stamps, now known, differ from the catalog's (forgotten: the caller
+    /// asks for them again).
+    @discardableResult
+    public func setRequest(window: Int, _ request: ThumbnailRequest?, stamps: [URL: FileStamp]) async -> [URL] {
         defer { replan() }
         guard let request else {
             windows[window] = nil
             closeUnshownFolders()
-            return await reopenWalkFolders()
+            await reopenWalkFolders()
+            return []
         }
         // Equal arrays and dictionaries of one playlist compare by identity first: free on every step.
         if let old = windows[window], old.request.files == request.files, old.stamps == stamps {
             windows[window]?.request = request
-            return
+            return []
         }
         let listings = Self.listings(request.files, stamps)
-        windows[window] = Window(request: request, stamps: stamps, listings: listings)
+        let unstamped = Self.unstamped(request.files, stamps, except: listings)
+        windows[window] = Window(request: request, stamps: stamps, listings: listings, provisional: Set(unstamped.keys))
         await openListings(listings) { $0.windows[window]?.listings }
+        await openProvisional(unstamped) { $0.windows[window]?.provisional }
         await reopenWalkFolders()
+        // This request's files among them (another call may have opened some meanwhile: each takes its own).
+        let changed = request.files.filter { provisionalChanged.contains($0) }
+        provisionalChanged.subtract(changed)
+        return changed
     }
 
     /// The folders of a window's new `listings` synced into the catalog, each located first. `current` gives the
@@ -329,7 +355,8 @@ public actor ThumbnailStore {
         replan()
         func stale(_ dir: URL, _ listing: [ListedFile]) -> Bool {
             guard let folder = folders[dir] else { return true }
-            return folder.listing != listing || folder.partial != partial || folder.kept != kept[dir] ?? []
+            return folder.provisional || folder.listing != listing || folder.partial != partial
+                || folder.kept != kept[dir] ?? []
         }
         for (dir, listing) in listings where stale(dir, listing) {
             let location = wantsDisk ? await location(of: dir, sample: listing[0].url) : nil
@@ -537,9 +564,14 @@ public actor ThumbnailStore {
     }
 
     /// The folder's place in the catalog, resolved off the actor and once per folder (concurrent asks share
-    /// the lookup). A failure is not remembered: the next listing of the folder tries again.
+    /// the lookup). A share's comes from the mount table, no I/O (`shareLocate`); a failure is not remembered: the
+    /// next listing of the folder tries again.
     func location(of dir: URL, sample: URL) async -> ThumbnailLocation? {
         if let known = locations[dir] { return known }
+        if let share = shareLocate(sample) {
+            locations[dir] = share
+            return share
+        }
         if let task = locating[dir] { return await task.value }
         let locate = self.locate
         let task = Task.detached(priority: .utility) { locate(sample) }
@@ -555,12 +587,17 @@ public actor ThumbnailStore {
     func open(_ dir: URL, _ listing: [ListedFile], location: ThumbnailLocation?, partial: Bool = false,
               kept: Set<String> = []) {
         let stamps = Dictionary(listing.map { ($0.url, $0.stamp) }, uniquingKeysWith: { first, _ in first })
+        // Served from the catalog before its stamps (`openProvisional`): the stamps it was catalogued at are its
+        // listing's, so only what changed since is forgotten, and told to the caller.
+        let wasProvisional = folders[dir]?.provisional == true
+        if wasProvisional { provisional.subtract(folders[dir]?.listing.map(\.url) ?? []) }
         // Changed or gone: whatever was made of it, in memory or as a cell, shows the old picture.
         for file in folders[dir]?.listing ?? [] where stamps[file.url] != file.stamp {
             listed[file.url] = nil
             ids[file.url] = nil
             stored.remove(file.url)
             forget(file.url)
+            if wasProvisional { provisionalChanged.insert(file.url) }
         }
         for file in listing {
             listed[file.url] = file.stamp
@@ -575,6 +612,8 @@ public actor ThumbnailStore {
     /// The folder's ids and stored thumbnails from the catalog.
     func sync(_ dir: URL) {
         guard let folder = folders[dir], let location = folder.location else { return }
+        // Names only: read again, never written.
+        guard !folder.provisional else { return lookUpProvisional(dir, folder.listing.map(\.url), location: location) }
         let files = folder.listing.map { (name: $0.url.lastPathComponent, stamp: $0.stamp) }
         guard let (names, have) = perform("sync", { db -> ([String: Int64], Set<Int64>) in
             let names = try db.sync(folder: location, files: files, removingOthers: !folder.partial,
@@ -603,7 +642,7 @@ public actor ThumbnailStore {
     /// written first, while their ids are known). Memory-only thumbnails stay: memory is all they have (up to
     /// `memoryCap`, least recently used out first).
     func closeUnshownFolders() {
-        var shown = Set(windows.values.flatMap(\.listings.keys))
+        var shown = Set(windows.values.flatMap(\.listings.keys)).union(windows.values.flatMap(\.provisional))
         if let walk = walkWindow { shown.formUnion(walk.listings.keys) }
         let gone = folders.filter { !shown.contains($0.key) }
         guard !gone.isEmpty else { return }
@@ -617,6 +656,8 @@ public actor ThumbnailStore {
             evicted.remove(url)
             missed.remove(url)
             uncommitted.remove(url)
+            provisional.remove(url)
+            provisionalChanged.remove(url)
         }
         for dir in gone.keys { folders[dir] = nil }
     }

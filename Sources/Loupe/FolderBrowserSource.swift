@@ -512,6 +512,7 @@ extension Notification.Name {
                 guard let self, !Task.isCancelled else { return }
                 if let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel) {
                     self.view?.setImage(image, for: entry.id)
+                    self.pictured.insert(entry.url)
                 } else {
                     self.waiting[entry.url.standardizedFileURL] = entry.id
                 }
@@ -546,6 +547,7 @@ extension Notification.Name {
         lastAsked = []
         lastInView = []
         requestedVisible = []
+        pictured = []
         stopQueuedCovers()
         progressMayHaveChanged()
         guard let folder, let path else { return }
@@ -556,6 +558,8 @@ extension Notification.Name {
             guard let self, !Task.isCancelled, self.coverFolder == path, place != .notNow else { return }
             self.coverPlace = place
             self.coverShare = share
+            // Its photos' folder is the same: the store needs no second resolve of it.
+            if case .located(let location) = place { Task { await thumbnails.knowLocation(of: folder, location) } }
             self.sendCovers()
         }
     }
@@ -860,10 +864,23 @@ extension Notification.Name {
                                        visibleOnly: Settings.shared.config.thumbsAhead != .folder)
         let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
         Task { @MainActor [weak self] in
-            await thumbnails.setRequest(window: window, request, stamps: stamps)
+            let changed = await thumbnails.setRequest(window: window, request, stamps: stamps)
+            self?.askAgain(changed)
             // The generator's count follows the request (its listing synced with the catalog): read it anew.
             self?.progressMayHaveChanged()
         }
+    }
+
+    /// Photos the store served from the catalog before their stamps (a share's names-only listing) that the real
+    /// stamps show changed (`ThumbnailStore.setRequest`): their cards drop the old picture and wait for the new one.
+    private func askAgain(_ changed: [URL]) {
+        for url in changed {
+            pictured.remove(url)
+            guard let entry = shown[url.path], entry.kind == .file else { continue }
+            view?.setImage(nil, for: entry.id)
+            waiting[url.standardizedFileURL] = entry.id
+        }
+        if !changed.isEmpty { progressMayHaveChanged() }
     }
 
     private func thumbnailChanged(_ url: URL) {
@@ -872,6 +889,7 @@ extension Notification.Name {
         Task { @MainActor [weak self] in
             guard let self, let image = await self.thumbnails.cell(url, maxPixel: maxPixel) else { return }
             self.view?.setImage(image, for: id)
+            self.pictured.insert(url)
         }
     }
 
@@ -1122,6 +1140,9 @@ extension Notification.Name {
     /// The photos of the last request in view and the margin: before the complete listing (names only, no stamps)
     /// the generator does not count them, so the progress counts those without a stamp in view.
     private var requestedVisible: [URL] = []
+    /// Photos of the folder on screen whose picture was given (from the catalog too, before their stamps): one in view
+    /// without a stamp but with its picture does not wait for the share.
+    private var pictured: Set<URL> = []
     /// Since when the folder on screen has only its names-only listing (nil: complete, or none yet), and whether its
     /// listing failed: the photos in view without stamps then wait for the share, not counted as work.
     private var namesOnlySince: ContinuousClock.Instant?
@@ -1164,8 +1185,10 @@ extension Notification.Name {
         let covers = await thumbnails.coverQueue.progress(client: window)
         let browsing = await thumbnails.coverQueue.browsingPaused
         let walked = await walk?.progress
-        // Names only so far (a share's first pass): the photos in view wait for their stamps, then to be made.
-        let unlisted = shownDated ? 0 : requestedVisible.reduce(0) { $0 + (stamps[$1] == nil ? 1 : 0) }
+        // Names only so far (a share's first pass): the photos in view wait for their stamps, then to be made (those
+        // the catalog served meanwhile do not).
+        let unlisted = shownDated ? 0
+            : requestedVisible.reduce(0) { $0 + (stamps[$1] == nil && !pictured.contains($1) ? 1 : 0) }
         // Work still to do on a share that does not answer waits for it: the visible cards' subfolders (the popover
         // says so), what is in view and the folder's photos (not work under way: the pill goes out).
         let left = covers.ahead.done < covers.ahead.total || generator.all.done < generator.all.total || unlisted > 0

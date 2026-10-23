@@ -1452,4 +1452,93 @@ final class Locked<T>: @unchecked Sendable {
         #expect(await eventually { await allReady(store, files) })
         #expect(await store.walkPending.isEmpty)
     }
+
+    // MARK: - Before the stamps (a share's names-only listing)
+
+    /// A folder the catalog has, made by an earlier session, in a new store: its names alone (no stamps yet, a share's
+    /// first pass) serve its cells from the catalog at once, with no read of the photos.
+    @Test func catalogedFolderServesCellsBeforeItsStamps() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(3, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+
+        let again = ThumbReader()
+        for url in files { again.add(url, reader.data(url)!) }
+        let second = store(again, dir: dir)
+        await second.setRequest(window: 1, request(files, current: -1, visible: [0, 1, 2], home: true), stamps: [:])
+        for url in files { #expect(await second.cell(url, maxPixel: 16) != nil, "\(url.lastPathComponent)") }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(again.reads.isEmpty)
+    }
+
+    /// The real stamps after the names: of the cells served from the catalog only the file that changed is forgotten,
+    /// and handed back so the caller asks for it again; the others stay as they are.
+    @Test func realStampsForgetOnlyTheChangedFile() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(3, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+
+        let again = ThumbReader()
+        for url in files { again.add(url, reader.data(url)!) }
+        again.add(files[1], TestJPEGs.gradient(width: 60, height: 30))   // replaced under the same name
+        let second = store(again, dir: dir)
+        await second.setViewerActivity(.neighbours)                     // nothing made meanwhile
+        await second.setRequest(window: 1, request(files, home: true), stamps: [:])
+        for url in files { #expect(await second.cell(url, maxPixel: 16) != nil) }
+        let changed = await second.setRequest(window: 1, request(files, home: true), stamps: again.stamps)
+        #expect(changed == [files[1]])
+        #expect(await second.cell(files[1], maxPixel: 16) == nil)       // not the old picture
+        #expect(await second.status(files[1]) == .pending)
+        #expect(await second.cell(files[0], maxPixel: 16) != nil)
+        #expect(await second.cell(files[2], maxPixel: 16) != nil)
+        await second.setViewerActivity(.idle)
+        #expect(await eventually { await allReady(second, files) })
+        #expect(again.reads.allSatisfy { $0 == files[1] })
+    }
+
+    /// What is served before the stamps writes nothing: no catalog row for a file it does not know, no access, no batch,
+    /// and nothing is made from names alone.
+    @Test func provisionalRowsAreNeverWritten() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(2, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+        let before = try ThumbnailDatabase(directory: dir, thumbSize: 32).catalogedFiles().count
+
+        let again = ThumbReader()
+        for url in files { again.add(url, reader.data(url)!) }
+        let new = URL(fileURLWithPath: "/photos/a/new.jpg")
+        again.add(new, TestJPEGs.gradient(width: 50, height: 30))
+        let second = store(again, dir: dir, commitDelay: .milliseconds(5))
+        await second.setRequest(window: 1, request(files + [new], current: -1, visible: [0, 1, 2], home: true),
+                                stamps: [:])
+        for url in files { #expect(await second.cell(url, maxPixel: 16) != nil) }
+        #expect(await second.cell(new, maxPixel: 16) == nil)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(await second.touched.isEmpty)
+        #expect(await second.commitCount == 0)
+        #expect(again.reads.isEmpty)
+        #expect(try ThumbnailDatabase(directory: dir, thumbSize: 32).catalogedFiles().count == before)
+    }
+
+    /// A share's location comes from the mount table alone (no `realpath`, no `statfs` on the share): the key
+    /// `resolve` would give, the folder under the mount point; off a share, nil (`resolve` answers there).
+    @Test func shareLocationFromTheMountTable() {
+        typealias Mount = ThumbnailStore.Mount
+        let mounts = [Mount(point: "/", from: "/dev/disk1s1", local: true),
+                      Mount(point: "/Volumes/Photos", from: "//host/Photos", local: false)]
+        let location = ThumbnailStore.shareLocation(of: "/Volumes/Photos/2024/a.jpg", in: mounts)
+        #expect(location == ThumbnailLocation.make(path: "/Volumes/Photos/2024/a.jpg", mountPoint: "/Volumes/Photos",
+                                                   mountFrom: "//host/Photos", isLocal: false, volumeUUID: nil))
+        #expect(location?.folder == "/2024")
+        #expect(ThumbnailStore.shareLocation(of: "/Library/Photos/a.jpg", in: mounts) == nil)
+    }
 }
