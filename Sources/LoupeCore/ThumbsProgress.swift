@@ -59,10 +59,14 @@ public struct ThumbsProgress: Equatable, Sendable {
     public var inViewWaiting: Int
     /// Of the folder's photos still to do, how many wait on a share that is offline: not work under way either.
     public var photosWaiting: Int
+    /// Of the visible cards' subfolders still to do, how many wait on a share that is offline (the walk's own folders
+    /// not among them: it waits with its own word and its Stop): not work under way either.
+    public var subfoldersWaiting: Int
 
     public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), photos: WorkCount = WorkCount(),
                 subfolders: WorkCount = WorkCount(), paused: Pause? = nil, walkNote: String? = nil,
-                subtreeRunning: Bool = false, inViewWaiting: Int = 0, photosWaiting: Int = 0) {
+                subtreeRunning: Bool = false, inViewWaiting: Int = 0, photosWaiting: Int = 0,
+                subfoldersWaiting: Int = 0) {
         self.inView = inView
         self.rest = rest
         self.photos = photos
@@ -72,6 +76,7 @@ public struct ThumbsProgress: Equatable, Sendable {
         self.subtreeRunning = subtreeRunning
         self.inViewWaiting = inViewWaiting
         self.photosWaiting = photosWaiting
+        self.subfoldersWaiting = subfoldersWaiting
     }
 
     /// What is in view while some of it is still to be made, then the photos, then the subfolders; nil once all are
@@ -79,7 +84,7 @@ public struct ThumbsProgress: Equatable, Sendable {
     public var stage: Stage? {
         if inView.done + inViewWaiting < inView.total { return .inView }
         if photos.done + photosWaiting < photos.total { return .thumbnails }
-        if subfolders.done < subfolders.total { return .subfolders }
+        if subfolders.done + subfoldersWaiting < subfolders.total { return .subfolders }
         return nil
     }
 
@@ -109,8 +114,8 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// cover queue's of Home's client (`CoverQueue.progress`), the walk's while one runs (`ThumbsWalk.progress`; nil:
     /// none for this window) and the pauses: the user's wins when both hold. A walk that stopped early ("Too many
     /// folders") leaves no folder counted as still to do. `aheadWaitsForShare`: the share of the folder on screen is
-    /// offline (`ThumbnailStore.isShareOffline`), so its cards' subfolders still to do wait for it, and the popover says
-    /// so as the walk does. `unlistedInView`: the photos in view and the margin that the generator does not count yet
+    /// offline (`ThumbnailStore.isShareOffline`), so its cards' subfolders still to do wait for it: not work (the pill
+    /// goes out), and the popover says so as the walk does. `unlistedInView`: the photos in view and the margin that the generator does not count yet
     /// because the folder's listing is still names only (a share's first pass gives no stamps): they wait to be made,
     /// so they count in view, none of them done. `shareOffline`: the share of the folder on screen is offline, so
     /// all of what is in view and of the folder's photos still to do waits for it; `unlistedWaitsForShare`: the complete listing does not come
@@ -137,7 +142,8 @@ public struct ThumbsProgress: Equatable, Sendable {
                               paused: pausedByUser ? .user : browsing ? .browsing : nil,
                               walkNote: walk.flatMap { $0.waiting ?? $0.stopped } ?? (waits ? ThumbsWalk.waitingForShare : nil),
                               subtreeRunning: walk?.running ?? false, inViewWaiting: inViewWaiting,
-                              photosWaiting: shareOffline ? generator.all.total - generator.all.done : 0)
+                              photosWaiting: shareOffline ? generator.all.total - generator.all.done : 0,
+                              subfoldersWaiting: aheadWaits ? covers.ahead.total - covers.ahead.done : 0)
     }
 
     /// What the toolbar's pill and its popover draw (`HomeBrowserView.setProgress`): the text and the current stage's

@@ -266,14 +266,24 @@ import Testing
         #expect(coversRun.text == "In view 1 / 9")
     }
 
-    /// The visible cards' subfolders waiting on a share that does not answer say so, as the walk does; the walk's own
-    /// word wins, and nothing is said once the subfolders are done.
+    /// The visible cards' subfolders waiting on a share that does not answer say so, as the walk does, and are not work
+    /// (the pill goes out); the walk's own word wins, and nothing is said once the subfolders are done.
     @Test func aheadWaitingForTheShareIsSaid() {
         let generator = GeneratorProgress(all: WorkCount(done: 10, total: 10))
         let waiting = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 0, total: 12)),
                                           walk: nil, pausedByUser: false, browsing: false, aheadWaitsForShare: true)
         #expect(waiting.walkNote == ThumbsWalk.waitingForShare)
-        #expect(waiting.state?.pauseNote == ThumbsWalk.waitingForShare)
+        // Waiting is not work: the pill goes out, the popover says why.
+        #expect(waiting.state == nil)
+        #expect(!waiting.display.working)
+        #expect(waiting.display.pauseNote == ThumbsWalk.waitingForShare)
+        // The walk's folders on command are still work while it waits (it has its own Stop).
+        var walk = WalkProgress(folders: WorkCount(done: 1, total: 4))
+        walk.running = true
+        let walking = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 0, total: 12)),
+                                          walk: walk, pausedByUser: false, browsing: false, aheadWaitsForShare: true)
+        #expect(walking.stage == .subfolders)
+        #expect(walking.text == "Subfolders 1 / 16")
         let done = ThumbsProgress.join(generator: generator, covers: Self.covers(ahead: WorkCount(done: 12, total: 12)),
                                        walk: nil, pausedByUser: false, browsing: false, aheadWaitsForShare: true)
         #expect(done.walkNote == nil)
