@@ -283,6 +283,10 @@ private final class StampReader: FileReading, @unchecked Sendable {
         #expect(!tree.calls.contains { $0.hasSuffix("/x") })
         #expect(await store.walkWindow == nil)
         #expect(await store.coverQueue.progress(client: 7) == CoverProgress())
+        // A walk that was cancelled counts nothing as still to do: the pill of the window that started it goes out.
+        let progress = await walk.progress
+        #expect(progress.folders.done == progress.folders.total)
+        #expect(progress.files.done == progress.files.total)
     }
 
     /// On a share the folder is listed by names (the cover slot free at once), then each photo's stamp is asked in the

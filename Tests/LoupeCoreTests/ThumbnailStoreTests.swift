@@ -161,8 +161,9 @@ final class Locked<T>: @unchecked Sendable {
                        commitDelay: commitDelay, decodes: decodes, memoryCap: memoryCap, log: log)
     }
 
-    private func request(_ files: [URL], current: Int = 0, visible: [Int] = [], isKey: Bool = true) -> ThumbnailRequest {
-        ThumbnailRequest(files: files, current: current, visible: visible, isKey: isKey)
+    private func request(_ files: [URL], current: Int = 0, visible: [Int] = [], isKey: Bool = true,
+                         home: Bool = false) -> ThumbnailRequest {
+        ThumbnailRequest(files: files, current: current, visible: visible, isKey: isKey, isHome: home)
     }
 
     /// Polls `condition` every 2 ms until it holds or `timeout` passes.
@@ -520,9 +521,9 @@ final class Locked<T>: @unchecked Sendable {
         #expect(await eventually { await allReady(store, files) })
     }
 
-    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): a window's visible files (Home's: those in
-    /// view and the margin) are made, the rest of its folder and the walk's window wait, and the cover queue's work
-    /// ahead with them; off again, they come.
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): a Home window's visible files (those in view
+    /// and the margin) are made, the rest of its folder and the walk's window wait, and the cover queue's work ahead
+    /// with them; off again, they come.
     @Test func aheadPauseKeepsTheVisibleFiles() async throws {
         let reader = ThumbReader()
         let files = photos(6, in: reader)
@@ -531,7 +532,7 @@ final class Locked<T>: @unchecked Sendable {
         await store.pauseAhead(true)
         #expect(await store.coverQueue.aheadPaused)
         await store.setWalkWindow(request(walked), stamps: reader.stamps)
-        await store.setRequest(window: 1, request(files, current: 1, visible: [1, 4]), stamps: reader.stamps)
+        await store.setRequest(window: 1, request(files, current: 1, visible: [1, 4], home: true), stamps: reader.stamps)
         #expect(await eventually { await allReady(store, [files[1], files[4]]) })
         try await Task.sleep(for: .milliseconds(50))
         #expect(Set(reader.reads) == [files[1], files[4]])
@@ -540,21 +541,58 @@ final class Locked<T>: @unchecked Sendable {
         #expect(await eventually { await allReady(store, files + walked) })
     }
 
-    /// The rest of the folder's count: the window's stamped files with a thumbnail (or whose making failed) of all of
-    /// them; the walk's window is not counted.
+    /// The pause is Home's: a viewer's strip goes on outward from its photo while it holds.
+    @Test func aheadPauseLeavesTheViewersStrip() async throws {
+        let reader = ThumbReader()
+        let files = photos(5, in: reader)
+        let store = store(reader, dir: nil)
+        await store.pauseAhead(true)
+        await store.setRequest(window: 1, request(files, current: 2, visible: [2]), stamps: reader.stamps)
+        #expect(await eventually { await allReady(store, files) })
+    }
+
+    /// Window `window`'s photos: those in view and the margin (its request's visible ones) and all of its listing, each
+    /// counting the stamped files with a thumbnail (or whose making failed) of all of them; the walk's window is not
+    /// counted.
     @Test func generatorProgressCountsTheListing() async throws {
         let reader = ThumbReader()
         let files = photos(4, in: reader)
         let walked = photos(2, folder: "/photos/walked", in: reader)
         reader.fail(files[3])
         let store = store(reader, dir: nil)
-        #expect(await store.generatorProgress(window: 1) == WorkCount())
+        #expect(await store.generatorProgress(window: 1) == GeneratorProgress())
         await store.setViewerActivity(.neighbours)
         await store.setWalkWindow(request(walked), stamps: reader.stamps)
-        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
-        #expect(await store.generatorProgress(window: 1) == WorkCount(done: 0, total: 4))
+        await store.setRequest(window: 1, request(files, visible: [0, 3, 3], home: true), stamps: reader.stamps)
+        #expect(await store.generatorProgress(window: 1)
+                == GeneratorProgress(visible: WorkCount(done: 0, total: 2), all: WorkCount(done: 0, total: 4)))
         await store.setViewerActivity(.idle)
-        #expect(await eventually { await store.generatorProgress(window: 1) == WorkCount(done: 4, total: 4) })
+        #expect(await eventually {
+            await store.generatorProgress(window: 1)
+                == GeneratorProgress(visible: WorkCount(done: 2, total: 2), all: WorkCount(done: 4, total: 4))
+        })
+    }
+
+    /// A folder whose thumbnails are all in the catalog counts as done as soon as its request is in: the source reads
+    /// the progress after `setRequest` returns, never the folder before's.
+    @Test func generatorProgressFollowsTheRequestAtOnce() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let first = photos(3, in: reader)
+        let catalogued = photos(4, folder: "/photos/b", in: reader)
+        let maker = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await maker.setRequest(window: 1, request(catalogued), stamps: reader.stamps)
+        #expect(await eventually { await settled(maker, catalogued) })
+
+        let again = ThumbReader()
+        for url in first + catalogued { again.add(url, reader.data(url)!) }
+        let store = store(again, dir: dir)
+        await store.setViewerActivity(.neighbours)
+        await store.setRequest(window: 1, request(first), stamps: again.stamps)
+        #expect(await store.generatorProgress(window: 1).all == WorkCount(done: 0, total: 3))
+        await store.setRequest(window: 1, request(catalogued), stamps: again.stamps)
+        #expect(await store.generatorProgress(window: 1).all == WorkCount(done: 4, total: 4))
     }
 
     // MARK: - Sources

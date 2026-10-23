@@ -42,9 +42,9 @@ extension ThumbnailStore {
         }
     }
 
-    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): only the windows' visible files are made
-    /// (Home's request has those in view and the margin there), not the rest of their folders nor the walk's window,
-    /// and the cover queue holds its work ahead and the walk. Jobs already running end as they are (a few files at
+    /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"; Home's): of Home's requests (`isHome`) only the
+    /// visible files are made (those in view and the margin), not the rest of their folders, nor the walk's window;
+    /// a viewer's strip goes on as ever. The cover queue holds its work ahead and the walk. Jobs already running end as they are (a few files at
     /// most: `jobLimit`). Off again, all of it comes back in its order.
     public func pauseAhead(_ on: Bool) async {
         if aheadPaused != on {
@@ -55,19 +55,27 @@ extension ThumbnailStore {
         await coverQueue.pauseAhead(on)
     }
 
-    /// How far the generator is with window `window`'s folder (thumbs-ahead stage 3): its stamped files with a
-    /// thumbnail, or whose making failed this session, or that the size limit evicted (made again only at the next
-    /// opening), of all its stamped files. The walk's window is not counted. Zero of zero for a window it does not have.
-    public func generatorProgress(window: Int) -> WorkCount {
-        var count = WorkCount()
-        guard let listings = windows[window]?.listings else { return count }
-        for listing in listings.values {
+    /// How far the generator is with window `window`'s folder (thumbs-ahead stages 1–3): of its request's visible
+    /// files (Home's: in view and the margin) and of all of them, the stamped ones with a thumbnail, or whose making
+    /// failed this session, or that the size limit evicted (made again only at the next opening), of all stamped ones.
+    /// The walk's window is not counted. Nothing for a window it does not have.
+    public func generatorProgress(window: Int) -> GeneratorProgress {
+        var progress = GeneratorProgress()
+        guard let window = windows[window] else { return progress }
+        func finished(_ url: URL) -> Bool { status(url) != .pending || evicted.contains(url) }
+        for listing in window.listings.values {
             for file in listing {
-                count.total += 1
-                if status(file.url) != .pending || evicted.contains(file.url) { count.done += 1 }
+                progress.all.total += 1
+                if finished(file.url) { progress.all.done += 1 }
             }
         }
-        return count
+        let files = window.request.files
+        for url in Set(window.request.visible.filter(files.indices.contains).map { files[$0] })
+        where window.stamps[url] != nil {
+            progress.visible.total += 1
+            if finished(url) { progress.visible.done += 1 }
+        }
+        return progress
     }
 
     func idleWoke() {

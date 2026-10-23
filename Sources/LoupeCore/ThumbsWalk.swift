@@ -166,6 +166,11 @@ public actor ThumbsWalk {
             announce()
         }
         listing = nil
+        if Task.isCancelled {
+            // Cancelled: nothing is left to do, so the progress counts nothing as still to come (the pill goes out).
+            progress.folders.total = progress.folders.done
+            progress.files.total = progress.files.done
+        }
         await store.setWalkWindow(nil, stamps: [:])
         await want()
         if progress.waiting != nil { progress.waiting = nil }

@@ -757,9 +757,13 @@ extension Notification.Name {
         let shownIndices = files.compactMap { index[$0] }
         let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
                                        visible: shownIndices,
-                                       isKey: view?.window?.isKeyWindow ?? false)
+                                       isKey: view?.window?.isKeyWindow ?? false, isHome: true)
         let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
-        Task { await thumbnails.setRequest(window: window, request, stamps: stamps) }
+        Task { @MainActor [weak self] in
+            await thumbnails.setRequest(window: window, request, stamps: stamps)
+            // The generator's count follows the request (its listing synced with the catalog): read it anew.
+            self?.progressMayHaveChanged()
+        }
     }
 
     private func thumbnailChanged(_ url: URL) {
@@ -1008,6 +1012,7 @@ extension Notification.Name {
     private func currentProgress() async -> ThumbsProgress {
         guard case .folder = view?.location else { return ThumbsProgress() }
         let thumbnails = self.thumbnails, window = thumbnailWindow
+        // The walk's count follows the window that started it, whatever folder that window shows now.
         let walk = Self.walkOwner === self ? Self.walk : nil
         let generator = await thumbnails.generatorProgress(window: window)
         let covers = await thumbnails.coverQueue.progress(client: window)

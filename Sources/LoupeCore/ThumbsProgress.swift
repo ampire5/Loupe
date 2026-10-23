@@ -1,11 +1,23 @@
 import Foundation
 
+/// How far the generator is with a window's folder (`ThumbnailStore.generatorProgress`): its photos in view and the
+/// margin (the request's visible ones), and all of them.
+public struct GeneratorProgress: Equatable, Sendable {
+    public var visible: WorkCount
+    public var all: WorkCount
+
+    public init(visible: WorkCount = WorkCount(), all: WorkCount = WorkCount()) {
+        self.visible = visible
+        self.all = all
+    }
+}
+
 /// How far Home's preparation of a folder is, for the toolbar's pill and its popover (thumbs-ahead spec, "Пилюля в
 /// тулбаре"): one value joined from the three counters (the generator's for the window, the cover queue's for the
 /// client, the subtree walk's for the command) and the pauses.
 ///
-/// The pill names the current stage: the rest of the folder's photos while some are still to be made ("Thumbnails
-/// 120 / 480"), then the subfolders ("Subfolders 5 / 48"); paused, "Paused · 120 / 480"; nothing once both are done.
+/// The pill names the current stage: the folder's photos (all of them, those in view too) while some are still to be
+/// made ("Thumbnails 120 / 480"), then the subfolders ("Subfolders 5 / 48"); paused, "Paused · 120 / 480"; nothing once both are done.
 public struct ThumbsProgress: Equatable, Sendable {
     /// Why the work ahead waits: the user's pause (the popover's "Pause"), or the viewer busy ("Paused while you
     /// browse").
@@ -21,25 +33,28 @@ public struct ThumbsProgress: Equatable, Sendable {
         case subfolders
     }
 
-    /// The folder's cards in view and their margin (stages 1–2).
+    /// What is in view and the margin (stages 1–2): the folder's cards (their covers) and its photos (thumbnails).
     public var inView: WorkCount
-    /// The folder's photos: those with a thumbnail of all listed (stage 3, the generator's window).
+    /// The rest of the folder's photos, out of view and the margin (stage 3).
     public var rest: WorkCount
+    /// All of the folder's photos, those in view too: the pill's "Thumbnails 120 / 480".
+    public var photos: WorkCount
     /// The visible cards' subfolders (a cover and a summary each), with the walk's folders while it runs.
     public var subfolders: WorkCount
     public var paused: Pause?
 
-    public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), subfolders: WorkCount = WorkCount(),
-                paused: Pause? = nil) {
+    public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), photos: WorkCount = WorkCount(),
+                subfolders: WorkCount = WorkCount(), paused: Pause? = nil) {
         self.inView = inView
         self.rest = rest
+        self.photos = photos
         self.subfolders = subfolders
         self.paused = paused
     }
 
     /// The photos while some are still to be made, then the subfolders; nil once both are done.
     public var stage: Stage? {
-        if rest.done < rest.total { return .thumbnails }
+        if photos.done < photos.total { return .thumbnails }
         if subfolders.done < subfolders.total { return .subfolders }
         return nil
     }
@@ -47,7 +62,7 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// The current stage's count (the pill's ring is its share), nil once all is done.
     public var current: WorkCount? {
         switch stage {
-        case .thumbnails: rest
+        case .thumbnails: photos
         case .subfolders: subfolders
         case nil: nil
         }
@@ -64,20 +79,22 @@ public struct ThumbsProgress: Equatable, Sendable {
         }
     }
 
-    /// One progress from the generator's count of the window's listing (`ThumbnailStore.generatorProgress`), the
+    /// One progress from the generator's counts of the window's photos (`ThumbnailStore.generatorProgress`), the
     /// cover queue's of Home's client (`CoverQueue.progress`), the walk's while one runs (`ThumbsWalk.progress`; nil:
     /// none for this window) and the pauses: the user's wins when both hold. A walk that stopped early ("Too many
     /// folders") leaves no folder counted as still to do.
-    public static func join(generator: WorkCount, covers: CoverProgress, walk: WalkProgress?, pausedByUser: Bool,
+    public static func join(generator: GeneratorProgress, covers: CoverProgress, walk: WalkProgress?, pausedByUser: Bool,
                             browsing: Bool) -> ThumbsProgress {
         var subfolders = covers.ahead
         if let walk {
             subfolders.done += walk.folders.done
             subfolders.total += walk.stopped == nil ? walk.folders.total : walk.folders.done
         }
-        let inView = WorkCount(done: covers.inView.done + covers.margin.done,
-                               total: covers.inView.total + covers.margin.total)
-        return ThumbsProgress(inView: inView, rest: generator, subfolders: subfolders,
+        let inView = WorkCount(done: covers.inView.done + covers.margin.done + generator.visible.done,
+                               total: covers.inView.total + covers.margin.total + generator.visible.total)
+        let rest = WorkCount(done: generator.all.done - generator.visible.done,
+                             total: generator.all.total - generator.visible.total)
+        return ThumbsProgress(inView: inView, rest: rest, photos: generator.all, subfolders: subfolders,
                               paused: pausedByUser ? .user : browsing ? .browsing : nil)
     }
 }
