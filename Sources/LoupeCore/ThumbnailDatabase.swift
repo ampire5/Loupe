@@ -72,11 +72,12 @@ public final class ThumbnailDatabase {
     }
 
     /// Records an opened folder's listing and returns name → file id. A file whose size or mtime changed
-    /// keeps its id but loses its thumbnail and `ImageInfo`; files no longer listed leave both databases, unless
-    /// `removingOthers` is false (a part of the folder's files: the subtree walk's photos stamped so far).
+    /// keeps its id but loses its thumbnail and `ImageInfo`; files no longer listed leave both databases, but for
+    /// those named in `keeping` (listed without a stamp: the subtree walk's photos whose stat failed), and none when
+    /// `removingOthers` is false (a part of the folder's files: the walk's photos stamped so far).
     /// `folder.name` is not used.
     public func sync(folder: ThumbnailLocation, files: [(name: String, stamp: FileStamp)],
-                     removingOthers: Bool = true) throws -> [String: Int64] {
+                     removingOthers: Bool = true, keeping: Set<String> = []) throws -> [String: Int64] {
         let time = SQLiteValue.double(now().timeIntervalSinceReferenceDate)
         var ids: [String: Int64] = [:]
         try catalog.transaction {
@@ -104,7 +105,7 @@ public final class ThumbnailDatabase {
                     added.append(file)
                 }
             }
-            let orphans = removingOthers ? stored.values.map(\.id) : []
+            let orphans = removingOthers ? stored.filter { !keeping.contains($0.key) }.map(\.value.id) : []
             try deleteThumbs(changed.map(\.id) + orphans)
 
             for file in changed {

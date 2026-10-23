@@ -86,11 +86,17 @@ public actor ThumbnailStore {
         var location: ThumbnailLocation?
         /// Only some of the folder's files (the walk's photos stamped so far): the catalog keeps the others' rows.
         var partial = false
+        /// Names listed without a stamp (the walk's photos whose stat failed): the catalog keeps their rows.
+        var kept: Set<String> = []
     }
 
     var windows: [Int: Window] = [:]
-    /// The subtree walk's window (`setWalkWindow`): after every window's files, one folder at a time.
+    /// The subtree walk's window (`setWalkWindow`): after every window's files, one folder at a time; its listings
+    /// hold all its folders, those a window shows too (that window's listing wins while it shows them).
     var walkWindow: Window?
+    /// How the walk window's folders are opened: only some of their files (`Folder.partial`), and the names kept.
+    var walkPartial = false
+    var walkKept: [URL: Set<String>] = [:]
     /// Its files with no thumbnail yet (pending, not evicted), and the walk waiting for that count to change.
     var walkPending: Set<URL> = []
     var walkWaiter: (count: Int, continuation: CheckedContinuation<Int, Never>)?
@@ -294,7 +300,7 @@ public actor ThumbnailStore {
         guard let request else {
             windows[window] = nil
             closeUnshownFolders()
-            return
+            return await reopenWalkFolders()
         }
         // Equal arrays and dictionaries of one playlist compare by identity first: free on every step.
         if let old = windows[window], old.request.files == request.files, old.stamps == stamps {
@@ -304,22 +310,26 @@ public actor ThumbnailStore {
         let listings = Self.listings(request.files, stamps)
         windows[window] = Window(request: request, stamps: stamps, listings: listings)
         await openListings(listings) { $0.windows[window]?.listings }
+        await reopenWalkFolders()
     }
 
     /// The folders of a window's new `listings` synced into the catalog, each located first. `current` gives the
     /// window's listings as they are after the awaits (nil: the window closed); `partial`: the listings hold only some
-    /// of their folders' files.
-    func openListings(_ listings: [URL: [ListedFile]], partial: Bool = false,
+    /// of their folders' files; `kept`: names listed without a stamp, by folder.
+    func openListings(_ listings: [URL: [ListedFile]], partial: Bool = false, kept: [URL: Set<String>] = [:],
                       current: (isolated ThumbnailStore) -> [URL: [ListedFile]]?) async {
         // A folder left stops generating now, not after the new one is located.
         closeUnshownFolders()
         replan()
-        for (dir, listing) in listings where folders[dir]?.listing != listing || folders[dir]?.partial != partial {
+        func stale(_ dir: URL, _ listing: [ListedFile]) -> Bool {
+            guard let folder = folders[dir] else { return true }
+            return folder.listing != listing || folder.partial != partial || folder.kept != kept[dir] ?? []
+        }
+        for (dir, listing) in listings where stale(dir, listing) {
             let location = wantsDisk ? await location(of: dir, sample: listing[0].url) : nil
             // The await let other calls in: sync what the window lists now, unless another one already did.
-            guard let now = current(self)?[dir], folders[dir]?.listing != now || folders[dir]?.partial != partial
-            else { continue }
-            open(dir, now, location: location, partial: partial)
+            guard let now = current(self)?[dir], stale(dir, now) else { continue }
+            open(dir, now, location: location, partial: partial, kept: kept[dir] ?? [])
         }
     }
 
@@ -532,7 +542,8 @@ public actor ThumbnailStore {
 
     /// A folder (re)listed: what changed or left is forgotten, failures get another try (spec §3.7), and the
     /// catalog learns the listing.
-    func open(_ dir: URL, _ listing: [ListedFile], location: ThumbnailLocation?, partial: Bool = false) {
+    func open(_ dir: URL, _ listing: [ListedFile], location: ThumbnailLocation?, partial: Bool = false,
+              kept: Set<String> = []) {
         let stamps = Dictionary(listing.map { ($0.url, $0.stamp) }, uniquingKeysWith: { first, _ in first })
         // Changed or gone: whatever was made of it, in memory or as a cell, shows the old picture.
         for file in folders[dir]?.listing ?? [] where stamps[file.url] != file.stamp {
@@ -547,7 +558,7 @@ public actor ThumbnailStore {
             evicted.remove(file.url)
             if let thumbnail = made[file.url], thumbnail.stamp != file.stamp { forget(file.url) }
         }
-        folders[dir] = Folder(listing: listing, location: location, partial: partial)
+        folders[dir] = Folder(listing: listing, location: location, partial: partial, kept: kept)
         if !checkReopen() { sync(dir) }
     }
 
@@ -556,7 +567,8 @@ public actor ThumbnailStore {
         guard let folder = folders[dir], let location = folder.location else { return }
         let files = folder.listing.map { (name: $0.url.lastPathComponent, stamp: $0.stamp) }
         guard let (names, have) = perform("sync", { db -> ([String: Int64], Set<Int64>) in
-            let names = try db.sync(folder: location, files: files, removingOthers: !folder.partial)
+            let names = try db.sync(folder: location, files: files, removingOthers: !folder.partial,
+                                    keeping: folder.kept)
             return (names, try db.hasThumbnail(Array(names.values)))
         }) else { return }
         for file in folder.listing {

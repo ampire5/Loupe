@@ -13,6 +13,7 @@ private final class FakeTree: @unchecked Sendable {
     private var asked: [(path: String, dated: Bool)] = []
     private var running = 0
     private var peak = 0
+    private var down = false
     private let latency: TimeInterval
 
     init(reader: ThumbReader, latency: TimeInterval = 0) {
@@ -33,6 +34,11 @@ private final class FakeTree: @unchecked Sendable {
     }
 
     var calls: [String] { lock.withLock { asked.map(\.path) } }
+    /// While true, every listing fails as a share's lost connection does.
+    var offline: Bool {
+        get { lock.withLock { down } }
+        set { lock.withLock { down = newValue } }
+    }
     var datedCalls: [Bool] { lock.withLock { asked.map(\.dated) } }
     var peakConcurrent: Int { lock.withLock { peak } }
 
@@ -46,6 +52,7 @@ private final class FakeTree: @unchecked Sendable {
             }
             defer { self.lock.withLock { self.running -= 1 } }
             if self.latency > 0 { Thread.sleep(forTimeInterval: self.latency) }
+            if self.offline { throw POSIXError(.ENOTCONN) }
             guard dated else { return CoverListing(names: CoverNames(files: names, folders: subfolders)) }
             let entries = names.map { name -> BrowserEntry in
                 let url = folder.appendingPathComponent(name)
@@ -71,6 +78,7 @@ private final class StampReader: FileReading, @unchecked Sendable {
     private var cancelledCount = 0
     private let holdFrom: Int
     private let gate = HoldGate()
+    private var failing: Set<URL> = []
 
     init(_ inner: ThumbReader, holdFrom: Int = .max) {
         self.inner = inner
@@ -81,6 +89,10 @@ private final class StampReader: FileReading, @unchecked Sendable {
     var peakConcurrent: Int { lock.withLock { peak } }
     var allBackground: Bool { lock.withLock { background } }
     var cancelled: Int { lock.withLock { cancelledCount } }
+    /// The stamps parked from now on go on (and none parks again).
+    func release() { gate.open() }
+    /// Stamps of `url` fail as for a file gone.
+    func fail(_ url: URL) { lock.withLock { _ = failing.insert(url) } }
 
     func read(_ url: URL, priority: ReadPriority) async throws -> FileBytes { try await inner.read(url, priority: priority) }
 
@@ -110,6 +122,7 @@ private final class StampReader: FileReading, @unchecked Sendable {
                 throw error
             }
         }
+        if lock.withLock({ failing.contains(url) }) { throw CocoaError(.fileReadNoSuchFile) }
         return inner.stamp(of: url)
     }
 }
@@ -160,6 +173,8 @@ private final class StampReader: FileReading, @unchecked Sendable {
         await store.setCoverListing(dated: tree.lister)
         await store.setCoverVolumes { _ in false }
         await store.setCoverStat { _ in nil }
+        let changes = Locked(0)
+        await store.coverQueue.setOnProgress { client in if client == 7 { changes.update { $0 += 1 } } }
         let walk = ThumbsWalk(store: store, queue: store.coverQueue, client: 7)
         await walk.start(URL(fileURLWithPath: "/t"), location: loc("/t"), depth: 2)
         await walk.finished()
@@ -171,15 +186,14 @@ private final class StampReader: FileReading, @unchecked Sendable {
         for folder in ["/t", "/t/a", "/t/a/b"] {
             #expect(await store.folderSamples(URL(fileURLWithPath: folder), limit: 10).count == 2)
         }
-        // The subfolders' covers and summaries (made ahead on the walk's client) come too.
-        let a = loc("/t/a"), b = loc("/t/a/b"), c = loc("/t/a/b/c")
-        #expect(await eventually {
-            let first = await store.folderSummary(at: a), second = await store.folderSummary(at: b)
-            return first != nil && second != nil
-        })
-        let deepest = await store.folderSummary(at: c)
-        #expect(deepest == nil)
-        #expect(Set(tree.calls) == ["/t", "/t/a", "/t/a/b"])
+        // Each folder's summary from the walk's own listing: one listing a folder, no cover listing it again.
+        for folder in ["/t", "/t/a", "/t/a/b"] {
+            #expect(await store.folderSummary(at: loc(folder))?.photos == 2)
+        }
+        #expect(await store.folderSummary(at: loc("/t/a/b/c")) == nil)
+        #expect(tree.calls == ["/t", "/t/a", "/t/a/b"])
+        // One `want` a folder (its listing) and its listing done, and the last `want` that leaves the queue.
+        #expect(changes.get == 2 * 3 + 1)
         #expect(!reader.reads.contains { $0.path.hasPrefix("/t/a/b/c/") })
     }
 
@@ -203,9 +217,9 @@ private final class StampReader: FileReading, @unchecked Sendable {
         await walk.start(URL(fileURLWithPath: "/s"), location: nil, depth: 1)
         await walk.finished()
         #expect(await walk.progress.folders == WorkCount(done: 5, total: 5))
-        // Each subfolder listed by the walk and by its cover.
-        #expect(await eventually { ["a", "b", "c", "d"].allSatisfy { name in tree.calls.filter { $0 == "/s/" + name }.count == 2 } })
         #expect(await eventually { await queue.progress(client: 1).inView.done == 3 })
+        // Each of the walk's folders listed once.
+        for path in ["/s", "/s/a", "/s/b", "/s/c", "/s/d"] { #expect(tree.calls.filter { $0 == path }.count == 1) }
         #expect(tree.peakConcurrent == 1)
         // A share's folders are listed by names, never with stat.
         #expect(!tree.datedCalls.contains(true))
@@ -291,5 +305,118 @@ private final class StampReader: FileReading, @unchecked Sendable {
         try? await Task.sleep(for: .milliseconds(100))
         #expect(reader.stamps == stamps)
         #expect(stamps < ThumbsWalk.stampChunk + 20)
+    }
+
+    /// Home's cards in view on the share go before the walk: the walk's first listing waits for them.
+    @Test func homeCardsGoBeforeTheWalk() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), tree = FakeTree(reader: reader, latency: 0.02)
+        tree.set("/s", photos: 1)
+        for name in ["h1", "h2", "h3"] { tree.set("/home/" + name, photos: 1) }
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: tree.lister)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverStat { _ in nil }
+        let queue = store.coverQueue
+        await queue.want(["/home/h1", "/home/h2", "/home/h3"], visible: 3, client: 1, isNetwork: { _ in true }) { id in
+            await store.folderCard(URL(fileURLWithPath: id), archive: false, in: nil, network: true, maxPixel: 16) != nil
+        }
+        let walk = ThumbsWalk(store: store, queue: queue, client: 7)
+        await walk.start(URL(fileURLWithPath: "/s"), location: nil, depth: 0)
+        await walk.finished()
+        let calls = tree.calls
+        let walkFirst = try #require(calls.firstIndex(of: "/s"))
+        #expect(calls.prefix(walkFirst).filter { $0.hasPrefix("/home/") }.count == 3)
+    }
+
+    /// A share's stamps keep to its gate: each has the share's time limit, two time outs make it offline, then only
+    /// its probe turn stamps; the walk says it waits, keeps its place, and goes on when the share answers.
+    @Test func walkStampsKeepToTheSharesGate() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let inner = ThumbReader(), tree = FakeTree(reader: inner)
+        tree.set("/g", photos: 6)
+        let reader = StampReader(inner, holdFrom: 0)
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: tree.lister, networkTimeout: .milliseconds(100))
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverNetworkVolumes { _ in "net:share" }
+        await store.setCoverStat { _ in nil }
+        await store.setCoverProbeInterval(.milliseconds(400))
+        let walk = ThumbsWalk(store: store, queue: store.coverQueue, client: 7, retryDelay: .milliseconds(20),
+                              maxRetryDelay: .milliseconds(50))
+        await walk.start(URL(fileURLWithPath: "/g"), location: nil, depth: 0)
+        #expect(await eventually { await walk.progress.waiting == ThumbsWalk.waitingForShare })
+        #expect(await store.isOffline("net:share"))
+        // Offline: stamps only on the probe turn, a few in all, however often the walk asks.
+        let stamps = reader.stamps
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(reader.stamps <= stamps + 2)
+        reader.release()
+        await walk.finished()
+        let progress = await walk.progress
+        #expect(progress.waiting == nil)
+        #expect(progress.files == WorkCount(done: 6, total: 6))
+        #expect(!(await store.isOffline("net:share")))
+    }
+
+    /// A share that does not answer the walk's listing: the walk waits with a note, keeps its place, and goes on when
+    /// the share is back.
+    @Test func walkWaitsForAnOfflineShare() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), tree = FakeTree(reader: reader)
+        tree.set("/w", photos: 2)
+        tree.offline = true
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: tree.lister)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverNetworkVolumes { _ in "net:share" }
+        await store.setCoverStat { _ in
+            if tree.offline { throw POSIXError(.ENOTCONN) }
+            return nil
+        }
+        await store.setCoverProbeInterval(.milliseconds(50))
+        let queue = CoverQueue(retryDelay: .milliseconds(20), maxRetryDelay: .milliseconds(50))
+        let walk = ThumbsWalk(store: store, queue: queue, client: 7)
+        await walk.start(URL(fileURLWithPath: "/w"), location: nil, depth: 0)
+        #expect(await eventually { await walk.progress.waiting == ThumbsWalk.waitingForShare })
+        #expect(await walk.progress.folders.done == 0)
+        tree.offline = false
+        await walk.finished()
+        let progress = await walk.progress
+        #expect(progress.waiting == nil)
+        #expect(progress.folders == WorkCount(done: 1, total: 1))
+        #expect(progress.files == WorkCount(done: 2, total: 2))
+    }
+
+    /// A share photo whose stamp failed keeps its catalog row and thumbnail: only names the listing lacks may go.
+    @Test func walkKeepsTheRowsOfUnstampedPhotos() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let inner = ThumbReader(), tree = FakeTree(reader: inner)
+        tree.set("/k", photos: 3)
+        let all = files("/k", 3)
+        let first = ThumbnailStore(directory: dir, reader: inner, thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: Self.locate, idleDelay: .zero, commitDelay: .milliseconds(5), decodes: 1)
+        await first.setRequest(window: 1, ThumbnailRequest(files: all, current: 0, visible: [], isKey: true),
+                               stamps: inner.stamps)
+        #expect(await eventually {
+            let ready = await Self.allReady(first, all), writes = await first.pendingWrites
+            return ready && writes == 0
+        })
+        await first.setRequest(window: 1, nil, stamps: [:])
+
+        let reader = StampReader(inner)
+        reader.fail(all[1])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: tree.lister)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverStat { _ in nil }
+        let walk = ThumbsWalk(store: store, queue: store.coverQueue, client: 7)
+        await walk.start(URL(fileURLWithPath: "/k"), location: nil, depth: 0)
+        await walk.finished()
+        #expect(await store.folderSamples(URL(fileURLWithPath: "/k"), limit: 10).count == 3)
     }
 }

@@ -610,9 +610,9 @@ extension Notification.Name {
         }
     }
 
-    /// The work ahead on one subfolder (`ThumbnailStore.prepareAhead`, as the subtree walk's) while its parent card
-    /// is on screen. A summary it wrote (new or changed) has its parent card's "+N inside" counted again
-    /// (`refreshInside`); a fresh one skipped costs the parent nothing.
+    /// The work ahead on one subfolder (`ThumbnailStore.prepareAhead`) while its parent card is on screen. A summary
+    /// it wrote (new or changed) has its parent card's "+N inside" counted again (`refreshInside`); a fresh one skipped
+    /// costs the parent nothing.
     private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadCard) async -> Bool {
         let thumbnails = self.thumbnails
         let lastViewed: @MainActor (AheadCard) -> String?? = { [weak self] card in

@@ -516,7 +516,7 @@ extension ThumbnailStore {
     /// stored summary is read again here: one written while the listing ran (the folder opened meanwhile, with dates)
     /// is what a names-only count keeps the dates of. A folder's (not a zip's) subfolders are remembered for the work
     /// ahead (`subfolderNames`).
-    private func card(_ images: [CGImage], listing: CoverListing?, problem: CardProblem?, modified: Date?,
+    func card(_ images: [CGImage], listing: CoverListing?, problem: CardProblem?, modified: Date?,
                       location: ThumbnailLocation?, folder: URL?) -> FolderCard {
         let stored = location.flatMap { storedSummary(at: $0) }
         guard let listing else { return FolderCard(images: images, summary: stored, problem: problem) }
@@ -630,7 +630,7 @@ extension ThumbnailStore {
 
     /// An offline share's probe takes its turn as its call starts: nil (not now) when the turn is not due (another
     /// card took it within `coverProbeInterval`); a turn without a mark when the share is not offline.
-    private func takeProbeTurn(_ volume: String?) -> ProbeTurn?? {
+    func takeProbeTurn(_ volume: String?) -> ProbeTurn?? {
         guard let volume, let since = offlineVolumes[volume] else { return .some(nil) }
         let now = ContinuousClock.now
         guard now - since >= coverProbeInterval else { return nil }
@@ -639,7 +639,7 @@ extension ThumbnailStore {
     }
 
     /// The turn given back when its call did not start (the lane full, the task cancelled).
-    private func giveBack(_ turn: ProbeTurn??, _ volume: String?) {
+    func giveBack(_ turn: ProbeTurn??, _ volume: String?) {
         if let turn = turn ?? nil, let volume, offlineVolumes[volume] == turn.taken { offlineVolumes[volume] = turn.before }
     }
 
@@ -708,14 +708,14 @@ extension ThumbnailStore {
         return ContinuousClock.now - since >= coverProbeInterval
     }
 
-    private func noteVolumeTimeout(_ volume: String?) {
+    func noteVolumeTimeout(_ volume: String?) {
         guard let volume else { return }
         if coverVolumeTimeouts.count >= Self.coverVolumeLimit { coverVolumeTimeouts.removeAll() }
         coverVolumeTimeouts[volume, default: 0] += 1
         if coverVolumeTimeouts[volume, default: 0] >= Self.coverOfflineTimeouts { markVolumeOffline(volume) }
     }
 
-    private func markVolumeOffline(_ volume: String?) {
+    func markVolumeOffline(_ volume: String?) {
         guard let volume else { return }
         if offlineVolumes.count >= Self.coverVolumeLimit {
             // Forgotten, so no longer offline: their dimmed cards are asked for again, as when they answer.
@@ -778,7 +778,7 @@ extension ThumbnailStore {
     }
 
     /// The folder was listed for its summary this session (at this date): not again, whatever came of it.
-    private func noteSummaryTried(_ key: String) {
+    func noteSummaryTried(_ key: String) {
         if summaryTried.count >= Self.coverPickLimit { summaryTried.removeAll() }
         summaryTried.insert(key)
     }
@@ -1028,7 +1028,7 @@ extension ThumbnailStore {
         return pick.kind
     }
 
-    private func remember(_ kind: CoverPick.Kind, for key: String, lastViewed: String?) {
+    func remember(_ kind: CoverPick.Kind, for key: String, lastViewed: String?) {
         coverPickUses += 1
         coverPicks[key] = CoverPick(kind: kind, lastViewed: lastViewed, use: coverPickUses)
         guard coverPicks.count > Self.coverPickLimit else { return }

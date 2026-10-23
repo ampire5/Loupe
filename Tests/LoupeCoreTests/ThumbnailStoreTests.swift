@@ -1297,6 +1297,14 @@ final class Locked<T>: @unchecked Sendable {
         }
         #expect(listings.get == 2)
         #expect(card.summary?.photos == 6)
+
+        // A zip's memos are keyed by its path the same way (`memoKey`: the path, or the path, NUL and its date).
+        let zip = URL(fileURLWithPath: "/photos/z.zip")
+        let zipLocation = ThumbnailLocation(volume: "test", folder: "/photos/z.zip", name: "_")
+        _ = await store.folderCard(zip, archive: true, in: zipLocation, maxPixel: 16, modified: date)
+        #expect(await store.coverPicks.keys.contains { $0.hasPrefix("/photos/z.zip") })
+        await store.forgetSummaryAndPick(of: zipLocation, folder: zip)
+        #expect(!(await store.coverPicks.keys.contains { $0.hasPrefix("/photos/z.zip") }))
     }
 
     /// A walk window of a folder's first stamped photos (more to come) leaves the catalog's rows of the others alone.
@@ -1319,5 +1327,21 @@ final class Locked<T>: @unchecked Sendable {
         await second.setRequest(window: 1, request(files), stamps: reader.stamps)
         #expect(await allReady(second, files))
         #expect(reader.reads.count == reads)
+    }
+
+    /// A walk folder a window also shows is that window's to make; when the window closes before, the walk window
+    /// keeps the folder open and its photos are still made.
+    @Test func walkFolderOutlivesTheWindowThatShowedIt() async throws {
+        let reader = ThumbReader()
+        let files = photos(3, in: reader)
+        let gates = files.map { reader.hold($0) }
+        let store = store(reader, dir: nil)
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        await store.setWalkWindow(ThumbnailRequest(files: files, current: 0, visible: [], isKey: false),
+                                  stamps: reader.stamps)
+        await store.setRequest(window: 1, nil, stamps: [:])
+        gates.forEach { $0.open() }
+        #expect(await eventually { await allReady(store, files) })
+        #expect(await store.walkPending.isEmpty)
     }
 }
