@@ -12,7 +12,7 @@ let package = Package(
         .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.2.0"),
         .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.1.0"),
         .package(url: "https://github.com/ampire5/LogiHIDPP.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.2.0"),
+        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.3.0"),
         .package(url: "https://github.com/ampire5/StashKit.git", from: "0.1.0"),
     ],
     targets: [
@@ -28,6 +28,7 @@ let package = Package(
                                                      .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                      .product(name: "StashKit", package: "StashKit")]),
         .executableTarget(name: "Loupe", dependencies: ["LoupeCore", "LoupeRender", "LoupeSettings",
+                                                        .product(name: "SettingsKit", package: "SettingsKit"),
                                                         .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                         .product(name: "InfoPanelKit", package: "InfoPanelKit"),
                                                         .product(name: "HomeScreenKit", package: "HomeScreenKit"),

@@ -2,6 +2,7 @@ import AppKit
 import LoupeCore
 import LoupeRender
 import LoupeSettings
+import SettingsKit
 
 extension Notification.Name {
     /// Posted on the main thread after every config push (a reload, a menu toggle, a strip resize), for window state
@@ -167,6 +168,15 @@ extension Notification.Name {
             NSApp.applicationIconImage = icon
         }
     }
+
+    /// View › App Icon… (⌃⌥⌘I): the picker window (SettingsKit) of `appIconChoices`; a click is applied at once and
+    /// written to loupe.conf like a menu toggle.
+    private lazy var iconPicker = IconPickerWindowController(
+        choices: { Self.appIconChoices() },
+        current: { [unowned self] in config.appIcon },
+        onPick: { [unowned self] word in change("app-icon") { $0.appIcon = word } })
+
+    @objc func showIconPicker(_ sender: Any?) { iconPicker.show() }
 
     /// Where your own `app-icon` pictures go: ~/.config/loupe/icons/<name>.icns, .png or .icon (Icon Composer).
     static var userIcons: URL { Config.directory.appendingPathComponent("icons", isDirectory: true) }
