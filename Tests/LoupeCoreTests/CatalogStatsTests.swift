@@ -41,4 +41,19 @@ import Testing
         #expect(CatalogStats.title(forVolume: "uuid:DEF", localNames: [:]) == "Local disk")
         #expect(CatalogStats.title(forVolume: "mnt:/Volumes/Card", localNames: [:]) == "Card")
     }
+
+    /// Only local volumes are asked for their UUID and name: a share would answer over the network.
+    @Test func localNamesSkipNetworkVolumes() {
+        let disk = URL(fileURLWithPath: "/")
+        let card = URL(fileURLWithPath: "/Volumes/Card")
+        let share = URL(fileURLWithPath: "/Volumes/Share")
+        #expect(CatalogStats.localVolumes([(url: disk, isLocal: true), (url: share, isLocal: false),
+                                           (url: card, isLocal: true)]) == [disk, card])
+        let shareOnly = CatalogStats(volumes: [.init(key: "net://u@pc/S"), .init(key: "mnt:/Volumes/X")],
+                                     total: .init(key: ""), diskBytes: 0)
+        #expect(!CatalogStats.needsLocalNames(shareOnly))
+        let withDisk = CatalogStats(volumes: [.init(key: "net://u@pc/S"), .init(key: "uuid:ABC")],
+                                    total: .init(key: ""), diskBytes: 0)
+        #expect(CatalogStats.needsLocalNames(withDisk))
+    }
 }

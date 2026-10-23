@@ -78,7 +78,8 @@ extension SettingsPanel {
             SettingsSection("Catalog", rows: [
                 .custom("Catalog",
                         searchTexts: { ["Catalog", "Thumbnails", "Folders", "Photos", "Database", "Disk"] }) {
-                    CatalogStatsView(directory: context?.catalogDirectory, clear: context?.clearThumbnails)
+                    CatalogStatsView(directory: context?.catalogDirectory, clear: context?.clearThumbnails,
+                                     cache: catalogStats)
                 },
             ]),
             SettingsSection("JPEG XL", rows: [

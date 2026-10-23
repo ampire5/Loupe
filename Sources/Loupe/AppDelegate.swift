@@ -96,7 +96,7 @@ import UniformTypeIdentifiers
         pressureMonitor = MemoryPressureMonitor(cache: cache)
         var thumbnailLog: (@Sendable (String) -> Void)?
         if DebugLog.isEnabled { thumbnailLog = { line in DebugLog.log(line) } }
-        let thumbnails = ThumbnailStore(directory: Self.thumbnailDirectory(), reader: reader,
+        let thumbnails = ThumbnailStore(directory: Self.thumbnailDirectory, reader: reader,
                                         thumbSize: config.thumbSize, limitBytes: config.thumbCacheBytes,
                                         cachedBytes: { await cache.cachedBytes($0, stamp: $1) }, log: thumbnailLog)
         self.thumbnails = thumbnails
@@ -175,8 +175,9 @@ import UniformTypeIdentifiers
         return controller
     }
 
-    /// `~/Library/Caches/Loupe`, made if missing; nil (memory-only thumbnails) if it cannot be.
-    private static func thumbnailDirectory() -> URL? {
+    /// `~/Library/Caches/Loupe`, made if missing; nil (memory-only thumbnails) if it cannot be. Worked out once, at
+    /// launch (the store), not again on each Settings open.
+    private static let thumbnailDirectory: URL? = {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
         let directory = caches.appendingPathComponent("Loupe", isDirectory: true)
         do {
@@ -186,7 +187,7 @@ import UniformTypeIdentifiers
             return nil
         }
         return directory
-    }
+    }()
 
     /// Forwards the cache's activity to the store, in order (the cache calls its handler inside its actor, so the
     /// values go through a stream rather than a task each, which could overtake one another), and the store's
@@ -459,7 +460,7 @@ import UniformTypeIdentifiers
                                            translateKey: { KeyboardLayout.translate(keyCode: $0, shift: $1) },
                                            reloadInput: { Settings.shared.reload() },
                                            menuRows: { MenuShortcuts.rows() },
-                                           catalogDirectory: Self.thumbnailDirectory(),
+                                           catalogDirectory: Self.thumbnailDirectory,
                                            clearThumbnails: { [weak self] in
                                                await self?.confirmAndClearThumbnails() ?? false
                                            })

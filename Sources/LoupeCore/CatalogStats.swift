@@ -83,12 +83,28 @@ public struct CatalogStats: Equatable, Sendable {
         return key
     }
 
-    /// Mounted local volumes by UUID, for `title(forVolume:localNames:)`.
+    /// Whether `title(forVolume:localNames:)` needs the local volumes' names: only `uuid:` volumes use them.
+    public static func needsLocalNames(_ stats: CatalogStats) -> Bool {
+        stats.volumes.contains { $0.key.hasPrefix("uuid:") }
+    }
+
+    /// The volumes worth asking for a UUID and a name: the local ones (a share would answer over the network).
+    public static func localVolumes(_ volumes: [(url: URL, isLocal: Bool)]) -> [URL] {
+        volumes.filter(\.isLocal).map(\.url)
+    }
+
+    /// Mounted local volumes by UUID, for `title(forVolume:localNames:)`. Network volumes are never asked for their
+    /// UUID or name: `volumeIsLocal` comes with the mount list (the mount's flags), the rest are server round trips.
     public static func mountedLocalNames() -> [String: String] {
-        let keys: [URLResourceKey] = [.volumeUUIDStringKey, .volumeNameKey]
+        let fm = FileManager.default
+        let mounted = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeIsLocalKey], options: []) ?? []
+        let records = mounted.map { url in
+            (url: url, isLocal: (try? url.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal ?? false)
+        }
+        let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeNameKey]
         var names: [String: String] = [:]
-        for url in FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: []) ?? [] {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)), let uuid = values.volumeUUIDString else { continue }
+        for url in localVolumes(records) {
+            guard let values = try? url.resourceValues(forKeys: keys), let uuid = values.volumeUUIDString else { continue }
             names[uuid] = values.volumeName ?? url.lastPathComponent
         }
         return names

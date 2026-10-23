@@ -53,6 +53,8 @@ public struct SettingsPanelContext {
     private static var terminateObserver: NSObjectProtocol?
     /// The context of the last `show`: what the pages' closures (icon choices, the Advanced buttons) ask.
     static var context: SettingsPanelContext?
+    /// The Catalog card's last count: kept here so page switches and the window's hiding do not count again.
+    static let catalogStats = CatalogStatsCache()
     /// The Key Bindings tables' source, made on the first `show` over the context's input.conf.
     static var bindingSource: InputBindingSource?
 
