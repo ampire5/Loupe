@@ -285,6 +285,8 @@ extension ImageCache {
             guard TileGrid.fitsTextureArrays(info.pixelSize) else { throw DecodeError.tooLarge }
 
             let start = ContinuousClock.now
+            // `priority` marks it waiting again (its probe marked it busy) while it queues for the gate and the slot,
+            // so a full job abandons it rather than wait for a decode that has not begun (`awaitReadyDecode`).
             let p = priority(url, goal, phase)
             let roleDecoder = decoder.forRole(.other)
             // Background work even for the current photo: never the big-decode slot reserved for the current one.
@@ -300,12 +302,9 @@ extension ImageCache {
                 emit(url, .uploadSkipped, goal, level: 0)
                 return
             }
-            // Planned, or a full job waits for it (it uploads it next): kept, room made. Overtaken by a full job of
-            // the current photo that decodes on its own: kept only if planned. Left the plan meanwhile: kept only if
-            // it fits as things stand (as an unplanned upload).
-            let overtaken = e.jobs[.full] != nil && e.readyWaiters == 0
-            let wanted = planned[url]?[goal] != nil || e.readyWaiters > 0
-            guard wanted || !overtaken && usedSystemBytes() + image.image.buffer.length <= effectiveMemory else {
+            // Kept, room made, only while planned or while a full job waits for it (it uploads it next); otherwise
+            // dropped, whether it left the plan or the photo on screen overtook it and decoded on its own.
+            guard planned[url]?[goal] != nil || e.readyWaiters > 0 else {
                 emit(url, .uploadSkipped, goal, level: 0)
                 return
             }

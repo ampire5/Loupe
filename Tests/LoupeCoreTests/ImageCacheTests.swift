@@ -1183,6 +1183,41 @@ struct ImageCacheTests {
         }
     }
 
+    /// A ready job that ran its own probe and then queues for the single ready slot (behind n1's ready decode, held)
+    /// is only waiting: stepping onto its photo, the full job gives it up and decodes at once, even with figures
+    /// that would wait for a decode in progress. One decode of that photo in all.
+    @Test func queuedReadyDecodeIsAbandonedNotAwaited() async {
+        var limits = CacheLimits.at3G
+        limits.graphicsMemory = 1 << 30
+        limits.full = 0
+        limits.previews = 2   // the current photo and n1: n2 has no preview job, so its ready job probes it
+        let rig = Rig(limits: limits)
+        await rig.cache.setDecodeSpeeds(ready: 0, current: 1e9)   // a ready decode in progress would be waited for
+        let files = fileURLs(10)
+        let log = TraceEvents()
+        await rig.cache.setTrace { log.add($0) }
+        let held = BlockingGate()
+        rig.decoder.gateFullCalls(files[1], [held])
+        await rig.focus(files, 0, dwelling: true, needsFull: true)
+        #expect(await eventually { rig.decoder.calls(files[1]).contains(.full) })
+        #expect(await eventually {
+            log.events.contains { $0.url == files[2] && $0.kind == .decodeWait && $0.goal == .ready }
+        })
+        #expect(log.events.contains { $0.url == files[2] && $0.kind == .probeWait && $0.goal == .ready },
+                "fixture: the ready job probed n2 itself")
+        await rig.focus(files, 2, needsFull: true, previous: 0)
+        #expect(await eventually { await rig.state(files[2]) == .full }, "sharp while n1's ready decode is held")
+        #expect(!log.events.contains { $0.url == files[2] && $0.kind == .readyAwait })
+        #expect(log.events.contains { $0.url == files[2] && $0.kind == .jobCancelled && $0.goal == .ready })
+        #expect(log.events.contains { $0.url == files[2] && $0.kind == .decodeDone && $0.goal == .full })
+        #expect(!log.events.contains { $0.url == files[1] && $0.kind == .decodeDone && $0.goal == .ready },
+                "fixture: n1's ready decode still held")
+        held.open()
+        #expect(await rig.settle())
+        #expect(rig.decoder.calls(files[2]).filter { $0 == .full }.count == 1)
+        await rig.clear()
+    }
+
     /// Memory pressure takes the ready decodes first: at a quarter of `cache-memory` the files all still fit and
     /// stay, the current photo's included, and no ready decode does, so none is left (not even the current photo's:
     /// the screen never draws from it). Three of the files are held but no longer planned (`cache-files` lowered to 1

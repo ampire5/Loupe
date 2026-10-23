@@ -64,8 +64,10 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// sharp before the next one against 21 without, a step back 172–255 ms to sharp against 570–583, and the run's CPU
     /// time 126 s against 157. The implementation, same machine and defaults (docs/bench/2026-10-23-memory-tiers.md):
     /// back-fast 29 of 29 sharp against 18–19, a step back 172–198 ms p50 and 244–245 ms max, CPU 137 s against
-    /// 162–166; a ready decode here takes 2.4–2.8 s, so a full job that finds one in progress waits for it: the
-    /// first step after opening took 0.78–1.26 s to sharp against 0.58–0.80 s before.
+    /// 162–166. A ready decode here takes 2.4–2.8 s against ~0.6 s at the current role: when the photo on screen's
+    /// full job always waited for one in progress, the first step after opening took 0.78–1.26 s to sharp against
+    /// 0.58–0.80 s before, so it now waits only for one expected to end sooner than its own decode and otherwise
+    /// decodes at once (`awaitReadyDecode`, `overtakesReady`); neighbours' full jobs wait.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
     /// Measured full-decode speeds in ms per megapixel, running averages: ready decodes (`.other` role at `.utility`:
     /// 2.4–2.8 s for 147 MP JPEG XL on the i7-10700K, Task 7's bench) and the current photo's full decodes (current
@@ -241,10 +243,10 @@ public actor ImageCache<Loader: PyramidLoader> {
         onActivity?(now)
     }
 
-    /// Test hook: nothing in flight (no read, job task — cancelled ones included — or stamp check).
     /// Test hook: decode speeds (ms per megapixel) `overtakesReady` uses instead of the measured ones.
     func setDecodeSpeeds(ready: Double?, current: Double?) { fixedDecodeSpeeds = (ready, current) }
 
+    /// Test hook: nothing in flight (no read, job task — cancelled ones included — or stamp check).
     var isIdle: Bool { stampChecks == 0 && runningJobs == 0 && entries.values.allSatisfy { $0.read == nil } }
 
     // MARK: Levels and state
