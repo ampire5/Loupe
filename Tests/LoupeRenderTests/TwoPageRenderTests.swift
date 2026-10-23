@@ -228,11 +228,11 @@ import Testing
         let shared = Self.shared(path, seam: 200.37)
         let viewport = PagePlacement(rect: Self.layout.rects[0], pageSize: Self.sizes[0], shared: shared).viewport
         let n = ColorCube.dimension, last = Float(n - 1)
-        var values = [Float16](repeating: 1, count: n * n * n * 4)
+        var values = [Half](repeating: 1, count: n * n * n * 4)
         for b in 0..<n { for g in 0..<n { for r in 0..<n {
             let i = ((b * n + g) * n + r) * 4
-            values[i] = Float16(Float(r) / last / 2); values[i + 1] = Float16(Float(g) / last / 2)
-            values[i + 2] = Float16(Float(b) / last / 2)
+            values[i] = Half(Float(r) / last / 2); values[i + 1] = Half(Float(g) / last / 2)
+            values[i + 2] = Half(Float(b) / last / 2)
         } } }
         let half = try #require(ColorLUT.make(ColorCube(values: values)))
         let colour: Px = (40, 60, 200, 255)

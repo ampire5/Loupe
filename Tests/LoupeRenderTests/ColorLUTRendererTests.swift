@@ -86,14 +86,14 @@ import Testing
     /// r' = g^1.3, g' = b, b' = 0.15 + 0.7·r (slope ≤ 1.3, so a code of input moves the output by ~1 code at most).
     private static let testCube: ColorCube = {
         let n = ColorCube.dimension, last = Double(n - 1)
-        var values = [Float16](repeating: 1, count: n * n * n * 4)
+        var values = [Half](repeating: 1, count: n * n * n * 4)
         for b in 0..<n {
             for g in 0..<n {
                 for r in 0..<n {
                     let i = ((b * n + g) * n + r) * 4
-                    values[i] = Float16(pow(Double(g) / last, 1.3))
-                    values[i + 1] = Float16(Double(b) / last)
-                    values[i + 2] = Float16(0.15 + 0.7 * Double(r) / last)
+                    values[i] = Half(pow(Double(g) / last, 1.3))
+                    values[i + 1] = Half(Double(b) / last)
+                    values[i + 2] = Half(0.15 + 0.7 * Double(r) / last)
                 }
             }
         }
@@ -472,7 +472,7 @@ import Testing
         let n = ColorCube.dimension
         #expect(lut.texture.textureType == .type3D && lut.texture.pixelFormat == .rgba16Float)
         #expect(lut.texture.width == n && lut.texture.height == n && lut.texture.depth == n)
-        var texel = [Float16](repeating: 0, count: 4)
+        var texel = [Half](repeating: 0, count: 4)
         let (r, g, b) = (5, 17, 29)
         lut.texture.getBytes(&texel, bytesPerRow: 8, bytesPerImage: 8, from: MTLRegionMake3D(r, g, b, 1, 1, 1),
                              mipmapLevel: 0, slice: 0)

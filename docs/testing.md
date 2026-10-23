@@ -9,10 +9,19 @@
 | `scripts/test.sh full` | + матрицы сверки (`LOUPE_FULL_TESTS=1`, `TestLevel.fullOnly`), по одному, `nice` | дольше, одно ядро | перед слиянием ветки, после правок рендера |
 
 Декодеры, включая свою libjxl (ветка `loupe` форка ampire5/libjxl, коммит — `libjxl_commit` в `scripts/build-deps.sh`),
-собираются статически в `.deps/arm64` (рецепт — `scripts/build-deps.sh`; `scripts/deps.sh` скачивает готовую сборку
+собираются статически в `.deps/<arch>` (рецепт — `scripts/build-deps.sh`; `scripts/deps.sh` скачивает готовую сборку
 рецепта или собирает её) — `test.sh` и `make-app.sh` делают это сами при первой сборке и подключают через
 `scripts/libjxl-env.sh`. Правка ветки `loupe` — новый `libjxl_commit`, то есть новый рецепт. Голый `swift build` без этого падает на
 `JxlDecoderLoupeVersion` — так и задумано.
+
+## Intel (x86_64)
+
+Intel-сборка (macOS 26) делается из `main`: `DEPS_ARCH=x86_64 scripts/test.sh` на Apple Silicon — нативная
+кросс-сборка, тесты под Rosetta. В CI это джоба `test-x86_64` (Xcode 26), без рендер-тестов (у виртуальных машин GitHub
+паравиртуальный GPU). На настоящем Intel Mac, подключённом как self-hosted runner, workflow *Intel Mac (self-hosted)*
+гоняет `scripts/test.sh render` и собирает приложение — пока раннер не подключён, только вручную, никогда на pull
+request. Как подключить Mac: [docs/intel-runner.md](https://github.com/ampire5/FrameScrub/blob/main/docs/intel-runner.md)
+в FrameScrub.
 
 Что видно на экране: ошибки сборки, каждая проваленная проверка в момент провала (тест, файл:строка, сообщение, пара
 строк подробностей), строка прогресса и в конце каждого прогона — сводка упавших тестов. Всё остальное (прошедшие тесты,
@@ -46,5 +55,5 @@
 . scripts/libjxl-env.sh && swift run -c release LoupeBench strip --files 1000000
 ```
 
-Бюджет — 1 мс на событие на Intel-iMac (`lts/macos26`); там 2026-10-21: p99 2,5 µs и для 10 000, и для 1 000 000
+Бюджет — 1 мс на событие на Intel-iMac; там 2026-10-21: p99 2,5 µs и для 10 000, и для 1 000 000
 файлов, раскладка на 1 000 000 файлов — 5 мс, 49 ячеек при высоте 68 и ширине 1800.

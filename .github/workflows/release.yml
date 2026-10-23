@@ -34,9 +34,9 @@ jobs:
           dsym="Loupe-${GITHUB_REF_NAME}-macOS-arm64.dSYM.zip"
           ditto -c -k --keepParent build/Loupe.dSYM "$dsym"
           gh release create "$GITHUB_REF_NAME" "$zip" "$dsym" --generate-notes \
-            --notes "Unsigned build for Apple Silicon, macOS 26+. After unzipping: \`xattr -dr com.apple.quarantine Loupe.app\`, then open it."
+            --notes "Unsigned builds: \`macOS-arm64\` for Apple Silicon (macOS 26+), \`macOS-x86_64\` for Intel Macs (macOS 26; it follows a few minutes later). After unzipping: \`xattr -dr com.apple.quarantine Loupe.app\`, then open it."
       # Points the cask's on_arm block (the lines marked `# arm`) in ampire5/homebrew-tap at this release; the
-      # lts/macos26 releases update on_intel. Needs a TAP_TOKEN secret that can push to that repo.
+      # x86_64 job below updates on_intel. Needs a TAP_TOKEN secret that can push to that repo.
       - name: Update the Homebrew cask
         if: env.TAP_TOKEN != ''
         run: |
@@ -46,4 +46,48 @@ jobs:
           sed -i '' -E "s/^( *)version \".*\" # arm$/\1version \"$version\" # arm/; s/^( *)sha256 .* # arm$/\1sha256 \"$sha\" # arm/" tap/Casks/loupe.rb
           git -C tap -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -am "loupe $version"
+          git -C tap push
+
+  # The same release for Intel Macs (macOS 26), built with Xcode 26 and tested under Rosetta as CI's x86_64 job is.
+  # After the arm64 job: it adds its zip to that release and updates the cask's on_intel block.
+  release-x86_64:
+    needs: release
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+      DEPS_ARCH: x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rosetta and Xcode 26
+        run: |
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - name: Homebrew tools
+        run: brew install cmake ninja nasm pkgconf
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
+      - name: Test
+        run: scripts/test.sh --no-parallel
+      - name: Build the app
+        run: scripts/make-app.sh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip="Loupe-${GITHUB_REF_NAME}-macOS-x86_64.zip"
+          ditto -c -k --keepParent build/Loupe.app "$zip"
+          dsym="Loupe-${GITHUB_REF_NAME}-macOS-x86_64.dSYM.zip"
+          ditto -c -k --keepParent build/Loupe.dSYM "$dsym"
+          gh release upload "$GITHUB_REF_NAME" "$zip" "$dsym" --clobber
+      - name: Update the Homebrew cask
+        if: env.TAP_TOKEN != ''
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha=$(shasum -a 256 "Loupe-${GITHUB_REF_NAME}-macOS-x86_64.zip" | cut -d' ' -f1)
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ampire5/homebrew-tap" tap
+          sed -i '' -E "s/^( *)version \".*\" # intel$/\1version \"$version\" # intel/; s/^( *)sha256 .* # intel$/\1sha256 \"$sha\" # intel/" tap/Casks/loupe.rb
+          git -C tap -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -am "loupe $version (Intel)"
           git -C tap push

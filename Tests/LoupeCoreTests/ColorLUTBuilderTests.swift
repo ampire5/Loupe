@@ -149,8 +149,8 @@ private func throughCoreImage(_ image: CGImage, steps: [AutoColorStep], share: D
     let cube = ColorCube.identity
     let n = ColorCube.dimension
     #expect(cube.values.count == n * n * n * 4)
-    #expect(node(cube, 5, 0, 0) == SIMD3(Float(Float16(5 / Float(last))), 0, 0))   // r fastest
-    #expect(node(cube, 0, 7, 0) == SIMD3(0, Float(Float16(7 / Float(last))), 0))
+    #expect(node(cube, 5, 0, 0) == SIMD3(Float(Half(5 / Float(last))), 0, 0))   // r fastest
+    #expect(node(cube, 0, 7, 0) == SIMD3(0, Float(Half(7 / Float(last))), 0))
     #expect(node(cube, 0, 0, last) == SIMD3(0, 0, 1))
     #expect(cube.values[3] == 1)
 }
@@ -290,10 +290,12 @@ private func throughCoreImage(_ image: CGImage, steps: [AutoColorStep], share: D
 // guard against a lost order of magnitude, not a benchmark (the debug build runs the per-node loops unoptimised).
 @Test func cubeBuildTime() throws {
     #if DEBUG
-    let budget = 200.0
+    var budget = 200.0
     #else
-    let budget = 10.0
+    var budget = 10.0
     #endif
+    // CI's x86_64 job runs the tests under Rosetta, which takes the per-node loops ~1.5x longer.
+    if runsUnderRosetta { budget *= 2 }
     let s = settings(vibrance: true)
     let space = CGColorSpace(name: CGColorSpace.displayP3)!
     let first = Date()

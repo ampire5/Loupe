@@ -1,30 +1,23 @@
 name: Edge builds
 
-# The latest build that passed CI, for `brew install --cask ampire5/tap/loupe@edge`: main's (Apple Silicon) in the
-# pre-release `edge`, lts/macos26's (Intel) in `edge-lts`. It takes the app CI built and tested, and points the cask's
-# on_arm or on_intel block at it, with a version from `git describe` (0.1.0-17-g1a2b3c4 on main, 0.1.0-lts-3-gabcdef0
-# on lts/macos26), so `brew upgrade` sees every build. Only the newest zip is kept. GitHub runs this file from main for
-# both branches; the manual run publishes the branch's latest successful CI run. Needs the TAP_TOKEN secret, as the
-# release workflow does.
+# The latest build of main that passed CI, for `brew install --cask ampire5/tap/loupe@edge`, in the pre-release
+# `edge`: both apps CI built and tested, arm64 (Apple Silicon) and x86_64 (Intel Macs, macOS 26). It points the cask's
+# on_arm and on_intel blocks at them, with a version from `git describe` (0.1.0-17-g1a2b3c4), so `brew upgrade` sees
+# every build. Only the newest zip of each architecture is kept. The manual run publishes main's latest successful CI
+# run. Needs the TAP_TOKEN secret, as the release workflow does.
 
 on:
   workflow_run:
-    workflows: [CI, "CI (LTS, Intel)"]
+    workflows: [CI]
     types: [completed]
-    branches: [main, lts/macos26]
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      branch:
-        description: Branch whose latest successful CI run to publish
-        default: main
-        type: choice
-        options: [main, lts/macos26]
 
 permissions:
   contents: write
   actions: read
 
-# One at a time: the main and LTS builds both push to the tap (the other app's too: the push retries on a race).
+# One at a time: every build pushes to the tap (the other app's too: the push retries on a race).
 concurrency:
   group: edge
   cancel-in-progress: false
@@ -44,22 +37,14 @@ jobs:
         id: run
         run: |
           if [[ $GITHUB_EVENT_NAME == workflow_dispatch ]]; then
-            branch='${{ inputs.branch }}'
-            read -r id sha < <(gh run list -R "$GITHUB_REPOSITORY" -b "$branch" -e push -s success -L 20 \
-              --json databaseId,headSha,workflowName --jq '[.[] | select(.workflowName | startswith("CI"))][0] | "\(.databaseId) \(.headSha)"')
+            read -r id sha < <(gh run list -R "$GITHUB_REPOSITORY" -w CI -b main -e push -s success -L 1 \
+              --json databaseId,headSha --jq '.[0] | "\(.databaseId) \(.headSha)"')
           else
-            branch='${{ github.event.workflow_run.head_branch }}'
             id='${{ github.event.workflow_run.id }}'
             sha='${{ github.event.workflow_run.head_sha }}'
           fi
-          case $branch in
-            main) arch=arm64 marker=arm tag=edge match='v[0-9]*' exclude='*-lts' ;;
-            lts/macos26) arch=x86_64 marker=intel tag=edge-lts match='v[0-9]*-lts' exclude='' ;;
-            *) echo "no edge channel for $branch" >&2; exit 1 ;;
-          esac
-          echo "branch=$branch id=$id sha=$sha arch=$arch"
-          { echo "id=$id"; echo "sha=$sha"; echo "branch=$branch"; echo "arch=$arch"; echo "marker=$marker"
-            echo "tag=$tag"; echo "match=$match"; echo "exclude=$exclude"; } >> "$GITHUB_OUTPUT"
+          echo "id=$id sha=$sha"
+          { echo "id=$id"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.run.outputs.sha }}
@@ -67,52 +52,59 @@ jobs:
       - name: Version
         id: version
         run: |
-          args=(--tags --match '${{ steps.run.outputs.match }}')
-          [[ -n '${{ steps.run.outputs.exclude }}' ]] && args+=(--exclude '${{ steps.run.outputs.exclude }}')
-          described=$(git describe "${args[@]}" --long 2>/dev/null || echo "v0.0.0-0-g$(git rev-parse --short HEAD)")
+          # The -lts tags are the frozen lts/macos26 line's.
+          described=$(git describe --tags --match 'v[0-9]*' --exclude '*-lts' --long 2>/dev/null \
+            || echo "v0.0.0-0-g$(git rev-parse --short HEAD)")
           version=${described#v}
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "$version"
-      - name: The app from CI
+      - name: The apps from CI
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.APP }}-macOS-${{ steps.run.outputs.arch }}
+          pattern: ${{ env.APP }}-macOS-*
+          merge-multiple: true
           run-id: ${{ steps.run.outputs.id }}
           github-token: ${{ github.token }}
           path: artifact
       - name: Publish
         run: |
-          tag=${{ steps.run.outputs.tag }} sha=${{ steps.run.outputs.sha }} arch=${{ steps.run.outputs.arch }}
-          zip="$APP-${{ steps.version.outputs.version }}-macOS-$arch.zip"
-          mv "artifact/$APP-macOS-$arch.zip" "$zip"
-          echo "sha256=$(sha256sum "$zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
-          echo "zip=$zip" >> "$GITHUB_ENV"
-          notes="The latest build of ${{ steps.run.outputs.branch }} that passed CI (${sha::7}), not a release: unsigned, for testing. Homebrew: \`brew install --cask ampire5/tap/$CASK\`."
+          tag=edge sha=${{ steps.run.outputs.sha }} version=${{ steps.version.outputs.version }}
+          notes="The latest build of main that passed CI (${sha::7}), not a release: unsigned, for testing. \`macOS-arm64\` for Apple Silicon, \`macOS-x86_64\` for Intel Macs (macOS 26). Homebrew: \`brew install --cask ampire5/tap/$CASK\`."
           if gh release view "$tag" >/dev/null 2>&1; then
-            # The tag follows the build. Only a label (the cask needs the zip): GitHub refuses the move now and then
+            # The tag follows the build. Only a label (the cask needs the zips): GitHub refuses the move now and then
             # (403, e.g. past a commit that changes a workflow, which GITHUB_TOKEN may not), and that is no failure.
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$sha" -F force=true >/dev/null \
-              || echo "::warning title=Edge tag not moved::$tag stays where it was; the zip is published anyway"
+              || echo "::warning title=Edge tag not moved::$tag stays where it was; the zips are published anyway"
             gh release edit "$tag" --notes "$notes"
           else
             gh release create "$tag" --target "$sha" --prerelease --latest=false --title "$tag (latest build)" --notes "$notes"
           fi
-          gh release upload "$tag" "$zip" --clobber   # a run again for the same build replaces it
+          zips=()
+          for arch in arm64 x86_64; do
+            zip="$APP-$version-macOS-$arch.zip"
+            mv "artifact/$APP-macOS-$arch.zip" "$zip"
+            echo "sha256_$arch=$(sha256sum "$zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+            zips+=("$zip")
+          done
+          gh release upload "$tag" "${zips[@]}" --clobber   # a run again for the same build replaces them
           for old in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
-            [[ $old == "$zip" ]] || gh release delete-asset "$tag" "$old" --yes
+            [[ " ${zips[*]} " == *" $old "* ]] || gh release delete-asset "$tag" "$old" --yes
           done
       - name: Update the Homebrew cask
         if: env.TAP_TOKEN != ''
         run: |
-          marker=${{ steps.run.outputs.marker }} version=${{ steps.version.outputs.version }}
+          version=${{ steps.version.outputs.version }}
           git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/ampire5/homebrew-tap" tap
           file="tap/Casks/$CASK.rb"
-          sed -i -E "s/^( *)version \".*\" # $marker$/\1version \"$version\" # $marker/; s/^( *)sha256 .* # $marker$/\1sha256 \"$sha256\" # $marker/" "$file"
+          for marker in arm intel; do
+            [[ $marker == arm ]] && sha256=$sha256_arm64 || sha256=$sha256_x86_64
+            sed -i -E "s/^( *)version \".*\" # $marker$/\1version \"$version\" # $marker/; s/^( *)sha256 .* # $marker$/\1sha256 \"$sha256\" # $marker/" "$file"
+          done
           if git -C tap diff --quiet; then echo "the cask already has $version"; exit 0; fi
           # Set in the clone: the rebase below commits too.
           git -C tap config user.name github-actions
           git -C tap config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git -C tap commit -qam "$CASK $version ($marker)"
+          git -C tap commit -qam "$CASK $version"
           for attempt in 1 2 3; do
             git -C tap push -q && exit 0
             git -C tap pull -q --rebase

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The recipe of Loupe's decoders: static, for the architecture in scripts/deps.arch (arm64 on main, x86_64 on
-# lts/macos26), built from source into .deps/<arch> (or $LOUPE_DEPS). The app links them in and bundles no dylibs (and
+# The recipe of Loupe's decoders: static, for $DEPS_ARCH (arm64 or x86_64; the Mac's own architecture
+# unless set), built from source into .deps/<arch> (or $LOUPE_DEPS). The app links them in and bundles no dylibs (and
 # Homebrew builds no Intel bottles any more):
 #   libjpeg-turbo; brotli and highway; Loupe's libjxl (github.com/ampire5/libjxl, branch `loupe`: v0.12.0 plus the DC
 #   image functions, pinned to a commit below); libde265 and libheif (LoupeBench only, HEIC without AVIF).
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # renovate: datasource=github-tags depName=libjpeg-turbo/libjpeg-turbo
-jpeg_turbo_version=3.2.1
+jpeg_turbo_version=3.2.0
 # renovate: datasource=github-tags depName=google/brotli extractVersion=^v(?<version>.+)$
 brotli_version=1.2.1
 # renovate: datasource=github-tags depName=google/highway
@@ -23,8 +23,8 @@ libde265_version=1.1.3
 libheif_version=1.23.6
 libjxl_commit=8b643990a3f30a55c220386329a3c59ccf189473   # branch loupe
 min=26.0
-arch=$(<scripts/deps.arch)
-[[ $arch == arm64 || $arch == x86_64 ]] || { echo "error: scripts/deps.arch names $arch, not arm64 or x86_64" >&2; exit 1; }
+arch=${DEPS_ARCH:-$(uname -m)}
+[[ $arch == arm64 || $arch == x86_64 ]] || { echo "error: DEPS_ARCH is $arch, not arm64 or x86_64" >&2; exit 1; }
 prefix=${LOUPE_DEPS:-$PWD/.deps/$arch}
 rm -rf "$prefix"
 src=$prefix/src

@@ -1,9 +1,8 @@
 name: Prebuilt dependencies
 
-# Builds scripts/build-deps.sh's recipe for scripts/deps.arch from source and publishes it as the pre-release
-# deps-<arch>-<recipe hash>, which scripts/deps.sh downloads (CI, releases, local builds). Runs when the recipe changes
-# on main (arm64) or on lts/macos26 (x86_64, its own copy of this workflow), and by hand; a recipe that is already
-# published is left alone.
+# Builds scripts/build-deps.sh's recipe from source for each architecture, arm64 and x86_64 (Intel Macs, macOS 26), and
+# publishes it as the pre-release deps-<arch>-<recipe hash>, which scripts/deps.sh downloads (CI, releases, local
+# builds). Runs when the recipe changes on main, and by hand; a recipe that is already published is left alone.
 on:
   push:
     branches: [main]
@@ -15,10 +14,21 @@ permissions:
 
 jobs:
   publish:
-    runs-on: xcode-27
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: xcode-27
+            tools: cmake ninja pkgconf
+          - arch: x86_64
+            runner: macos-26
+            tools: cmake ninja nasm pkgconf
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
+      DEPS_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
       - name: Already published?
@@ -30,9 +40,15 @@ jobs:
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "$name is already published"
           fi
+      - name: Rosetta and Xcode 26
+        if: steps.check.outputs.published != 'true' && matrix.arch == 'x86_64'
+        run: |
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
       - name: Homebrew tools
         if: steps.check.outputs.published != 'true'
-        run: brew install cmake ninja pkgconf
+        run: brew install ${{ matrix.tools }}
       - name: Build from source
         if: steps.check.outputs.published != 'true'
         run: scripts/deps.sh fetch
@@ -43,4 +59,4 @@ jobs:
           scripts/deps.sh pack out
           gh release create "$name" "out/$name.tar.xz" "out/$name.tar.xz.sha256" --target "$GITHUB_SHA" \
             --prerelease --latest=false --title "Build dependencies: $name" \
-            --notes "Static $(cat scripts/deps.arch) libraries for ${GITHUB_REF_NAME}, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."
+            --notes "Static $DEPS_ARCH libraries for ${GITHUB_REF_NAME}, built by scripts/build-deps.sh at ${GITHUB_SHA::7}. Downloaded by scripts/deps.sh; not an app release."
