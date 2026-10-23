@@ -1,5 +1,7 @@
 # Карточки папок и архивов: крупная обложка и сведения — план реализации
 
+> **Обновление (владелец, 2026-10-23):** клавиши переключателя вида теперь ⌥⌘1 / ⌥⌘2 / ⌥⌘3 (не ⌃⌘1–3), ниже — прежний текст.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** карточки папок и zip в браузере Home — «Плакат» (обложка + полоса сведений под ней) по умолчанию, «Карточка» и «Список» переключателем, запоминаемым для папки; сведения из сохранённой сводки папки и памяти посещений.
