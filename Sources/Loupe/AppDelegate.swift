@@ -733,13 +733,13 @@ import UniformTypeIdentifiers
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
-        // How Home's browser draws a folder's folders and archives (folder cards spec): ⌃⌘1–⌃⌘3 (`CardStyleKeys`; ⌘
+        // How Home's browser draws a folder's folders and archives (folder cards spec): ⌥⌘1–⌥⌘3 (`CardStyleKeys`; ⌘
         // digits are the tabs'), on Home on a folder only, checked at its style (ViewerWindowController validates
         // them; `CardStyleMenuReset` unchecks them where no viewer answers). Elsewhere `MainMenu` lets the keys go on.
         for (index, title) in ["as Posters", "as Cards", "as List"].enumerated() {
             let item = view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
                                     keyEquivalent: String(index + 1))
-            item.keyEquivalentModifierMask = [.control, .command]
+            item.keyEquivalentModifierMask = [.option, .command]
             item.tag = index
         }
         view.delegate = CardStyleMenuReset.shared
@@ -824,7 +824,7 @@ import UniformTypeIdentifiers
 /// and Colour menus also decline them through their delegate (`Settings.menuHasKeyEquivalent`).
 ///
 /// The browser's tab chords no item carries (⌘1…⌘9, ⌥⌘→ / ⌥⌘←, `BrowserTabKeys`) go to `onTabKey` first; it declines
-/// them outside a viewer window. ⌃⌘1–⌃⌘3 (`CardStyleKeys`) reach View › as Posters / as Cards / as List only while
+/// them outside a viewer window. ⌥⌘1–⌥⌘3 (`CardStyleKeys`) reach View › as Posters / as Cards / as List only while
 /// the key window can choose a card style: elsewhere (the settings window and its key recorder, the Open panel) a
 /// disabled item would take them.
 final class MainMenu: NSMenu {

@@ -31,19 +31,23 @@ struct BrowserTabKeysTests {
     }
 }
 
-/// ⌃⌘1–⌃⌘3 pick how Home draws a folder's cards (posters, cards, list), by the key's code; ⌘ digits stay the tabs'.
+/// ⌥⌘1–⌥⌘3 pick how Home draws a folder's cards (posters, cards, list), by the key's code; ⌘ digits stay the tabs'
+/// and ⌥ digits Home's sort.
 struct CardStyleKeysTests {
     @Test func chords() {
-        #expect(CardStyleKeys.match(keyCode: 18, command: true, control: true) == 0)   // ⌃⌘1
-        #expect(CardStyleKeys.match(keyCode: 19, command: true, control: true) == 1)
-        #expect(CardStyleKeys.match(keyCode: 20, command: true, control: true) == 2)   // ⌃⌘3
-        #expect(CardStyleKeys.match(keyCode: 21, command: true, control: true) == nil) // ⌃⌘4: none
+        #expect(CardStyleKeys.match(keyCode: 18, command: true, option: true) == 0)   // ⌥⌘1
+        #expect(CardStyleKeys.match(keyCode: 19, command: true, option: true) == 1)
+        #expect(CardStyleKeys.match(keyCode: 20, command: true, option: true) == 2)   // ⌥⌘3
+        #expect(CardStyleKeys.match(keyCode: 21, command: true, option: true) == nil) // ⌥⌘4: none
+        #expect(CardStyleKeys.match(keyCode: 18, command: true, control: true) == nil) // ⌃⌘1: no longer
         #expect(CardStyleKeys.match(keyCode: 18, command: true) == nil)                // ⌘1: a tab
-        #expect(CardStyleKeys.match(keyCode: 18, control: true) == nil)
-        #expect(CardStyleKeys.match(keyCode: 18, command: true, shift: true, control: true) == nil)
+        #expect(CardStyleKeys.match(keyCode: 18, option: true) == nil)                 // ⌥1: Home's sort
+        #expect(CardStyleKeys.match(keyCode: 18, command: true, shift: true, option: true) == nil)
         #expect(CardStyleKeys.match(keyCode: 18, command: true, option: true, control: true) == nil)
-        // Not a tab chord either: the two never meet.
-        #expect(BrowserTabKeys.match(keyCode: 18, command: true, control: true) == nil)
+        // Not a tab chord either: ⌥⌘ with a digit never selects a tab (⌥⌘ matches only ← and →).
+        for code: UInt16 in [18, 19, 20, 25] {
+            #expect(BrowserTabKeys.match(keyCode: code, command: true, option: true) == nil)
+        }
     }
 }
 

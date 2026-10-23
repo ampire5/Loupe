@@ -45,15 +45,16 @@ public enum BrowserTabKeys {
     ]
 }
 
-/// ⌃⌘1 / ⌃⌘2 / ⌃⌘3: how Home's browser draws a folder's folders and archives (posters, cards, list; folder cards
-/// spec). ⌘ digits stay the tabs' (`BrowserTabKeys`), on Home too. By key code, like the tabs' digits.
+/// ⌥⌘1 / ⌥⌘2 / ⌥⌘3: how Home's browser draws a folder's folders and archives (posters, cards, list; folder cards
+/// spec; ⌃⌘ digits were awkward to press). ⌘ digits stay the tabs' (`BrowserTabKeys`), on Home too, and ⌥ digits
+/// Home's sort. By key code, like the tabs' digits.
 public enum CardStyleKeys {
     private static let digitCodes: [UInt16] = [18, 19, 20]
 
-    /// The style's index (`CardStyle.allCases`) for ⌃⌘ with 1, 2 or 3 and nothing else; nil for any other key.
+    /// The style's index (`CardStyle.allCases`) for ⌥⌘ with 1, 2 or 3 and nothing else; nil for any other key.
     public static func match(keyCode: UInt16, command: Bool = false, shift: Bool = false, option: Bool = false,
                              control: Bool = false) -> Int? {
-        guard command, control, !shift, !option else { return nil }
+        guard command, option, !shift, !control else { return nil }
         return digitCodes.firstIndex(of: keyCode)
     }
 }

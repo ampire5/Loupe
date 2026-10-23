@@ -198,7 +198,7 @@ import StashKitUI
     }
 
     /// Whether the key window is a viewer's showing Home on a folder: View › as Posters / as Cards / as List and
-    /// ⌃⌘1–⌃⌘3 apply.
+    /// ⌥⌘1–⌥⌘3 apply.
     var keyWindowCanChooseCardStyle: Bool {
         guard let window = NSApp.keyWindow else { return false }
         return entries.first { $0.controller.window === window }?.controller.canChooseCardStyle ?? false

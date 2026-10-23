@@ -770,7 +770,7 @@ extension Notification.Name {
         return CardStyle.forFolder(folder, settings: settings, fallback: Settings.shared.config.folderCards)
     }
 
-    /// The style chosen for the folder (the switch, the View menu, ⌃⌘1–⌃⌘3): its own from now on, its subfolders'
+    /// The style chosen for the folder (the switch, the View menu, ⌥⌘1–⌥⌘3): its own from now on, its subfolders'
     /// until they choose theirs.
     func setCardStyle(_ style: CardStyle, for location: BrowserLocation) {
         guard case .folder(let folder) = location else { return }
