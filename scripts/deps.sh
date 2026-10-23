@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The prebuilt dependencies: scripts/build-deps.sh's output for scripts/deps.arch, published as a release asset
-# so CI, releases and local builds use the same binaries without building them again.
+# The prebuilt dependencies: scripts/build-deps.sh's output for $DEPS_ARCH (the Mac's own architecture unless set),
+# published as a release asset so CI, releases and local builds use the same binaries without building them again.
 # The archive is named after the architecture and the recipe: deps-<arch>-<first 12 hex digits of the SHA-256 of build-deps.sh without
 # its comment lines>. A changed recipe
 # has no archive until the "Prebuilt dependencies" workflow publishes one (it runs when the recipe changes on the
@@ -12,7 +12,7 @@
 #        scripts/deps.sh pack DIR  write <name>.tar.xz and <name>.tar.xz.sha256 into DIR from .deps/<arch>
 set -euo pipefail
 cd "$(dirname "$0")/.."
-arch=$(<scripts/deps.arch)
+arch=${DEPS_ARCH:-$(uname -m)}
 prefix=${LOUPE_DEPS:-$PWD/.deps/$arch}
 repo=${DEPS_REPO:-ampire5/Loupe}
 # Comments do not count: only the recipe's commands and versions name the archive.

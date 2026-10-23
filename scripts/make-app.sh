@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds build/Loupe.app (release, for scripts/deps.arch: arm64 on main, x86_64 on lts/macos26). Only the Loupe product is built. Its decoders
-# (libjpeg-turbo, Loupe's own libjxl and their dependencies) are linked in statically (scripts/build-deps.sh), so the
-# app bundles no dylibs; libheif is not linked by the app.
+# Builds build/Loupe.app (release, for $DEPS_ARCH: the Mac's own architecture unless set, scripts/libjxl-env.sh). Only
+# the Loupe product is built. Its decoders (libjpeg-turbo, Loupe's own libjxl and their dependencies) are linked in
+# statically (scripts/build-deps.sh), so the app bundles no dylibs; libheif is not linked by the app.
 # Usage: scripts/make-app.sh [--install] [--label NAME]   (--install copies the app to ~/Applications; --label, or
 # env LOUPE_BUILD_LABEL, names the build in Loupe › About Loupe, e.g. L7)
 set -euo pipefail

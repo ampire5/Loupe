@@ -1,0 +1,42 @@
+name: Intel Mac (self-hosted)
+
+# main's x86_64 build on a real Intel Mac with macOS 26 (docs/intel-runner.md in FrameScrub): native x86_64 and the
+# Metal render tests on the Mac's own GPU, which CI's x86_64 job under Rosetta on GitHub's virtual machines cannot run. Never on pull
+# requests: the runner is a personal computer and must not run code from forks. When the Mac is off, the run waits
+# for it (up to a day).
+# Pushes do not start it while no runner is registered: they would wait a day for one, then fail. Put the push
+# trigger back with the runner (docs/intel-runner.md).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: intel-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, macOS, X64, intel-macos26]
+    timeout-minutes: 120
+    env:
+      # Outside the checkout, which actions/checkout cleans: kept between runs.
+      LOUPE_DEPS: ${{ github.workspace }}/../loupe-deps/x86_64
+      DEPS_ARCH: x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Machine
+        run: |
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          system_profiler SPDisplaysDataType | grep -E 'Chipset Model|Metal' || true
+          xcodebuild -version
+          swift --version
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
+      # The core suite, then the render tests one at a time on the real GPU (docs/testing.md).
+      - name: Test
+        run: scripts/test.sh render
+      - name: Build the app
+        run: scripts/make-app.sh

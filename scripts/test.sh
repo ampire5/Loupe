@@ -16,8 +16,8 @@ set -e
 cd "$(dirname "$0")/.."
 . scripts/libjxl-env.sh
 . scripts/test-report.sh
-# The tests are built for scripts/deps.arch ($DEPS_TRIPLE). For the Mac's own architecture `swift test` runs them as
-# usual. For x86_64 on Apple Silicon (lts/macos26's CI) they are cross-built natively and only the test bundle runs
+# The tests are built for $DEPS_ARCH ($DEPS_TRIPLE, scripts/libjxl-env.sh). For the Mac's own architecture `swift test` runs them as
+# usual. For x86_64 on Apple Silicon (`DEPS_ARCH=x86_64`, CI's x86_64 job) they are cross-built natively and only the test bundle runs
 # under Rosetta, through SwiftPM's own swift-testing helper: the compiler under Rosetta took most of CI's time, and
 # `swift test` itself under Rosetta spent minutes compiling the manifests again. Arguments go to the testing library
 # (`--filter`, `--skip`, `--no-parallel`).

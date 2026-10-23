@@ -32,7 +32,7 @@ public final class PageAlignedBuffer: @unchecked Sendable {
         let (rounded, overflow) = minimumLength.addingReportingOverflow(page - 1)
         guard !overflow else { throw DecodeError.outOfMemory }
         let length = max(page, rounded / page * page)
-        // mmap aligns to the VM page, 16 KiB on Apple Silicon but 4 KiB on Intel and under Rosetta (lts/macos26):
+        // mmap aligns to the VM page, 16 KiB on Apple Silicon but 4 KiB on Intel and under Rosetta:
         // one page more is mapped and the parts before the first 16 KiB boundary and after `length` given back.
         let (mapped, tooLarge) = length.addingReportingOverflow(page)
         guard !tooLarge, let pointer = mmap(nil, mapped, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0),

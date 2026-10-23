@@ -361,7 +361,7 @@ public final class TileRenderer {
     /// render pass and no clear. Needs no tile instances: each threadgroup finds its texels' slots itself.
     private func encodeResample(_ frame: LevelFrame, kernel: ResampleKernel?, upscale: Bool,
                                 commandBuffer: MTLCommandBuffer, target: MTLTexture, region: Region = .whole) {
-        guard target.width > 0, target.height > 0, let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        guard target.width > 0, target.height > 0 else { return }
         let clip = region.writes(target)
         // The dispatch covers view px x0 ..< x0 + w, y0 ..< y0 + h: the whole target, or the clip. The kernels work in
         // the dispatch's own px, so the view geometry is given less (x0, y0) (whole px, exact in Float for offsets under
@@ -369,6 +369,16 @@ public final class TileRenderer {
         let x0 = clip?.x ?? 0, y0 = clip?.y ?? 0
         let w = clip?.width ?? target.width, h = clip?.height ?? target.height
         let shift = SIMD2(Float(x0), Float(y0))
+        // A GPU that cannot write _srgb textures from a shader (Intel and AMD Macs) gets the target's unorm view and
+        // the ENCODE_SRGB variant, which encodes itself; background(for:) then gives the background encoded too. A
+        // `.table` frame's target is that view already, written through the inverse table.
+        var target = target, encodeSRGB = false
+        if !context.supportsSRGBWrites, let format = Self.unormFormat(of: target.pixelFormat),
+           let view = target.makeTextureView(pixelFormat: format) {
+            target = view
+            encodeSRGB = true
+        }
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.label = kernel == nil ? "resampleEWA" : "resample"
         let size = frame.grid.levelSize(frame.level)
         // lanczos-antiring is a Lanczos option (spec §5), EWA Lanczos included; the separable shader applies it only
@@ -388,9 +398,11 @@ public final class TileRenderer {
         let table = frame.inverseCurve != nil, cube = frame.color != nil
         if let kernel {
             encoder.setComputePipelineState(context.resamplePipeline(kernel: kernel, upscale: upscale, alpha: frame.hasAlpha,
-                                                                     curveTable: table, colorLUT: cube, cut: region.cut != nil))
+                                                                     curveTable: table, colorLUT: cube,
+                                                                     encodeSRGB: encodeSRGB, cut: region.cut != nil))
         } else {
-            encoder.setComputePipelineState(context.ewaPipeline(alpha: frame.hasAlpha, curveTable: table, colorLUT: cube, cut: region.cut != nil))
+            encoder.setComputePipelineState(context.ewaPipeline(alpha: frame.hasAlpha, curveTable: table, colorLUT: cube,
+                                                                encodeSRGB: encodeSRGB, cut: region.cut != nil))
             encoder.setTexture(context.ewaWeights, index: 2)
             var cutoff2 = MetalContext.ewaCutoffSquared
             encoder.setBytes(&cutoff2, length: MemoryLayout<Float>.stride, index: 1)

@@ -1,8 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency updates for main and the lts/macos26 line (LTS_POLICY.md on lts/macos26).",
+  "description": "Dependency updates for main.",
   "extends": ["config:recommended"],
-  "baseBranches": ["main", "lts/macos26"],
   "schedule": ["before 9am on monday"],
   "customManagers": [
     {
@@ -32,13 +31,6 @@
       "matchUpdateTypes": ["patch"],
       "schedule": ["at any time"],
       "prPriority": 10
-    },
-    {
-      "description": "On the LTS line, minor and major library updates only when approved on the Dependency Dashboard",
-      "matchManagers": ["custom.regex"],
-      "matchBaseBranches": ["lts/macos26"],
-      "matchUpdateTypes": ["minor", "major"],
-      "dependencyDashboardApproval": true
     }
   ]
 }

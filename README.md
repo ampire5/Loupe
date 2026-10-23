@@ -198,7 +198,7 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 
 ## Install
 
-Loupe needs macOS 26 or later and an Apple Silicon Mac. Intel Macs on macOS 26 get the [`lts/macos26`](https://github.com/ampire5/Loupe/tree/lts/macos26) line: the `-lts` releases, which the cask picks on Intel.
+Loupe needs macOS 26 or later: on Apple Silicon, or on an Intel Mac with macOS 26 (every release has a `macOS-x86_64` zip, which the cask picks on Intel).
 
 ```sh
 brew install --cask ampire5/tap/loupe
@@ -214,7 +214,7 @@ xattr -dr com.apple.quarantine /Applications/Loupe.app
 
 ### Edge builds
 
-The latest build that passed CI, not a release: unsigned, for testing. On Apple Silicon these are `main`'s builds, on Intel `lts/macos26`'s. The `loupe@edge` cask replaces `loupe` and back; your settings and data stay.
+The latest build that passed CI, not a release: unsigned, for testing. Both architectures are built from `main`. The `loupe@edge` cask replaces `loupe` and back; your settings and data stay.
 
 ```sh
 brew uninstall --cask loupe                       # the release, if installed: the two casks conflict
@@ -250,7 +250,9 @@ release: `brew uninstall --cask loupe@edge && brew install --cask ampire5/tap/lo
 
 ### Build from source
 
-You need macOS 26 or later on Apple Silicon and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon).
+You need macOS 26 or later and the Command Line Tools (`xcode-select --install`); Xcode is optional (its `actool` builds the Liquid Glass app icon). The scripts build for the Mac's own architecture; `DEPS_ARCH=x86_64` before them builds for Intel Macs on Apple Silicon (with `nasm` too; the tests then run under Rosetta).
+
+One branch, two toolchains: CI builds arm64 with the newest Xcode and x86_64 (Intel Macs, which stop at macOS 26) with Xcode 26. Code for a newer macOS goes under `if #available(macOS 27, *)`, and an API that only the newer SDK has also under a compiler check (`#if compiler(>=…)`), so the Xcode 26 build still compiles; Intel-only paths go under `#if arch(x86_64)` or a check of the GPU (`MetalContext.supportsSRGBWrites`).
 
 ```sh
 brew install cmake ninja pkgconf

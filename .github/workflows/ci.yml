@@ -46,3 +46,49 @@ jobs:
         with:
           name: Loupe-macOS-arm64
           path: Loupe-macOS-arm64.zip
+
+  # Intel Macs stop at macOS 26: main ships an x86_64 build for them too, made with Xcode 26 (Swift 6.2, the macOS 26
+  # SDK). GitHub has no Intel runner with macOS 26, so the job runs on the Apple Silicon macos-26 image: SwiftPM
+  # cross-builds x86_64 natively, and the tests run under Rosetta (the Intel Mac workflow runs the render tests).
+  test-x86_64:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEPS_ARCH: x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rosetta and Xcode 26
+        run: |
+          /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - name: Toolchain
+        run: |
+          uname -m
+          swift --version
+      - name: Homebrew tools
+        run: brew install cmake ninja nasm pkgconf
+      - name: Cache decoders
+        uses: actions/cache@v4
+        with:
+          path: .deps/x86_64
+          key: deps-x86_64-${{ hashFiles('scripts/build-deps.sh') }}
+      - name: Decoders (prebuilt, or built from source)
+        run: scripts/deps.sh fetch
+      - name: Test
+        run: scripts/test.sh --no-parallel   # timing tests share 3 cores badly in parallel
+      - name: Upload the test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-x86_64
+          path: .build/test.log
+          retention-days: 14
+      - name: Build the app
+        run: scripts/make-app.sh
+      - name: Upload the app
+        run: ditto -c -k --keepParent build/Loupe.app Loupe-macOS-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Loupe-macOS-x86_64
+          path: Loupe-macOS-x86_64.zip
