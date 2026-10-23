@@ -335,6 +335,9 @@ extension Notification.Name {
                     let (changes, sink) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
                     self.watchChanges = sink
                     self.watcher.watch(folder)
+                    // The folder's volume while it answers (the mount table, no file system asked): a failed relist's
+                    // probe never walks above it, so a share dropped later keeps the grid.
+                    let mountPoint = AncestorProbe.mountPoint(of: folder)
                     var failing = false
                     for await _ in changes {
                         // A change heard after the place was left (or the stream ended) lists nothing.
@@ -352,10 +355,11 @@ extension Notification.Name {
                         } catch {
                             guard wanted() else { return }
                             self.watcher.listed(in: ContinuousClock.now - started, succeeded: false)
-                            // Gone only when the system says so and the nearest ancestor that is there answers; a
-                            // share that times out or dropped keeps the grid, the next poll tries again
-                            // (`FolderRelistFailure`). One probe at a time: one still out counts as no answer.
-                            let ancestors = await self.ancestorProbe.run(folder, timeout: .seconds(1)) ?? []
+                            // Gone only when the system says so and the nearest ancestor that is there, on the folder's
+                            // own volume, answers; a share that times out or dropped keeps the grid, the next poll tries
+                            // again (`FolderRelistFailure`). One probe at a time: one still out counts as no answer.
+                            let ancestors = await self.ancestorProbe.run(folder, mountPoint: mountPoint,
+                                                                         timeout: .seconds(1)) ?? []
                             guard wanted() else { return }
                             if FolderRelistFailure(error, ancestors: ancestors) == .gone {
                                 await self.folderGone(folder)

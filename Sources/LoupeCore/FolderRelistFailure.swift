@@ -38,37 +38,73 @@ public enum FolderRelistFailure: Equatable, Sendable {
 /// (`FolderRelistFailure.Probe`), on one thread of its own at utility QoS. One probe at a time: while one is out (an
 /// `opendir` hung on a share stays out past its deadline) another is skipped (nil), so a relist that fails fast every
 /// poll never piles up stuck threads.
+///
+/// The walk never leaves the folder's volume: it stops at the folder's mount point (as the mount table gave it while
+/// the folder was listed), and a mount point that is missing, or no longer in the mount table, is no answer. A share
+/// dropped or a disk ejected takes its mount point with it (or leaves an empty folder that is not the volume), and the
+/// volume above it answering says nothing about the folder.
 public final class AncestorProbe: @unchecked Sendable {
     private let open: @Sendable (String) -> FolderRelistFailure.Probe
+    private let mountPoints: @Sendable () -> [String]
     private let lock = NSLock()
     private var busy = false
 
-    public init(open: @escaping @Sendable (String) -> FolderRelistFailure.Probe = AncestorProbe.openDirectory) {
+    /// `mountPoints`: the mount table's mount points now (`getfsstat` with `MNT_NOWAIT`, which asks no file system).
+    public init(open: @escaping @Sendable (String) -> FolderRelistFailure.Probe = AncestorProbe.openDirectory,
+                mountPoints: @escaping @Sendable () -> [String] = AncestorProbe.tableMountPoints) {
         self.open = open
+        self.mountPoints = mountPoints
+    }
+
+    /// The mount table's mount points (`getfsstat` with `MNT_NOWAIT`: no file system asked, never hangs).
+    @Sendable public static func tableMountPoints() -> [String] { ThumbnailStore.mounts().map(\.point) }
+
+    /// `folder`'s mount point from the mount table (no file system asked), as written: what `run` stays under.
+    public static func mountPoint(of folder: URL) -> String? {
+        mountPoint(of: folder.standardizedFileURL.path, in: tableMountPoints())
+    }
+
+    /// `mountPoint`'s pure part: the longest mount point in `table` that holds `path`, at whatever path it is mounted.
+    static func mountPoint(of path: String, in table: [String]) -> String? {
+        table.filter { Self.path(path, isUnder: $0) }.max { $0.count < $1.count }
+    }
+
+    private static func path(_ path: String, isUnder point: String) -> Bool {
+        path == point || path.hasPrefix(point == "/" ? "/" : point + "/")
     }
 
     /// A probe is out (its thread has not returned).
     public var isBusy: Bool { get async { lock.withLock { busy } } }
 
-    /// The ancestors' answers, parent first; `[.noAnswer]` when `timeout` passes first; nil while another probe is out.
-    public func run(_ folder: URL, timeout: Duration) async -> [FolderRelistFailure.Probe]? {
+    /// The ancestors' answers, parent first, up to `mountPoint` (the folder's, from `mountPoint(of:)` while it was
+    /// listed); `.noAnswer` last when the walk would go above it, and `[.noAnswer]` when it is unknown or no longer in
+    /// the mount table, or when `timeout` passes first; nil while another probe is out.
+    public func run(_ folder: URL, mountPoint: String?, timeout: Duration) async -> [FolderRelistFailure.Probe]? {
         let started = lock.withLock { () -> Bool in
             guard !busy else { return false }
             busy = true
             return true
         }
         guard started else { return nil }
-        let open = self.open
+        let open = self.open, mountPoints = self.mountPoints
         return await withCheckedContinuation { (c: CheckedContinuation<[FolderRelistFailure.Probe], Never>) in
             let once = OnceResume(c)
             let thread = Thread { [self] in
                 var answers: [FolderRelistFailure.Probe] = []
-                var at = folder.standardizedFileURL.deletingLastPathComponent()
-                while true {
-                    let answer = open(at.path)
-                    answers.append(answer)
-                    guard answer == .missing, at.path != "/" else { break }
-                    at = at.deletingLastPathComponent()
+                if let mountPoint, mountPoints().contains(mountPoint) {
+                    var at = folder.standardizedFileURL.deletingLastPathComponent()
+                    while true {
+                        guard Self.path(at.path, isUnder: mountPoint) else {
+                            answers.append(.noAnswer)   // above the volume: no witness
+                            break
+                        }
+                        let answer = open(at.path)
+                        answers.append(answer)
+                        guard answer == .missing, at.path != "/" else { break }
+                        at = at.deletingLastPathComponent()
+                    }
+                } else {
+                    answers = [.noAnswer]
                 }
                 lock.withLock { busy = false }
                 once.resume(answers)
