@@ -13,6 +13,7 @@ import LoupeCore
 // LoupeBench strip … (see StripBench.swift)
 // LoupeBench panload … (see PanLoadBench.swift)
 // LoupeBench sharesim … (see ShareSimBench.swift)
+// LoupeBench settings … (see SettingsBench.swift)
 
 let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "avif", "jxl", "webp", "tif", "tiff", "gif", "bmp"]
 /// Every decode method by name. Each declares the formats it accepts; ImageIO takes all of them.
@@ -37,6 +38,9 @@ if getenv("MallocLargeCache") == nil {
     fail("cannot re-execute with MallocLargeCache=0 (errno \(errno)); run with MallocLargeCache=0 set")
 }
 
+if CommandLine.arguments.dropFirst().first == "settings" {
+    SettingsBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
 if CommandLine.arguments.dropFirst().first == "replay" {
     Replay.main(Array(CommandLine.arguments.dropFirst(2)))
 }
