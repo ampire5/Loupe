@@ -140,18 +140,18 @@ public final class ThumbnailDatabase {
         return found
     }
 
-    /// The rows of `names` in the folder of `location` (its `name` is ignored), by name, with the stamps they were
-    /// catalogued at: what Home serves before a folder's stamps come (a share's names-only listing). Read only: no
-    /// row is added, changed or touched.
+    /// The rows of `names` (nil: all) in the folder of `location` (its `name` is ignored), by name, with the stamps
+    /// they were catalogued at: what Home serves before a folder's stamps come (a share's names-only listing). Read
+    /// only: no row is added, changed or touched.
     public func catalogRows(in location: ThumbnailLocation,
-                            names: Set<String>) throws -> [String: (id: Int64, stamp: FileStamp)] {
+                            names: Set<String>?) throws -> [String: (id: Int64, stamp: FileStamp)] {
         var rows: [String: (id: Int64, stamp: FileStamp)] = [:]
         try catalog.query("""
             SELECT f.id, f.name, f.size, f.mtime FROM files f JOIN folders d ON f.folder = d.id JOIN volumes v ON d.volume = v.id
             WHERE v.key = ? AND d.path = ?
             """, [.text(location.volume), .text(location.folder)]) { r in
             let name = r.text(1)
-            guard names.contains(name) else { return }
+            guard names?.contains(name) ?? true else { return }
             rows[name] = (r.int(0), FileStamp(modified: Date(timeIntervalSinceReferenceDate: r.double(3)), size: Int(r.int(2))))
         }
         return rows

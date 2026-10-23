@@ -32,15 +32,27 @@ extension ThumbnailStore {
     /// The catalog's rows of `files` (one read-only query, `ThumbnailDatabase.catalogRows`): their ids and stored
     /// thumbnails serve their cells; the folder is partial and provisional (no sync writes or deletes, no access
     /// written, nothing made). Cells asked for before and now stored are told about (`onThumbnail`).
-    func lookUpProvisional(_ dir: URL, _ files: [URL], location: ThumbnailLocation) {
-        let names = Set(files.map(\.lastPathComponent))
-        guard let (rows, have) = perform("lookup", { db -> ([String: (id: Int64, stamp: FileStamp)], Set<Int64>) in
-            let rows = try db.catalogRows(in: location, names: names)
-            return (rows, try db.hasThumbnail(rows.values.map(\.id)))
-        }) else { return }
-        // A lookup before (fewer names so far): what it served goes, these rows replace it.
-        if let old = folders[dir], old.provisional {
-            for file in old.listing {
+    func lookUpProvisional(_ dir: URL, _ files: [URL], location: ThumbnailLocation, fresh: Bool = false) {
+        // The folder's rows are read once per visit (its names come in parts on a share): a later part maps its names
+        // to them in memory and asks only ids not checked yet whether they have a thumbnail.
+        let old = folders[dir].flatMap { $0.provisional && $0.location == location && !fresh ? $0 : nil }
+        var catalog = old?.catalog ?? [:], checked = old?.checked ?? [:]
+        if old?.catalog == nil {
+            guard let rows = perform("lookup", { db -> [String: CatalogRow] in
+                self.provisionalLookups += 1
+                return try db.catalogRows(in: location, names: nil)
+            }) else { return }
+            catalog = rows
+            checked = [:]
+        }
+        let unchecked = files.compactMap { catalog[$0.lastPathComponent]?.id }.filter { checked[$0] == nil }
+        if !unchecked.isEmpty {
+            guard let have = perform("lookup", { try $0.hasThumbnail(unchecked) }) else { return }
+            for id in unchecked { checked[id] = have.contains(id) }
+        }
+        // What an earlier part served goes; this part's rows replace it.
+        if let previous = folders[dir], previous.provisional {
+            for file in previous.listing {
                 ids[file.url] = nil
                 stored.remove(file.url)
                 provisional.remove(file.url)
@@ -48,13 +60,17 @@ extension ThumbnailStore {
         }
         var listing: [ListedFile] = []
         for url in files {
-            guard let row = rows[url.lastPathComponent] else { continue }
+            guard let row = catalog[url.lastPathComponent] else { continue }
             listing.append(ListedFile(url: url, stamp: row.stamp))
             ids[url] = row.id
             provisional.insert(url)
-            if have.contains(row.id) { stored.insert(url) } else { stored.remove(url) }
+            if checked[row.id] == true { stored.insert(url) } else { stored.remove(url) }
         }
-        folders[dir] = Folder(listing: listing, location: location, partial: true, provisional: true)
+        var folder = Folder(listing: listing, location: location, partial: true, provisional: true)
+        folder.catalog = catalog
+        folder.checked = checked
+        folder.asked = files
+        folders[dir] = folder
         for url in missed where stored.contains(url) {
             missed.remove(url)
             onThumbnail?(url)
@@ -63,14 +79,35 @@ extension ThumbnailStore {
 
     /// Where Home's folder on screen is, as its covers resolved it (`shownFolderPlace`): its photos' folder needs no
     /// second resolve. `folder` is the folder itself; its files' folder key is the same URL as theirs.
+    /// A key the mount table gave (`shareLocated`) is replaced by it, so a share path through a symlink ends on the
+    /// resolved key whatever came first; a folder open under the other key is opened under this one.
     public func knowLocation(of folder: URL, _ location: ThumbnailLocation) {
         let dir = folder.appendingPathComponent("_").deletingLastPathComponent()
-        if locations[dir] == nil { locations[dir] = location }
+        guard locations[dir] == nil || shareLocated.contains(dir) else { return }
+        shareLocated.remove(dir)
+        let before = locations[dir]
+        locations[dir] = location
+        guard let before, before.volume != location.volume || before.folder != location.folder,
+              let open = folders[dir], open.location.map({ $0.volume == before.volume && $0.folder == before.folder }) == true
+        else { return }
+        for file in open.listing {
+            ids[file.url] = nil
+            stored.remove(file.url)
+        }
+        folders[dir]?.location = location
+        if open.provisional {
+            lookUpProvisional(dir, open.asked, location: location, fresh: true)
+        } else {
+            sync(dir)
+        }
+        replan()
     }
 
     /// `url`'s location on a share from the mount table (`getfsstat` with `MNT_NOWAIT`, which asks no file system):
     /// the share's key and the folder under its mount point, as `ThumbnailLocation.resolve` would give without its
-    /// `realpath` and `statfs` on the share. Nil off a share or with no mount point above it.
+    /// `realpath` and `statfs` on the share. Nil off a share or with no mount point above it. The path is taken as
+    /// written: one through a symlink inside the share gets the link's folder, not the real one `resolve` gives; Home's
+    /// resolved place replaces it once known (`knowLocation`).
     @Sendable public static func shareLocation(_ url: URL) -> ThumbnailLocation? {
         shareLocation(of: url.standardizedFileURL.path, in: mounts())
     }

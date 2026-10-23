@@ -1541,4 +1541,49 @@ final class Locked<T>: @unchecked Sendable {
         #expect(location?.folder == "/2024")
         #expect(ThumbnailStore.shareLocation(of: "/Library/Photos/a.jpg", in: mounts) == nil)
     }
+
+    /// A share's names come in parts: the folder's catalog rows are read once per visit, each new part's names are
+    /// mapped to them in memory (and only ids not yet checked are asked for a thumbnail).
+    @Test func provisionalRowsAreReadOncePerVisit() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(4, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+
+        let second = store(ThumbReader(), dir: dir)
+        await second.setRequest(window: 1, request(Array(files.prefix(2)), current: -1, visible: [0, 1], home: true),
+                                stamps: [:])
+        await second.setRequest(window: 1, request(files, current: -1, visible: [0, 1, 2, 3], home: true), stamps: [:])
+        for url in files { #expect(await second.cell(url, maxPixel: 16) != nil, "\(url.lastPathComponent)") }
+        #expect(await second.provisionalLookups == 1)
+        // A new visit (the folder left, then shown again) reads them again.
+        await second.setRequest(window: 1, nil, stamps: [:])
+        await second.setRequest(window: 1, request(files, current: -1, visible: [0], home: true), stamps: [:])
+        #expect(await second.provisionalLookups == 2)
+    }
+
+    /// A share path through a symlink: the mount table's key (the link's folder) is not the catalog's; the place Home
+    /// resolved replaces it once known, and the folder open under the old key serves from the new one.
+    @Test func resolvedPlaceReplacesTheMountTablesKey() async throws {
+        let dir = tempDir()
+        let reader = ThumbReader()
+        let files = photos(2, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+
+        let second = ThumbnailStore(directory: dir, reader: ThumbReader(), thumbSize: 32, limitBytes: 1 << 30,
+                                    locate: Self.testLocate,
+                                    shareLocate: {
+                                        ThumbnailLocation(volume: "net:link", folder: "/a", name: $0.lastPathComponent)
+                                    },
+                                    idleDelay: .zero, commitDelay: .seconds(3600), decodes: 1)
+        await second.setRequest(window: 1, request(files, current: -1, visible: [0, 1], home: true), stamps: [:])
+        #expect(await second.cell(files[0], maxPixel: 16) == nil)
+        let folder = files[0].deletingLastPathComponent()
+        await second.knowLocation(of: folder, try #require(Self.testLocate(folder.appendingPathComponent("_"))))
+        for url in files { #expect(await second.cell(url, maxPixel: 16) != nil, "\(url.lastPathComponent)") }
+    }
 }

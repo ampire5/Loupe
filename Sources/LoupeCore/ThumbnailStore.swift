@@ -97,7 +97,14 @@ public actor ThumbnailStore {
         /// Its files' names only so far: `listing` holds the catalog's rows of them with the stamps they were
         /// catalogued at, nothing is written for it (no sync, no access) and nothing is made (`listed` has none).
         var provisional = false
+        /// A provisional folder's catalog rows, read once per visit, and the ids checked for a thumbnail so far.
+        var catalog: [String: CatalogRow]?
+        var checked: [Int64: Bool] = [:]
+        /// A provisional folder's files asked for (those the catalog has rows of are `listing`).
+        var asked: [URL] = []
     }
+
+    typealias CatalogRow = (id: Int64, stamp: FileStamp)
 
     var windows: [Int: Window] = [:]
     /// The subtree walk's window (`setWalkWindow`): after every window's files, one folder at a time; its listings
@@ -114,6 +121,8 @@ public actor ThumbnailStore {
     /// Resolved once per folder for the session (`resolve` blocks on a slow share, so never per file).
     var locations: [URL: ThumbnailLocation] = [:]
     var locating: [URL: Task<ThumbnailLocation?, Never>] = [:]
+    /// Folders whose `locations` key came from the mount table (`shareLocate`): a resolved one replaces it.
+    var shareLocated: Set<URL> = []
 
     /// Files of the open folders with their listing stamps: only these are generated.
     var listed: [URL: FileStamp] = [:]
@@ -125,6 +134,8 @@ public actor ThumbnailStore {
     var provisional: Set<URL> = []
     /// Files served provisionally whose real stamps differed (`open`), until the request that brought them takes them.
     var provisionalChanged: Set<URL> = []
+    /// Test hook: catalog reads of a provisional folder's rows (`lookUpProvisional`).
+    var provisionalLookups = 0
 
     // MARK: Thumbnails
 
@@ -570,6 +581,7 @@ public actor ThumbnailStore {
         if let known = locations[dir] { return known }
         if let share = shareLocate(sample) {
             locations[dir] = share
+            shareLocated.insert(dir)
             return share
         }
         if let task = locating[dir] { return await task.value }
@@ -613,7 +625,9 @@ public actor ThumbnailStore {
     func sync(_ dir: URL) {
         guard let folder = folders[dir], let location = folder.location else { return }
         // Names only: read again, never written.
-        guard !folder.provisional else { return lookUpProvisional(dir, folder.listing.map(\.url), location: location) }
+        guard !folder.provisional else {
+            return lookUpProvisional(dir, folder.asked, location: location, fresh: true)
+        }
         let files = folder.listing.map { (name: $0.url.lastPathComponent, stamp: $0.stamp) }
         guard let (names, have) = perform("sync", { db -> ([String: Int64], Set<Int64>) in
             let names = try db.sync(folder: location, files: files, removingOthers: !folder.partial,

@@ -165,6 +165,9 @@ extension Notification.Name {
                 progressMayHaveChanged()
                 // The browser keeps its cards (the folder on screen shown again asks for nothing): its last ask goes
                 // again, so the request is no longer held and the pictures still missing are waited for anew.
+                let changed = changedWhilePaused
+                changedWhilePaused = []
+                askAgain(changed)
                 if case .folder = view?.location, let last = lastWant {
                     return wantImages(last.ids, visible: last.visible, width: last.width)
                 }
@@ -194,6 +197,7 @@ extension Notification.Name {
 
     func stop() {
         endOwnWalk()
+        isStopped = true   // no held request: the window closes, its request goes
         isPaused = true
         Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
         _ = gate.begin(nil)
@@ -330,6 +334,8 @@ extension Notification.Name {
                     self.watchChanges = sink
                     self.watcher.watch(folder)
                     for await _ in changes {
+                        // A change heard after the place was left (or the stream ended) lists nothing.
+                        guard wanted() else { return }
                         let started = ContinuousClock.now
                         do {
                             let entries = try await Task.detached { try BrowserListingSource.full(folder, archives: archives) }.value
@@ -553,6 +559,7 @@ extension Notification.Name {
         lastInView = []
         requestedVisible = []
         pictured = []
+        changedWhilePaused = []
         stopQueuedCovers()
         progressMayHaveChanged()
         guard let folder, let path else { return }
@@ -848,12 +855,20 @@ extension Notification.Name {
     /// store keeps its folder open and synced, but nothing of it to make (no file in view, nothing outward from them).
     /// Back on Home, the same files and stamps reorder its queue only (`ThumbnailStore.setRequest`).
     private func holdRequest() {
-        guard !shownFiles.isEmpty else { return }
+        guard !isStopped, !shownFiles.isEmpty else { return }
         let request = ThumbnailRequest(files: shownFiles, current: -1, visible: [], isKey: false, isHome: true,
                                        visibleOnly: true)
         let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
-        Task { await thumbnails.setRequest(window: window, request, stamps: stamps) }
+        Task { @MainActor [weak self] in
+            let changed = await thumbnails.setRequest(window: window, request, stamps: stamps)
+            self?.askAgain(changed)
+        }
     }
+
+    /// The window is closing (`stop`): nothing is held for it any more.
+    private var isStopped = false
+    /// Changed photos the store handed back while the viewer showed (`askAgain`): their cards are told on return.
+    private var changedWhilePaused: [URL] = []
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.
     /// `files`: those in view first, then the margin's.
@@ -879,6 +894,7 @@ extension Notification.Name {
     /// Photos the store served from the catalog before their stamps (a share's names-only listing) that the real
     /// stamps show changed (`ThumbnailStore.setRequest`): their cards drop the old picture and wait for the new one.
     private func askAgain(_ changed: [URL]) {
+        guard !isPaused else { return changedWhilePaused += changed }
         for url in changed {
             pictured.remove(url)
             guard let entry = shown[url.path], entry.kind == .file else { continue }
