@@ -6,7 +6,7 @@ import LoupeCore
 import LoupeRender
 import Metal
 
-// LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|all|a,b,...] [--screen 6144x3456]
+// LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|all|a,b,...] [--screen 6144x3456]
 //                   [--video out.mov] [--raw out.tsv] [--conf loupe.conf] [--nocache] [--trace out.txt]
 //                   [--seed] [--limit N] <folder>
 //
@@ -16,7 +16,8 @@ import Metal
 // step (needsFull from the zoom until the header is known, exact afterwards), dwell after 150 ms, and the current
 // photo replaces the previous one only once ShowPolicy says it is sharp enough for the scale. With --seed, a strip
 // jump (`jumpfar`) first seeds the landing from its stored thumbnail (ReplaySeeds.swift) and shows it at once, as
-// `strip-jump-preview=yes` does.
+// `strip-jump-preview=yes` does. On a discrete card the cache has two tiers: "cache" figures are its system tier
+// (compressed files and ready decodes against `cache-memory`), "graphics" its pyramids against the graphics tier.
 
 struct ReplayOptions {
     var scripts = ReplayScript.all
@@ -61,6 +62,11 @@ struct StepRecord {
     /// decoded from the file: a seeded thumbnail never counts.
     var sharpMs: Double?
     var landing = false
+    /// When the step began (ReplayDriver.begin).
+    var startedAt = ContinuousClock.now
+    /// From the step to the moment the photo's full job found its ready decode in progress and waited for it
+    /// (trace `readyAwait`, negative: while it was still a neighbour, since the previous step). Nil: it did not.
+    var readyAwaitMs: Double?
     /// A seeded strip jump (`--seed`): from the step to the scrubbing focus being in the cache, and to
     /// `ThumbnailStore.seed` handing over the level (the upload follows; `seeded` in the landing table).
     var seedFocusMs: Double?
@@ -95,6 +101,9 @@ struct FrameState {
     var currentName = ""
     var usedBytes = 0
     var limitBytes = 0
+    /// The graphics tier (nil limit: one budget, `usedBytes` holds everything).
+    var graphicsUsedBytes = 0
+    var graphicsLimitBytes: Int?
 }
 
 final class FrameBox: @unchecked Sendable {
@@ -142,6 +151,8 @@ actor ReplayDriver {
     private var cpu0 = 0.0
     private(set) var records: [StepRecord] = []
     private(set) var peakUsed = 0
+    private(set) var peakGraphicsUsed = 0
+    private(set) var peakReady = 0
 
     init(cache: ImageCache<MetalPyramidLoader>, files: [URL], zoom: ReplayZoom, screen: PixelSize, box: FrameBox,
          showBlurry: ShowBlurry, seeds: ThumbnailStore? = nil) {
@@ -170,7 +181,7 @@ actor ReplayDriver {
         stripJump = strip
         latestInfo = nil
         records.append(StepRecord(number: number, index: index, name: files[index].lastPathComponent, move: move, burst: burst,
-                                  landing: landing))
+                                  landing: landing, startedAt: start))
         publish()
         if strip {
             scrubbing = true
@@ -206,8 +217,13 @@ actor ReplayDriver {
     /// The cache's notification: re-reads the current photo's entry and considers it for the screen.
     func update(_ url: URL) async {
         let stats = await cache.stats()
-        peakUsed = max(peakUsed, stats.usedBytes)
-        box.set { $0.usedBytes = stats.usedBytes; $0.limitBytes = stats.limitBytes }
+        peaks(stats)
+        box.set {
+            $0.usedBytes = stats.usedBytes
+            $0.limitBytes = stats.limitBytes
+            $0.graphicsUsedBytes = stats.graphicsUsedBytes
+            $0.graphicsLimitBytes = stats.graphicsLimitBytes
+        }
         guard stepNo >= 0, url == files[index] else { return }
         if let e = await cache.entry(url) { await consider(e) }
     }
@@ -236,7 +252,28 @@ actor ReplayDriver {
         r.gpu = ReplayMetrics.gpuAllocated()
         r.cpuMs = cpuTimeMs() - cpu0
         records[records.count - 1] = r
+        peaks(stats)
+    }
+
+    private func peaks(_ stats: CacheStats) {
         peakUsed = max(peakUsed, stats.usedBytes)
+        peakGraphicsUsed = max(peakGraphicsUsed, stats.graphicsUsedBytes)
+        peakReady = max(peakReady, stats.readyCount)
+    }
+
+    /// Marks the steps whose photo's full job waited for its ready decode, from the run's trace.
+    func markReadyAwaits(_ log: TraceLog) {
+        let awaits = log.all.filter { $0.kind == CacheTraceEvent.Kind.readyAwait.rawValue }
+        for i in records.indices {
+            let from = i > 0 ? records[i - 1].startedAt : records[i].startedAt
+            let to = i + 1 < records.count ? records[i + 1].startedAt : ContinuousClock.now
+            let url = files[records[i].index]
+            guard let e = awaits.first(where: { $0.url.path == url.path && $0.time >= from && $0.time < to }) else {
+                continue
+            }
+            let c = (e.time - records[i].startedAt).components
+            records[i].readyAwaitMs = Double(c.seconds) * 1000 + Double(c.attoseconds) / 1e15
+        }
     }
 
     // MARK: ViewerSession logic
@@ -380,6 +417,8 @@ struct ScriptResult {
     let cpuMs: Double
     let startRAM, startGPU: Int
     let peakRAM, peakGPU, peakUsed: Int
+    /// Peaks of the graphics tier's use and of the ready decodes held (CacheStats).
+    let peakGraphicsUsed, peakReady: Int
     let teardownRAM, teardownGPU: Int
     /// phys_footprint after `malloc_zone_pressure_relief`: what of `teardownRAM` is freed memory libmalloc still held.
     let reliefRAM: Int
@@ -390,7 +429,7 @@ struct ScriptResult {
 }
 
 enum Replay {
-    static let usage = "usage: LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|all|a,b,...] "
+    static let usage = "usage: LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|all|a,b,...] "
         + "[--screen WxH] [--video out.mov] [--raw out.tsv] [--conf loupe.conf] [--nocache] [--trace out.txt] [--seed] "
         + "[--limit N] <folder>"
 
@@ -504,10 +543,11 @@ enum Replay {
         o.conf.map { Config.load(from: URL(fileURLWithPath: $0)).0 } ?? Config()
     }
 
-    /// The defaults with show-blurry=no, or the cache-* and show-blurry settings of `--conf`.
+    /// The app's defaults with show-blurry=no (from an empty `Config`, so a discrete card gets its graphics tier as in
+    /// the app), or the cache-* and show-blurry settings of `--conf`.
     static func limits(_ o: ReplayOptions) -> CacheLimits {
         guard let conf = o.conf else {
-            var limits = CacheLimits()
+            var limits = CacheLimits(config: Config())
             limits.showBlurry = .no
             return limits
         }
@@ -535,7 +575,7 @@ enum Replay {
         let driver = ReplayDriver(cache: cache, files: files, zoom: script.zoom, screen: screen, box: box,
                                   showBlurry: limits.showBlurry, seeds: seedStore?.store)
         await cache.setOnUpdate { url in Task { await driver.update(url) } }
-        if script.steps.contains(where: \.landing) { await cache.setTrace { log.add($0) } }
+        await cache.setTrace { log.add($0) }   // landings' stages, and full jobs waiting for a ready decode
         var landings: [LandingRecord] = []
         func snapshot(_ stop: ContinuousClock.Instant) async -> LoadSnapshot {
             let stats = await cache.stats()
@@ -594,8 +634,10 @@ enum Replay {
         let wallMs = msSince(t0)
         let cpuMs = cpuTimeMs() - cpu0
         sampler.stop()
+        await driver.markReadyAwaits(log)
         let records = await driver.records
         let peakUsed = await driver.peakUsed
+        let peakGraphicsUsed = await driver.peakGraphicsUsed, peakReady = await driver.peakReady
         let summary = await recorder?.finish()
         await cache.setTrace(nil)
         // Each landing's records since the previous landing's stop (the photo may have been a neighbour before).
@@ -623,6 +665,7 @@ enum Replay {
         return ScriptResult(script: script, records: records, skipped: skipped, wallMs: wallMs, cpuMs: cpuMs,
                             startRAM: startRAM, startGPU: startGPU,
                             peakRAM: sampler.peakRAM, peakGPU: sampler.peakGPU, peakUsed: peakUsed,
+                            peakGraphicsUsed: peakGraphicsUsed, peakReady: peakReady,
                             teardownRAM: teardownRAM, teardownGPU: teardownGPU, reliefRAM: reliefRAM,
                             video: summary, limits: limits, landings: landings, files: files)
     }
@@ -645,8 +688,9 @@ enum Replay {
                                   + "in \(String(format: "%.1f", $0.prefillSeconds)) s before the run" } ?? ""))
         out.append("")
         out.append("| script | zoom | steps | shown sharp | shown blurry | not shown | hit | shown p50 | p90 | max | preview p50 "
-                   + "| full p50 | full p90 | CPU s | open CPU s | CPU s/step | RAM start/peak/end/after/relief | GPU start/peak/end/after | cache peak MB | wall s |")
-        out.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|")
+                   + "| full p50 | full p90 | CPU s | open CPU s | CPU s/step | RAM start/peak/end/after/relief | GPU start/peak/end/after "
+                   + "| cache peak MB | graphics peak MB | ready peak | wall s |")
+        out.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|")
         for r in results {
             let steps = r.records.filter { $0.number > 0 }
             var shown = Samples(), preview = Samples(), full = Samples()
@@ -669,7 +713,8 @@ enum Replay {
                        + "| \(String(format: "%.2f", stepCPU / 1000 / Double(max(steps.count, 1)))) "
                        + "| \(mb(r.startRAM))/\(mb(r.peakRAM))/\(mb(last?.ram ?? 0))/\(mb(r.teardownRAM))/\(mb(r.reliefRAM)) "
                        + "| \(mb(r.startGPU))/\(mb(r.peakGPU))/\(mb(last?.gpu ?? 0))/\(mb(r.teardownGPU)) "
-                       + "| \(mb(r.peakUsed)) | \(String(format: "%.1f", r.wallMs / 1000)) |")
+                       + "| \(mb(r.peakUsed)) | \(r.limits.graphicsMemory == nil ? "–" : mb(r.peakGraphicsUsed)) | \(r.peakReady) "
+                       + "| \(String(format: "%.1f", r.wallMs / 1000)) |")
         }
         out.append("")
         out.append("Times in ms from the step. shown sharp: the entry qualified under show-blurry=no (ShowPolicy, needed "
@@ -679,7 +724,11 @@ enum Replay {
                    + "hit: it already qualified when the step reached it. CPU s/step: the steps' own CPU without the open "
                    + "(open CPU s). RAM = phys_footprint MB, "
                    + "GPU = MTLDevice.currentAllocatedSize MB; \"after\" is 3 s after the teardown (empty playlist), "
-                   + "\"relief\" right after malloc_zone_pressure_relief (freed blocks libmalloc still held).")
+                   + "\"relief\" right after malloc_zone_pressure_relief (freed blocks libmalloc still held). "
+                   + "cache: CacheStats.usedBytes, on a discrete card the system tier only (files and ready decodes); "
+                   + "graphics: the pyramids and uploads against the graphics tier (– with one budget); ready: entries "
+                   + "holding a ready decode; ready wait (steps): ms from the step to its full job waiting for the "
+                   + "photo's ready decode in progress (negative: before the step).")
         for r in results {
             out.append("")
             out.append("### \(r.script.name) (\(r.script.zoom.rawValue))")
@@ -709,11 +758,21 @@ enum Replay {
                 out.append(contentsOf: landingTable(r))
                 out.append("")
             }
+            let waited = r.records.filter { $0.readyAwaitMs != nil }
+            if !waited.isEmpty {
+                var sharp = Samples()
+                waited.compactMap(\.sharpMs).forEach { sharp.add($0) }
+                let numbers = waited.map { "\($0.number)" }.joined(separator: ", ")
+                out.append("Full jobs that waited for a ready decode: \(waited.count) steps (\(numbers)), "
+                           + "sharp p50 \(f0(sharp.median)) / max \(f0(sharp.percentile(100))) ms, "
+                           + "\(waited.count - sharp.count) not sharp before the next step.")
+                out.append("")
+            }
             out.append(stepHeader)
             out.append(stepRule)
             let shownRows = r.records.count <= 16 ? r.records : Array(r.records.prefix(11)) + Array(r.records.suffix(5))
             for (i, s) in shownRows.enumerated() {
-                if r.records.count > 16 && i == 11 { out.append("| … |" + String(repeating: " |", count: 16)) }
+                if r.records.count > 16 && i == 11 { out.append("| … |" + String(repeating: " |", count: 19)) }
                 out.append(stepRow(s))
             }
         }
@@ -721,8 +780,8 @@ enum Replay {
     }
 
     private static let stepHeader = "| step | file | move | hit | shown | preview | full | end state | finest/need/Lfit | "
-        + "decoder | read | look | prev | full dec | upload | cache MB | RAM | GPU | CPU ms |"
-    private static let stepRule = "|---:|---|---:|---|---:|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        + "decoder | read | look | prev | full dec | upload | cache MB | graphics MB | ready | ready wait | RAM | GPU | CPU ms |"
+    private static let stepRule = "|---:|---|---:|---|---:|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 
     private static func stepRow(_ s: StepRecord) -> String {
         let t = s.timings
@@ -732,13 +791,16 @@ enum Replay {
         let shown = s.shownMs == nil ? "–" : f0(s.shownMs) + (s.sharpAtShow == true ? "" : " (blurry)")
         return "| \(s.number) | \(s.name) | \(move) | \(s.hit ? "yes" : "") | \(shown) | \(f0(s.previewMs)) "
             + "| \(f0(s.fullMs)) | \(state) | \(levels) | \(s.decoder ?? "–") | \(f0(t.readMs)) | \(f0(t.firstLookMs)) "
-            + "| \(f0(t.previewMs)) | \(f0(t.fullMs)) | \(f0(t.uploadMs)) | \(mb(s.stats?.usedBytes ?? 0)) | \(mb(s.ram)) "
+            + "| \(f0(t.previewMs)) | \(f0(t.fullMs)) | \(f0(t.uploadMs)) | \(mb(s.stats?.usedBytes ?? 0)) "
+            + "| \(s.stats?.graphicsLimitBytes == nil ? "–" : mb(s.stats?.graphicsUsedBytes ?? 0)) | \(s.stats?.readyCount ?? 0) "
+            + "| \(f0(s.readyAwaitMs)) | \(mb(s.ram)) "
             + "| \(mb(s.gpu)) | \(f0(s.cpuMs)) |"
     }
 
     static func limitsText(_ l: CacheLimits) -> String {
         "cache-full \(l.full) / previews \(l.previews) / far \(l.farPreviewsCoarse ? "coarse" : "full") / files \(l.files) / "
-            + "memory \(mb(l.memory)) MB / show-blurry \(l.showBlurry.rawValue)"
+            + "memory \(mb(l.memory)) MB" + (l.graphicsMemory.map { " / graphics \(mb($0)) MB" } ?? "")
+            + " / show-blurry \(l.showBlurry.rawValue)"
     }
 
     /// One row per landing: the load at the stop and the photo's stages, ms relative to the stop.
@@ -821,7 +883,8 @@ enum Replay {
     private static func writeRaw(_ results: [ScriptResult], to path: String) {
         var lines = ["script\tstep\tindex\tfile\tmove\tburst\thit\tshown_ms\tpreview_ms\tfull_ms\tfailure\tend_state\tfinest\t"
                      + "needed\tlfit\tdecoder\tread_ms\tlook_ms\tpreview_dec_ms\tfull_dec_ms\tupload_ms\tbytes_n\tpreviews_n\t"
-                     + "full_n\tcache_used\tram\tgpu\tcpu_ms\tsharp_at_show\tsharp_ms\tlanding\tseeded_ms\tseed_focus_ms\tseed_thumb_ms"]
+                     + "full_n\tcache_used\tram\tgpu\tcpu_ms\tsharp_at_show\tsharp_ms\tlanding\tseeded_ms\tseed_focus_ms\tseed_thumb_ms\t"
+                     + "graphics_used\tready_n\tready_await_ms"]
         func o(_ v: Double?) -> String { v.map { String(format: "%.1f", $0) } ?? "" }
         func i(_ v: Int?) -> String { v.map(String.init) ?? "" }
         for r in results {
@@ -835,7 +898,8 @@ enum Replay {
                               i(st?.bytesCount), i(st?.previewCount), i(st?.fullCount), i(st?.usedBytes),
                               "\(s.ram)", "\(s.gpu)", String(format: "%.1f", s.cpuMs),
                               s.sharpAtShow.map { $0 ? "1" : "0" } ?? "", o(s.sharpMs), s.landing ? "1" : "0",
-                              o(seeded[s.number] ?? nil), o(s.seedFocusMs), o(s.seedThumbMs)].joined(separator: "\t"))
+                              o(seeded[s.number] ?? nil), o(s.seedFocusMs), o(s.seedThumbMs),
+                              i(st?.graphicsUsedBytes), i(st?.readyCount), o(s.readyAwaitMs)].joined(separator: "\t"))
             }
         }
         do {

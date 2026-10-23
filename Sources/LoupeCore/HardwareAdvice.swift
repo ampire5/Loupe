@@ -19,7 +19,11 @@ public enum HardwareAdvice {
     }
 
     /// What Loupe may keep on a discrete card: half of the card's working set. Nil on unified memory, where the
-    /// cache is the card's memory too.
+    /// cache is the card's memory too. The cache holds more on the card than this (the photo on screen, uploads in
+    /// flight): `LoupeBench panload` on an i7-10700K iMac with a Radeon Pro 5500 XT 8 GB (working set 8.57 GB, 5K)
+    /// panned smoothly up to ~6.6 GB on the card and stalled from ~7.6 GB; `replay --script 100,backfast` over 147 MP
+    /// JPEG XL with this tier (4.29 GB) peaked at 6.58–6.65 GB on the card, as the single 4 GiB budget did before
+    /// (docs/bench/2026-10-23-memory-tiers.md).
     public static func graphicsMemory(_ p: MachineProfile) -> Int? {
         p.gpu.unifiedMemory ? nil : p.gpu.workingSetBytes / 2
     }

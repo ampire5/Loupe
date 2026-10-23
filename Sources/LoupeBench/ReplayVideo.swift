@@ -132,7 +132,9 @@ final class ReplayVideo: @unchecked Sendable {
         let gb = { (b: Int) in String(format: "%.2f GB", Double(b) / 1_073_741_824) }
         var lines = ["\(state.script)  \(state.zoom.rawValue)  step \(state.step)/\(state.stepCount)  "
                      + "+\(Int(sinceStep)) ms",
-                     "cache \(state.usedBytes >> 20) / \(state.limitBytes >> 20) MB   RAM \(gb(ram))   GPU \(gb(gpu))"]
+                     "cache \(state.usedBytes >> 20) / \(state.limitBytes >> 20) MB   "
+                         + (state.graphicsLimitBytes.map { "graphics \(state.graphicsUsedBytes >> 20) / \($0 >> 20) MB   " } ?? "")
+                         + "RAM \(gb(ram))   GPU \(gb(gpu))"]
         if let shown = state.shown {
             let finest = shown.pyramid?.finestResidentLevel.map { "L\($0)" } ?? "-"
             let st = shown.failure != nil ? "failed" : shown.state.map { "\($0)" } ?? "-"

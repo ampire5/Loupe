@@ -39,7 +39,7 @@ struct ReplayScript {
     var openDwell: Duration = .seconds(2)
 
     static let all = ["fit", "100", "burst", "pingpong"]
-    static let known = all + ["jump10", "jump10-100", "jumpfar"]
+    static let known = all + ["jump10", "jump10-100", "jumpfar", "backfast"]
 
     /// From the first photo (3 s on it), five times: ten → 60 ms apart (key repeat or wheel), then 3 s on the photo
     /// it stops on, the landing.
@@ -69,6 +69,11 @@ struct ReplayScript {
             return ReplayScript(name: "100-steps", zoom: .actual,
                                 steps: Array(repeating: ReplayStep(move: 1, dwell: s), count: 30)
                                     + Array(repeating: ReplayStep(move: -1, dwell: s), count: 10))
+        case "backfast":
+            // Forward through 15 photos, looking at each, then back through them faster than a decode.
+            return ReplayScript(name: "back-fast", zoom: .actual,
+                                steps: Array(repeating: ReplayStep(move: 1, dwell: s), count: 15)
+                                    + Array(repeating: ReplayStep(move: -1, dwell: .milliseconds(600)), count: 14))
         case "burst":
             var steps = Array(repeating: ReplayStep(move: 1, dwell: .milliseconds(60), burst: true), count: 49)
             steps.append(ReplayStep(move: 1, dwell: .seconds(3), burst: true))

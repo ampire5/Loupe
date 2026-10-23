@@ -62,7 +62,10 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// (hardware defaults spec, «Два яруса памяти»). The prototype of the spec (i7-10700K, Radeon Pro 5500 XT, 64 GB;
     /// `replay --script backfast`, 15 photos of 147 MP JPEG XL forward at 1.5 s, 14 back at 0.6 s) kept 29 of 29 steps
     /// sharp before the next one against 21 without, a step back 172–255 ms to sharp against 570–583, and the run's CPU
-    /// time 126 s against 157.
+    /// time 126 s against 157. The implementation, same machine and defaults (docs/bench/2026-10-23-memory-tiers.md):
+    /// back-fast 29 of 29 sharp against 18–19, a step back 172–198 ms p50 and 244–245 ms max, CPU 137 s against
+    /// 162–166; a ready decode here takes 2.4–2.8 s, so a full job that finds one in progress waits for it: the
+    /// first step after opening took 0.78–1.26 s to sharp against 0.58–0.80 s before.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
     var entries: [URL: CacheEntry<Pyramid>] = [:]
     /// The latest plan per URL: goal → position in the plan (the decode rank).
