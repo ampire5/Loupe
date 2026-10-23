@@ -26,7 +26,8 @@ import Observation
     /// The last count; nil until the first one finished.
     private(set) var snapshot: Snapshot?
 
-    @ObservationIgnored private let read: @Sendable (URL?) -> Snapshot
+    /// Nil: the catalog is there but could not be read (busy during a big write, say): not «no catalog».
+    @ObservationIgnored private let read: @Sendable (URL?) -> Snapshot?
     @ObservationIgnored private let stamp: @Sendable (URL?) -> Stamp
     /// Bumped by `invalidate`.
     @ObservationIgnored private var generation = 0
@@ -34,7 +35,7 @@ import Observation
     @ObservationIgnored private var counted: (directory: URL?, generation: Int, stamp: Stamp)?
     @ObservationIgnored private var inFlight: Task<Void, Never>?
 
-    init(read: @escaping @Sendable (URL?) -> Snapshot = CatalogStatsCache.readSnapshot,
+    init(read: @escaping @Sendable (URL?) -> Snapshot? = CatalogStatsCache.readSnapshot,
          stamp: @escaping @Sendable (URL?) -> Stamp = CatalogStatsCache.fileStamp) {
         self.read = read
         self.stamp = stamp
@@ -64,18 +65,31 @@ import Observation
         let generation = generation
         let previous = counted.flatMap { $0.directory == directory && $0.generation == generation ? $0.stamp : nil }
         let read = read, stamp = stamp
-        let result = await Task.detached(priority: .utility) { () -> (Stamp, Snapshot?) in
+        let result = await Task.detached(priority: .utility) { () -> (stamp: Stamp, read: Snapshot??) in
             // Stamped before reading: a change during the read shows up as a new stamp next time.
             let now = stamp(directory)
-            return (now, now == previous ? nil : read(directory))
+            return (now, now == previous ? .none : .some(read(directory)))
         }.value
-        counted = (directory, generation, result.0)
-        if let fresh = result.1, fresh != snapshot { snapshot = fresh }
+        switch result.read {
+        case .none:
+            break  // Unchanged: the shown count is current.
+        case .some(.none):
+            // A failed read: the stamp is not kept, so the next refresh tries again; the old count stays shown.
+            counted = nil
+        case .some(.some(let fresh)):
+            counted = (directory, generation, result.stamp)
+            if fresh != snapshot { snapshot = fresh }
+        }
     }
 
     /// The real count: the catalog's tables, and the local volumes' names only when a `uuid:` volume needs them.
-    nonisolated static func readSnapshot(directory: URL?) -> Snapshot {
+    /// Nil when `Catalog.db` is there but could not be read.
+    nonisolated static func readSnapshot(directory: URL?) -> Snapshot? {
         let stats = directory.flatMap(CatalogStats.read)
+        if stats == nil, let directory,
+           FileManager.default.fileExists(atPath: directory.appendingPathComponent("Catalog.db").path) {
+            return nil
+        }
         let names = stats.map(CatalogStats.needsLocalNames) == true ? CatalogStats.mountedLocalNames() : [:]
         return Snapshot(stats: stats, names: names)
     }

@@ -67,6 +67,62 @@ struct CatalogStatsCacheTests {
         #expect(probe.loads.withLock { $0 } == 1)
     }
 
+    /// A cache whose reads fail (the catalog is there but busy) while `failing` is set.
+    private func makeFlakyCache(_ probe: Probe, failing: OSAllocatedUnfairLock<Bool>) -> CatalogStatsCache {
+        CatalogStatsCache(
+            read: { _ in
+                let n = probe.loads.withLock { $0 += 1; return $0 }
+                if failing.withLock({ $0 }) { return nil }
+                return CatalogStatsCache.Snapshot(stats: nil, names: ["read": "\(n)"])
+            },
+            stamp: { _ in CatalogStatsCache.Stamp(files: [.init(size: probe.stamp.withLock { $0 }, modified: nil)]) })
+    }
+
+    @Test func failedReadIsNotCachedAndCountsAgain() async {
+        let probe = Probe()
+        let failing = OSAllocatedUnfairLock(initialState: true)
+        let cache = makeFlakyCache(probe, failing: failing)
+        let dir = URL(fileURLWithPath: "/nonexistent-catalog")
+        await cache.refresh(directory: dir)
+        #expect(cache.snapshot == nil, "a failed read is not «no catalog»")
+        failing.withLock { $0 = false }
+        // Same files on disk: the failed read must not have recorded the stamp.
+        await cache.refresh(directory: dir)
+        #expect(probe.loads.withLock { $0 } == 2)
+        #expect(cache.snapshot?.names == ["read": "2"])
+    }
+
+    @Test func failedReadKeepsThePreviousSnapshot() async {
+        let probe = Probe()
+        let failing = OSAllocatedUnfairLock(initialState: false)
+        let cache = makeFlakyCache(probe, failing: failing)
+        let dir = URL(fileURLWithPath: "/nonexistent-catalog")
+        await cache.refresh(directory: dir)
+        #expect(cache.snapshot?.names == ["read": "1"])
+        probe.stamp.withLock { $0 = 2 }
+        failing.withLock { $0 = true }
+        await cache.refresh(directory: dir)
+        #expect(probe.loads.withLock { $0 } == 2)
+        #expect(cache.snapshot?.names == ["read": "1"], "the previous count stays shown")
+        failing.withLock { $0 = false }
+        await cache.refresh(directory: dir)
+        #expect(probe.loads.withLock { $0 } == 3)
+        #expect(cache.snapshot?.names == ["read": "3"])
+    }
+
+    @Test func readSnapshotFailsOnlyWhenTheCatalogIsThere() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("loupe-snap-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        // No Catalog.db: a real «no catalog».
+        #expect(CatalogStatsCache.readSnapshot(directory: dir) == CatalogStatsCache.Snapshot(stats: nil, names: [:]))
+        #expect(CatalogStatsCache.readSnapshot(directory: nil) == CatalogStatsCache.Snapshot(stats: nil, names: [:]))
+        // A Catalog.db that cannot be read: a failed read, not «no catalog».
+        try Data("not a database".utf8).write(to: dir.appendingPathComponent("Catalog.db"))
+        #expect(CatalogStatsCache.readSnapshot(directory: dir) == nil)
+    }
+
     @Test func fileStampFollowsTheCatalogFiles() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("loupe-stamp-\(UUID().uuidString)")
