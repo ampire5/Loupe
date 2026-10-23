@@ -638,7 +638,9 @@ import UniformTypeIdentifiers
             let browser = homeView.browser
             // A restored folder not shown yet (its Home tab is on Recent) is kept as it came.
             if !hasBrowsed, let restore = restoreBrowserAt {
-                return .homeKeeping(shownTab, folder: restore.folder.path, under: under, browser: restore.browser)
+                var kept = restore.browser ?? SessionSnapshot.Browser(selection: nil, anchor: nil, style: nil)
+                kept.style = tabGridStyle.own ?? kept.style   // a toggle made on Recent meanwhile
+                return .homeKeeping(shownTab, folder: restore.folder.path, under: under, browser: kept)
             }
             let folder: String? = if hasBrowsed, case .folder(let url) = browser.lastBrowsed { url.path } else { nil }
             // The selection and the scroll while the folder is on screen; the tab's own Square / Aspect always.
