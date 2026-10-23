@@ -634,6 +634,8 @@ public actor ThumbnailStore {
                                     keeping: folder.kept)
             return (names, try db.hasThumbnail(Array(names.values)))
         }) else { return }
+        // Synced under the mount table's key: it holds for the session (`knowLocation` leaves it).
+        shareLocated.remove(dir)
         for file in folder.listing {
             guard let id = names[file.url.lastPathComponent] else { continue }
             ids[file.url] = id
