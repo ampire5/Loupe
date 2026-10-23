@@ -1124,7 +1124,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
@@ -1649,6 +1649,22 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config.keys.contains("folder-cards"))
 }
 
+/// `grid-style-memory`: how Home's Square / Aspect toggle is remembered, for the tab by default (`TabGridStyle`).
+@Test func gridStyleMemoryKey() {
+    let d = Config()
+    #expect(d.gridStyleMemory == .tab && d.text(forKey: "grid-style-memory") == "tab")
+    for memory in ["tab", "folder", "global"] {
+        let (c, errors) = Config.parse("grid-style-memory=\(memory)")
+        #expect(errors.isEmpty && c.gridStyleMemory.rawValue == memory && c.text(forKey: "grid-style-memory") == memory)
+    }
+    #expect(Config.parse("grid-style-memory=Folder").0.gridStyleMemory == .folder)
+    #expect(Config.parse("grid-style-memory=window").1 == ["loupe.conf:1: bad option 'grid-style-memory=window'"])
+    var c = Config()
+    #expect(c.set("grid-style-memory", "global") == .ok && c.gridStyleMemory == .global)
+    #expect(c.set("grid-style-memory", "") == .badValue && c.gridStyleMemory == .global)
+    #expect(Config.keys.contains("grid-style-memory"))
+}
+
 /// `thumbs-ahead`: how far Home prepares thumbnails beyond the cards in view (thumbs-ahead spec, decision 5).
 @Test func thumbsAheadParsesAndDefaults() {
     let d = Config()
@@ -1700,12 +1716,15 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 /// config takes no part of them and reports none as ignored (the window warned "ignored browser-sort=…" once per
 /// folder).
 @Test func noIgnoredWarningForHomeKeys() {
-    #expect(Config.homeFolderKeys == ["browser-sort", "folder-cards"])
+    #expect(Config.homeFolderKeys == ["browser-sort", "folder-cards", "grid-style"])
     let (c, rejected) = Config().applying(["browser-sort": "date-", "folder-cards": "list", "spread": "yes"])
     #expect(rejected.isEmpty)
     #expect(c.spread && c.folderCards == .posters)
     // A bad value of one is Home's to ignore, too.
     #expect(Config().applying(["folder-cards": "huge"]).rejected.isEmpty)
+    // `grid-style` in a folder's settings is the toggle's (`grid-style-memory=folder`), read by Home, not applied.
+    let styled = Config().applying(["grid-style": "square"])
+    #expect(styled.rejected.isEmpty && styled.config.gridStyle == .aspect)
     // Other keys that are no folder keys are still reported.
     #expect(Config().applying(["strip-height": "100"]).rejected == ["strip-height=100"])
 }

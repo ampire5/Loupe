@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 131)
+        #expect(Config.keys.count == 132)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -134,6 +134,28 @@ struct PagesTests {
                 == "How folders and archives show in the browser: a big cover with a line of facts below, a compact "
                     + "card, or a list. Remembered for each folder, like its sort.")
         #expect(SettingsPanel.pages().first { $0.id == "general" }?.keys.contains("folder-cards") == true)
+    }
+
+    /// How Home's Square / Aspect toggle is remembered: per tab (the default), per folder, everywhere; next to
+    /// "Folder cards".
+    @Test func gridStyleMemoryRow() {
+        guard case .choice(let items) = row("grid-style-memory")?.kind else {
+            Issue.record("grid-style-memory is not a choice")
+            return
+        }
+        #expect(items.map(\.word) == ["tab", "folder", "global"])
+        #expect(items.map(\.title) == ["Per tab", "Per folder", "Everywhere"])
+        #expect(row("grid-style-memory")?.title == "Square or Aspect")
+        #expect(row("grid-style-memory")?.description
+                == "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its own until "
+                    + "it closes, a new one starts from Folders thumbnails. Per folder: saved for the folder and the "
+                    + "ones under it, like its sort. Everywhere: changes Folders thumbnails for all. Default Per tab.")
+        let keys = SettingsPanel.pages().first { $0.id == "general" }?.keys ?? []
+        if let cards = keys.firstIndex(of: "folder-cards") {
+            #expect(keys.firstIndex(of: "grid-style-memory") == cards + 1)
+        } else {
+            Issue.record("no folder-cards row")
+        }
     }
 
     /// The pop-ups of the enumerations offer the whole set (spec §11).

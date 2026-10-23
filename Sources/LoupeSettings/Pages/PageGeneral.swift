@@ -107,6 +107,14 @@ extension SettingsPanel {
                 ], symbol: "rectangle.grid.1x2",
                 description: "How folders and archives show in the browser: a big cover with a line of facts below, a "
                     + "compact card, or a list. Remembered for each folder, like its sort."),
+                .choice("grid-style-memory", "Square or Aspect", [
+                    (word: "tab", title: "Per tab"), (word: "folder", title: "Per folder"),
+                    (word: "global", title: "Everywhere"),
+                ], symbol: "rectangle.grid.2x2",
+                description: "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its "
+                    + "own until it closes, a new one starts from Folders thumbnails. Per folder: saved for the folder "
+                    + "and the ones under it, like its sort. Everywhere: changes Folders thumbnails for all. "
+                    + "Default Per tab."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),
                 ], symbol: "rectangle.stack.badge.play",

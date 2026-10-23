@@ -840,13 +840,22 @@ import UniformTypeIdentifiers
                 _ = Settings.shared.saveAsDefault(["home-tab": saved.rawValue])
             }
             if tab == .stash { self.stash?.page.focusPage() }
+            // `grid-style-memory=folder`: each folder its own Square / Aspect, before its cards are laid out.
+            self.applyGridStyle()
             self.updateTitle()
         }
         browser.onResize = { [weak self] in self?.resizeBrowserCards($0) }
-        // ⌥T, the style button, ⌥N: saved as the default, then shown.
-        browser.onStyle = { [weak self] style in
-            _ = Settings.shared.saveAsDefault(["grid-style": style.rawValue])
-            self?.applyBrowserSettings()
+        // ⌥T, the style button: kept for the tab, saved for the folder or as the default (`grid-style-memory`), then
+        // shown. ⌥N: saved as the default, then shown.
+        browser.onStyle = { [weak self, weak browser] style in
+            guard let self, let browser else { return }
+            let folder = Self.folder(of: browser.location)
+            switch self.tabGridStyle.choose(style, memory: Settings.shared.config.gridStyleMemory, folder: folder) {
+            case .none: break
+            case .folder(let url, let style): self.folderSettings.set(GridStyle.settingKey, style.rawValue, for: url)
+            case .global(let style): _ = Settings.shared.saveAsDefault(["grid-style": style.rawValue])
+            }
+            self.applyBrowserSettings()
         }
         browser.onNames = { [weak self] names in
             _ = Settings.shared.saveAsDefault(["grid-names": names.rawValue])
@@ -961,14 +970,30 @@ import UniformTypeIdentifiers
     /// loupe.conf's `folder-cards` as `applyBrowserSettings` last applied it.
     private var shownFolderCards: CardStyle?
 
-    /// `browser-card-size`, `grid-style`, `grid-names`, `folder-cover`, `folder-cards`: on every show and every
-    /// settings change.
+    /// This tab's Square / Aspect under `grid-style-memory` (its own choice, for the session).
+    private var tabGridStyle = TabGridStyle()
+
+    private static func folder(of location: BrowserLocation) -> URL? {
+        if case .folder(let url) = location { return url }
+        return nil
+    }
+
+    /// Square / Aspect for where Home's browser is: the tab's, the folder's or loupe.conf's (`grid-style-memory`).
+    private func applyGridStyle() {
+        guard let view = homeView?.browser else { return }
+        let config = Settings.shared.config
+        view.style = tabGridStyle.style(memory: config.gridStyleMemory, global: config.gridStyle,
+                                        folder: Self.folder(of: view.location), settings: folderSettings)
+    }
+
+    /// `browser-card-size`, `grid-style` (with `grid-style-memory`), `grid-names`, `folder-cover`, `folder-cards`: on
+    /// every show and every settings change.
     private func applyBrowserSettings() {
         guard let homeView else { return }
         let config = Settings.shared.config
         let view = homeView.browser
         view.cardSize = CGFloat(config.browserCardSize)
-        view.style = config.gridStyle
+        applyGridStyle()
         view.names = config.gridNames
         let coverLayout = HomeMosaic.Layout(rawValue: config.folderCover.rawValue) ?? .hero
         homeSources?.folders.coverLayout = coverLayout

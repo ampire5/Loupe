@@ -456,6 +456,10 @@ public struct Config: Equatable, Sendable {
     /// facts, a compact card, a list row); the default for every folder, which keeps its own choice in its settings
     /// like its sort (`CardStyle.forFolder`; folder cards spec).
     public var folderCards = CardStyle.posters
+    /// `grid-style-memory`: how Home's Square / Aspect toggle is remembered (`GridStyleMemory`): for the tab (the
+    /// default; a new tab starts from `grid-style`), for the folder and the ones under it (its settings, like
+    /// `folder-cards`), or everywhere (written to `grid-style`). `TabGridStyle` resolves it.
+    public var gridStyleMemory = GridStyleMemory.tab
     /// `thumbs-ahead`: how far thumbnails are prepared beyond the cards in view (`ThumbsAhead`); the default is the
     /// whole folder. Background work pauses while photos are browsed.
     public var thumbsAhead = ThumbsAhead.folder
@@ -588,7 +592,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-folder-name",
                               "app-icon"]
 
@@ -604,9 +608,10 @@ public struct Config: Equatable, Sendable {
                                           "spread-wide-ratio"]
     /// The keys a folder may set for itself.
     public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys
-    /// Home's own keys in a folder's settings: its sort (`BrowserSort.settingKey`) and how its folders are drawn
-    /// (`CardStyle.settingKey`). The browser reads them itself; a folder's config neither takes nor refuses them.
-    public static let homeFolderKeys = ["browser-sort", "folder-cards"]
+    /// Home's own keys in a folder's settings: its sort (`BrowserSort.settingKey`), how its folders are drawn
+    /// (`CardStyle.settingKey`) and Square / Aspect under `grid-style-memory=folder` (`GridStyle.settingKey`). Home
+    /// reads them itself; a folder's config neither takes nor refuses them.
+    public static let homeFolderKeys = ["browser-sort", "folder-cards", "grid-style"]
 
     /// This config with a folder's saved `key: text` values on top (only `folderKeys`). `rejected` lists
     /// `key=value` for every entry that is no folder key or whose value `set` refuses, sorted by key; those
@@ -739,6 +744,7 @@ public struct Config: Equatable, Sendable {
         case "grid-names": return gridNames.rawValue
         case "folder-cover": return folderCover.rawValue
         case "folder-cards": return folderCards.rawValue
+        case "grid-style-memory": return gridStyleMemory.rawValue
         case "thumbs-ahead": return thumbsAhead.rawValue
         case "thumbs-depth": return String(thumbsDepth)
         case "thumbs-pill-delay": return formatNumber(thumbsPillDelay)
@@ -1034,6 +1040,8 @@ public struct Config: Equatable, Sendable {
             if let v = FolderCoverLayout(rawValue: value.lowercased()) { folderCover = v } else { return .badValue }
         case "folder-cards":
             if let v = CardStyle(rawValue: value.lowercased()) { folderCards = v } else { return .badValue }
+        case "grid-style-memory":
+            if let v = GridStyleMemory(rawValue: value.lowercased()) { gridStyleMemory = v } else { return .badValue }
         case "thumbs-ahead":
             if let v = ThumbsAhead(rawValue: value.lowercased()) { thumbsAhead = v } else { return .badValue }
         case "thumbs-depth":
