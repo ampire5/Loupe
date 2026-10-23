@@ -72,9 +72,11 @@ public final class ThumbnailDatabase {
     }
 
     /// Records an opened folder's listing and returns name → file id. A file whose size or mtime changed
-    /// keeps its id but loses its thumbnail and `ImageInfo`; files no longer listed leave both databases.
+    /// keeps its id but loses its thumbnail and `ImageInfo`; files no longer listed leave both databases, unless
+    /// `removingOthers` is false (a part of the folder's files: the subtree walk's photos stamped so far).
     /// `folder.name` is not used.
-    public func sync(folder: ThumbnailLocation, files: [(name: String, stamp: FileStamp)]) throws -> [String: Int64] {
+    public func sync(folder: ThumbnailLocation, files: [(name: String, stamp: FileStamp)],
+                     removingOthers: Bool = true) throws -> [String: Int64] {
         let time = SQLiteValue.double(now().timeIntervalSinceReferenceDate)
         var ids: [String: Int64] = [:]
         try catalog.transaction {
@@ -102,7 +104,7 @@ public final class ThumbnailDatabase {
                     added.append(file)
                 }
             }
-            let orphans = stored.values.map(\.id)
+            let orphans = removingOthers ? stored.values.map(\.id) : []
             try deleteThumbs(changed.map(\.id) + orphans)
 
             for file in changed {
@@ -430,6 +432,12 @@ public final class ThumbnailDatabase {
                     SELECT rowid FROM folder_summaries ORDER BY last_used DESC, rowid DESC LIMIT -1 OFFSET ?)
                 """, [.int(Int64(max(0, summaryCapacity)))])
         }
+    }
+
+    /// Drops the stored summary of the folder `location.folder` on `location.volume` ("Refresh cover").
+    public func deleteSummary(at location: ThumbnailLocation) throws {
+        try catalog.run("DELETE FROM folder_summaries WHERE volume = ? AND path = ?",
+                        [.text(location.volume), .text(location.folder)])
     }
 
     /// The photo counts of the stored summaries of the direct subfolders of `location.folder` (R8), by path: one range

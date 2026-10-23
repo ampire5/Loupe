@@ -115,4 +115,18 @@ import Foundation
         #expect(ThumbnailRequest.inViewFirst(f, inView: [f[3], f[4]]) == [f[3], f[4], f[0], f[1], f[2], f[5]])
         #expect(ThumbnailRequest.inViewFirst(f, inView: []) == f)
     }
+
+    /// The walk's window (thumbs-ahead stage 5) comes after every window's files, the key one's and the others', and
+    /// a file a window has keeps that window's place.
+    @Test func walkWindowComesLast() {
+        let a = files("a", 3), b = files("b", 2), w = files("w", 3) + [a[1]]
+        let requests = [
+            ThumbnailRequest(files: b, current: 0, visible: [], isKey: false),
+            ThumbnailRequest(files: a, current: 0, visible: [2], isKey: true),
+        ]
+        let walk = ThumbnailRequest(files: w, current: 0, visible: [], isKey: false)
+        #expect(names(ThumbnailQueue.order(requests, skip: [w[1]], trailing: walk))
+                == ["a2", "a0", "a1", "b0", "b1", "w0", "w2"])
+        #expect(ThumbnailQueue.order(requests, skip: []) == ThumbnailQueue.order(requests, skip: [], trailing: nil))
+    }
 }

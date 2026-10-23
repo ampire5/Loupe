@@ -61,7 +61,7 @@ extension ThumbnailStore {
         for request in requests where request.isKey {
             for index in request.visible where request.files.indices.contains(index) { keep.insert(request.files[index]) }
         }
-        let ordered = ThumbnailQueue.order(requests, skip: [])
+        let ordered = ThumbnailQueue.order(requests, skip: [], trailing: walkWindow?.request)
         let inOrder = Set(ordered)
         let outside = made.keys.filter { !inOrder.contains($0) && !keep.contains($0) }
             .sorted { madeAccess[$0, default: 0] < madeAccess[$1, default: 0] }

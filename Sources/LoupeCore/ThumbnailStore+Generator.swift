@@ -16,6 +16,7 @@ extension ThumbnailStore {
     func replan() {
         queueIsStale = true
         for job in jobs.values where listed[job.url] == nil { cancel(job.token) }   // its folder was replaced or closed
+        countWalkPending()
         pump()
     }
 
@@ -51,7 +52,7 @@ extension ThumbnailStore {
             // Files in flight are left out: they come back through `finish` if they stay pending.
             let skip = stored.union(made.keys).union(unavailable).union(evicted).union(jobs.values.map(\.url))
             let requests = windows.sorted { $0.key < $1.key }.map(\.value.request)
-            queue = ThumbnailQueue.order(requests, skip: skip)
+            queue = ThumbnailQueue.order(requests, skip: skip, trailing: walkWindow?.request)
             queuePosition = 0
             queueIsStale = false
         }
@@ -136,6 +137,7 @@ extension ThumbnailStore {
         case .failed:
             if !job.cancelled {
                 unavailable.insert(url)
+                walkFileDone(url)
                 onThumbnail?(url)
             }
             log?("thumb \(url.lastPathComponent): failed after read \(Self.ms(timing.read)) ms")
@@ -160,6 +162,7 @@ extension ThumbnailStore {
             if uncommitted.count >= Self.batchSize { commit() } else { scheduleCommit() }
         }
         enforceMemoryCap()   // after `uncommitted`, which the cap leaves alone
+        walkFileDone(url)
         onThumbnail?(url)
     }
 

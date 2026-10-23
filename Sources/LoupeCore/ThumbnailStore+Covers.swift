@@ -571,7 +571,7 @@ extension ThumbnailStore {
     /// answers; a share's volume gone makes it offline; a malformed zip is broken. `forSummary`: the pictures came from
     /// the catalog, so a failure or a time out leaves the folder's own notes (empty for the session, time outs)
     /// alone.
-    private func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String?,
+    func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String?,
                               alias: String?, forSummary: Bool, probe: Bool = false) async -> CoverListingResult {
         let lister = coverLister, dated = !network
         var turn: ProbeTurn?
@@ -1115,7 +1115,8 @@ extension ThumbnailStore {
     static func onThread<T: Sendable>(_ threads: CoverThreads, lane: CoverLane, timeout: Duration,
                                       _ work: @escaping @Sendable (_ part: @escaping @Sendable (T) -> Bool) throws -> T)
         async -> ThreadAnswer<T>.Outcome {
-        guard threads.enter(lane) else { return .busy }
+        // A task already cancelled (a card left, a walk ended) starts no blocking call.
+        guard !Task.isCancelled, threads.enter(lane) else { return .busy }
         let answer = ThreadAnswer<T>()
         DispatchQueue.global(qos: coverQoS).async {
             let result = Result { try work { answer.part($0) } }

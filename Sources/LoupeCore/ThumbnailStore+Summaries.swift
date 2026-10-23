@@ -95,6 +95,23 @@ extension ThumbnailStore {
         _ = perform("move summaries", { try $0.moveSummaries(volume: location.volume, from: move.from, to: move.to) })
     }
 
+    /// "Refresh cover" on a folder's card: its summary goes from the batch waiting and the catalog, and this session's
+    /// memos of it (its pick, its subfolders' names, its summary listed or due, its being found empty, its time outs)
+    /// from memory, so its next card lists it again. `location` is where the catalog keeps the folder (as for its
+    /// card), `folder` its path, which the memos are keyed by (at any of its dates). Its thumbnails stay in the catalog.
+    public func forgetSummaryAndPick(of location: ThumbnailLocation, folder: URL) {
+        pendingSummaries[Self.summaryKey(location)] = nil
+        _ = perform("forget summary", { try $0.deleteSummary(at: location) })
+        let path = folder.standardizedFileURL.path
+        func isFolder(_ key: String) -> Bool { key == path || key.hasPrefix(path + "\u{0}") }
+        coverPicks = coverPicks.filter { !isFolder($0.key) }
+        summaryTried = summaryTried.filter { !isFolder($0) }
+        summaryDue = summaryDue.filter { !isFolder($0) }
+        emptyCovers = emptyCovers.filter { !isFolder($0) }
+        coverTimeouts = coverTimeouts.filter { !isFolder($0.key) }
+        if let names = coverSubfolders.removeValue(forKey: path) { coverSubfolderNames -= names.names.count }
+    }
+
     /// Summaries waiting for the next batch at most: a full batch is written at once, else with the thumbnails'
     /// batch (`commitDelay`). Covers finish a few a second, so a batch is mostly what a second of covers made; the
     /// bound keeps a burst (a folder of hundreds of zips from the catalog) to one transaction per this many, each

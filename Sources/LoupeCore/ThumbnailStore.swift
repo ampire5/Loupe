@@ -84,9 +84,16 @@ public actor ThumbnailStore {
         var listing: [ListedFile]
         /// Nil: no database for this folder (memory only, or its volume could not be examined).
         var location: ThumbnailLocation?
+        /// Only some of the folder's files (the walk's photos stamped so far): the catalog keeps the others' rows.
+        var partial = false
     }
 
     var windows: [Int: Window] = [:]
+    /// The subtree walk's window (`setWalkWindow`): after every window's files, one folder at a time.
+    var walkWindow: Window?
+    /// Its files with no thumbnail yet (pending, not evicted), and the walk waiting for that count to change.
+    var walkPending: Set<URL> = []
+    var walkWaiter: (count: Int, continuation: CheckedContinuation<Int, Never>)?
     /// Folders some window shows, by directory URL: two windows on one folder share it.
     var folders: [URL: Folder] = [:]
     /// Resolved once per folder for the session (`resolve` blocks on a slow share, so never per file).
@@ -296,14 +303,23 @@ public actor ThumbnailStore {
         }
         let listings = Self.listings(request.files, stamps)
         windows[window] = Window(request: request, stamps: stamps, listings: listings)
+        await openListings(listings) { $0.windows[window]?.listings }
+    }
+
+    /// The folders of a window's new `listings` synced into the catalog, each located first. `current` gives the
+    /// window's listings as they are after the awaits (nil: the window closed); `partial`: the listings hold only some
+    /// of their folders' files.
+    func openListings(_ listings: [URL: [ListedFile]], partial: Bool = false,
+                      current: (isolated ThumbnailStore) -> [URL: [ListedFile]]?) async {
         // A folder left stops generating now, not after the new one is located.
         closeUnshownFolders()
         replan()
-        for (dir, listing) in listings where folders[dir]?.listing != listing {
+        for (dir, listing) in listings where folders[dir]?.listing != listing || folders[dir]?.partial != partial {
             let location = wantsDisk ? await location(of: dir, sample: listing[0].url) : nil
             // The await let other calls in: sync what the window lists now, unless another one already did.
-            guard let current = windows[window]?.listings[dir], folders[dir]?.listing != current else { continue }
-            open(dir, current, location: location)
+            guard let now = current(self)?[dir], folders[dir]?.listing != now || folders[dir]?.partial != partial
+            else { continue }
+            open(dir, now, location: location, partial: partial)
         }
     }
 
@@ -516,7 +532,7 @@ public actor ThumbnailStore {
 
     /// A folder (re)listed: what changed or left is forgotten, failures get another try (spec §3.7), and the
     /// catalog learns the listing.
-    func open(_ dir: URL, _ listing: [ListedFile], location: ThumbnailLocation?) {
+    func open(_ dir: URL, _ listing: [ListedFile], location: ThumbnailLocation?, partial: Bool = false) {
         let stamps = Dictionary(listing.map { ($0.url, $0.stamp) }, uniquingKeysWith: { first, _ in first })
         // Changed or gone: whatever was made of it, in memory or as a cell, shows the old picture.
         for file in folders[dir]?.listing ?? [] where stamps[file.url] != file.stamp {
@@ -531,7 +547,7 @@ public actor ThumbnailStore {
             evicted.remove(file.url)
             if let thumbnail = made[file.url], thumbnail.stamp != file.stamp { forget(file.url) }
         }
-        folders[dir] = Folder(listing: listing, location: location)
+        folders[dir] = Folder(listing: listing, location: location, partial: partial)
         if !checkReopen() { sync(dir) }
     }
 
@@ -540,7 +556,7 @@ public actor ThumbnailStore {
         guard let folder = folders[dir], let location = folder.location else { return }
         let files = folder.listing.map { (name: $0.url.lastPathComponent, stamp: $0.stamp) }
         guard let (names, have) = perform("sync", { db -> ([String: Int64], Set<Int64>) in
-            let names = try db.sync(folder: location, files: files)
+            let names = try db.sync(folder: location, files: files, removingOthers: !folder.partial)
             return (names, try db.hasThumbnail(Array(names.values)))
         }) else { return }
         for file in folder.listing {
@@ -565,7 +581,8 @@ public actor ThumbnailStore {
     /// written first, while their ids are known). Memory-only thumbnails stay: memory is all they have (up to
     /// `memoryCap`, least recently used out first).
     func closeUnshownFolders() {
-        let shown = Set(windows.values.flatMap(\.listings.keys))
+        var shown = Set(windows.values.flatMap(\.listings.keys))
+        if let walk = walkWindow { shown.formUnion(walk.listings.keys) }
         let gone = folders.filter { !shown.contains($0.key) }
         guard !gone.isEmpty else { return }
         let goneFiles = gone.values.flatMap { $0.listing.map(\.url) }

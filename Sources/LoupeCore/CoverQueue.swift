@@ -198,6 +198,10 @@ public actor CoverQueue {
         }
     }
 
+    /// Whether work ahead waits now (the subtree walk's stamps and listings too, thumbs-ahead plan R3): while the
+    /// viewer is busy (`pause`) and until its resume delay has passed.
+    public var aheadPaused: Bool { paused }
+
     /// The end of a resume delay; stale (and ignored) when `pause` was called again since it was scheduled, even if
     /// its wake had already left the timer.
     func resume(_ generation: Int) {

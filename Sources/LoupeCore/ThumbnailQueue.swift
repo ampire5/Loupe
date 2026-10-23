@@ -29,12 +29,14 @@ public struct ThumbnailRequest: Sendable, Equatable {
 
 /// The order in which thumbnails get generated across windows. The user is looking at the key window's strip,
 /// so its visible cells come first, then its photos spreading outward from the current one (the user is about to
-/// scrub or step there), then the same two stages for the other windows, the one key most recently first. One pass
-/// over the files with a Set for duplicates: folders hold 10 000+ photos and several windows may show the same one.
+/// scrub or step there), then the same two stages for the other windows, the one key most recently first; after them
+/// all, the subtree walk's window (thumbs-ahead stage 5), which no one is looking at. One pass over the files with a Set
+/// for duplicates: folders hold 10 000+ photos and several windows may show the same one.
 public enum ThumbnailQueue {
     /// Files to generate, most urgent first. Each file appears once, at its first position; `skip` (thumbnails
-    /// that already exist or are being made) never appears.
-    public static func order(_ requests: [ThumbnailRequest], skip: Set<URL>) -> [URL] {
+    /// that already exist or are being made) never appears. `trailing` (the walk's window) goes after every request,
+    /// its visible cells then outward from its current file, as a window's.
+    public static func order(_ requests: [ThumbnailRequest], skip: Set<URL>, trailing: ThumbnailRequest? = nil) -> [URL] {
         // The key window(s) first, the others by how recently they were key; ties keep the order given (stable).
         let others = requests.enumerated().filter { !$0.element.isKey }
             .sorted { ($0.element.lastActive, $1.offset) > ($1.element.lastActive, $0.offset) }.map(\.element)
@@ -57,6 +59,10 @@ public enum ThumbnailQueue {
             for request in group {
                 outward(request, add)
             }
+        }
+        if let trailing {
+            for index in trailing.visible where trailing.files.indices.contains(index) { add(trailing.files[index]) }
+            outward(trailing, add)
         }
         return result
     }

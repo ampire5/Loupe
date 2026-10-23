@@ -12,13 +12,17 @@ public struct CoverListing: Equatable, Sendable {
     /// The subfolders' modification dates by name, those a listing with stat gave (the work ahead's freshness:
     /// `ThumbnailStore.subfolderModified`); empty from a names-only listing.
     public var folderDates: [String: Date]
+    /// The photos' stamps by name, those a listing with stat gave (the subtree walk's window: `ThumbsWalk`); empty from
+    /// a names-only listing and for a zip.
+    public var fileStamps: [String: FileStamp]
 
     public init(names: CoverNames, summary: FolderSummary? = nil, photoDates: [Date]? = nil,
-                folderDates: [String: Date] = [:]) {
+                folderDates: [String: Date] = [:], fileStamps: [String: FileStamp] = [:]) {
         self.names = names
         self.summary = summary
         self.photoDates = photoDates
         self.folderDates = folderDates
+        self.fileStamps = fileStamps
     }
 
     /// From a listing (`BrowserListingSource.names`, with stat on a local volume: the summary and the photos' dates
@@ -29,7 +33,11 @@ public struct CoverListing: Equatable, Sendable {
                   summary: dated ? .of(listing: entries, folderModified: nil) : nil,
                   photoDates: dated ? files.compactMap(\.date) : nil,
                   folderDates: dated ? Dictionary(folders.compactMap { entry in entry.date.map { (entry.name, $0) } },
-                                                  uniquingKeysWith: { first, _ in first }) : [:])
+                                                  uniquingKeysWith: { first, _ in first }) : [:],
+                  fileStamps: dated ? Dictionary(files.compactMap { entry in
+                      guard let date = entry.date, let size = entry.size else { return nil }
+                      return (entry.name, FileStamp(modified: date, size: Int(size)))
+                  }, uniquingKeysWith: { first, _ in first }) : [:])
     }
 }
 

@@ -63,8 +63,8 @@ extension SettingsPanel {
             description: "Prepare thumbnails ahead: for the whole folder (default), for the cards in view, or not at "
                 + "all. Background work pauses while you browse photos."),
             .number("thumbs-depth", "Prepare depth", step: 1, symbol: "arrow.down.right.and.arrow.up.left",
-                    description: "How many levels of subfolders Prepare thumbnails goes into. 0–3, 0 = the folder "
-                        + "itself; default 1."),
+                    description: "How many levels of subfolders \"Prepare thumbnails of folder and subfolders\" "
+                        + "goes into. 0–3, 0 = the folder itself; default 1."),
             .number("thumbs-pill-delay", "Show progress after", unit: "s", step: 0.5, symbol: "clock.badge",
                     description: "How long background work runs before its progress pill shows. 0 = at once; "
                         + "default 1."),

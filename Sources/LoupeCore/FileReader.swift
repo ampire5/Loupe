@@ -96,6 +96,16 @@ public protocol FileReading: Sendable {
     func readPrefix(_ url: URL, priority: ReadPriority, isEnough: @escaping @Sendable (Data) -> Bool) async throws -> FileBytes
     /// The file's stamp, queued like a read at `priority` (1: behind the current photo's read).
     func stamp(_ url: URL, priority: Int) async throws -> FileStamp
+    /// The same at a read's `priority`: a background one (`isBackground`, the subtree walk's) runs where the
+    /// thumbnail reads do, never on the viewer's threads.
+    func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp
+}
+
+extension FileReading {
+    /// Readers without classes of threads: as `stamp(_:priority:)` at the priority's value.
+    public func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp {
+        try await stamp(url, priority: priority.value)
+    }
 }
 
 extension FileReading {
@@ -197,7 +207,11 @@ public final class FileReader: FileReading, @unchecked Sendable {
 
     /// `stat` on the pool: it hangs on a dead share just like a read.
     public func stamp(_ url: URL, priority: Int) async throws -> FileStamp {
-        try await submit(url, priority: ReadPriority(priority)) { _ in
+        try await stamp(url, priority: ReadPriority(priority))
+    }
+
+    public func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp {
+        try await submit(url, priority: priority) { _ in
             if ArchivePath.split(url) != nil { return try ArchiveReader.shared.stamp(url) }
             var st = stat()
             guard stat(url.path, &st) == 0 else { throw Self.posixError() }

@@ -1260,4 +1260,64 @@ final class Locked<T>: @unchecked Sendable {
         #expect(withMemory.count == 4)
         #expect(await second.aspects([]) == [:])
     }
+
+    // MARK: - Thumbs ahead (stage 5)
+
+    /// "Refresh cover": the folder's summary goes from the batch and the catalog and its pick from memory, so its next
+    /// card lists it again.
+    @Test func refreshCoverForgetsSummaryAndPick() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let names = photos(6, folder: "/photos/p", in: reader).map(\.lastPathComponent)
+        let listings = Locked(0)
+        let store = store(reader, dir: dir)
+        await store.setCoverListing { _, _, _ in
+            listings.update { $0 += 1 }
+            return CoverNames(files: names, folders: [])
+        }
+        await store.setCoverVolumes { _ in false }
+        let folder = URL(fileURLWithPath: "/photos/p")
+        let location = ThumbnailLocation(volume: "test", folder: "/photos/p", name: "_")
+        let date = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = await store.folderCard(folder, archive: false, in: location, maxPixel: 16, modified: date)
+        #expect(listings.get == 1)
+        #expect(await store.folderSummary(at: location)?.photos == 6)
+        #expect(await store.coverPicks.keys.contains { $0.hasPrefix("/photos/p") })
+        await store.commit()
+        await store.forgetSummaryAndPick(of: location, folder: folder)
+        #expect(await store.folderSummary(at: location) == nil)
+        #expect(!(await store.coverPicks.keys.contains { $0.hasPrefix("/photos/p") }))
+        // The pictures from the catalog at once, the summary listed on the call after (as a card's).
+        var card = try #require(await store.folderCard(folder, archive: false, in: location, maxPixel: 16,
+                                                       modified: date))
+        if card.summaryPending {
+            card = try #require(await store.folderCard(folder, archive: false, in: location, maxPixel: 16,
+                                                       modified: date))
+        }
+        #expect(listings.get == 2)
+        #expect(card.summary?.photos == 6)
+    }
+
+    /// A walk window of a folder's first stamped photos (more to come) leaves the catalog's rows of the others alone.
+    @Test func walkChunkKeepsTheFolderCatalog() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let files = photos(4, in: reader)
+        let first = store(reader, dir: dir, commitDelay: .milliseconds(5))
+        await first.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await settled(first, files) })
+
+        let second = store(reader, dir: dir)
+        let chunk = Array(files.prefix(2))
+        await second.setWalkWindow(ThumbnailRequest(files: chunk, current: 0, visible: [], isKey: false),
+                                   stamps: reader.stamps, complete: false)
+        #expect(await allReady(second, chunk))
+        await second.setWalkWindow(nil, stamps: [:])
+        let reads = reader.reads.count
+        await second.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await allReady(second, files))
+        #expect(reader.reads.count == reads)
+    }
 }

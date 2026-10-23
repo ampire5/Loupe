@@ -77,6 +77,19 @@ public struct CoverCards {
         while bytes > limitBytes, let oldest = kept.min(by: { $0.value.use < $1.value.use })?.key { remove(oldest) }
     }
 
+    /// The card's cover is to be made anew ("Refresh cover"): its mosaic is no longer given back and it waits for a
+    /// cover again, with the cards in view when it is (`inView`), else after them.
+    public mutating func again(_ id: String, inView: Bool) {
+        remove(id)
+        guard !pending.contains(id) else { return }
+        if inView {
+            pending.insert(id, at: visiblePending)
+            visiblePending += 1
+        } else {
+            pending.append(id)
+        }
+    }
+
     /// Another budget (the folder's card count or the cards' size changed): the least recently used go if it shrank.
     public mutating func setLimit(_ limit: Int) {
         limitBytes = limit

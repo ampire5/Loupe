@@ -573,10 +573,6 @@ extension Notification.Name {
         var parentLocation: ThumbnailLocation?
     }
 
-    /// The decoded cells of a subfolder made ahead are dropped (only the catalog keeps what it made: no view shows
-    /// it), so they are decoded as small as can be: the thumbnails kept are the store's own size whatever this is.
-    private static let aheadCellPixels = 16
-
     /// The subfolders of the folder cards in view, card by card in the grid's order (the last ask's), those whose
     /// names are known; the others' names are asked for (`askSubfolders`), and they come with a later `sendCovers`.
     private func aheadCards(in shownLocation: ThumbnailLocation?) -> [AheadCard] {
@@ -614,10 +610,9 @@ extension Notification.Name {
         }
     }
 
-    /// The work ahead on one subfolder: its card (`ThumbnailStore.folderCard`, at the date its parent's listing gave,
-    /// else its own stat's: `subfolderModified`, "not now" when that does not answer) for the catalog only, with "not
-    /// now" and a summary still to be listed as a card's. A summary it wrote (new or changed) has its parent card's
-    /// "+N inside" counted again (`refreshInside`); a fresh one skipped costs the parent nothing.
+    /// The work ahead on one subfolder (`ThumbnailStore.prepareAhead`, as the subtree walk's) while its parent card
+    /// is on screen. A summary it wrote (new or changed) has its parent card's "+N inside" counted again
+    /// (`refreshInside`); a fresh one skipped costs the parent nothing.
     private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadCard) async -> Bool {
         let thumbnails = self.thumbnails
         let lastViewed: @MainActor (AheadCard) -> String?? = { [weak self] card in
@@ -630,15 +625,9 @@ extension Notification.Name {
         }
         return { card in
             guard let viewed = await lastViewed(card) else { return true }
-            guard case .known(let modified) = await thumbnails.subfolderModified(card.url, in: card.location)
-            else { return false }
-            guard !Task.isCancelled else { return true }
-            guard let made = await thumbnails.folderCard(card.url, archive: false, in: card.location, network: network,
-                                                         maxPixel: Self.aheadCellPixels, lastViewed: viewed,
-                                                         modified: modified) else { return false }
-            guard !Task.isCancelled else { return true }
+            let made = await thumbnails.prepareAhead(card.url, in: card.location, network: network, lastViewed: viewed)
             if made.summaryWritten, let parentLocation = card.parentLocation { await refresh(card.parent, parentLocation) }
-            return !(made.summaryPending || (made.problem == .offline && made.images.isEmpty))
+            return made.done
         }
     }
 
@@ -784,6 +773,12 @@ extension Notification.Name {
             items.append(places.isPinned(entry.url) ? HomeMenuItem(id: "unpin", title: "Unpin")
                                                     : HomeMenuItem(id: "pin", title: "Pin"))
         }
+        if entry.kind == .folder, case .folder = location {
+            items.append(HomeMenuItem(id: "prepare-subtree", title: "Prepare thumbnails of folder and subfolders"))
+        }
+        if entry.kind == .folder || entry.kind == .archive, case .folder = location {
+            items.append(HomeMenuItem(id: "refresh-cover", title: "Refresh cover"))
+        }
         if entry.canRename { items.append(HomeMenuItem(id: "rename", title: "Rename…")) }
         if entry.canTrash { items.append(HomeMenuItem(id: "trash", title: "Move to Trash")) }
         return items
@@ -802,8 +797,49 @@ extension Notification.Name {
             onPlacesChanged?()
         case "rename": view?.beginRename()
         case "trash": view?.trashSelected()
+        case "prepare-subtree": prepareSubtree(entry)
+        case "refresh-cover": refreshCover(entry)
         default: break
         }
+    }
+
+    /// The app's one subtree walk (thumbs-ahead spec, stage 5) on the store's cover queue, as a client of its own: a
+    /// walk asked from any window ends the one before.
+    private static var walk: ThumbsWalk?
+
+    /// "Prepare thumbnails of folder and subfolders": the walk from this card's folder down to `thumbs-depth`, where
+    /// the catalog keeps it as for its card.
+    private func prepareSubtree(_ entry: BrowserEntry) {
+        guard entry.kind == .folder else { return }
+        let walk = Self.walk ?? {
+            let made = ThumbsWalk(store: thumbnails, queue: thumbnails.coverQueue, client: Self.nextWindow)
+            Self.nextWindow += 1
+            Self.walk = made
+            return made
+        }()
+        let location = shownLocation?.subfolder(entry.url.lastPathComponent)
+        let depth = Settings.shared.config.thumbsDepth, folder = entry.url
+        Task { await walk.start(folder, location: location, depth: depth) }
+    }
+
+    /// "Refresh cover": the card's summary and pick go from the catalog and memory (`forgetSummaryAndPick`), and the
+    /// card goes to the cover queue again, its picture and facts made anew.
+    private func refreshCover(_ entry: BrowserEntry) {
+        guard entry.kind == .folder || entry.kind == .archive, coverPlace != nil else { return }
+        let id = entry.id, folder = entry.url, thumbnails = self.thumbnails
+        let location = shownLocation?.subfolder(entry.url.lastPathComponent)
+        cards.again(id, inView: lastInView.contains(id))
+        sendToQueue { queue, client in
+            if let location { await thumbnails.forgetSummaryAndPick(of: location, folder: folder) }
+            await queue.forget([id], client: client)
+        }
+        sendCovers()
+    }
+
+    /// Where the catalog keeps the folder on screen, once resolved; nil without one.
+    private var shownLocation: ThumbnailLocation? {
+        if case .located(let location) = coverPlace { return location }
+        return nil
     }
 
     /// A sidebar row of a folder, a place or a zip (`.folder` rows): the cards' Show in Finder and Copy Path.
