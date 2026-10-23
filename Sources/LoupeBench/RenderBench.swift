@@ -332,7 +332,7 @@ enum RenderBench {
     /// bytes are tagged with (their values stay the same).
     static func zonePlate(_ size: PixelSize, alpha: Bool = false,
                           colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!) throws -> DecodedImage {
-        let bytesPerRow = (size.width * 4 + 63) / 64 * 64
+        let bytesPerRow = DecodedImage.bytesPerRow(width: size.width)
         let buffer = try PageAlignedBuffer(minimumLength: bytesPerRow * size.height)
         let base = buffer.bytes.assumingMemoryBound(to: UInt8.self)
         let period: Float = 2048

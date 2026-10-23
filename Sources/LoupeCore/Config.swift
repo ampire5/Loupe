@@ -273,7 +273,9 @@ public struct Config: Equatable, Sendable {
     public var cacheFarPreviewsCoarse = true
     /// `cache-files`: neighbours kept as compressed bytes, 0...50.
     public var cacheFiles = 24
-    /// `cache-memory`: ceiling over all planned levels, in bytes; by default by the Mac's memory (`Machine`).
+    /// `cache-memory`: ceiling over all planned levels and files, in bytes (over the files and ready decodes only when
+    /// a discrete card has its own tier, `CacheLimits.graphicsMemory`); by default from the Mac
+    /// (`HardwareAdvice.defaultCacheMemory`).
     public var cacheMemory = HardwareAdvice.defaultCacheMemory(.current)
     /// `cache-idle-trim`: minutes without use after which a tab's cache is trimmed, 0...1440 (0: never).
     public var cacheIdleTrimMinutes = 30
@@ -284,8 +286,9 @@ public struct Config: Equatable, Sendable {
     /// `jxl-threads-current`: libjxl worker threads for the current photo's decode, 1...16; by default one per
     /// performance core (`Machine`).
     public var jxlThreadsCurrent = Machine.jxlThreadsCurrent
-    /// `jxl-threads-other`: libjxl worker threads for neighbours and thumbnails, 1...16 (2 measured best,
-    /// docs/bench/2026-10-20-jxl-tuning.md).
+    /// `jxl-threads-other`: libjxl worker threads for neighbours and thumbnails, 1...16; by default a quarter of the
+    /// cores, 1 or 2 (`HardwareAdvice.defaultJXLThreadsOther`; 2 measured best, docs/bench/2026-10-20-jxl-tuning.md).
+    /// Takes effect clamped to a quarter of the cores (`JXLOptions(config:)`); kept here as written.
     public var jxlThreadsOther = HardwareAdvice.defaultJXLThreadsOther(.current)
     /// `jxl-dc-preview`: first looks, coarse previews and thumbnails of JPEG XL from the 1:8 DC image.
     public var jxlDCPreview = true

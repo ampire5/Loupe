@@ -158,9 +158,9 @@ extension ImageCache {
             // gate of big decodes too.
             let serial = goal == .full ? info.isProgressive
                                        : roleDecoder.previewNeedsFullDecode(data, info: info, level: wanted)
-            let busy: @Sendable () -> Bool = { phase.markBusy(); return true }
+            // A job given up (`abandonIfWaiting`) after its slot was granted decodes nothing.
             let image = try await decode(url, goal, gated: serial, gateForCurrent: p.forCurrent, on: pool,
-                                         forCurrent: p.forCurrent, rank: p.rank, begin: busy) {
+                                         forCurrent: p.forCurrent, rank: p.rank, begin: phase.beginIfLive) {
                 if goal == .full { return LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0) }
                 return try roleDecoder.preview(data, info: info, level: wanted)
             }
@@ -169,7 +169,12 @@ extension ImageCache {
             guard image.level <= wanted, image.level < l.grid.levelCount else { throw DecodeError.unreadable }
             if goal == .full {
                 e.timings.fullMs = start.millisecondsElapsed
-                e.readyFailed = false   // the file decodes: a ready decode may be tried again
+                if e.readyFailed {
+                    // The file decodes: a ready decode may be planned again, and this one is kept as it (below)
+                    // rather than made once more in the background.
+                    e.readyFailed = false
+                    reconcile()
+                }
             } else {
                 e.timings.previewMs = start.millisecondsElapsed
             }
@@ -251,14 +256,19 @@ extension ImageCache {
             guard isWanted(url, e, goal), e.ready == nil, e.jobs[.full] == nil else { return }
             guard TileGrid.fitsTextureArrays(info.pixelSize) else { throw DecodeError.tooLarge }
 
-            let start = ContinuousClock.now
             // `priority` marks it waiting again (its probe marked it busy) while it queues for the gate and the slot,
             // so a full job abandons it rather than wait for a decode that has not begun (`awaitReadyDecode`).
             let p = priority(url, goal, phase)
             let roleDecoder = decoder.forRole(.other)
+            // Running, it counts as the neighbours' activity (`currentActivity`), which the actor is told of.
+            let begin: @Sendable () -> Bool = { [weak self] in
+                guard phase.beginIfLive() else { return false }
+                Task { await self?.updateActivity() }
+                return true
+            }
             // Background work even for the current photo: never the big-decode slot reserved for the current one.
             let image = try await decode(url, goal, gated: info.isProgressive, gateForCurrent: false, on: readyPool,
-                                         forCurrent: p.forCurrent, rank: p.rank, begin: phase.beginIfLive) {
+                                         forCurrent: p.forCurrent, rank: p.rank, begin: begin) {
                 LevelImage(image: try roleDecoder.decodeFull(data, info: info), level: 0)
             }
             guard isAlive(url, e) else { return }
@@ -273,8 +283,9 @@ extension ImageCache {
                 emit(url, .uploadSkipped, goal, level: 0)
                 return
             }
+            // No `fullMs`: the stats bar's full decode time is the photo on screen's, not a background decode's (which
+            // includes its wait for the gate and the slot).
             e.ready = image
-            e.timings.fullMs = start.millisecondsElapsed
             evictToFit()
         } catch {
             // A read failure is already the entry's (`readTask`); a bad header or a decode error is left to the

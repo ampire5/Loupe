@@ -53,7 +53,7 @@ private func solidJPEG(width: Int, height: Int, space: CGColorSpace, alpha: CGIm
     let preview = try turbo.preview(data, info: info, level: 2)
     #expect(preview.level == 2)
     #expect(preview.image.pixelSize == expected)
-    #expect(preview.image.bytesPerRow == (751 * 4 + 63) / 64 * 64)
+    #expect(preview.image.bytesPerRow == 3008)   // 751 × 4 = 3004, padded to 64 bytes
 }
 
 @Test func previewCapsAtEighth() throws {

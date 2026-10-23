@@ -23,15 +23,16 @@ public struct CacheLimits: Equatable, Sendable {
     /// `cache-files`: neighbours kept as compressed bytes.
     public var files = 24
     /// `cache-memory`: a fuse over the sum of everything planned; with a graphics tier (`graphicsMemory`), over what
-    /// lives in system memory only (the compressed bytes), the pyramids going by that tier.
+    /// lives in system memory only (the compressed bytes and ready decodes), the pyramids going by that tier.
     public var memory = HardwareAdvice.defaultCacheMemory(.current)
     /// `cache-idle-trim`: how long a tab may go unused before its cache is trimmed; nil: never.
     public var idleTrim: Duration? = .seconds(30 * 60)
     /// `cache-idle-keep`: what the trim leaves.
     public var idleKeep = CacheIdleKeep.full
     public var showBlurry = ShowBlurry.no
-    /// The card's own budget on a Mac with a discrete GPU (half its working set); nil: one budget, `memory`.
-    public var graphicsMemory: Int?
+    /// The card's own budget on a Mac with a discrete GPU (half its working set); nil: one budget, `memory`. By
+    /// default this Mac's (`HardwareAdvice.graphicsMemory`), as `init(config:)` sets it, so the defaults agree.
+    public var graphicsMemory: Int? = HardwareAdvice.graphicsMemory(.current)
 
     public init() {}
 

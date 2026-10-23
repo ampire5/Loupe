@@ -27,6 +27,12 @@ public struct DecodedImage: Sendable {
         self.colorSpace = colorSpace
         self.hasAlphaChannel = hasAlphaChannel
     }
+
+    /// The row of a `width`-pixel image as decoders lay it out: BGRA8, rounded up to 64 bytes.
+    public static func bytesPerRow(width: Int) -> Int { (width * 4 + 63) / 64 * 64 }
+
+    /// The buffer a decode of a `size` image fills: what a full decode holds in memory (`CacheGoal.ready`'s cost).
+    public static func byteCount(_ size: PixelSize) -> Int { bytesPerRow(width: size.width) * size.height }
 }
 
 extension DecodedImage {
@@ -158,7 +164,7 @@ public enum ImageIODecoder {
     static func allocateBGRA(width: Int, height: Int) throws -> (buffer: PageAlignedBuffer, bytesPerRow: Int) {
         let (rowBytes, rowOverflow) = width.multipliedReportingOverflow(by: 4)
         guard !rowOverflow, rowBytes <= Int.max - 63 else { throw DecodeError.outOfMemory }
-        let bytesPerRow = (rowBytes + 63) / 64 * 64
+        let bytesPerRow = DecodedImage.bytesPerRow(width: width)
         let (total, overflow) = bytesPerRow.multipliedReportingOverflow(by: height)
         guard !overflow else { throw DecodeError.outOfMemory }
         return (try PageAlignedBuffer(minimumLength: total), bytesPerRow)

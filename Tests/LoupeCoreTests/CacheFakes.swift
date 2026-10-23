@@ -314,7 +314,7 @@ final class FakeDecoder: ImageDecoder, @unchecked Sendable {
         try work(name, full: true)
         defer { lock.withLock { finished[name] = Date() } }
         guard fullSizedBuffers else { return try image(info, level: 0).image }
-        let size = info.pixelSize, rowBytes = (size.width * 4 + 63) / 64 * 64
+        let size = info.pixelSize, rowBytes = DecodedImage.bytesPerRow(width: size.width)
         return DecodedImage(pixelSize: size, bytesPerRow: rowBytes,
                             buffer: try PageAlignedBuffer(minimumLength: rowBytes * size.height),
                             colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
@@ -396,11 +396,13 @@ final class FakeLoader: PyramidLoader, @unchecked Sendable {
 }
 
 extension CacheLimits {
-    /// The defaults with the 3 GB `cache-memory` the cache tests were worked out for: the default itself follows the
-    /// Mac (`Machine.cacheMemory`, 1–4 GB), and a CI runner with little memory would get a smaller one.
+    /// The defaults with the 3 GB `cache-memory` the cache tests were worked out for, and one budget (no graphics
+    /// tier, as on unified memory): both defaults follow the Mac (`HardwareAdvice`), and a CI runner with little
+    /// memory would get a smaller one, a Mac with a discrete card a graphics tier.
     static var at3G: CacheLimits {
         var limits = CacheLimits()
         limits.memory = 3 << 30
+        limits.graphicsMemory = nil
         return limits
     }
 }

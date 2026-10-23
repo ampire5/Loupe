@@ -304,13 +304,14 @@ import Foundation
 }
 
 @Test func cacheLimitsFollowConfig() {
-    // A unified-memory Mac: one budget, which is what `CacheLimits()` is.
+    // The defaults with and without a config are the same on any Mac, graphics tier included.
+    #expect(CacheLimits(config: Config()) == CacheLimits())
     let unified = MachineProfile(physicalCores: 8, performanceCores: 8, memoryBytes: 16 << 30,
                                  gpu: GPUProfile(unifiedMemory: true, workingSetBytes: 12 << 30, name: "Apple GPU"))
-    #expect(CacheLimits(config: Config(), profile: .current).graphicsMemory == HardwareAdvice.graphicsMemory(.current))
-    var plain = CacheLimits(config: Config())
-    plain.graphicsMemory = nil
-    #expect(plain == CacheLimits())
+    let discrete = MachineProfile(physicalCores: 8, performanceCores: 8, memoryBytes: 32 << 30,
+                                  gpu: GPUProfile(unifiedMemory: false, workingSetBytes: 8 << 30, name: "Card"))
+    #expect(CacheLimits(config: Config(), profile: unified).graphicsMemory == nil)
+    #expect(CacheLimits(config: Config(), profile: discrete).graphicsMemory == 4 << 30)
     var c = Config()
     c.cacheFull = 2; c.cachePreviews = 7; c.cacheFarPreviewsCoarse = false; c.cacheFiles = 3; c.cacheMemory = 1 << 30; c.showBlurry = .fit
     let l = CacheLimits(config: c, profile: unified)

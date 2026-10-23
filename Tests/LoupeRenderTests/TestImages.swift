@@ -11,7 +11,7 @@ enum TestImages {
     static func synthetic(_ width: Int, _ height: Int,
                           colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!,
                           pixel: (Int, Int) -> (b: UInt8, g: UInt8, r: UInt8, a: UInt8)) -> DecodedImage {
-        let bytesPerRow = (width * 4 + 63) / 64 * 64
+        let bytesPerRow = DecodedImage.bytesPerRow(width: width)
         let buffer = try! PageAlignedBuffer(minimumLength: bytesPerRow * height)
         memset(buffer.bytes, 0, buffer.length)
         let base = buffer.bytes.assumingMemoryBound(to: UInt8.self)

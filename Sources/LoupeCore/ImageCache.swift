@@ -71,7 +71,9 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// decode cannot be stopped and the second decode runs beside it; no gain, so it was removed. With a queued ready
     /// job given up rather than waited for (d581405, two runs), no step met one in progress: the first step after
     /// opening was already sharp, 100-steps max 1–2 ms, back-fast 29 of 29 with a step back 184–186 ms p50 and
-    /// 237–309 ms max.
+    /// 237–309 ms max. The system tier bounds what is held, not what is being made: up to four full decodes in flight
+    /// (three on `pool`, one here), each ~0.6 GB of output at 147 MP plus libjxl's own buffers, can stand ~2.5–3 GB
+    /// above it for a moment. That is the one 15.3 GB process peak in those runs, against a cache figure of 11 391 MiB.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
     var entries: [URL: CacheEntry<Pyramid>] = [:]
     /// The latest plan per URL: goal → position in the plan (the decode rank).
@@ -218,15 +220,19 @@ public actor ImageCache<Loader: PyramidLoader> {
 
     /// `.current` while the current photo has a read, a job or a stamp check in flight or waiting (a job queued in
     /// the current class counts too: an ex-current one still ahead of the neighbours is the viewer's I/O), else
-    /// `.neighbours` while any other read or job is, else `.idle`.
+    /// `.neighbours` while any other read or job is, else `.idle`. A ready job (`CacheGoal.ready`) is background
+    /// work whatever its photo: `.neighbours` at most while it runs, nothing while it waits, so a ready fill (seconds
+    /// at 147 MP) never holds back thumbnails or Home covers as the photo on screen does.
     func currentActivity() -> CacheActivity {
         if stampChecks > 0 { return .current }
         var neighbours = false
         for (url, e) in entries {
-            let busy = e.read != nil || !e.jobs.isEmpty
+            let jobs = e.jobs.filter { $0.key != .ready }
+            let busy = e.read != nil || !jobs.isEmpty
             if busy && isCurrent(url) { return .current }
-            if e.jobs.values.contains(where: { $0.phase.forCurrent }) { return .current }
-            neighbours = neighbours || busy
+            if jobs.values.contains(where: { $0.phase.forCurrent }) { return .current }
+            let readyRunning = e.jobs[.ready].map { !$0.phase.isWaiting } ?? false
+            neighbours = neighbours || busy || readyRunning
         }
         return neighbours ? .neighbours : .idle
     }
@@ -298,7 +304,8 @@ public actor ImageCache<Loader: PyramidLoader> {
         guard let e = entries[url] else { return EntryFacts() }
         return EntryFacts(pixelSize: e.info?.pixelSize, orientation: e.info?.orientation ?? .up, fileSize: e.stamp?.size,
                           failed: e.failure != nil, fullKept: isSatisfied(url, e, .full) || e.jobs[.full] != nil,
-                          readyKept: e.ready != nil || e.jobs[.ready].map { !$0.phase.isWaiting } == true)
+                          readyKept: e.ready != nil || e.jobs[.ready].map { !$0.phase.isWaiting } == true,
+                          readyFailed: e.readyFailed)
     }
 
     /// Replans and brings jobs and residency in line: cancels what left the plan, starts what is missing in

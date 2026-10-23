@@ -25,6 +25,12 @@ private let intelIGPU = MachineProfile(physicalCores: 4, performanceCores: 4, me
     #expect(HardwareAdvice.defaultCacheMemory(card4) == 3_221_225_472)
     #expect(HardwareAdvice.defaultCacheMemory(m4max) == 4 << 30)
     #expect(HardwareAdvice.defaultCacheMemory(m1) == 1536 << 20)
+    // A discrete card with little memory: a fifth would be under 1 GiB (819 MiB of 4 GiB, 409 MiB of 2 GiB).
+    for memory in [2 * gib, 4 * gib] {
+        let small = MachineProfile(physicalCores: 4, performanceCores: 4, memoryBytes: memory,
+                                   gpu: GPUProfile(unifiedMemory: false, workingSetBytes: 2 * gib, name: "Card"))
+        #expect(HardwareAdvice.defaultCacheMemory(small) == gib)
+    }
 }
 
 @Test func neighbourThreadsAreAQuarterOfTheCores() {
@@ -67,7 +73,8 @@ private let intelIGPU = MachineProfile(physicalCores: 4, performanceCores: 4, me
 @Test func limitsCarryTheGraphicsTier() {
     #expect(CacheLimits(config: Config(), profile: imac).graphicsMemory == 4_286_578_688)
     #expect(CacheLimits(config: Config(), profile: m4max).graphicsMemory == nil)
-    #expect(CacheLimits().graphicsMemory == nil)
+    // Without a config, the same tier as with one: this Mac's.
+    #expect(CacheLimits().graphicsMemory == CacheLimits(config: Config()).graphicsMemory)
 }
 
 @Test func neighbourThreadsTakeEffectClamped() {
