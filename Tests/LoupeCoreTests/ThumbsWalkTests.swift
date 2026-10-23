@@ -80,9 +80,13 @@ private final class StampReader: FileReading, @unchecked Sendable {
     private let gate = HoldGate()
     private var failing: Set<URL> = []
 
-    init(_ inner: ThumbReader, holdFrom: Int = .max) {
+    /// How long each stamp waits in the reader's queue before a thread picks it up.
+    private let queued: Duration
+
+    init(_ inner: ThumbReader, holdFrom: Int = .max, queued: Duration = .zero) {
         self.inner = inner
         self.holdFrom = holdFrom
+        self.queued = queued
     }
 
     var stamps: Int { lock.withLock { count } }
@@ -103,6 +107,12 @@ private final class StampReader: FileReading, @unchecked Sendable {
 
     func stamp(_ url: URL, priority: Int) async throws -> FileStamp {
         try await stamp(url, priority: ReadPriority(priority))
+    }
+
+    func stamp(_ url: URL, priority: ReadPriority, started: @escaping @Sendable () -> Void) async throws -> FileStamp {
+        if queued > .zero { try await Task.sleep(for: queued) }
+        started()
+        return try await stamp(url, priority: priority)
     }
 
     func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp {
@@ -206,7 +216,8 @@ private final class StampReader: FileReading, @unchecked Sendable {
         for name in ["a", "b", "c", "d"] { tree.set("/s/" + name, photos: 2) }
         for name in ["h1", "h2", "h3"] { tree.set("/home/" + name, photos: 2) }
         let store = store(reader, dir: dir)
-        await store.setCoverListing(dated: tree.lister)
+        // A generous time limit: these count listings, which a time out under load would repeat.
+        await store.setCoverListing(dated: tree.lister, networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in true }
         await store.setCoverStat { _ in nil }
         let queue = store.coverQueue
@@ -311,23 +322,67 @@ private final class StampReader: FileReading, @unchecked Sendable {
     @Test func homeCardsGoBeforeTheWalk() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
-        let reader = ThumbReader(), tree = FakeTree(reader: reader, latency: 0.02)
-        tree.set("/s", photos: 1)
+        let reader = ThumbReader(), tree = FakeTree(reader: reader, latency: 0.05)
+        tree.set("/s", photos: 0, folders: ["a"])
+        tree.set("/s/a", photos: 0)
         for name in ["h1", "h2", "h3"] { tree.set("/home/" + name, photos: 1) }
         let store = store(reader, dir: dir)
-        await store.setCoverListing(dated: tree.lister)
+        // A generous time limit: these count listings, which a time out under load would repeat.
+        await store.setCoverListing(dated: tree.lister, networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in true }
         await store.setCoverStat { _ in nil }
         let queue = store.coverQueue
+        // The walk first; Home's cards come while its first listing runs, and go before its next one.
+        let walk = ThumbsWalk(store: store, queue: queue, client: 7)
+        await walk.start(URL(fileURLWithPath: "/s"), location: nil, depth: 1)
+        #expect(await eventually { tree.calls.contains("/s") })
         await queue.want(["/home/h1", "/home/h2", "/home/h3"], visible: 3, client: 1, isNetwork: { _ in true }) { id in
             await store.folderCard(URL(fileURLWithPath: id), archive: false, in: nil, network: true, maxPixel: 16) != nil
         }
-        let walk = ThumbsWalk(store: store, queue: queue, client: 7)
-        await walk.start(URL(fileURLWithPath: "/s"), location: nil, depth: 0)
         await walk.finished()
-        let calls = tree.calls
-        let walkFirst = try #require(calls.firstIndex(of: "/s"))
-        #expect(calls.prefix(walkFirst).filter { $0.hasPrefix("/home/") }.count == 3)
+        #expect(tree.calls == ["/s", "/home/h1", "/home/h2", "/home/h3", "/s/a"])
+    }
+
+    /// A share's stamp that waits in the reader's queue (behind the open folders' reads) past the time limit is not a
+    /// time out: the share is not noted, and the stamp comes.
+    @Test func aQueuedStampIsNoTimeOut() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let inner = ThumbReader()
+        inner.add(URL(fileURLWithPath: "/q/0.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        let reader = StampReader(inner, queued: .milliseconds(300))
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: FakeTree(reader: inner).lister, networkTimeout: .milliseconds(100))
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverNetworkVolumes { _ in "net:share" }
+        for _ in 0..<2 {
+            guard case .stamp = await store.walkStamp(URL(fileURLWithPath: "/q/0.jpg"), in: nil) else {
+                Issue.record("a queued stamp gave no stamp")
+                return
+            }
+        }
+        #expect(await store.coverVolumeTimeouts["net:share"] == nil)
+        #expect(!(await store.isOffline("net:share")))
+    }
+
+    /// A stamp a thread picked up that then takes longer than the time limit is a time out of the share.
+    @Test func aStartedStampTimesOut() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let inner = ThumbReader()
+        inner.add(URL(fileURLWithPath: "/q/0.jpg"), TestJPEGs.gradient(width: 40, height: 30))
+        let reader = StampReader(inner, holdFrom: 0)
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(dated: FakeTree(reader: inner).lister, networkTimeout: .milliseconds(100))
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverNetworkVolumes { _ in "net:share" }
+        guard case .notNow(offline: false) = await store.walkStamp(URL(fileURLWithPath: "/q/0.jpg"), in: nil) else {
+            Issue.record("a stamp that hangs gave an answer")
+            return
+        }
+        #expect(await store.coverVolumeTimeouts["net:share"] == 1)
+        _ = await store.walkStamp(URL(fileURLWithPath: "/q/0.jpg"), in: nil)
+        #expect(await store.isOffline("net:share"))
     }
 
     /// A share's stamps keep to its gate: each has the share's time limit, two time outs make it offline, then only

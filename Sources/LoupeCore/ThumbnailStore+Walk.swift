@@ -107,7 +107,8 @@ extension ThumbnailStore {
 
     /// A photo's stamp for the walk's window on a share, kept to the share's gate as its listings are: while the share
     /// is offline only on its probe turn (`coverProbeInterval`), else "not now"; a background job of the reader (on
-    /// the thumbnail reads' threads, behind the open folders' reads) given the share's listing time limit, whose
+    /// the thumbnail reads' threads, behind the open folders' reads) given the share's listing time limit from the
+    /// moment a thread picks it up (its wait in the queue behind those reads is not the share's slowness), whose
     /// expiry (or a connection error) counts towards offline, and whose answer brings the share back. `location`:
     /// where the catalog keeps the photo's folder (nil: none).
     func walkStamp(_ url: URL, in location: ThumbnailLocation?) async -> WalkStamp {
@@ -120,13 +121,19 @@ extension ThumbnailStore {
             case error(any Error)
             case timedOut
         }
+        let started = StartSignal()
         let race = await withTaskGroup(of: Race?.self, returning: Race?.self) { group in
             group.addTask {
-                do { return .stamp(try await reader.stamp(url, priority: priority)) } catch {
+                do {
+                    return .stamp(try await reader.stamp(url, priority: priority, started: { started.fire() }))
+                } catch {
                     return Task.isCancelled ? nil : .error(error)
                 }
             }
-            group.addTask { (try? await Task.sleep(for: timeout)) != nil ? .timedOut : nil }
+            group.addTask {
+                guard await started.wait() else { return nil }
+                return (try? await Task.sleep(for: timeout)) != nil ? .timedOut : nil
+            }
             for await answer in group {
                 guard let answer else { continue }
                 group.cancelAll()
@@ -242,5 +249,42 @@ extension ThumbnailStore {
         guard let waiter = walkWaiter else { return }
         walkWaiter = nil
         waiter.continuation.resume(returning: walkPending.count)
+    }
+}
+
+/// Fired once, from any thread, when a job starts; waited for by a task (`ThumbnailStore.walkStamp`'s time limit).
+final class StartSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    private var waiter: CheckedContinuation<Bool, Never>?
+
+    func fire() {
+        let waiter = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+            fired = true
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume(returning: true)
+    }
+
+    /// True once fired; false when the waiting task is cancelled first.
+    func wait() async -> Bool {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                let now = lock.withLock { () -> Bool? in
+                    if fired { return true }
+                    if Task.isCancelled { return false }
+                    waiter = continuation
+                    return nil
+                }
+                if let now { continuation.resume(returning: now) }
+            }
+        } onCancel: {
+            let waiter = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+                defer { self.waiter = nil }
+                return self.waiter
+            }
+            waiter?.resume(returning: false)
+        }
     }
 }

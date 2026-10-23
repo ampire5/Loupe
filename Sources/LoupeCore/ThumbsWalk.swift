@@ -153,8 +153,9 @@ public actor ThumbsWalk {
                 }
                 progress.folders.total = places.count
             }
-            let stamps = network ? nil : Dictionary(listing.fileStamps.map { (place.url.appendingPathComponent($0.key), $0.value) },
-                                                    uniquingKeysWith: { first, _ in first })
+            let stamps = network ? nil : Dictionary(
+                listing.fileStamps.map { (place.url.appendingPathComponent($0.key), $0.value) },
+                uniquingKeysWith: { first, _ in first })
             await prepare(files, stamps: stamps, location: place.location)
             guard !Task.isCancelled else { break }
             progress.folders.done += 1
@@ -253,8 +254,8 @@ public actor ThumbsWalk {
     /// A share's photos stamped in the reader's background threads, no more at once than the generator's reads, each
     /// waiting while the queue's work ahead is paused; a stamp that says "not now" (the share offline or slow) is asked
     /// again after a growing delay while the walk says it waits. Every `stampChunk` answers the stamped ones go to the
-    /// walk window, all of them at the end, those whose stamp failed kept in the catalog. Returns how many have a stamp;
-    /// stops when the walk is cancelled.
+    /// walk window, all of them at the end, those whose stamp failed kept in the catalog. Returns how many have a
+    /// stamp; stops when the walk is cancelled.
     private func stampInChunks(_ files: [URL], location: ThumbnailLocation?) async -> Int {
         let limit = max(1, store.readLimit)
         var stamps: [URL: FileStamp] = [:]

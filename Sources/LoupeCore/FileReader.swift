@@ -99,12 +99,22 @@ public protocol FileReading: Sendable {
     /// The same at a read's `priority`: a background one (`isBackground`, the subtree walk's) runs where the
     /// thumbnail reads do, never on the viewer's threads.
     func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp
+    /// The same, `started` called as a thread picks the stat up (it may wait in the queue behind other reads first):
+    /// a time limit on the stat itself starts there (the subtree walk's share stamps).
+    func stamp(_ url: URL, priority: ReadPriority, started: @escaping @Sendable () -> Void) async throws -> FileStamp
 }
 
 extension FileReading {
     /// Readers without classes of threads: as `stamp(_:priority:)` at the priority's value.
     public func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp {
         try await stamp(url, priority: priority.value)
+    }
+
+    /// Readers without a queue of their own: started at once.
+    public func stamp(_ url: URL, priority: ReadPriority,
+                      started: @escaping @Sendable () -> Void) async throws -> FileStamp {
+        started()
+        return try await stamp(url, priority: priority)
     }
 }
 
@@ -211,7 +221,13 @@ public final class FileReader: FileReading, @unchecked Sendable {
     }
 
     public func stamp(_ url: URL, priority: ReadPriority) async throws -> FileStamp {
+        try await stamp(url, priority: priority, started: {})
+    }
+
+    public func stamp(_ url: URL, priority: ReadPriority,
+                      started: @escaping @Sendable () -> Void) async throws -> FileStamp {
         try await submit(url, priority: priority) { _ in
+            started()
             if ArchivePath.split(url) != nil { return try ArchiveReader.shared.stamp(url) }
             var st = stat()
             guard stat(url.path, &st) == 0 else { throw Self.posixError() }
