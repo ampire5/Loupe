@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// One position pill (M4b spec §5): its rectangle in view pixels, origin top-left. The pill's shape is the rectangle's
+/// One position pill (M4b spec §5): its rectangle in the area it stands in (`PanIndicators.pills`), origin top-left. The pill's shape is the rectangle's
 /// rounded ends, radius half its thickness.
 public struct PanIndicatorPill: Equatable, Sendable {
     public var rect: CGRect
@@ -11,44 +11,46 @@ public struct PanIndicatorPill: Equatable, Sendable {
     }
 }
 
-/// The pan position indicators' maths (M4b spec §5): where the pills stand and how opaque they are. Pure: the renderer
-/// draws the rectangles (`TileRenderer.encodePanIndicators`), the view asks for frames while the alpha is above 0.
+/// The pan position indicators' maths (M4b spec §5): where the pills stand and how opaque they are. Pure: the app draws
+/// the rectangles in an overlay over the window's content (`PanIndicatorsView`); `TileRenderer.encodePanIndicators`
+/// can composite them into a frame (the render bench).
 public enum PanIndicators {
-    /// Pill thickness, distance from the view edge and minimum length, in points (× the window's backing scale).
+    /// Pill thickness, distance from the area's edge and minimum length, in points (× the window's backing scale).
     public static let thicknessPoints = 5.0
     public static let insetPoints = 4.0
     public static let minLengthPoints = 24.0
 
-    /// The pills of `t`: a horizontal one at the bottom when the picture is wider than the view, a vertical one at the
-    /// right when it is taller. `bottomInsetPoints` lifts the bottom one (and shortens the right one) above the
-    /// thumbnail strip. A pill's length is the visible share of its track (at least `minLengthPoints`), its position
-    /// the visible rect's place in the picture; a rubber-banded picture pins it at the track's end, not squeezed. A
-    /// track shorter than the minimum length gives no pill.
-    public static func pills(for t: ViewTransform, backingScale: Double, bottomInsetPoints: Double) -> [PanIndicatorPill] {
+    /// The pills of `t`, standing in `area` (origin top-left, in the units `backingScale` turns points into): a
+    /// horizontal one at the area's bottom when the picture is wider than the view, a vertical one at its right when it
+    /// is taller. The area is the window's container (full screen: the screen), not the viewer, so the pills sit at the
+    /// window's edge over the strip and side panels whatever the strip's placement; windowed, its top is below the stats
+    /// bar. A pill's length is the visible share of its track (at least `minLengthPoints`), its position the visible
+    /// rect's place in the picture, both from `t` alone; a rubber-banded picture pins it at the track's end, not
+    /// squeezed. A track shorter than the minimum length gives no pill.
+    public static func pills(for t: ViewTransform, backingScale: Double, in area: CGRect) -> [PanIndicatorPill] {
         let axes = t.pannableAxes
-        guard axes.x || axes.y else { return [] }
+        // `size`, not `width`, `height`: those are absolute, so a negative area would pass.
+        guard axes.x || axes.y, area.size.width > 0, area.size.height > 0 else { return [] }
         let k = max(backingScale, 0)
         let thickness = thicknessPoints * k, inset = insetPoints * k, minLength = minLengthPoints * k
-        let bottom = max(bottomInsetPoints, 0) * k
-        let width = Double(t.viewSize.width), height = Double(t.viewSize.height)
         let visible = t.visibleRect
         let image = t.imageSize
         let corner = thickness + inset   // what the other pill's thickness takes off this one's track
 
         var result: [PanIndicatorPill] = []
-        if axes.x, bottom + inset + thickness <= height {   // lifted above the view's top: no pill, never a negative y
-            let end = width - inset - (axes.y ? corner : 0)
-            if let (start, length) = span(from: inset, to: end, minLength: minLength, visibleMin: visible.minX,
-                                          visibleSize: visible.width, image: image.width) {
-                result.append(PanIndicatorPill(rect: CGRect(x: start, y: height - bottom - inset - thickness,
+        if axes.x, inset + thickness <= area.height {   // too short an area: no pill, never one above its top
+            let end = area.maxX - inset - (axes.y ? corner : 0)
+            if let (start, length) = span(from: area.minX + inset, to: end, minLength: minLength,
+                                          visibleMin: visible.minX, visibleSize: visible.width, image: image.width) {
+                result.append(PanIndicatorPill(rect: CGRect(x: start, y: area.maxY - inset - thickness,
                                                             width: length, height: thickness)))
             }
         }
         if axes.y {
-            let end = height - inset - bottom - (axes.x ? corner : 0)
-            if let (start, length) = span(from: inset, to: end, minLength: minLength, visibleMin: visible.minY,
-                                          visibleSize: visible.height, image: image.height) {
-                result.append(PanIndicatorPill(rect: CGRect(x: width - inset - thickness, y: start,
+            let end = area.maxY - inset - (axes.x ? corner : 0)
+            if let (start, length) = span(from: area.minY + inset, to: end, minLength: minLength,
+                                          visibleMin: visible.minY, visibleSize: visible.height, image: image.height) {
+                result.append(PanIndicatorPill(rect: CGRect(x: area.maxX - inset - thickness, y: start,
                                                             width: thickness, height: length)))
             }
         }

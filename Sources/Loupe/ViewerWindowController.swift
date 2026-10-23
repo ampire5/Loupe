@@ -69,6 +69,9 @@ import UniformTypeIdentifiers
     private let backAtTop: NSLayoutConstraint
     private let viewerBelowBar: NSLayoutConstraint
     private let viewerAtTop: NSLayoutConstraint
+    /// The pan pills' top: below the stats bar while it shows in a window, the container's top otherwise.
+    private let pillsBelowBar: NSLayoutConstraint
+    private let pillsAtTop: NSLayoutConstraint
     private let viewerAboveStrip: NSLayoutConstraint
     private let viewerAtBottom: NSLayoutConstraint
     private var isFullScreen = false
@@ -158,6 +161,9 @@ import UniformTypeIdentifiers
         // Above both: as a sibling over the viewer it wins its hit tests, so the viewer's hand cursor and cursor
         // autohide leave it alone (`isMouseOverPicture`).
         container.addSubview(strip.view)
+        // The pan position pills: over the strip (and its capsule, `strip.attach`) and the info panel, at the window's
+        // edge, under the toast and the cheat sheet; takes no clicks.
+        container.addSubview(viewerView.panIndicatorsView)
         // The info panel goes between the bar and the strip while it is shown (`makeInfoPanel`).
         // Over the strip: in the viewer's bottom-right corner, lifted above the band, which covers the viewer's
         // bottom while it floats (and is on screen whenever the strip just jumped).
@@ -178,11 +184,16 @@ import UniformTypeIdentifiers
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
         viewerBelowBar = viewerView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
         viewerAtTop = viewerView.topAnchor.constraint(equalTo: container.topAnchor)
+        pillsBelowBar = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
+        pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: container.topAnchor)
         viewerAboveStrip = viewerView.bottomAnchor.constraint(equalTo: strip.view.topAnchor)
         viewerAtBottom = viewerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         NSLayoutConstraint.activate([
             viewerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             viewerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            viewerView.panIndicatorsView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            viewerView.panIndicatorsView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            viewerView.panIndicatorsView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             statsBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             statsBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             statsBar.topAnchor.constraint(equalTo: container.topAnchor),
@@ -260,20 +271,14 @@ import UniformTypeIdentifiers
         makeInfoPanel(in: container)
         strip.onReservesSpaceChange = { [weak self] in
             self?.applyStripLayout()
-            self?.updateIndicatorInset()
         }
         strip.onToast = { [weak self] in self?.toast.show($0) }
         strip.onShownChange = { [weak self] in
             self?.infoPanel.place()
-            self?.updateIndicatorInset()
             self?.updateBackButton()
         }
-        // A resize, full screen, the strip's height: the panel keeps to its corner of the new area, the bottom pill
-        // stands above the strip.
-        container.onLayout = { [weak self] in
-            self?.infoPanel.place()
-            self?.updateIndicatorInset()
-        }
+        // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
+        container.onLayout = { [weak self] in self?.infoPanel.place() }
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
@@ -1642,12 +1647,6 @@ import UniformTypeIdentifiers
         return true
     }
 
-    /// The bottom pan indicator stands above the strip while the strip floats over the viewer (M4b spec §5.1); a strip
-    /// in a bar of its own is below the viewer already.
-    private func updateIndicatorInset() {
-        viewerView.setIndicatorBottomInset(strip.isShown && !strip.reservesSpace ? Double(strip.bandHeight) : 0)
-    }
-
     /// The viewer ends at the strip's top while the strip is a bar of its own, at the window's bottom otherwise.
     private func applyStripLayout() {
         // Deactivate first: both bottom constraints are required and must never be active together.
@@ -1686,9 +1685,13 @@ import UniformTypeIdentifiers
         if belowBar {
             viewerAtTop.isActive = false
             viewerBelowBar.isActive = true
+            pillsAtTop.isActive = false
+            pillsBelowBar.isActive = true
         } else {
             viewerBelowBar.isActive = false
             viewerAtTop.isActive = true
+            pillsBelowBar.isActive = false
+            pillsAtTop.isActive = true
         }
     }
 

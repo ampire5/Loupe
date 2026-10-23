@@ -227,7 +227,7 @@ enum RenderBench {
         let pills = PanIndicators.pills(
             for: ViewTransform(imageSize: CGSize(width: view.width * 4, height: view.height * 4), viewSize: view,
                                mode: .actual(1)),
-            backingScale: 2, bottomInsetPoints: 0)
+            backingScale: 2, in: CGRect(origin: .zero, size: view))
         if panIndicators && pills.count != 2 { fail("expected two pills, got \(pills.count)") }
         let usable = resolved.filter { $0.magnify || $0.fit || coversView(imageSize, view, scale: $0.scale) }
 

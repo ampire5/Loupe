@@ -89,16 +89,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         /// The transparency keys (`transparency`, `checker-size`, `checker-colors`) and the window's backing scale.
         var transparency = TransparencySettings()
         var backingScale = 1.0
-        /// The pan indicators (M4b spec §5): `pan-indicators` (with `P`'s session value), `pan-indicators-hide` and
-        /// `-fade` in seconds, `pan-indicators-on-switch`, and how far (points) the thumbnail strip covers the view's
-        /// bottom.
-        var panMode = PanIndicatorMode.auto
-        var panHide = 0.4
-        var panFade = 0.25
-        var panOnSwitch = false
-        var panBottomInset = 0.0
-        /// When the visible part of the picture last moved (`update`), on the `CACurrentMediaTime` clock; nil: never.
-        var lastMotion: CFTimeInterval?
         /// The colour space of the photo on its way while no image is drawn (`expectColorSpace`); nil: none known.
         var expected: CGColorSpace?
         /// The photo is held back (`hold`): frames draw only the background, the layer already tagged for `image`.
@@ -143,9 +133,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// The last drawn frame was in the middle of a colour fade (`mix` < 1): the next callback draws again, whatever
     /// the generation, so the frame at the fade's end (`mix` 1) is drawn too and the link idles only after it.
     private var drawnColorRunning = false
-    /// The opacity of the pan indicators in the last drawn frame, 0 when it had none. Above 0 in `auto` the callbacks go
-    /// on while it changes (the fade) or will change (the hold before it): see `metalDisplayLink`.
-    private var drawnPanAlpha = 0.0
     private var idlePolicy = IdlePolicy()
     /// `pairColorSpace`'s last answer and the two spaces it was for.
     private var pairSpaces: (first: CGColorSpace, second: CGColorSpace, pair: PairColorSpace)?
@@ -184,16 +171,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         let wake: CFRunLoop? = state.withLock { s in
             guard !s.stopped else { return nil }
             s.inputPhase.recordInput(at: now)
-            // Motion for the pan indicators: the visible part, the drawn zoom or the picture's size changed; another
-            // picture (a switch with a kept zoom) only with `pan-indicators-on-switch` (M4b spec §5.2).
-            let old = s.transform
-            if PanIndicators.isMotion(sameImage: pages.samePictures(as: s.pages),
-                                      imageSizeChanged: transform.imageSize != old.imageSize,
-                                      scaleChanged: transform.drawnScale != old.drawnScale,
-                                      visibleChanged: transform.visibleRect != old.visibleRect,
-                                      onSwitch: s.panOnSwitch) {
-                s.lastMotion = now
-            }
             s.pages = pages
             s.transform = transform
             s.generation += 1
@@ -257,31 +234,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// The window's backing scale (drawable px per point), for the checkerboard's cell size. Any thread.
     func setBackingScale(_ scale: Double) {
         change { $0.backingScale = scale }
-    }
-
-    /// The pan indicators' mode (`pan-indicators` or `P`'s session value) and timings, from the next display refresh on.
-    /// Any thread; the same values again change nothing.
-    func setPanIndicators(mode: PanIndicatorMode, hide: TimeInterval, fade: TimeInterval, onSwitch: Bool) {
-        changeIfNeeded { s in
-            guard s.panMode != mode || s.panHide != hide || s.panFade != fade || s.panOnSwitch != onSwitch else {
-                return false
-            }
-            s.panMode = mode
-            s.panHide = hide
-            s.panFade = fade
-            s.panOnSwitch = onSwitch
-            return true
-        }
-    }
-
-    /// How far (points) the thumbnail strip covers the bottom of the view: the bottom pill stands above it. Any thread;
-    /// the same value again changes nothing.
-    func setIndicatorBottomInset(_ points: Double) {
-        changeIfNeeded { s in
-            guard s.panBottomInset != points else { return false }
-            s.panBottomInset = points
-            return true
-        }
     }
 
     /// Applies `body` to the snapshot as a new generation and wakes the paused link to draw it.
@@ -447,22 +399,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         // runs on this thread after us). No change is ever missed, and `paused` is only ever set when the
         // link is really about to pause. During the latch `paused` is false, so an `update` then queues
         // no wake-up and is simply seen here.
-        //
-        // Pan indicators on screen in `auto`: a callback whose opacity differs from the drawn one draws (the fade); one
-        // with the same opacity, still to fade, keeps the link awake without drawing (the hold before the fade, longer
-        // than the idle grace).
         let (snapshot, action) = state.withLock { s -> (Snapshot?, IdlePolicy.Action) in
             guard !s.stopped else { return (nil, .skip) }   // stopped during the latch: the stop block comes next
-            var panChanged = false, panHolding = false
-            if drawnPanAlpha > 0, s.panMode == .auto {
-                let alpha = PanIndicators.alpha(mode: .auto, now: CACurrentMediaTime(), lastMotion: s.lastMotion,
-                                                hide: s.panHide, fade: s.panFade)
-                panChanged = alpha != drawnPanAlpha
-                panHolding = !panChanged
-            }
-            var action = idlePolicy.frame(changed: s.generation != drawnGeneration || drawnColorRunning || panChanged,
-                                          at: target)
-            if action == .pause, panHolding { action = .skip }
+            let action = idlePolicy.frame(changed: s.generation != drawnGeneration || drawnColorRunning, at: target)
             if action == .pause { s.paused = true }
             return (action == .draw ? s : nil, action)
         }
@@ -514,7 +453,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         guard viewSize.width >= 1, viewSize.height >= 1 else {
             drawnGeneration = snapshot.generation   // no view yet (before the first layout): nothing to draw
             drawnColorRunning = false
-            drawnPanAlpha = 0
             return
         }
         // Before anything else: a retag defers this callback (see `retagIfNeeded`).
@@ -540,15 +478,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         // Held: tagged for the image above all the same, so no retag on reveal; only the background is drawn.
         let shown = snapshot.held ? nil : snapshot.pages.leadImage
         drawPages(snapshot, pair: pair, at: drawTime, into: commands, target: target)
-        // The pan indicators over the finished frame, in the drawable itself (M4b spec §5.3); nothing encoded at 0.
-        let panAlpha = PanIndicators.alpha(mode: snapshot.panMode, now: drawTime, lastMotion: snapshot.lastMotion,
-                                           hide: snapshot.panHide, fade: snapshot.panFade)
-        let pills = panAlpha > 0 && shown != nil
-            ? PanIndicators.pills(for: snapshot.transform, backingScale: snapshot.backingScale,
-                                  bottomInsetPoints: snapshot.panBottomInset)
-            : []
-        renderer.encodePanIndicators(pills, alpha: Float(panAlpha), backingScale: snapshot.backingScale,
-                                     into: commands, target: target)
         if DebugLog.isEnabled {
             // The first frame at the level the zoom wants after an activation (`watchSharp`).
             let generation = snapshot.generation
@@ -617,7 +546,6 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         commands.commit()
         drawnGeneration = snapshot.generation
         drawnColorRunning = snapshot.pages.colorRunning(at: drawTime)
-        drawnPanAlpha = pills.isEmpty ? 0 : panAlpha
         let t = snapshot.transform
         DebugLog.log("frame \(snapshot.generation): \(target.width)x\(target.height) scale \(t.scale) mode \(t.mode) "
                      + String(format: "center %.4f,%.4f", t.center.x, t.center.y)

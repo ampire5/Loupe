@@ -20,6 +20,9 @@ import QuartzCore
 @MainActor final class ViewerView: NSView {
     let session: ViewerSession
     private var renderLoop: RenderLoop!
+    /// The pan position pills, drawn over the window's content rather than in this view's frames: the window controller
+    /// puts the view in its container (`PanIndicatorsView`); this view hands it what it hands the render loop.
+    let panIndicatorsView = PanIndicatorsView()
     /// What was last handed to the render loop, so session changes that do not affect the picture
     /// (a load starting, the playlist arriving) do not wake the display link for an identical frame.
     private var shownImage: TiledImage?
@@ -261,10 +264,14 @@ import QuartzCore
                 var right = layout.order[0] == 0 ? reading.1 : reading.0
                 left.rect = layout.rects[0]
                 right.rect = layout.rects[1]
-                renderLoop.update(pages: RenderPages(first: left, second: right), transform: transform)
+                let pages = RenderPages(first: left, second: right)
+                renderLoop.update(pages: pages, transform: transform)
+                panIndicatorsView.show(pages, transform: transform)
             } else {
                 // One page, the whole of the transform's image: drawn as a single photo always was.
-                renderLoop.update(pages: RenderPages(first: page), transform: transform)
+                let pages = RenderPages(first: page)
+                renderLoop.update(pages: pages, transform: transform)
+                panIndicatorsView.show(pages, transform: transform)
             }
         }
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in
@@ -546,6 +553,7 @@ import QuartzCore
     /// While `on`, frames draw only the background (`RenderLoop.hold`, `launch-reveal`).
     func holdReveal(_ on: Bool) {
         renderLoop.hold(on)
+        panIndicatorsView.held = on
     }
 
     /// `background`: the picture's surround, drawn by the render loop and also the layer's own colour (what shows
@@ -565,13 +573,10 @@ import QuartzCore
     /// `pan-indicators-on-switch`: the position pills.
     func setPanIndicators(_ settings: Settings) {
         let config = settings.config
-        renderLoop.setPanIndicators(mode: settings.panIndicators, hide: Double(config.panIndicatorsHideMilliseconds) / 1000,
-                                    fade: Double(config.panIndicatorsFadeMilliseconds) / 1000,
-                                    onSwitch: config.panIndicatorsOnSwitch)
+        panIndicatorsView.setMode(settings.panIndicators, hide: Double(config.panIndicatorsHideMilliseconds) / 1000,
+                                  fade: Double(config.panIndicatorsFadeMilliseconds) / 1000,
+                                  onSwitch: config.panIndicatorsOnSwitch)
     }
-
-    /// How far (points) the thumbnail strip covers the view's bottom: the bottom pill stands above it.
-    func setIndicatorBottomInset(_ points: Double) { renderLoop.setIndicatorBottomInset(points) }
 
     /// Whether the render loop records frame times for the extended stats (off: no cost per frame).
     func setFrameStatsEnabled(_ on: Bool) { renderLoop.setFrameStatsEnabled(on) }

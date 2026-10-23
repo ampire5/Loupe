@@ -9,8 +9,9 @@ private func view(center: CGPoint = CGPoint(x: 0.5, y: 0.5), view: CGSize = CGSi
     ViewTransform(imageSize: CGSize(width: 6000, height: 4000), viewSize: view, mode: mode, center: center)
 }
 
-private func pills(_ t: ViewTransform, scale: Double = 2, bottom: Double = 0) -> [PanIndicatorPill] {
-    PanIndicators.pills(for: t, backingScale: scale, bottomInsetPoints: bottom)
+/// The pills of `t` in `area` (default: the view's own rect, the container the size of the viewer).
+private func pills(_ t: ViewTransform, scale: Double = 2, area: CGRect? = nil) -> [PanIndicatorPill] {
+    PanIndicators.pills(for: t, backingScale: scale, in: area ?? CGRect(origin: .zero, size: t.viewSize))
 }
 
 // Horizontal track 8 ... 1600 - 8 - 18 = 1574 (the vertical pill takes 10 + 8); vertical 8 ... 1000 - 8 - 18 = 974.
@@ -69,25 +70,34 @@ private let hTrack = 8.0 ... 1574.0, vTrack = 8.0 ... 974.0
     #expect(h.rect.width == 48)                           // 1566 × 1 % would be 15.7
 }
 
-@Test func bottomInsetRaisesTheHorizontalPillAndShortensTheVerticalOne() throws {
-    let plain = pills(view())
-    let lifted = pills(view(), bottom: 80)               // 160 px at backing 2
-    let h0 = try #require(plain.first { $0.rect.height == 10 }), h1 = try #require(lifted.first { $0.rect.height == 10 })
-    let v0 = try #require(plain.first { $0.rect.width == 10 }), v1 = try #require(lifted.first { $0.rect.width == 10 })
-    #expect(h1.rect.maxY == h0.rect.maxY - 160)
-    #expect(h1.rect.width == h0.rect.width)
-    #expect(abs((v1.rect.height / v0.rect.height) - ((974.0 - 160 - 8) / (974.0 - 8))) < 1e-9)
-    #expect(v1.rect.minY >= 8)
-    #expect(v1.rect.maxY <= 1000 - 8 - 160 - 18 + 1e-9)
+@Test func pillsSitAtContainerEdgeWhateverTheStripMode() throws {
+    // Strip beside: the viewer (1600×800 px) ends at the strip's top, the container is 1600×1000.
+    let beside = pills(view(view: CGSize(width: 1600, height: 800)), area: CGRect(x: 0, y: 0, width: 1600, height: 1000))
+    // Strip over: the viewer fills the container, the strip floats over its bottom.
+    let over = pills(view(), area: CGRect(x: 0, y: 0, width: 1600, height: 1000))
+    for p in [beside, over] {
+        let h = try #require(p.first { $0.rect.height == 10 }), v = try #require(p.first { $0.rect.width == 10 })
+        #expect(h.rect.maxY == 992.0)               // the container's bottom, not the viewer's or the strip's top
+        #expect(v.rect.maxX == 1592.0)
+        #expect(v.rect.minY >= 8 && v.rect.maxY <= 1000 - 8 - 18 + 1e-9)
+    }
+    // Windowed with the stats bar at the top (60 px): the vertical track starts below it, the horizontal pill stays put.
+    let barred = pills(view(view: CGSize(width: 1600, height: 740)), area: CGRect(x: 0, y: 60, width: 1600, height: 940))
+    let h = try #require(barred.first { $0.rect.height == 10 }), v = try #require(barred.first { $0.rect.width == 10 })
+    #expect(h.rect.maxY == 992.0)
+    #expect(v.rect.minY >= 60 + 8 && v.rect.maxY <= 1000 - 8 - 18 + 1e-9)
+    // The pill's length is the viewer's visible share of the container's track: 800 / 4000 of 1000 - 8 - 8 - 18.
+    let vb = try #require(beside.first { $0.rect.width == 10 })
+    #expect(abs(vb.rect.height - (1000.0 - 34) * 800 / 4000) < 1e-9)
 }
 
-@Test func tinyViewsAndHugeInsetsGiveNoPillAndNoNegativeSize() {
+@Test func tinyViewsAndShortAreasGiveNoPillAndNoNegativeSize() {
     #expect(pills(view(view: CGSize(width: 30, height: 30)), scale: 1).isEmpty)
-    // A bottom inset taller than the view (1200 px, 4000 px in a 1000 px view): no pill at all, not one at a negative y.
-    #expect(pills(view(), bottom: 600).isEmpty)
-    #expect(pills(view(), bottom: 2000).isEmpty)
-    // Just fitting: 1000 = bottom 982 + inset 8 + thickness 10 would be 1000, so the horizontal pill still stands at y 0.
-    let edge = pills(view(), bottom: 491)
+    // An area too short for the horizontal pill (17 px < inset 8 + thickness 10): none, not one at a negative y.
+    #expect(!pills(view(), area: CGRect(x: 0, y: 0, width: 1600, height: 17)).contains { $0.rect.height == 10 })
+    #expect(pills(view(), area: CGRect(x: 0, y: 0, width: 1600, height: -50)).isEmpty)
+    // Just fitting: 18 = inset 8 + thickness 10, so the horizontal pill still stands at y 0.
+    let edge = pills(view(), area: CGRect(x: 0, y: 0, width: 1600, height: 18))
     #expect(edge.contains { $0.rect.height == 10 && $0.rect.minY == 0 })
     #expect(edge.allSatisfy { $0.rect.minY >= 0 && $0.rect.width > 0 && $0.rect.height > 0 })
     #expect(pills(view(view: .zero)).isEmpty)
