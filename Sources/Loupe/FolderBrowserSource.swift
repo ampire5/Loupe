@@ -97,6 +97,8 @@ extension Notification.Name {
     /// (its work may have listed it meanwhile); until the folder changes.
     private var subfolders = AheadSubfolders()
     private var subfoldersAsked: Set<String> = []
+    /// The subfolders the last ask sent ahead whose work is not done yet: when none is left, the window moves on.
+    private var aheadSent: Set<String> = []
     /// Cards whose "+N inside" is to be counted again (a subfolder made ahead wrote its summary), each once per
     /// `insideRefreshDelay` however many of its subfolders do.
     private var insideRefresh: [String: Task<Void, Never>] = [:]
@@ -488,6 +490,7 @@ extension Notification.Name {
         followUps = []
         subfolders = AheadSubfolders()
         subfoldersAsked = []
+        aheadSent = []
         for task in insideRefresh.values { task.cancel() }
         insideRefresh = [:]
         noCover = []
@@ -540,6 +543,7 @@ extension Notification.Name {
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
         let aheadList = shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadIDs(in: shownLocation) : []
+        aheadSent = Set(aheadList)
         // The kept entries as they are now (copied on write: nothing is made for this ask).
         let ahead = subfolders
         let layout = shownCoverLayout, side = size.width, scale = size.scale
@@ -624,6 +628,14 @@ extension Notification.Name {
         return subfolders.ids(for: cards)
     }
 
+    /// Subfolder `id`'s work ahead is done: it leaves the window (`AheadSubfolders.markDone`); once every one the last
+    /// ask sent is done, the covers are sent again with the next subfolders still to do (the same cards in view).
+    private func aheadDone(_ id: String) {
+        subfolders.markDone(id)
+        guard aheadSent.remove(id) != nil, aheadSent.isEmpty else { return }
+        sendCovers()
+    }
+
     /// The card's subfolders' names from the store (memory or catalog, never a listing) and their entries, off the
     /// main thread; known, the covers are sent again with them.
     private func askSubfolders(_ id: String, of folder: URL, in location: ThumbnailLocation?) {
@@ -657,10 +669,15 @@ extension Notification.Name {
             guard let self, self.coverFolder == folderPath else { return }
             self.refreshInside(of: parent, at: location)
         }
+        let finished: @MainActor (String) -> Void = { [weak self] id in
+            guard let self, self.coverFolder == folderPath else { return }
+            self.aheadDone(id)
+        }
         return { card in
             guard let viewed = await lastViewed(card) else { return true }
             let made = await thumbnails.prepareAhead(card.url, in: card.location, network: network, lastViewed: viewed)
             if made.summaryWritten, let parentLocation = card.parentLocation { await refresh(card.parent, parentLocation) }
+            if made.done { await finished(card.id) }
             return made.done
         }
     }

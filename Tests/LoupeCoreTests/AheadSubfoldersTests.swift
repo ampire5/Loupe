@@ -48,6 +48,29 @@ import Testing
         #expect(AheadSubfolders.limit == 1_000)
     }
 
+    /// The limit is a moving window, not a fixed ceiling: the subfolders already done leave it, so those past the
+    /// first `limit` are asked while the same cards stay in view.
+    @Test func doneSubfoldersLeaveTheWindow() {
+        var ahead = AheadSubfolders()
+        let cards = (0..<12).map { "/r/c\($0)" }
+        for card in cards {
+            let names = (0..<100).map { "s\($0)" }
+            ahead.set(AheadSubfolders.entries(names, card: card, folder: URL(fileURLWithPath: card), location: nil),
+                      for: card)
+        }
+        let first = ahead.ids(for: cards)
+        #expect(first.count == 1_000)
+        for id in first.prefix(400) { ahead.markDone(id) }
+        let moved = ahead.ids(for: cards)
+        #expect(moved.count == 800)
+        #expect(moved.first == first[400])
+        for id in first { ahead.markDone(id) }
+        let rest = ahead.ids(for: cards)
+        #expect(rest.count == 200)
+        #expect(Set(rest.compactMap { ahead.card($0)?.parent }) == ["/r/c10", "/r/c11"])
+        #expect(ahead.isDone(first[0]) && !ahead.isDone(rest[0]))
+    }
+
     /// I4's measurement: the main thread's time per ask, the way it was (an entry per subfolder of every card in view
     /// made on every ask, and a dictionary of them) against the cards' entries made once and joined up to the limit.
     /// A synthetic tree of `cards` folders of `subfolders` empty subfolders each, made under LOUPE_AHEAD_BENCH (a

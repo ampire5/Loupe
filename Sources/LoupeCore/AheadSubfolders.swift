@@ -2,7 +2,7 @@ import Foundation
 
 /// The work ahead's subfolders (thumbs-ahead spec, stage 4) of a folder's cards: each card's entries are made once,
 /// when its subfolders' names come (`entries`, off the main thread), and kept until the folder changes; an ask joins
-/// the ids of the cards in view, in their order, up to `limit`. The queue's ids carry their card, so a task finds its
+/// the ids of the cards in view still to do, in their order, up to `limit` (those done leave it: a moving window). The queue's ids carry their card, so a task finds its
 /// subfolder (`card`) in the kept entries without a table of every subfolder made for each ask.
 public struct AheadSubfolders: Sendable {
     /// A subfolder of a card in view, as the work ahead makes it.
@@ -23,10 +23,12 @@ public struct AheadSubfolders: Sendable {
         var cards: [String: Card]
     }
 
-    /// Subfolders an ask sends to the cover queue at most, all cards in view together. Basis: the work ahead makes
-    /// 11-13 subfolders a second on a local SSD (`CoverQueue.listingLimit`'s bench: 72 subfolders in 5.4-6.5 s on an
-    /// Intel iMac, i7-10700K), so 1 000 is over a minute of work, more than one screen is looked at before the next
-    /// ask (a scroll) sends the list again; and every ask then costs the main thread a bounded join and the queue a
+    /// Subfolders still to do an ask sends to the cover queue at most, all cards in view together: a window over the
+    /// cards' subfolders that moves on as they are done (`markDone`), not a ceiling: once those sent are done, the
+    /// next ask sends the following ones while the same cards stay. Basis: the work ahead makes 11-13 subfolders a
+    /// second on a local SSD (`CoverQueue.listingLimit`'s bench: 72 subfolders in 5.4-6.5 s on an Intel iMac,
+    /// i7-10700K), so 1 000 is over a minute of work, more than one screen is looked at before the next ask (a scroll,
+    /// or the window sent done) sends the list again; and every ask then costs the main thread a bounded join and the queue a
     /// bounded `want`, whatever the cards hold (a card may have up to `coverSubfoldersPerFolder`, 1 000, itself).
     /// Measured (`aheadAskBench`, debug test build, the same iMac; a synthetic local tree of 30 folders of 1 000 empty
     /// subfolders each, names only, on SSD; 20 asks): main-thread time per ask, median / max of two runs, 187-190 /
@@ -36,6 +38,10 @@ public struct AheadSubfolders: Sendable {
     public static let limit = 1_000
 
     private var byCard: [String: Entries] = [:]
+    /// The subfolders whose work is done (`markDone`), and how many of each card's: a card all done is passed over
+    /// whole by an ask.
+    private var done: Set<String> = []
+    private var doneByCard: [String: Int] = [:]
 
     public init() {}
 
@@ -47,16 +53,34 @@ public struct AheadSubfolders: Sendable {
         byCard[card] = entries
     }
 
-    /// The ids of `cards`' subfolders, card by card in the order given, those whose names are known, at most `limit`.
+    /// The ids of `cards`' subfolders still to do, card by card in the order given, those whose names are known, at
+    /// most `limit`.
     public func ids(for cards: [String], limit: Int = Self.limit) -> [String] {
         var ids: [String] = []
         for card in cards {
             guard ids.count < limit else { break }
             guard let entries = byCard[card] else { continue }
-            ids.append(contentsOf: entries.ids.prefix(limit - ids.count))
+            let doneHere = doneByCard[card] ?? 0
+            if doneHere == 0 {
+                ids.append(contentsOf: entries.ids.prefix(limit - ids.count))
+                continue
+            }
+            guard doneHere < entries.ids.count else { continue }
+            for id in entries.ids where !done.contains(id) {
+                ids.append(id)
+                if ids.count == limit { break }
+            }
         }
         return ids
     }
+
+    /// The work on subfolder `id` (an id of `ids`) is done: asks leave it out from now on.
+    public mutating func markDone(_ id: String) {
+        guard let parent = Self.parent(of: id), byCard[parent]?.cards[id] != nil, done.insert(id).inserted else { return }
+        doneByCard[parent, default: 0] += 1
+    }
+
+    public func isDone(_ id: String) -> Bool { done.contains(id) }
 
     /// The subfolder of a queue id (`ids`); nil for one not among the kept entries (the folder changed since).
     public func card(_ id: String) -> Card? {
