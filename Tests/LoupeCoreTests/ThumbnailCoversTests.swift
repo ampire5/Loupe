@@ -955,6 +955,28 @@ private final class StatLog: @unchecked Sendable {
     }
 }
 
+/// A subfolder stat that waits at `gate` while `hangs`, else answers `date` at once.
+private final class HangingStat: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hanging = false
+    private let gate: DispatchSemaphore
+    private let date: Date
+    init(gate: DispatchSemaphore, date: Date) {
+        self.gate = gate
+        self.date = date
+    }
+    var hangs: Bool {
+        get { lock.withLock { hanging } }
+        set { lock.withLock { hanging = newValue } }
+    }
+    var stat: ThumbnailStore.CoverStat {
+        { _ in
+            if self.hangs { self.gate.wait() }
+            return self.date
+        }
+    }
+}
+
 /// Task 6 of the folder cards: the cover queue's task brings the folder's summary too, from a listing with dates on a
 /// local volume and names only on a share, kept in the catalog; a stored summary still fresh and the four thumbnails
 /// in the catalog make the card without a listing; a broken zip and a share that does not answer are told.
@@ -1899,6 +1921,64 @@ final class LockedErrors: @unchecked Sendable {
         #expect(back.problem == nil && back.summary?.photos == 4)
         #expect(calls.count == 1)
         for _ in 0..<2 { gate.signal() }
+    }
+
+    /// Thumbs-ahead fix round 2: a subfolder's stat for the work ahead keeps to an offline share's gate as a listing
+    /// does: no stat between probes (`.notNow`), and the probe's stat that answers brings the share back.
+    @Test func subfolderStatKeepsToTheOfflineGate() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let gate = DispatchSemaphore(value: 0), date = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        let store = await store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await offline(store, gate: gate)
+        #expect(await store.isOffline("net:share"))
+        let stats = StatLog(date)
+        await store.setCoverStat(stats.stat)
+        let sub = URL(fileURLWithPath: "/net/p/s")
+        for _ in 0..<3 { #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .notNow) }
+        #expect(stats.calls.isEmpty)
+        await store.setCoverProbeInterval(.zero)
+        // A time limit a loaded machine cannot miss for the stat that answers.
+        await store.setCoverListing(dated: { _, _, _, _ in CoverListing(names: CoverNames(files: [], folders: [])) },
+                                    networkTimeout: .seconds(30))
+        #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .known(date))
+        #expect(stats.calls == ["/net/p/s"])
+        #expect(await !store.isOffline("net:share"))
+        for _ in 0..<2 { gate.signal() }
+    }
+
+    /// Thumbs-ahead fix round 2: subfolder stats that do not answer in time count towards the share's offline state
+    /// as listings do; one that answers clears the count.
+    @Test func subfolderStatTimeOutsCountTowardsOffline() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let gate = DispatchSemaphore(value: 0), date = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        let store = await store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        // Short for the stats that hang, long enough for the one that answers on a loaded machine.
+        func timeLimit(_ limit: Duration) async {
+            await store.setCoverListing(dated: { _, _, _, _ in CoverListing(names: CoverNames(files: [], folders: [])) },
+                                        networkTimeout: limit)
+        }
+        let hang = HangingStat(gate: gate, date: date)
+        await store.setCoverStat(hang.stat)
+        let sub = URL(fileURLWithPath: "/net/p/s")
+        hang.hangs = true
+        await timeLimit(.milliseconds(50))
+        #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .notNow)
+        #expect(await !store.isOffline("net:share"))
+        // An answer between two time outs clears the count.
+        hang.hangs = false
+        await timeLimit(.seconds(30))
+        #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .known(date))
+        hang.hangs = true
+        await timeLimit(.milliseconds(50))
+        #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .notNow)
+        #expect(await !store.isOffline("net:share"))
+        #expect(await store.subfolderModified(sub, in: loc("/net/p/s")) == .notNow)
+        #expect(await store.isOffline("net:share"))
+        for _ in 0..<3 { gate.signal() }
     }
 
     /// Without a location a card's volume and share-ness come from the mount table: local folders failing with what

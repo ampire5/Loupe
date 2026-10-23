@@ -574,22 +574,16 @@ extension ThumbnailStore {
     private func coverListing(_ folder: URL, archive: Bool, network: Bool, key: String, volume: String?,
                               alias: String?, forSummary: Bool, probe: Bool = false) async -> CoverListingResult {
         let lister = coverLister, dated = !network
-        // An offline share's probe takes its turn as the listing starts (`.notNow` when another card took it since it
-        // was found due), and gives it back when the listing did not start (the lane full, the task cancelled).
-        var turn: (taken: ContinuousClock.Instant, before: ContinuousClock.Instant)?
-        if probe, let volume, let since = offlineVolumes[volume] {
-            let now = ContinuousClock.now
-            guard now - since >= coverProbeInterval else { return .notNow }
-            offlineVolumes[volume] = now
-            turn = (now, since)
+        var turn: ProbeTurn?
+        if probe {
+            guard let taken = takeProbeTurn(volume) else { return .notNow }
+            turn = taken
         }
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             part in try lister(folder, archive, dated, part)
         }
-        if case .busy = outcome, let turn, let volume, offlineVolumes[volume] == turn.taken {
-            offlineVolumes[volume] = turn.before
-        }
+        if case .busy = outcome { giveBack(turn, volume) }
         func timedOut() -> CoverListingResult {
             noteVolumeTimeout(volume)
             guard !forSummary else { return .notNow }
@@ -626,6 +620,27 @@ extension ThumbnailStore {
         case .timedOut:
             return timedOut()
         }
+    }
+
+    /// An offline share's probe turn as a call took it: when, and the share's mark before.
+    struct ProbeTurn {
+        var taken: ContinuousClock.Instant
+        var before: ContinuousClock.Instant
+    }
+
+    /// An offline share's probe takes its turn as its call starts: nil (not now) when the turn is not due (another
+    /// card took it within `coverProbeInterval`); a turn without a mark when the share is not offline.
+    private func takeProbeTurn(_ volume: String?) -> ProbeTurn?? {
+        guard let volume, let since = offlineVolumes[volume] else { return .some(nil) }
+        let now = ContinuousClock.now
+        guard now - since >= coverProbeInterval else { return nil }
+        offlineVolumes[volume] = now
+        return .some(ProbeTurn(taken: now, before: since))
+    }
+
+    /// The turn given back when its call did not start (the lane full, the task cancelled).
+    private func giveBack(_ turn: ProbeTurn??, _ volume: String?) {
+        if let turn = turn ?? nil, let volume, offlineVolumes[volume] == turn.taken { offlineVolumes[volume] = turn.before }
     }
 
     /// An error of a share's connection rather than of the folder (gone, no permission): it counts as a time out.
@@ -930,23 +945,44 @@ extension ThumbnailStore {
     /// The modification date the work ahead makes a subfolder's card at (`folderCard`'s `modified`, which a stored
     /// summary must match to be fresh): its parent's dated listing's this session, else one stat of the subfolder
     /// itself (nothing inside it), in the covers' listing lane of its volume (a share's or the local volumes') with
-    /// that lane's time limit. `.notNow` when the lane is full or the stat does not answer in time. Called from the
-    /// cover queue's work, never on the main thread.
+    /// that lane's time limit. `.notNow` when the lane is full or the stat does not answer in time. On a share it
+    /// keeps to the share's gate as a listing does (`coverListing`): while the share is offline no stat but its probe
+    /// turn's (`coverProbeInterval`), else `.notNow`; a time out or a connection error counts towards offline, an
+    /// answer brings the share back. Called from the cover queue's work, never on the main thread.
     public func subfolderModified(_ subfolder: URL, in location: ThumbnailLocation?) async -> SubfolderDate {
         let url = subfolder.standardizedFileURL
         if let date = coverSubfolders[url.deletingLastPathComponent().path]?.dates[url.lastPathComponent] {
             return .known(date)
         }
         let stat = coverStat, network = location?.isNetwork ?? coverVolumeIsNetwork(url)
+        let volume = network ? volumeKey(url, location) : nil
+        guard let turn = takeProbeTurn(volume) else { return .notNow }
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
             (_: @Sendable (Date?) -> Bool) -> Date? in
             try stat(url)
         }
         switch outcome {
-        case .value(let date, _): return .known(date)
-        case .failed: return .known(nil)
-        case .busy, .timedOut: return .notNow
+        case .value(let date, _):
+            noteVolumeAnswered(volume, alias: location?.volume)
+            return .known(date)
+        case .failed(let error):
+            if network, !coverVolumeIsNetwork(url) {
+                markVolumeOffline(volume)   // the mount table no longer puts it on a share: its volume is gone
+                return .notNow
+            }
+            if network, Self.isConnectionError(error) {
+                noteVolumeTimeout(volume)
+                return .notNow
+            }
+            noteVolumeAnswered(volume, alias: location?.volume)   // gone, no permission: the share answered
+            return .known(nil)
+        case .busy:
+            giveBack(turn, volume)
+            return .notNow
+        case .timedOut:
+            noteVolumeTimeout(volume)
+            return .notNow
         }
     }
 
