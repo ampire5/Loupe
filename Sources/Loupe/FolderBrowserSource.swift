@@ -92,9 +92,10 @@ extension Notification.Name {
     /// counted without the folder's date would never be fresh.
     private var shownDated = false
     /// The direct subfolders of the cards in view, by card id, in Finder order, for the work ahead (thumbs-ahead spec,
-    /// stage 4: `ThumbnailStore.subfolderNames`, never a listing of its own). Asked for once per card, and again when
-    /// its facts come (its work may have listed it meanwhile); until the folder changes.
-    private var subfolders: [String: [String]] = [:]
+    /// stage 4: `ThumbnailStore.subfolderNames`, never a listing of its own): each card's entries made once, off the
+    /// main thread, when its names come (`AheadSubfolders`). Asked for once per card, and again when its facts come
+    /// (its work may have listed it meanwhile); until the folder changes.
+    private var subfolders = AheadSubfolders()
     private var subfoldersAsked: Set<String> = []
     /// Cards whose "+N inside" is to be counted again (a subfolder made ahead wrote its summary), each once per
     /// `insideRefreshDelay` however many of its subfolders do.
@@ -184,6 +185,7 @@ extension Notification.Name {
     }
 
     func stop() {
+        endOwnWalk()
         isPaused = true
         _ = gate.begin(nil)
         stopWatching()
@@ -484,7 +486,7 @@ extension Notification.Name {
         cards.reset()
         facts = [:]
         followUps = []
-        subfolders = [:]
+        subfolders = AheadSubfolders()
         subfoldersAsked = []
         for task in insideRefresh.values { task.cancel() }
         insideRefresh = [:]
@@ -536,8 +538,9 @@ extension Notification.Name {
         let ids = Array(pending.prefix(visiblePending)) + inView + pending.dropFirst(visiblePending)
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
-        let ahead = shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadCards(in: shownLocation) : []
-        let aheadByID = Dictionary(ahead.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let aheadList = shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadIDs(in: shownLocation) : []
+        // The kept entries as they are now (copied on write: nothing is made for this ask).
+        let ahead = subfolders
         let layout = shownCoverLayout, side = size.width, scale = size.scale
         let compact = view?.shownStyle == .cards   // board B: the layout kept at 76 pt
         let cellPixels = layout.cellPixels(width: side, scale: scale)
@@ -570,7 +573,7 @@ extension Notification.Name {
         }
         let subfolderWork = aheadWork(network: network, folderPath: folderPath)
         let work: @Sendable (String) async -> Bool = { id in
-            if let subfolder = aheadByID[id] { return await subfolderWork(subfolder) }
+            if let subfolder = ahead.card(id) { return await subfolderWork(subfolder) }
             guard let card = await lookup(id) else { return true }
             let entry = card.entry
             // Only its summary is wanted: that waits for the folder's date (`shownDated`), which brings it back.
@@ -599,55 +602,43 @@ extension Notification.Name {
             await deliver(id, mosaic, facts, again, card.picture && mosaic == nil && !again)
             return !again
         }
-        let aheadIDs = ahead.map(\.id)
         sendToQueue { queue, client in
-            await queue.want(ids, visible: visible, ahead: aheadIDs, client: client, isNetwork: { _ in network },
+            await queue.want(ids, visible: visible, ahead: aheadList, client: client, isNetwork: { _ in network },
                              work: work)
         }
     }
 
-    /// A subfolder of a card in view, as the work ahead makes it.
-    private struct AheadCard: Sendable {
-        var id: String
-        var parent: String
-        var url: URL
-        var location: ThumbnailLocation?
-        var parentLocation: ThumbnailLocation?
-    }
-
-    /// The subfolders of the folder cards in view, card by card in the grid's order (the last ask's), those whose
-    /// names are known; the others' names are asked for (`askSubfolders`), and they come with a later `sendCovers`.
-    private func aheadCards(in shownLocation: ThumbnailLocation?) -> [AheadCard] {
-        var cards: [AheadCard] = []
+    /// The queue ids of the folder cards in view's subfolders, card by card in the grid's order (the last ask's), those
+    /// whose names are known, at most `AheadSubfolders.limit` in all: the kept entries joined, nothing made per
+    /// subfolder. The others' names are asked for (`askSubfolders`), and they come with a later `sendCovers`.
+    private func aheadIDs(in shownLocation: ThumbnailLocation?) -> [String] {
+        var cards: [String] = []
         for id in lastAsked where lastInView.contains(id) {
             guard let entry = shown[id], entry.kind == .folder else { continue }
-            let location = shownLocation?.subfolder(entry.url.lastPathComponent)
-            guard let names = subfolders[id] else {
-                askSubfolders(id, of: entry.url, in: location)
-                continue
+            if !subfolders.has(id) {
+                askSubfolders(id, of: entry.url, in: shownLocation?.subfolder(entry.url.lastPathComponent))
             }
-            for name in names {
-                let url = entry.url.appendingPathComponent(name, isDirectory: true)
-                cards.append(AheadCard(id: url.path, parent: id, url: url, location: location?.subfolder(name),
-                                       parentLocation: location))
-            }
+            cards.append(id)
         }
-        return cards
+        return subfolders.ids(for: cards)
     }
 
-    /// The card's subfolders' names from the store (memory or catalog, never a listing), off the main thread; known,
-    /// the covers are sent again with them.
+    /// The card's subfolders' names from the store (memory or catalog, never a listing) and their entries, off the
+    /// main thread; known, the covers are sent again with them.
     private func askSubfolders(_ id: String, of folder: URL, in location: ThumbnailLocation?) {
         guard subfoldersAsked.insert(id).inserted else { return }
         if facts[id]?.summary?.folders == 0 {
-            subfolders[id] = []
+            subfolders.set(AheadSubfolders.entries([], card: id, folder: folder, location: location), for: id)
             return
         }
         let thumbnails = self.thumbnails, folderPath = coverFolder
         Task { @MainActor [weak self] in
             guard let names = await thumbnails.subfolderNames(of: folder, in: location) else { return }
+            let entries = await Task.detached(priority: .utility) {
+                AheadSubfolders.entries(names, card: id, folder: folder, location: location)
+            }.value
             guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
-            self.subfolders[id] = names
+            self.subfolders.set(entries, for: id)
             if !names.isEmpty { self.sendCovers() }
         }
     }
@@ -655,9 +646,9 @@ extension Notification.Name {
     /// The work ahead on one subfolder (`ThumbnailStore.prepareAhead`) while its parent card is on screen. A summary
     /// it wrote (new or changed) has its parent card's "+N inside" counted again (`refreshInside`); a fresh one skipped
     /// costs the parent nothing.
-    private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadCard) async -> Bool {
+    private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadSubfolders.Card) async -> Bool {
         let thumbnails = self.thumbnails
-        let lastViewed: @MainActor (AheadCard) -> String?? = { [weak self] card in
+        let lastViewed: @MainActor (AheadSubfolders.Card) -> String?? = { [weak self] card in
             guard let self, self.coverFolder == folderPath, self.shown[card.parent] != nil else { return nil }
             return .some(self.positions.fileName(in: card.url))
         }
@@ -705,7 +696,7 @@ extension Notification.Name {
         if again { followUps.insert(id) } else { followUps.remove(id) }
         showSummary(id)
         // Its work may have listed it: its subfolders' names may be known now.
-        if subfolders[id] == nil, subfoldersAsked.remove(id) != nil, lastInView.contains(id) { sendCovers() }
+        if !subfolders.has(id), subfoldersAsked.remove(id) != nil, lastInView.contains(id) { sendCovers() }
     }
 
     /// The card's facts with its visit and two-page keys as they are now (folder settings and positions are in memory).
@@ -889,6 +880,20 @@ extension Notification.Name {
         Task { await walk.start(folder, location: location, depth: depth) }
     }
 
+    /// The popover's "Stop preparing": the walk ends (`ThumbsWalk.cancel`), whichever window started it.
+    func stopSubtree() {
+        guard let walk = Self.walk else { return }
+        Task { await walk.cancel() }
+    }
+
+    /// The window that started the walk goes away (closed): its walk, which no other window counts or can stop from
+    /// its own popover, ends with it.
+    private func endOwnWalk() {
+        guard Self.walkOwner === self else { return }
+        Self.walkOwner = nil
+        stopSubtree()
+    }
+
     /// "Refresh cover": the card's summary and pick go from the catalog and memory (`forgetSummaryAndPick`), and the
     /// card goes to the cover queue again, its picture and facts made anew.
     private func refreshCover(_ entry: BrowserEntry) {
@@ -1038,6 +1043,7 @@ extension Notification.Name {
     private static let progressInterval: Duration = .milliseconds(250)
     private var progressTask: Task<Void, Never>?
     private var lastProgress: ThumbsProgress?
+    private var lastProgressLocation: BrowserLocation?
 
     /// A count may have changed: the progress is read once `progressInterval` has passed, whatever else changes
     /// meanwhile. Nothing while no one listens or the browser is hidden.
@@ -1050,8 +1056,10 @@ extension Notification.Name {
             let progress = await self.currentProgress()
             // A late count of a place the browser has left is dropped, and the new place's is read.
             guard self.view?.location == location else { return self.progressMayHaveChanged() }
-            guard !self.isPaused, progress != self.lastProgress else { return }
+            // A new place is told even with the same counts: the popover dropped the last place's on the move.
+            guard !self.isPaused, progress != self.lastProgress || location != self.lastProgressLocation else { return }
             self.lastProgress = progress
+            self.lastProgressLocation = location
             self.onProgress?(progress)
         }
     }
@@ -1059,16 +1067,18 @@ extension Notification.Name {
     /// The three counters joined (`ThumbsProgress.join`): the generator's for the browser's window, the cover queue's
     /// for its client, the walk's when this window started it, and the pauses.
     private func currentProgress() async -> ThumbsProgress {
-        guard case .folder = view?.location else { return ThumbsProgress() }
-        let thumbnails = self.thumbnails, window = thumbnailWindow
+        guard case .folder(let folder) = view?.location else { return ThumbsProgress() }
+        let thumbnails = self.thumbnails, window = thumbnailWindow, location = shownLocation
         // The walk's count follows the window that started it, whatever folder that window shows now.
         let walk = Self.walkOwner === self ? Self.walk : nil
         let generator = await thumbnails.generatorProgress(window: window)
         let covers = await thumbnails.coverQueue.progress(client: window)
         let browsing = await thumbnails.coverQueue.browsingPaused
         let walked = await walk?.progress
+        // The visible cards' subfolders still to do on a share that does not answer: the popover says they wait.
+        let shareAway = covers.ahead.done < covers.ahead.total ? await thumbnails.isShareOffline(folder, in: location) : false
         return ThumbsProgress.join(generator: generator, covers: covers, walk: walked,
-                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing)
+                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing, aheadWaitsForShare: shareAway)
     }
 }
 

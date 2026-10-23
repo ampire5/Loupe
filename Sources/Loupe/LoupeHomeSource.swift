@@ -129,6 +129,9 @@ import LoupeCore
     /// The progress popover's Prepare subfolders: the walk from the folder on screen.
     func prepareSubtree(of location: BrowserLocation) { folders.prepareShownSubtree(of: location) }
 
+    /// The progress popover's Stop preparing (while the walk runs): the walk ends.
+    func stopSubtree(in location: BrowserLocation) { folders.stopSubtree() }
+
     func pageFilterChosen(_ index: Int, in source: String) {
         if source == HomeCollections.stash { collections.onStashFilter?(index) }
     }

@@ -855,9 +855,10 @@ import UniformTypeIdentifiers
         }
         folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
-        // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done.
+        // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done. The popover (View ›
+        // Thumbnails…) has the counts whether or not anything is being prepared (`ThumbsProgress.display`).
         folders.onProgress = { [weak browser] progress in
-            browser?.setProgress(progress.state, delay: Config.pillDelay(seconds: Settings.shared.config.thumbsPillDelay))
+            browser?.setProgress(progress.display, delay: Config.pillDelay(seconds: Settings.shared.config.thumbsPillDelay))
         }
         folders.confirmDelete = { [weak self] name, answer in
             guard let window = self?.window else { answer(false); return }
@@ -900,13 +901,13 @@ import UniformTypeIdentifiers
         homeView?.browser.chooseCardStyle(CardStyle.allCases[tag])
     }
 
-    /// View › Thumbnails…: the toolbar pill's popover (from the sort while a narrow window hides the pill).
+    /// View › Thumbnails…: the progress popover with the folder's counts (from the pill when it shows, else the sort).
     @objc func showThumbsProgress(_ sender: Any?) {
         guard canShowThumbsProgress else { return }
         homeView?.browser.showProgressPopover()
     }
 
-    /// Home's browser is on screen with thumbnails being prepared (its pill lit).
+    /// Home's browser is on screen with a folder (whether or not anything is being prepared), or its pill is lit.
     var canShowThumbsProgress: Bool { isShowingHome && homeView?.browser.canShowProgressPopover == true }
 
     /// Home is on screen on a folder: its folder cards' style can be chosen (the View items and ⌥⌘1–⌥⌘3 are theirs).
