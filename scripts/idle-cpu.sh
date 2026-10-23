@@ -5,7 +5,7 @@
 #   --settle S    seconds to wait after each launch or switch before measuring (default 60)
 #   --window S    seconds each measurement lasts (default 60)
 #   FOLDER        opened in Home. May be on an SMB share: only its top level is listed, never recursively.
-#   IMAGE         opened in the viewer (default: the first JPEG/HEIC/PNG by name at FOLDER's top level)
+#   IMAGE         opened in the viewer (default: the first JPEG/HEIC/PNG/JXL by name at FOLDER's top level)
 # States measured, each after the settle time: (0) WindowServer alone, before Loupe launches; (1) Home on FOLDER;
 # (2) the viewer on IMAGE; (3) the window hidden (NSRunningApplication.hide, no Accessibility permission needed; the
 # state is skipped with a note when the app does not report itself hidden). Per state the CPU time delta of Loupe
@@ -48,8 +48,8 @@ fi
 listed=$(ls -A1 "$folder" 2>/dev/null) || listed=""
 if [[ -z $image ]]; then
     # One non-recursive listing of the top level, sorted by name.
-    first=$(printf '%s\n' "$listed" | grep -iE '\.(jpe?g|heic|png)$' | head -n 1 || true)
-    [[ -n $first ]] || { echo "error: no JPEG/HEIC/PNG at the top level of FOLDER (or it cannot be listed); pass IMAGE" >&2; exit 1; }
+    first=$(printf '%s\n' "$listed" | grep -iE '\.(jpe?g|heic|png|jxl)$' | head -n 1 || true)
+    [[ -n $first ]] || { echo "error: no JPEG/HEIC/PNG/JXL at the top level of FOLDER (or it cannot be listed); pass IMAGE" >&2; exit 1; }
     image=${folder%/}/$first
 fi
 [[ -f $image ]] || { echo "error: IMAGE is not a file" >&2; exit 1; }
