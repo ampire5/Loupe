@@ -64,21 +64,12 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// sharp before the next one against 21 without, a step back 172–255 ms to sharp against 570–583, and the run's CPU
     /// time 126 s against 157. The implementation, same machine and defaults (docs/bench/2026-10-23-memory-tiers.md):
     /// back-fast 29 of 29 sharp against 18–19, a step back 172–198 ms p50 and 244–245 ms max, CPU 137 s against
-    /// 162–166. A ready decode here takes 2.4–2.8 s against ~0.6 s at the current role: when the photo on screen's
-    /// full job always waited for one in progress, the first step after opening took 0.78–1.26 s to sharp against
-    /// 0.58–0.80 s before, so it now waits only for one expected to end sooner than its own decode and otherwise
-    /// decodes at once (`awaitReadyDecode`, `overtakesReady`); neighbours' full jobs wait. Measured with the
-    /// overtake (four runs each): that step took 785–796 ms when it overtook (the ready decode runs on beside it) and
-    /// once missed the next step 1.5 s later, 567–747 ms when it waited; back-fast unchanged (29 of 29, a step back
-    /// 166–195 ms p50, 230–292 ms max).
+    /// 162–166. A full job, the photo on screen's included, waits for a ready decode in progress (`awaitReadyDecode`).
+    /// A ready decode here takes 2.4–2.8 s against ~0.6 s at the current role, so the first step after opening took
+    /// 567–1255 ms to sharp when it waited (base 578–803). Overtaking it, decoding at once at the current role, was
+    /// tried and measured: that step took 785–796 ms and once missed the next step 1.5 s later, because the ready
+    /// decode cannot be stopped and the second decode runs beside it; no gain, so it was removed.
     let readyPool = DecodePool(slots: 1, reserved: 0, qos: .utility)
-    /// Measured full-decode speeds in ms per megapixel, running averages: ready decodes (`.other` role at `.utility`:
-    /// 2.4–2.8 s for 147 MP JPEG XL on the i7-10700K, Task 7's bench) and the current photo's full decodes (current
-    /// role: ~0.6 s for the same). nil until one completes. `overtakesReady` compares them.
-    var readyDecodeSpeed: Double?
-    var currentDecodeSpeed: Double?
-    /// Test hook: figures used instead of the measured ones (`setDecodeSpeeds`).
-    var fixedDecodeSpeeds: (ready: Double?, current: Double?)?
     var entries: [URL: CacheEntry<Pyramid>] = [:]
     /// The latest plan per URL: goal → position in the plan (the decode rank).
     var planned: [URL: [CacheGoal: Int]] = [:]
@@ -245,9 +236,6 @@ public actor ImageCache<Loader: PyramidLoader> {
         activity = now
         onActivity?(now)
     }
-
-    /// Test hook: decode speeds (ms per megapixel) `overtakesReady` uses instead of the measured ones.
-    func setDecodeSpeeds(ready: Double?, current: Double?) { fixedDecodeSpeeds = (ready, current) }
 
     /// Test hook: nothing in flight (no read, job task — cancelled ones included — or stamp check).
     var isIdle: Bool { stampChecks == 0 && runningJobs == 0 && entries.values.allSatisfy { $0.read == nil } }

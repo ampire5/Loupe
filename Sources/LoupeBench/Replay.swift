@@ -67,8 +67,6 @@ struct StepRecord {
     /// From the step to the moment the photo's full job found its ready decode in progress and waited for it
     /// (trace `readyAwait`, negative: while it was still a neighbour, since the previous step). Nil: it did not.
     var readyAwaitMs: Double?
-    /// The same for a full job that overtook the ready decode instead (trace `readyOvertaken`: it decoded at once).
-    var readyOvertakenMs: Double?
     /// A seeded strip jump (`--seed`): from the step to the scrubbing focus being in the cache, and to
     /// `ThumbnailStore.seed` handing over the level (the upload follows; `seeded` in the landing table).
     var seedFocusMs: Double?
@@ -263,22 +261,18 @@ actor ReplayDriver {
         peakReady = max(peakReady, stats.readyCount)
     }
 
-    /// Marks the steps whose photo's full job waited for its ready decode or overtook it, from the run's trace.
+    /// Marks the steps whose photo's full job waited for its ready decode, from the run's trace.
     func markReadyAwaits(_ log: TraceLog) {
-        let all = log.all
-        func ms(_ kind: CacheTraceEvent.Kind, _ i: Int) -> Double? {
+        let awaits = log.all.filter { $0.kind == CacheTraceEvent.Kind.readyAwait.rawValue }
+        for i in records.indices {
             let from = i > 0 ? records[i - 1].startedAt : records[i].startedAt
             let to = i + 1 < records.count ? records[i + 1].startedAt : ContinuousClock.now
             let url = files[records[i].index]
-            guard let e = all.first(where: {
-                $0.kind == kind.rawValue && $0.url.path == url.path && $0.time >= from && $0.time < to
-            }) else { return nil }
+            guard let e = awaits.first(where: { $0.url.path == url.path && $0.time >= from && $0.time < to }) else {
+                continue
+            }
             let c = (e.time - records[i].startedAt).components
-            return Double(c.seconds) * 1000 + Double(c.attoseconds) / 1e15
-        }
-        for i in records.indices {
-            records[i].readyAwaitMs = ms(.readyAwait, i)
-            records[i].readyOvertakenMs = ms(.readyOvertaken, i)
+            records[i].readyAwaitMs = Double(c.seconds) * 1000 + Double(c.attoseconds) / 1e15
         }
     }
 
@@ -734,8 +728,7 @@ enum Replay {
                    + "cache: CacheStats.usedBytes, on a discrete card the system tier only (files and ready decodes); "
                    + "graphics: the pyramids and uploads against the graphics tier (– with one budget); ready: entries "
                    + "holding a ready decode; ready wait (steps): ms from the step to its full job waiting for the "
-                   + "photo's ready decode in progress, \"ot\" when it overtook it and decoded at once (negative: before "
-                   + "the step).")
+                   + "photo's ready decode in progress (negative: before the step).")
         for r in results {
             out.append("")
             out.append("### \(r.script.name) (\(r.script.zoom.rawValue))")
@@ -765,14 +758,14 @@ enum Replay {
                 out.append(contentsOf: landingTable(r))
                 out.append("")
             }
-            for (label, steps) in [("waited for", r.records.filter { $0.readyAwaitMs != nil }),
-                                   ("overtook", r.records.filter { $0.readyOvertakenMs != nil })] where !steps.isEmpty {
+            let waited = r.records.filter { $0.readyAwaitMs != nil }
+            if !waited.isEmpty {
                 var sharp = Samples()
-                steps.compactMap(\.sharpMs).forEach { sharp.add($0) }
-                let numbers = steps.map { "\($0.number)" }.joined(separator: ", ")
-                out.append("Full jobs that \(label) a ready decode: \(steps.count) steps (\(numbers)), "
+                waited.compactMap(\.sharpMs).forEach { sharp.add($0) }
+                let numbers = waited.map { "\($0.number)" }.joined(separator: ", ")
+                out.append("Full jobs that waited for a ready decode: \(waited.count) steps (\(numbers)), "
                            + "sharp p50 \(f0(sharp.median)) / max \(f0(sharp.percentile(100))) ms, "
-                           + "\(steps.count - sharp.count) not sharp before the next step.")
+                           + "\(waited.count - sharp.count) not sharp before the next step.")
                 out.append("")
             }
             out.append(stepHeader)
@@ -800,7 +793,7 @@ enum Replay {
             + "| \(f0(s.fullMs)) | \(state) | \(levels) | \(s.decoder ?? "–") | \(f0(t.readMs)) | \(f0(t.firstLookMs)) "
             + "| \(f0(t.previewMs)) | \(f0(t.fullMs)) | \(f0(t.uploadMs)) | \(mb(s.stats?.usedBytes ?? 0)) "
             + "| \(s.stats?.graphicsLimitBytes == nil ? "–" : mb(s.stats?.graphicsUsedBytes ?? 0)) | \(s.stats?.readyCount ?? 0) "
-            + "| \(s.readyOvertakenMs.map { "ot \(f0($0))" } ?? f0(s.readyAwaitMs)) | \(mb(s.ram)) "
+            + "| \(f0(s.readyAwaitMs)) | \(mb(s.ram)) "
             + "| \(mb(s.gpu)) | \(f0(s.cpuMs)) |"
     }
 
@@ -891,7 +884,7 @@ enum Replay {
         var lines = ["script\tstep\tindex\tfile\tmove\tburst\thit\tshown_ms\tpreview_ms\tfull_ms\tfailure\tend_state\tfinest\t"
                      + "needed\tlfit\tdecoder\tread_ms\tlook_ms\tpreview_dec_ms\tfull_dec_ms\tupload_ms\tbytes_n\tpreviews_n\t"
                      + "full_n\tcache_used\tram\tgpu\tcpu_ms\tsharp_at_show\tsharp_ms\tlanding\tseeded_ms\tseed_focus_ms\tseed_thumb_ms\t"
-                     + "graphics_used\tready_n\tready_await_ms\tready_overtaken_ms"]
+                     + "graphics_used\tready_n\tready_await_ms"]
         func o(_ v: Double?) -> String { v.map { String(format: "%.1f", $0) } ?? "" }
         func i(_ v: Int?) -> String { v.map(String.init) ?? "" }
         for r in results {
@@ -906,8 +899,7 @@ enum Replay {
                               "\(s.ram)", "\(s.gpu)", String(format: "%.1f", s.cpuMs),
                               s.sharpAtShow.map { $0 ? "1" : "0" } ?? "", o(s.sharpMs), s.landing ? "1" : "0",
                               o(seeded[s.number] ?? nil), o(s.seedFocusMs), o(s.seedThumbMs),
-                              i(st?.graphicsUsedBytes), i(st?.readyCount), o(s.readyAwaitMs),
-                              o(s.readyOvertakenMs)].joined(separator: "\t"))
+                              i(st?.graphicsUsedBytes), i(st?.readyCount), o(s.readyAwaitMs)].joined(separator: "\t"))
             }
         }
         do {

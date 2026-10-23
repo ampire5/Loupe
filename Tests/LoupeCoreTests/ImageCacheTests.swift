@@ -1088,7 +1088,6 @@ struct ImageCacheTests {
         var limits = CacheLimits.at3G
         limits.graphicsMemory = 2 * widest.byteCount(levels: 0..<widest.levelCount)
         await rig.cache.setLimits(limits)
-        await rig.cache.setDecodeSpeeds(ready: 0, current: 1e9)   // a ready decode in flight is always waited for
         for i in 0..<5 {
             await rig.focus(files, i, needsFull: true, previous: i > 0 ? i - 1 : nil)
             await rig.focus(files, i, dwelling: true, needsFull: true, previous: i > 0 ? i - 1 : nil)
@@ -1112,15 +1111,13 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
-    /// The photo the user steps onto has its ready decode running, expected to end sooner than a decode of its own
-    /// (measured speeds: ready nearly instant, current slow): its full job waits for that decode and uploads it
-    /// rather than decoding the file a second time.
+    /// The photo the user steps onto has its ready decode running: its full job waits for that decode and uploads
+    /// it rather than decoding the file a second time.
     @Test func fullJobWaitsForReadyInFlight() async {
         var limits = CacheLimits.at3G
         limits.graphicsMemory = 1 << 30
         limits.full = 0   // no neighbour's full resolution: n2's full decode can only be its ready one
         let rig = Rig(limits: limits)
-        await rig.cache.setDecodeSpeeds(ready: 0, current: 1e9)
         let files = fileURLs(10)
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }
@@ -1137,62 +1134,15 @@ struct ImageCacheTests {
         await rig.clear()
     }
 
-    /// The photo the user steps onto has its ready decode just started, expected to take far longer than a decode of
-    /// its own (measured speeds: ready slow, current instant): its full job decodes at once at the current role and
-    /// the photo goes sharp from that, while the ready decode runs on. Ending after the full job kept its own decode,
-    /// the ready result is dropped; ending before (the current decode held back), it is kept (the plan wants it) and
-    /// the full job keeps nothing of its own.
-    @Test func currentOvertakesAJustStartedReadyDecode() async {
-        for readyEndsFirst in [false, true] {
-            var limits = CacheLimits.at3G
-            limits.graphicsMemory = 1 << 30
-            limits.full = 0   // no neighbour's full resolution: n2's first full decode is its ready one
-            let rig = Rig(limits: limits)
-            await rig.cache.setDecodeSpeeds(ready: 1e9, current: 0)
-            let files = fileURLs(10)
-            let log = TraceEvents()
-            await rig.cache.setTrace { log.add($0) }
-            let readyGate = BlockingGate(), currentGate = BlockingGate()
-            rig.decoder.gateFullCalls(files[2], [readyGate, readyEndsFirst ? currentGate : nil])
-            await rig.focus(files, 0, dwelling: true, needsFull: true)
-            #expect(await eventually { rig.decoder.calls(files[2]).contains(.full) })
-            await rig.focus(files, 2, needsFull: true, previous: 0)
-            #expect(await eventually { log.events.contains { $0.url == files[2] && $0.kind == .readyOvertaken } })
-            #expect(!log.events.contains { $0.url == files[2] && $0.kind == .readyAwait })
-            #expect(await eventually { rig.decoder.calls(files[2]).filter { $0 == .full }.count == 2 })
-            if readyEndsFirst {
-                readyGate.open()
-                #expect(await eventually {
-                    log.events.contains { $0.url == files[2] && $0.kind == .decodeDone && $0.goal == .ready }
-                })
-                #expect(await rig.state(files[2]) != .full)
-                currentGate.open()
-            } else {
-                // Sharp from the current decode while the ready one is still held at its gate.
-                #expect(await eventually { await rig.state(files[2]) == .full })
-                readyGate.open()
-            }
-            #expect(await eventually { await rig.state(files[2]) == .full })
-            #expect(await rig.settle())
-            let dropped = log.events.contains { $0.url == files[2] && $0.kind == .uploadSkipped && $0.goal == .ready }
-            #expect(dropped == !readyEndsFirst, "ready ends first: \(readyEndsFirst)")
-            #expect(await rig.cache.inspect([files[2]]).first??.planned[.ready] != nil)
-            #expect(rig.decoder.calls(files[2]).filter { $0 == .full }.count == 2)
-            #expect(await rig.cache.entry(files[2])?.failure == nil)
-            await rig.clear()
-        }
-    }
-
     /// A ready job that ran its own probe and then queues for the single ready slot (behind n1's ready decode, held)
-    /// is only waiting: stepping onto its photo, the full job gives it up and decodes at once, even with figures
-    /// that would wait for a decode in progress. One decode of that photo in all.
+    /// is only waiting: stepping onto its photo, the full job gives it up and decodes at once rather than wait for a
+    /// decode that has not begun. One decode of that photo in all.
     @Test func queuedReadyDecodeIsAbandonedNotAwaited() async {
         var limits = CacheLimits.at3G
         limits.graphicsMemory = 1 << 30
         limits.full = 0
         limits.previews = 2   // the current photo and n1: n2 has no preview job, so its ready job probes it
         let rig = Rig(limits: limits)
-        await rig.cache.setDecodeSpeeds(ready: 0, current: 1e9)   // a ready decode in progress would be waited for
         let files = fileURLs(10)
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }
@@ -1263,7 +1213,6 @@ struct ImageCacheTests {
         limits.graphicsMemory = 1 << 30
         limits.full = 0
         let rig = Rig(limits: limits)
-        await rig.cache.setDecodeSpeeds(ready: 0, current: 1e9)   // the full job waits for a ready decode in flight
         let files = fileURLs(40)   // 30 lies beyond what photo 0's dwell reads
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }

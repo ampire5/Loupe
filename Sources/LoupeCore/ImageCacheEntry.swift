@@ -179,7 +179,6 @@ final class JobPhase: @unchecked Sendable {
     private var waiting = true
     private var current: Bool
     private var abandoned = false
-    private var decodeStart: ContinuousClock.Instant?
 
     init(forCurrent: Bool) { current = forCurrent }
 
@@ -195,13 +194,9 @@ final class JobPhase: @unchecked Sendable {
         lock.withLock {
             guard !abandoned else { return false }
             waiting = false
-            decodeStart = .now
             return true
         }
     }
-
-    /// When the work started by `beginIfLive` began (nil: not begun, e.g. a ready job still probing).
-    var decodingSince: ContinuousClock.Instant? { lock.withLock { decodeStart } }
 
     /// Gives the job up if it is still waiting: its work then never starts (`beginIfLive`). False once it began.
     func abandonIfWaiting() -> Bool {

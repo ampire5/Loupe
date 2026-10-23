@@ -84,6 +84,8 @@ Reading:
   the end of the step). When the expected times said wait, it waited: 567 and 747 ms. Before the tiers: 578–803 ms.
   Elsewhere the overtake version matches the waiting one: back-fast 29 of 29, back steps 166–195 ms p50 and
   230–292 ms max, CPU 133–152 s.
+- **The overtake was removed** (user decision on these numbers): the photo on screen waits for its ready decode
+  again, as in «After, waiting»; a ready job still queued is given up. Its rows stay as the measurement behind it.
 - A first run of "after" had the bench's defaults without the graphics tier (`CacheLimits()` instead of the app's
   `CacheLimits(config:)`): one 13.7 GB budget for everything put 19.5 GB (18 594 MiB) on the card and made forward steps 0.36–0.54 s p50, up to 1.25 s.
   The replay now takes its defaults the way the app does.
