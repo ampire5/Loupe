@@ -578,6 +578,9 @@ extension ThumbnailStore {
         if probe {
             guard let taken = takeProbeTurn(volume) else { return .notNow }
             turn = taken
+        } else if isOffline(volume) {
+            // An offline share is listed only on its probe's turn, whoever asks.
+            return .notNow
         }
         let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
                                           timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
@@ -699,6 +702,12 @@ extension ThumbnailStore {
 
     func isOffline(_ volume: String?) -> Bool {
         volume.map { offlineVolumes[$0] != nil } ?? false
+    }
+
+    /// Whether the share of `folder` (`location`: where the catalog keeps it, as for its cards) is offline now: the
+    /// work ahead on it waits for its probe, and Home's progress says so.
+    public func isShareOffline(_ folder: URL, in location: ThumbnailLocation?) -> Bool {
+        isOffline(volumeKey(folder, location))
     }
 
     /// Whether a card on `volume` may be listed for its summary: always unless the share is offline, then once per

@@ -347,16 +347,16 @@ private final class FakeListing: @unchecked Sendable {
             made.add(id, images.count)
             return true
         }
-        // The share's cards first, until its hung listings fill its lane.
+        // The share's cards first, until its hung listings make it offline (then it is not listed outside its probe).
         await queue.want(shares, visible: shares.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
-        #expect(await eventually { store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverThreadsPerLane })
+        #expect(await eventually { store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverOfflineTimeouts })
         let ids = shares + locals
         await queue.want(ids, visible: ids.count, isNetwork: { $0.hasPrefix("/net/") }, work: work)
         #expect(await eventually { locals.allSatisfy { made.count(of: $0) == 4 } })
         try? await Task.sleep(for: .milliseconds(200))   // a few retries of the share's cards
         #expect(shares.allSatisfy { made.count(of: $0) == nil })
         #expect(await queue.pendingCount >= shares.count - 1)   // one may be running its quick "not now"
-        #expect(store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverThreadsPerLane)
+        #expect(store.coverThreads.count(CoverLane(network: true, resolving: false)) == ThumbnailStore.coverOfflineTimeouts)
         await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
         for _ in 0..<ThumbnailStore.coverThreadsPerLane { hang.signal() }
         #expect(await eventually { store.coverThreads.count(CoverLane(network: true, resolving: false)) == 0 })
@@ -454,7 +454,9 @@ private final class FakeListing: @unchecked Sendable {
             let share = ThumbnailLocation(volume: "net:share", folder: "/net/f\(i)", name: "_")
             #expect(await store.folderCover(URL(fileURLWithPath: "/net/f\(i)"), archive: false, in: share, maxPixel: 64) == nil)
         }
-        #expect(lanes.allSatisfy { store.coverThreads.count($0) == ThumbnailStore.coverThreadsPerLane })
+        // The listings stop at the share's second time out (offline: not listed outside its probe).
+        #expect(store.coverThreads.count(lanes[0]) == ThumbnailStore.coverThreadsPerLane)
+        #expect(store.coverThreads.count(lanes[1]) == ThumbnailStore.coverOfflineTimeouts)
         guard case .located(let shown) = await store.folderLocation(URL(fileURLWithPath: "/loc/shown")) else {
             Issue.record("the local folder did not resolve")
             return
@@ -468,7 +470,8 @@ private final class FakeListing: @unchecked Sendable {
     }
 
     /// Fix round 2: a share alive but too slow to give a name in time is given up after three tries (empty for the
-    /// session), not listed again and again.
+    /// session), not listed again and again. Offline after two, it is not listed outside its probe; the probe's
+    /// try, the third, gives the folder up.
     @Test func slowShareGivenUpAfterThreeTimeouts() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -489,6 +492,9 @@ private final class FakeListing: @unchecked Sendable {
         gate.signal()
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)
         gate.signal()
+        #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == nil)   // offline: not listed
+        #expect(await eventually { calls.count == 2 })
+        await store.setCoverProbeInterval(.zero)
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
         gate.signal()
         #expect(await store.folderCover(folder, archive: false, in: share, maxPixel: 64) == [])
@@ -1335,7 +1341,8 @@ private final class HangingStat: @unchecked Sendable {
         #expect(listing.summary?.datesKnown == true)
     }
 
-    /// A share whose cover listing gave no name in time twice in a row is offline; a listing that answers clears it.
+    /// A share whose cover listing gave no name in time twice in a row is offline; its probe's listing that answers
+    /// clears it (outside the probe an offline share is not listed: `offlineShareIsListedOnlyOnItsProbe`).
     @Test func offlineAfterTwoTimeouts() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -1363,6 +1370,9 @@ private final class HangingStat: @unchecked Sendable {
         // The share answers: a time limit no loaded machine's late thread runs out of, once both hung listings are in.
         #expect(await eventually { calls.count == 2 })
         await store.setCoverListing(dated: lister, networkTimeout: .seconds(30))
+        #expect(await store.folderCard(folder, archive: false, in: share, maxPixel: 64)?.problem == .offline)
+        #expect(calls.count == 2)   // not the probe's turn: nothing listed
+        await store.setCoverProbeInterval(.zero)
         let back = try #require(await store.folderCard(folder, archive: false, in: share, maxPixel: 64))
         #expect(back.problem == nil)
         #expect(back.images.count == 2)
@@ -1577,7 +1587,7 @@ private final class HangingStat: @unchecked Sendable {
     }
 
     /// Three folders on one share that hangs: after two time outs the share is offline, and every card on it says so,
-    /// those whose listing only found the lane full too; a listing that answers brings the share back.
+    /// the third not listed at all (outside its probe); the probe's listing that answers brings the share back.
     @Test func shareGoesOfflineAsAWhole() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -1599,16 +1609,17 @@ private final class HangingStat: @unchecked Sendable {
         }
         #expect(await card("a") == nil)                     // one time out: not now
         #expect(await card("b")?.problem == .offline)       // two in a row: the share
-        #expect(await card("c")?.problem == .offline)       // a third hangs too
+        #expect(await card("c")?.problem == .offline)       // a third: not listed
         let lane = CoverLane(network: true, resolving: false)
-        #expect(store.coverThreads.count(lane) == ThumbnailStore.coverThreadsPerLane)
-        #expect(await card("d")?.problem == .offline)       // the lane full: busy, offline all the same
+        #expect(store.coverThreads.count(lane) == ThumbnailStore.coverOfflineTimeouts)
+        #expect(await card("d")?.problem == .offline)
         #expect(await card("a")?.problem == .offline)
         hung.reset()
-        for _ in 0..<ThumbnailStore.coverThreadsPerLane { gate.signal() }
+        for _ in 0..<ThumbnailStore.coverOfflineTimeouts { gate.signal() }
         #expect(await eventually { store.coverThreads.count(lane) == 0 })
-        // The share answers: a time limit no loaded machine's late thread runs out of.
+        // The share answers its probe: a time limit no loaded machine's late thread runs out of.
         await store.setCoverListing(dated: lister, networkTimeout: .seconds(30))
+        await store.setCoverProbeInterval(.zero)
         let back = try #require(await card("e"))
         #expect(back.problem == nil)
         #expect(await card("d")?.problem == nil)
@@ -1892,6 +1903,36 @@ final class LockedErrors: @unchecked Sendable {
         #expect(await card("t2") == nil)   // one time out again: not offline
         #expect(await store.offlineVolumes["net:share"] == nil)
         for _ in 0..<2 { gate.signal() }
+    }
+
+    /// An offline share is listed only on its probe's turn, whatever asks (a cover's listing outside the probe, a
+    /// subfolder's pick, a summary that is fresh): "not now" otherwise, and nothing reaches the share.
+    @Test func offlineShareIsListedOnlyOnItsProbe() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let calls = TryCounter()
+        let store = await store(ThumbReader(), dir: dir)
+        await store.setCoverVolumes { _ in true }
+        await store.setCoverListing(dated: { _, _, _, _ in
+            calls.add()
+            return CoverListing(names: CoverNames(files: ["1.jpg"], folders: []))
+        }, networkTimeout: .seconds(30))
+        let folder = URL(fileURLWithPath: "/net/f")
+        #expect(await !store.isShareOffline(folder, in: loc("/net/f")))
+        await store.markVolumeOffline("net:share")
+        #expect(await store.isShareOffline(folder, in: loc("/net/f")))
+        #expect(await !store.isShareOffline(URL(fileURLWithPath: "/local/f"), in: loc("/local/f")))
+        // Not the probe: not listed, "not now".
+        let outside = await store.coverListing(folder, archive: false, network: true, key: "k", volume: "net:share",
+                                               alias: "net:share", forSummary: false)
+        guard case .notNow = outside else { Issue.record("listed outside the probe: \(outside)"); return }
+        #expect(calls.count == 0)
+        // The probe's turn lists.
+        await store.setCoverProbeInterval(.zero)
+        let probe = await store.coverListing(folder, archive: false, network: true, key: "k", volume: "net:share",
+                                             alias: "net:share", forSummary: false, probe: true)
+        guard case .listed = probe else { Issue.record("the probe did not list: \(probe)"); return }
+        #expect(calls.count == 1)
     }
 
     /// While a share is offline its cards are not listed for their summary but stay pending; one probe a while goes
@@ -2379,6 +2420,8 @@ final class LockedErrors: @unchecked Sendable {
         func card() async -> FolderCard? {
             await store.folderCard(folder, archive: false, in: loc("/net/f"), maxPixel: 64)
         }
+        // Offline after two errors, the share is listed only on its probe's turn: every call here takes one.
+        await store.setCoverProbeInterval(.zero)
         #expect(await card() == nil)   // one connection error: not now
         #expect(await card()?.problem == .offline)
         #expect(await card()?.images.isEmpty == true)   // the third: given up for the session
@@ -2585,12 +2628,13 @@ final class LockedErrors: @unchecked Sendable {
     }
 }
 
-/// The final fix wave, parked from Task 6: a folder without photos given up because each of its subfolders was (their
-/// share not answering) is tried again with them when the share comes back.
+/// The final fix wave, parked from Task 6: a folder without photos whose subfolders' share does not answer is tried
+/// again with them when the share comes back. (Thumbs-ahead final fix: offline after two errors, the share is not
+/// listed outside its probe, so the subfolders are no longer listed until each is given up; the card waits, offline.)
 @Suite struct FolderCardParentAwayTests {
     private let fm = FileManager.default
 
-    @Test func parentGivenUpViaItsSubfoldersComesBackWithTheShare() async throws {
+    @Test func parentWaitingOnItsSubfoldersComesBackWithTheShare() async throws {
         let dir = fm.temporaryDirectory.appendingPathComponent("loupe-folder-card-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: dir) }
         let reader = ThumbReader(), failing = LockedFlag()
@@ -2613,14 +2657,15 @@ final class LockedErrors: @unchecked Sendable {
         let top = URL(fileURLWithPath: "/net/top"), key = ThumbnailStore.memoKey(top, nil)
         let location = ThumbnailLocation(volume: "net:share", folder: "/net/top", name: "_")
         func card() async -> FolderCard? { await store.folderCard(top, archive: false, in: location, maxPixel: 64) }
-        // Its subfolders' listings fail with the share's errors until each is given up; then so is the folder.
+        // Its subfolders' listings fail with the share's errors: offline, and nothing listed again outside the probe;
+        // the folder is not given up, its card waits.
         for _ in 0..<ThumbnailStore.coverTimeoutsAllowed + 1 { _ = await card() }
-        #expect(await store.emptyCovers.contains(key))
-        #expect(await card()?.images.isEmpty == true)
+        #expect(await !store.emptyCovers.contains(key))
+        #expect(await store.isShareOffline(top, in: location))
+        #expect(await card()?.images.isEmpty != false)
         // The share answers again (the browser's own listing, say).
         failing.reset()
         await store.volumeAnswered(URL(fileURLWithPath: "/net/shown"), in: location)
-        #expect(await !store.emptyCovers.contains(key))
         let back = try #require(await card())
         #expect(back.images.count == 2)
     }
