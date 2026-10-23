@@ -129,4 +129,14 @@ import Foundation
                 == ["a2", "a0", "a1", "b0", "b1", "w0", "w2"])
         #expect(ThumbnailQueue.order(requests, skip: []) == ThumbnailQueue.order(requests, skip: [], trailing: nil))
     }
+    /// A request marked visible-only (Home under `thumbs-ahead = visible | off`) adds its visible cells and nothing
+    /// outward; the other requests and the walk's window are as ever.
+    @Test func visibleOnlyRequestKeepsToItsCells() {
+        let home = files("h", 5), strip = files("s", 3), walk = files("w", 2)
+        let order = ThumbnailQueue.order([
+            ThumbnailRequest(files: home, current: 1, visible: [1, 3], isKey: true, isHome: true, visibleOnly: true),
+            ThumbnailRequest(files: strip, current: 0, visible: [], isKey: false),
+        ], skip: [], trailing: ThumbnailRequest(files: walk, current: 0, visible: [], isKey: false))
+        #expect(order == [home[1], home[3]] + strip + walk)
+    }
 }

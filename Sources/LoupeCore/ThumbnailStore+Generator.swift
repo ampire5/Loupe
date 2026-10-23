@@ -58,22 +58,28 @@ extension ThumbnailStore {
     /// How far the generator is with window `window`'s folder (thumbs-ahead stages 1–3): of its request's visible
     /// files (Home's: in view and the margin) and of all of them, the stamped ones with a thumbnail, or whose making
     /// failed this session, or that the size limit evicted (made again only at the next opening), of all stamped ones.
-    /// The walk's window is not counted. Nothing for a window it does not have.
+    /// The walk's window is not counted. Nothing for a window it does not have. A visible-only request
+    /// (`ThumbnailRequest.visibleOnly`) counts its visible files as all of them: the rest is not made.
     public func generatorProgress(window: Int) -> GeneratorProgress {
         var progress = GeneratorProgress()
         guard let window = windows[window] else { return progress }
         func finished(_ url: URL) -> Bool { status(url) != .pending || evicted.contains(url) }
-        for listing in window.listings.values {
-            for file in listing {
-                progress.all.total += 1
-                if finished(file.url) { progress.all.done += 1 }
-            }
-        }
         let files = window.request.files
         for url in Set(window.request.visible.filter(files.indices.contains).map { files[$0] })
         where window.stamps[url] != nil {
             progress.visible.total += 1
             if finished(url) { progress.visible.done += 1 }
+        }
+        // Visible-only (`thumbs-ahead = visible | off`): the rest of the folder is not made, so not counted.
+        if window.request.visibleOnly {
+            progress.all = progress.visible
+            return progress
+        }
+        for listing in window.listings.values {
+            for file in listing {
+                progress.all.total += 1
+                if finished(file.url) { progress.all.done += 1 }
+            }
         }
         return progress
     }

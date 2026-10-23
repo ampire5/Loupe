@@ -14,14 +14,20 @@ public struct ThumbnailRequest: Sendable, Equatable {
     /// Home's request (its folder's photos, `visible` those in view and the margin): the user's pause of the work
     /// ahead holds the rest of its folder. A viewer's strip is never held by it.
     public var isHome: Bool
+    /// Only `visible` is made, nothing outward from it (Home under `thumbs-ahead = visible | off`): the rest of the
+    /// folder is not prepared, and the window's progress counts the visible files alone. Other requests and the walk's
+    /// window are as ever.
+    public var visibleOnly: Bool
 
-    public init(files: [URL], current: Int, visible: [Int], isKey: Bool, lastActive: Int = 0, isHome: Bool = false) {
+    public init(files: [URL], current: Int, visible: [Int], isKey: Bool, lastActive: Int = 0, isHome: Bool = false,
+                visibleOnly: Bool = false) {
         self.files = files
         self.current = current
         self.visible = visible
         self.isKey = isKey
         self.lastActive = lastActive
         self.isHome = isHome
+        self.visibleOnly = visibleOnly
     }
 
     /// `urls` with those in `inView` first, then the rest (the margin around the view), each in its order: the
@@ -41,7 +47,7 @@ public enum ThumbnailQueue {
     /// that already exist or are being made) never appears. `trailing` (the walk's window) goes after every request,
     /// its visible cells then outward from its current file, as a window's. `visibleOnly` (the user paused the work
     /// ahead): only Home's requests' visible cells (`isHome`, nothing outward from them; a viewer's strip as ever)
-    /// and no `trailing`.
+    /// and no `trailing`. A request marked `visibleOnly` adds its visible cells alone, whatever `visibleOnly` says.
     public static func order(_ requests: [ThumbnailRequest], skip: Set<URL>, trailing: ThumbnailRequest? = nil,
                              visibleOnly: Bool = false) -> [URL] {
         // The key window(s) first, the others by how recently they were key; ties keep the order given (stable).
@@ -63,7 +69,7 @@ public enum ThumbnailQueue {
                     add(request.files[index])
                 }
             }
-            for request in group where !(visibleOnly && request.isHome) {
+            for request in group where !request.visibleOnly && !(visibleOnly && request.isHome) {
                 outward(request, add)
             }
         }

@@ -489,6 +489,7 @@ extension Notification.Name {
         for task in insideRefresh.values { task.cancel() }
         insideRefresh = [:]
         noCover = []
+        lastWant = nil
         lastProgress = nil
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
@@ -787,7 +788,9 @@ extension Notification.Name {
         let shownIndices = files.compactMap { index[$0] }
         let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
                                        visible: shownIndices,
-                                       isKey: view?.window?.isKeyWindow ?? false, isHome: true)
+                                       isKey: view?.window?.isKeyWindow ?? false, isHome: true,
+                                       // `thumbs-ahead = visible | off`: what is asked for, never the rest of the folder.
+                                       visibleOnly: Settings.shared.config.thumbsAhead != .folder)
         let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
         Task { @MainActor [weak self] in
             await thumbnails.setRequest(window: window, request, stamps: stamps)
@@ -893,6 +896,8 @@ extension Notification.Name {
         let id = entry.id, folder = entry.url, thumbnails = self.thumbnails
         let location = shownLocation?.subfolder(entry.url.lastPathComponent)
         cards.again(id, inView: lastInView.contains(id))
+        // Given up on before (no cover then): it waits again for the new one.
+        if noCover.remove(id) != nil { view?.resumeWaiting(for: [id]) }
         sendToQueue { queue, client in
             if let location { await thumbnails.forgetSummaryAndPick(of: location, folder: folder) }
             await queue.forget([id], client: client)

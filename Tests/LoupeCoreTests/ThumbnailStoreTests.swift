@@ -162,8 +162,9 @@ final class Locked<T>: @unchecked Sendable {
     }
 
     private func request(_ files: [URL], current: Int = 0, visible: [Int] = [], isKey: Bool = true,
-                         home: Bool = false) -> ThumbnailRequest {
-        ThumbnailRequest(files: files, current: current, visible: visible, isKey: isKey, isHome: home)
+                         home: Bool = false, visibleOnly: Bool = false) -> ThumbnailRequest {
+        ThumbnailRequest(files: files, current: current, visible: visible, isKey: isKey, isHome: home,
+                         visibleOnly: visibleOnly)
     }
 
     /// Polls `condition` every 2 ms until it holds or `timeout` passes.
@@ -549,6 +550,38 @@ final class Locked<T>: @unchecked Sendable {
         await store.pauseAhead(true)
         await store.setRequest(window: 1, request(files, current: 2, visible: [2]), stamps: reader.stamps)
         #expect(await eventually { await allReady(store, files) })
+    }
+
+    /// `thumbs-ahead = visible` (Home's request marked visible-only, `visible` the photos in view and the margin) and
+    /// `off` (`visible` only those in view): only those are made, never the rest of the folder; the subtree walk the
+    /// user started still runs, and another window's strip goes on outward.
+    @Test(arguments: [[1, 4], [2]]) func visibleOnlyRequestMakesOnlyItsVisibleFiles(visible: [Int]) async throws {
+        let reader = ThumbReader()
+        let files = photos(6, in: reader)
+        let walked = photos(2, folder: "/photos/walked", in: reader)
+        let strip = photos(3, folder: "/photos/strip", in: reader)
+        let store = store(reader, dir: nil)
+        await store.setWalkWindow(request(walked), stamps: reader.stamps)
+        await store.setRequest(window: 1, request(files, current: visible[0], visible: visible, home: true, visibleOnly: true),
+                               stamps: reader.stamps)
+        await store.setRequest(window: 2, request(strip, current: 1, visible: [1], isKey: false), stamps: reader.stamps)
+        let shown = visible.map { files[$0] }
+        #expect(await eventually { await allReady(store, shown + walked + strip) })
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(Set(reader.reads) == Set(shown + walked + strip))
+    }
+
+    /// A visible-only request counts only its visible photos, so the pill goes out once they are made.
+    @Test func visibleOnlyProgressReachesDone() async throws {
+        let reader = ThumbReader()
+        let files = photos(5, in: reader)
+        let store = store(reader, dir: nil)
+        await store.setRequest(window: 1, request(files, current: 1, visible: [1, 2], home: true, visibleOnly: true),
+                               stamps: reader.stamps)
+        #expect(await eventually {
+            await store.generatorProgress(window: 1)
+                == GeneratorProgress(visible: WorkCount(done: 2, total: 2), all: WorkCount(done: 2, total: 2))
+        })
     }
 
     /// Window `window`'s photos: those in view and the margin (its request's visible ones) and all of its listing, each
