@@ -25,7 +25,8 @@ struct MachineNotesTests {
     }
 
     @Test func writtenHarmfulValueHasANote() throws {
-        let (store, dir) = try store("jxl-threads-other=8\n", on: imac)
+        // jxl-threads-current written out: its default follows the Mac running the test, not `imac`.
+        let (store, dir) = try store("jxl-threads-other=8\njxl-threads-current=8\n", on: imac)
         defer { try? FileManager.default.removeItem(at: dir) }
         let note = store.machineNote(forKey: "jxl-threads-other")
         #expect(note?.severity == .harmful)

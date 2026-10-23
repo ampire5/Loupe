@@ -13,6 +13,7 @@ struct GraphicsMemoryView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 16)
                 .padding(.horizontal, 6)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Graphics memory")
                     .font(.system(size: 13))
@@ -28,12 +29,10 @@ struct GraphicsMemoryView: View {
     }
 
     /// «4.3 GB of 8.6 GB on AMD Radeon Pro 5500 XT, set by Loupe for this card»: the tier, the card's working set
-    /// (what Metal reports for it) and the card.
+    /// (what Metal reports for it) and the card, in decimal gigabytes with one decimal as the notes spell them.
     static func text(for p: MachineProfile) -> String {
-        "\(bytes(HardwareAdvice.graphicsMemory(p) ?? 0)) of \(bytes(p.gpu.workingSetBytes)) on \(p.gpu.name), "
+        let gb = HardwareAdvice.decimalGB
+        return "\(gb(HardwareAdvice.graphicsMemory(p) ?? 0)) of \(gb(p.gpu.workingSetBytes)) on \(p.gpu.name), "
             + "set by Loupe for this card"
     }
-
-    /// Decimal gigabytes with one decimal, as the notes spell them (`ByteCountFormatter` gives 4.29 GB here).
-    static func bytes(_ n: Int) -> String { HardwareAdvice.decimalGB(n) }
 }
