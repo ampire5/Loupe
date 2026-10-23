@@ -1,5 +1,5 @@
 {
-  "originHash" : "8b01ee34914eee41eca6a0b67a6d60ed2b6e812ae409baf7fbe4193644415245",
+  "originHash" : "72ffe8eeff8dc68d47ff4152adc82dd2c6bbf229964ff4282b37edf50324c112",
   "pins" : [
     {
       "identity" : "homescreenkit",
@@ -34,7 +34,7 @@
       "location" : "https://github.com/ampire5/SettingsKit.git",
       "state" : {
         "branch" : "lts/macos26",
-        "revision" : "012bb47af307cd70b08eb4a42524cbb96ffffa8f"
+        "revision" : "35c6f16a66375e34f235ec22748f5ca9f15f7071"
       }
     },
     {

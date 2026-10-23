@@ -746,6 +746,10 @@ import UniformTypeIdentifiers
         stats.showKey(of: .cycleStats)
         // Retitled Hide Info while the panel is open (ViewerWindowController validates it).
         view.addItem(withTitle: "Show Info", action: #selector(ViewerWindowController.toggleInfoPanel(_:)), keyEquivalent: "i")
+        // The Dock icon picker (Settings), the same choices as the settings window's `app-icon` pop-up.
+        let icon = view.addItem(withTitle: "App Icon…", action: #selector(Settings.showIconPicker(_:)), keyEquivalent: "i")
+        icon.keyEquivalentModifierMask = [.control, .option, .command]
+        icon.target = Settings.shared
         // The session's mode in every window, checked (Settings); `P` is its Next Mode item, `⇧P` the item below.
         view.addItem(submenu: Settings.shared.makePanIndicatorsMenu(), title: "Pan Indicators")
         view.addItem(.viewerKey("Save Pan Indicators as Default", .savePanIndicators))
