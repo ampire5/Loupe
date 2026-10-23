@@ -53,10 +53,16 @@ public struct ThumbsProgress: Equatable, Sendable {
     public var walkNote: String?
     /// The subtree walk of this window is under way (`WalkProgress.running`): the popover offers "Stop preparing".
     public var subtreeRunning: Bool
+    /// Of what is in view still to do, how much waits on a share that is offline or does not answer (covers the queue
+    /// retries for good, photos it cannot read, photos waiting for a listing that does not come): not work under way,
+    /// so the in-view stage counts only the rest.
+    public var inViewWaiting: Int
+    /// Of the folder's photos still to do, how many wait on a share that is offline: not work under way either.
+    public var photosWaiting: Int
 
     public init(inView: WorkCount = WorkCount(), rest: WorkCount = WorkCount(), photos: WorkCount = WorkCount(),
                 subfolders: WorkCount = WorkCount(), paused: Pause? = nil, walkNote: String? = nil,
-                subtreeRunning: Bool = false) {
+                subtreeRunning: Bool = false, inViewWaiting: Int = 0, photosWaiting: Int = 0) {
         self.inView = inView
         self.rest = rest
         self.photos = photos
@@ -64,13 +70,15 @@ public struct ThumbsProgress: Equatable, Sendable {
         self.paused = paused
         self.walkNote = walkNote
         self.subtreeRunning = subtreeRunning
+        self.inViewWaiting = inViewWaiting
+        self.photosWaiting = photosWaiting
     }
 
     /// What is in view while some of it is still to be made, then the photos, then the subfolders; nil once all are
     /// done.
     public var stage: Stage? {
-        if inView.done < inView.total { return .inView }
-        if photos.done < photos.total { return .thumbnails }
+        if inView.done + inViewWaiting < inView.total { return .inView }
+        if photos.done + photosWaiting < photos.total { return .thumbnails }
         if subfolders.done < subfolders.total { return .subfolders }
         return nil
     }
@@ -104,9 +112,13 @@ public struct ThumbsProgress: Equatable, Sendable {
     /// offline (`ThumbnailStore.isShareOffline`), so its cards' subfolders still to do wait for it, and the popover says
     /// so as the walk does. `unlistedInView`: the photos in view and the margin that the generator does not count yet
     /// because the folder's listing is still names only (a share's first pass gives no stamps): they wait to be made,
-    /// so they count in view, none of them done.
+    /// so they count in view, none of them done. `shareOffline`: the share of the folder on screen is offline, so
+    /// all of what is in view and of the folder's photos still to do waits for it; `unlistedWaitsForShare`: the complete listing does not come
+    /// (it failed, or the share does not answer), so the unlisted photos wait for it. What waits is not work: the
+    /// state is not working on its account, and says "Waiting for the share".
     public static func join(generator: GeneratorProgress, covers: CoverProgress, walk: WalkProgress?, pausedByUser: Bool,
-                            browsing: Bool, aheadWaitsForShare: Bool = false, unlistedInView: Int = 0) -> ThumbsProgress {
+                            browsing: Bool, aheadWaitsForShare: Bool = false, unlistedInView: Int = 0,
+                            shareOffline: Bool = false, unlistedWaitsForShare: Bool = false) -> ThumbsProgress {
         var subfolders = covers.ahead
         if let walk {
             subfolders.done += walk.folders.done
@@ -118,10 +130,14 @@ public struct ThumbsProgress: Equatable, Sendable {
         let rest = WorkCount(done: generator.all.done - generator.visible.done,
                              total: generator.all.total - generator.visible.total)
         let aheadWaits = aheadWaitsForShare && covers.ahead.done < covers.ahead.total
+        let inViewLeft = inView.total - inView.done
+        let inViewWaiting = shareOffline ? inViewLeft : unlistedWaitsForShare ? min(unlistedInView, inViewLeft) : 0
+        let waits = aheadWaits || inViewWaiting > 0
         return ThumbsProgress(inView: inView, rest: rest, photos: generator.all, subfolders: subfolders,
                               paused: pausedByUser ? .user : browsing ? .browsing : nil,
-                              walkNote: walk.flatMap { $0.waiting ?? $0.stopped } ?? (aheadWaits ? ThumbsWalk.waitingForShare : nil),
-                              subtreeRunning: walk?.running ?? false)
+                              walkNote: walk.flatMap { $0.waiting ?? $0.stopped } ?? (waits ? ThumbsWalk.waitingForShare : nil),
+                              subtreeRunning: walk?.running ?? false, inViewWaiting: inViewWaiting,
+                              photosWaiting: shareOffline ? generator.all.total - generator.all.done : 0)
     }
 
     /// What the toolbar's pill and its popover draw (`HomeBrowserView.setProgress`): the text and the current stage's

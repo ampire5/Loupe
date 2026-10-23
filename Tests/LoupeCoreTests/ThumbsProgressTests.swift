@@ -230,6 +230,42 @@ import Testing
         #expect(!none.subtreeRunning)
     }
 
+    /// What is in view waits on a share that is offline: covers retried for good, photos that cannot be read (and the
+    /// folder's other photos with them). That is no work under way: the state is not working (the pill goes out) and says it waits for the share.
+    @Test func inViewWaitingForTheShareIsNotWork() throws {
+        let generator = GeneratorProgress(visible: WorkCount(done: 0, total: 4), all: WorkCount(done: 0, total: 4))
+        let covers = Self.covers(inView: WorkCount(done: 1, total: 6))
+        let waiting = ThumbsProgress.join(generator: generator, covers: covers, walk: nil, pausedByUser: false,
+                                          browsing: false, shareOffline: true)
+        #expect(waiting.inView == WorkCount(done: 1, total: 10))
+        #expect(waiting.state == nil)
+        #expect(!waiting.display.working)
+        #expect(waiting.walkNote == ThumbsWalk.waitingForShare)
+        #expect(waiting.display.pauseNote == ThumbsWalk.waitingForShare)
+        #expect(waiting.display.rows.first == .init(title: "In view", done: 1, total: 10))
+        // The share back: the same counts are work again.
+        let back = ThumbsProgress.join(generator: generator, covers: covers, walk: nil, pausedByUser: false,
+                                       browsing: false)
+        #expect(back.stage == .inView && back.walkNote == nil)
+    }
+
+    /// A share that drops before its complete listing: the photos in view without stamps wait for it, not counted as
+    /// work, while covers in view that are still being made keep the pill.
+    @Test func unlistedPhotosWaitingForTheShareAreNotWork() {
+        let stalled = ThumbsProgress.join(generator: GeneratorProgress(), covers: Self.covers(), walk: nil,
+                                          pausedByUser: false, browsing: false, unlistedInView: 6,
+                                          unlistedWaitsForShare: true)
+        #expect(stalled.inView == WorkCount(done: 0, total: 6))
+        #expect(stalled.state == nil)
+        #expect(stalled.display.pauseNote == ThumbsWalk.waitingForShare)
+        let coversRun = ThumbsProgress.join(generator: GeneratorProgress(),
+                                            covers: Self.covers(inView: WorkCount(done: 1, total: 3)), walk: nil,
+                                            pausedByUser: false, browsing: false, unlistedInView: 6,
+                                            unlistedWaitsForShare: true)
+        #expect(coversRun.stage == .inView)
+        #expect(coversRun.text == "In view 1 / 9")
+    }
+
     /// The visible cards' subfolders waiting on a share that does not answer say so, as the walk does; the walk's own
     /// word wins, and nothing is said once the subfolders are done.
     @Test func aheadWaitingForTheShareIsSaid() {

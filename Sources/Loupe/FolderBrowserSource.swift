@@ -280,6 +280,8 @@ extension Notification.Name {
         let archives = Settings.shared.config.archiveFolders
         let token = gate.begin(path)
         stopWatching()
+        listingFailed = false
+        listingAnswered(false, reset: true)
         // A zip's listing is its photos: no cards with covers.
         showCovers(of: ArchivePath.isArchive(folder) ? nil : folder)
         return AsyncThrowingStream { continuation in
@@ -325,6 +327,10 @@ extension Notification.Name {
                         }
                     }
                 } catch {
+                    if wanted() {
+                        self?.listingFailed = true
+                        self?.progressMayHaveChanged()
+                    }
                     continuation.finish(throwing: error)
                 }
             }
@@ -349,6 +355,7 @@ extension Notification.Name {
         remember(listing.entries)
         let wasDated = shownDated
         shownDated = listing.complete
+        listingAnswered(listing.complete)
         continuation.yield(listing)
         guard listing.complete, !wasDated else { return }
         // The cards now have their folders' dates (a stored summary is fresh only at its folder's date): the summaries
@@ -356,6 +363,25 @@ extension Notification.Name {
         sendCovers()
         let ready = Array(followUps)
         if !ready.isEmpty { sendToQueue { queue, client in await queue.forget(ready, client: client) } }
+    }
+
+    /// A listing of the folder on screen came (`complete`: with stamps), or a new one starts (`reset`): the clock of the
+    /// names-only wait starts at its first part and stops at the complete one; when it runs out the progress is read
+    /// again (no count changes meanwhile).
+    private func listingAnswered(_ complete: Bool, reset: Bool = false) {
+        if complete || reset {
+            namesOnlySince = nil
+            listingStallCheck?.cancel()
+            listingStallCheck = nil
+            return
+        }
+        guard namesOnlySince == nil else { return }
+        namesOnlySince = .now
+        listingStallCheck = Task { @MainActor [weak self] in
+            guard (try? await Task.sleep(for: Self.listingAnswerLimit)) != nil, let self else { return }
+            self.listingStallCheck = nil
+            self.progressMayHaveChanged()
+        }
     }
 
     /// The entries on screen: what `wantImages` and the menus look up by id.
@@ -1065,6 +1091,16 @@ extension Notification.Name {
     /// The photos of the last request in view and the margin: before the complete listing (names only, no stamps)
     /// the generator does not count them, so the progress counts those without a stamp in view.
     private var requestedVisible: [URL] = []
+    /// Since when the folder on screen has only its names-only listing (nil: complete, or none yet), and whether its
+    /// listing failed: the photos in view without stamps then wait for the share, not counted as work.
+    private var namesOnlySince: ContinuousClock.Instant?
+    private var listingFailed = false
+    private var listingStallCheck: Task<Void, Never>?
+    /// How long the complete listing may take after the names-only one before the share counts as not answering.
+    /// Basis: the names-only pass takes ~0.05 s on a share and the complete one "seconds on a cold share"
+    /// (`BrowserListingSource`); 30 s is several times that, and a folder whose listing is slower only puts the pill
+    /// out until its listing comes (the popover says it waits for the share).
+    private static let listingAnswerLimit: Duration = .seconds(30)
     private var lastProgressLocation: BrowserLocation?
 
     /// A count may have changed: the progress is read once `progressInterval` has passed, whatever else changes
@@ -1097,13 +1133,21 @@ extension Notification.Name {
         let covers = await thumbnails.coverQueue.progress(client: window)
         let browsing = await thumbnails.coverQueue.browsingPaused
         let walked = await walk?.progress
-        // The visible cards' subfolders still to do on a share that does not answer: the popover says they wait.
-        let shareAway = covers.ahead.done < covers.ahead.total ? await thumbnails.isShareOffline(folder, in: location) : false
         // Names only so far (a share's first pass): the photos in view wait for their stamps, then to be made.
         let unlisted = shownDated ? 0 : requestedVisible.reduce(0) { $0 + (stamps[$1] == nil ? 1 : 0) }
+        // Work still to do on a share that does not answer waits for it: the visible cards' subfolders (the popover
+        // says so), what is in view and the folder's photos (not work under way: the pill goes out).
+        let left = covers.ahead.done < covers.ahead.total || generator.all.done < generator.all.total || unlisted > 0
+            || covers.inView.done < covers.inView.total || covers.margin.done < covers.margin.total
+            || generator.visible.done < generator.visible.total
+        let offline = left ? await thumbnails.isShareOffline(folder, in: location) : false
+        // The complete listing did not come: it failed, or the share has not answered for `listingAnswerLimit`.
+        let stalled = listingFailed || namesOnlySince.map { ContinuousClock.now - $0 >= Self.listingAnswerLimit } ?? false
         return ThumbsProgress.join(generator: generator, covers: covers, walk: walked,
-                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing, aheadWaitsForShare: shareAway,
-                                   unlistedInView: unlisted)
+                                   pausedByUser: Self.aheadPausedByUser, browsing: browsing,
+                                   aheadWaitsForShare: offline && covers.ahead.done < covers.ahead.total,
+                                   unlistedInView: unlisted, shareOffline: offline,
+                                   unlistedWaitsForShare: offline || stalled)
     }
 }
 

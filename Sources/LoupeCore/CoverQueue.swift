@@ -81,7 +81,8 @@ public actor CoverQueue {
     /// Every client's cards in the order they start: the visible ones of all, then the margins, then the work ahead;
     /// those running or done are skipped.
     private var wanted: [Item] = []
-    /// Told the client whose counts (`progress`) may have changed; the caller coalesces.
+    /// Told the client whose counts (`progress`) may have changed, or one of whose cards said "not now" (its share may
+    /// be offline since); the caller coalesces.
     private var onProgress: (@Sendable (Int) -> Void)?
     private var running: [Key: Running] = [:]
     /// Cancelled tasks still ending, by token: they hold their place in the limits.
@@ -346,6 +347,8 @@ public actor CoverQueue {
                 let times = notNows[id, default: 0]
                 notNows[id] = times + 1
                 retryAt[id] = .now + Self.retryDelay(after: times + 1, base: retryDelay, cap: maxRetryDelay)
+                // The counts are the same, but the work may have found its share offline: Home's progress reads it.
+                onProgress?(id.client)
             }
         }
         pump()

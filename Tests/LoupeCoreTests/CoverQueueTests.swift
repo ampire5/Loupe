@@ -413,6 +413,18 @@ private final class TryCount: @unchecked Sendable {
         #expect(Set(heard.all) == [7])
     }
 
+    /// A "not now" is announced too: the work may have found its share offline, which Home's progress reads then.
+    @Test func notNowIsAnnounced() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1, retryDelay: .seconds(60))
+        let heard = HeardClients()
+        await queue.setOnProgress { heard.add($0) }
+        let tried = HeardClients()
+        await queue.want(["v1"], visible: 1, client: 4, isNetwork: { _ in false }) { _ in tried.add(1); return false }
+        #expect(await eventually { tried.all.count == 1 })
+        #expect(await eventually { heard.all.count >= 2 })   // the want, and the "not now"
+        #expect(Set(heard.all) == [4])
+    }
+
     /// The user's pause of the work ahead (thumbs-ahead spec, "Пауза"): the cards in view and the margin go on, the
     /// work ahead waits, and the walk's check says so; off again, the work ahead starts.
     @Test func pauseKeepsTheViewAlive() async {
