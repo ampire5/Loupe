@@ -103,8 +103,8 @@ in system memory) against `cache-memory`. SettingsKit gets a per-row machine not
   - `neighbourThreadsAreAQuarterOfTheCores`: defaults `imac 2, card4 1, m4max 2, m1 2`; `effectiveJXLThreadsOther(8,
     imac) == 2`, `(1, imac) == 1`, `(4, m4max) == 4`, `(5, m4max) == 4`.
   - `notesNameTheRuleAndTheRecommendedValue`:
-    - `note("jxl-threads-other", "8", imac) == Note(.harmful, "Effective 2 on this Mac: more would take over half of
-      its 8 cores in the background.", "2")`
+    - `note("jxl-threads-other", "8", imac) == Note(.harmful, "Effective 2 on this Mac: more would take over a quarter
+      of its 8 cores in the background.", "2")`
     - `note("jxl-threads-current", "16", imac) == Note(.suboptimal, "More threads than this Mac's 8 cores only burn
       CPU.", "8")`
     - `note("cache-memory", "40G", imac) == Note(.suboptimal, "Over half of this Mac's 68.7 GB of memory: macOS would

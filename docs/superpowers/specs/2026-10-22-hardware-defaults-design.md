@@ -89,7 +89,7 @@
 ## Где видно
 
 - **Settings** (SettingsKit): у строки — заметка, как сегодняшняя заметка папки: текст и, если есть, кнопка.
-  Вредное (`jxl-threads-other`): «Effective 2 on this Mac: more would take over half of its 8 cores in the
+  Вредное (`jxl-threads-other`): «Effective 2 on this Mac: more would take over a quarter of its 8 cores in the
   background.» + «Use recommended (2)». Неоптимальное: «More threads than this Mac's 8 cores only burn CPU.» + «Use recommended
   (8)». Описание строки по-прежнему называет умолчание этой машины. Нужна правка SettingsKit: в `SettingsStore`
   метод `machineNote(forKey:) -> SettingsNote?` с реализацией по умолчанию `nil`; `SettingsNote` — текст, вредное /

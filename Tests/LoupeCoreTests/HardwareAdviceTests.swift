@@ -44,7 +44,8 @@ private let intelIGPU = MachineProfile(physicalCores: 4, performanceCores: 4, me
 @Test func notesNameTheRuleAndTheRecommendedValue() {
     typealias Note = HardwareAdvice.Note
     #expect(HardwareAdvice.note(forKey: "jxl-threads-other", value: "8", on: imac)
-            == Note(severity: .harmful, text: "Effective 2 on this Mac: more would take over half of its 8 cores in the background.",
+            == Note(severity: .harmful,
+                    text: "Effective 2 on this Mac: more would take over a quarter of its 8 cores in the background.",
                     recommended: "2"))
     #expect(HardwareAdvice.note(forKey: "jxl-threads-current", value: "16", on: imac)
             == Note(severity: .suboptimal, text: "More threads than this Mac's 8 cores only burn CPU.", recommended: "8"))

@@ -56,7 +56,7 @@ public enum HardwareAdvice {
             guard let written = Int(value), written > 0, written > maxThreadsOther(p) else { return nil }
             let effective = effectiveJXLThreadsOther(written, p)
             return Note(severity: .harmful,
-                        text: "Effective \(effective) on this Mac: more would take over half of its "
+                        text: "Effective \(effective) on this Mac: more would take over a quarter of its "
                             + "\(p.physicalCores) cores in the background.",
                         recommended: String(effective))
         case "jxl-threads-current":
