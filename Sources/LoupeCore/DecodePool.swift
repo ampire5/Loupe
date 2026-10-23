@@ -6,7 +6,9 @@ import Foundation
 /// `slots - reserved` slots at once, so a stale neighbour decode can never keep the current photo
 /// waiting: at least `reserved` slots stay free for `forCurrent` jobs, which may take any slot.
 /// Waiting jobs start current before neighbour, then best rank first (lower `rank`), then in
-/// arrival order: a freed slot never goes to a neighbour while a current job is waiting.
+/// arrival order: a freed slot never goes to a neighbour while a current job is waiting. Neighbour decodes run at
+/// `.utility` at most, below the current photo's (`qos`), so the system schedules the current one first when the
+/// cores are busy.
 public final class DecodePool: @unchecked Sendable {
     private let slots: Int
     private let sharedSlots: Int
@@ -33,7 +35,8 @@ public final class DecodePool: @unchecked Sendable {
     private var nextID: UInt64 = 0
 
     /// `reserved` slots only ever serve current jobs; at least one slot is always shared so
-    /// neighbours still make progress when there is no current job. `run` works at `qos`.
+    /// neighbours still make progress when there is no current job. `run` works at `qos` for current jobs, at the
+    /// lower of `qos` and `.utility` for the others.
     public init(slots: Int = 3, reserved: Int = 1, qos: DispatchQoS.QoSClass = .userInitiated) {
         self.slots = max(1, slots)
         self.sharedSlots = max(1, self.slots - max(0, reserved))
@@ -52,7 +55,7 @@ public final class DecodePool: @unchecked Sendable {
             throw CancellationError()
         }
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
-            DispatchQueue.global(qos: qos).async {
+            DispatchQueue.global(qos: forCurrent ? qos : Self.neighbourQoS(qos)).async {
                 let result = Result { try work() }
                 // Free the slot before the caller resumes, so a follow-up job sees it free.
                 self.release(forCurrent: forCurrent)
@@ -73,6 +76,11 @@ public final class DecodePool: @unchecked Sendable {
     }
 
     func releaseSlot(forCurrent: Bool) { release(forCurrent: forCurrent) }
+
+    /// The QoS a neighbour's work runs at: `.utility`, or `qos` if that is lower already.
+    static func neighbourQoS(_ qos: DispatchQoS.QoSClass) -> DispatchQoS.QoSClass {
+        qos.rawValue.rawValue < DispatchQoS.QoSClass.utility.rawValue.rawValue ? qos : .utility
+    }
 
     /// Jobs it runs at once at most.
     var slotCount: Int { slots }

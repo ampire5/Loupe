@@ -272,3 +272,12 @@ private final class Peak: @unchecked Sendable {
     func enter() { lock.lock(); now += 1; max = Swift.max(max, now); lock.unlock() }
     func leave() { lock.lock(); now -= 1; lock.unlock() }
 }
+
+/// V7: a neighbour's decode runs below the current photo's: `.utility` against the pool's `.userInitiated`.
+@Test func neighbourDecodesRunAtUtility() async throws {
+    let pool = DecodePool(slots: 2, reserved: 1)
+    let neighbour = try await pool.run(forCurrent: false, rank: 1) { qos_class_self() }
+    let current = try await pool.run(forCurrent: true, rank: 0) { qos_class_self() }
+    #expect(neighbour == QOS_CLASS_UTILITY)
+    #expect(current == QOS_CLASS_USER_INITIATED)
+}

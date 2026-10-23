@@ -237,6 +237,10 @@ public actor ThumbnailStore {
     }
 
     var activity = CacheActivity.idle
+    /// Covers' thumbnail reads in flight (`coverCell`), by number: cancelled when the viewer's current photo needs the
+    /// share (`setActivity(.current)`), and made again once the viewer is idle.
+    var coverReads: [UInt64: Task<(Outcome, Timing), Never>] = [:]
+    var nextCoverRead: UInt64 = 0
     /// When the viewer cache last became idle; nil while it is not.
     var idleSince: ContinuousClock.Instant? = .now
     var idleWake: Task<Void, Never>?
@@ -337,7 +341,8 @@ public actor ThumbnailStore {
 
     /// The viewer cache's activity: new reads wait until `.idle` has held for `idleDelay`, `.current` cancels the
     /// jobs still reading or waiting to (their files go back in the queue) and lets the decodes finish: their bytes
-    /// are already here, and decodes take their own slot. Home's covers start none while the viewer is not idle (the
+    /// are already here, and decodes take their own slot. `.current` also cancels the covers' thumbnail reads in flight
+    /// (`coverCell` reads them again once idle). Home's covers start none while the viewer is not idle (the
     /// user is stepping through photos): `coverQueue` is paused, after the thumbnails' own state is set.
     public func setViewerActivity(_ activity: CacheActivity) async {
         setActivity(activity)
@@ -354,7 +359,10 @@ public actor ThumbnailStore {
             idleSince = nil
             idleWake?.cancel()
             idleWake = nil
-            if activity == .current { cancelReads() }
+            if activity == .current {
+                cancelReads()
+                cancelCoverReads()
+            }
         }
     }
 

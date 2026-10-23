@@ -13,6 +13,7 @@ extension ImageCache {
         if let read = e.read { return read }
         e.readID += 1
         let priority = ReadPriority(readPriority(url))
+        priority.isCurrent = isCurrent(url)
         e.readPriority = priority
         let id = e.readID
         let task = Task<Data, Error> {
@@ -56,9 +57,12 @@ extension ImageCache {
     }
 
     /// Moves a read in flight to its rank in the latest plan (the current photo's to the front), when that changed.
-    /// A read already on a reader thread is not affected; one still queued, or on its way to the queue, is.
+    /// A read already on a reader thread keeps its thread; one still queued, or on its way to the queue, moves. Its
+    /// current flag follows the photo, queued or running: the reader keeps a thread for current reads and pauses
+    /// running neighbour reads while one runs (`IOPool`).
     func reprioritizeRead(_ url: URL, _ e: CacheEntry<Pyramid>) {
         guard e.read != nil, let box = e.readPriority else { return }
+        box.isCurrent = isCurrent(url)
         let priority = readPriority(url)
         guard priority != box.value else { return }
         box.value = priority

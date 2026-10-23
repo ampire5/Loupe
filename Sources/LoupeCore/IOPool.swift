@@ -27,16 +27,31 @@ private struct StuckMark {
 /// orders jobs within a class. So with four threads the viewer keeps the two it always had, however many thumbnail
 /// reads are queued or stuck, and the thumbnail reads get two of their own.
 ///
+/// Within the viewer's share one thread is the current photo's (`ReadPriority.isCurrent`, read when a job is picked):
+/// neighbour reads run on at most `viewerThreads - 1`, so a photo stepped to never waits for a free thread behind
+/// neighbour reads already running (a running read is never preempted, and a share's reads can take seconds). And
+/// while a current read runs, running neighbour reads pause before their next chunk (`yieldToCurrent`), their bytes so
+/// far kept, so the current read has the share's bandwidth to itself; they go on once no current read runs.
+///
 /// The shares count jobs on live threads: a job written off by the watchdog no longer counts, and its replacement
 /// thread serves either class. Past `maxReplacements` write-offs no replacement comes (but for the last thread), so
 /// the pool can run on fewer than `threads` and the viewer's two are no longer guaranteed; by then the stuck volume's
 /// jobs are refused before any I/O, so only another volume hanging as well can take them.
 final class IOPool: @unchecked Sendable {
     static let tick: DispatchTimeInterval = .milliseconds(500)
+    /// Two, one of them the current photo's (`neighbourLimit`). Measured (i7-10700K, 8 cores, 64 GB, macOS 26), V7: a
+    /// share simulated on local JPEGs of 10–19 MiB, each 1 MiB chunk holding one shared 100 MiB/s link for 10 ms; three
+    /// neighbour reads running, the current photo's read asked for 100 ms later had its bytes back after 466–782 ms
+    /// (p50 ≈ 530) with both viewer threads open to neighbours and no pause, after 128–274 ms (p50 ≈ 200; the file
+    /// alone needs 100–186 ms) with a thread kept for it and the neighbours paused. On a local SSD (files are mapped:
+    /// no thread is held), `LoupeBench replay --script jumpfar --screen 5120x2880` over 165 baseline JPEGs of 4–25 MP,
+    /// 14 MB on average, release build: landings sharp after 199–314 ms against 209–308 ms before, no change.
     static let viewerThreads = 2
 
     private let threads: Int
     private let foregroundLimit: Int
+    /// Neighbour reads (the viewer's, not current) at once: one viewer thread stays the current photo's.
+    private let neighbourLimit: Int
     private let backgroundLimit: Int
     private let timeoutNanos: UInt64
     private let maxReplacements: Int
@@ -65,6 +80,7 @@ final class IOPool: @unchecked Sendable {
          volumeIdentifier: @escaping @Sendable (URL) -> NSObjectProtocol? = IOPool.resolveVolumeIdentifier) {
         self.threads = max(1, threads)
         foregroundLimit = min(self.threads, Self.viewerThreads)
+        neighbourLimit = max(1, foregroundLimit - 1)
         backgroundLimit = max(1, self.threads - Self.viewerThreads)
         let (seconds, attoseconds) = timeout.components
         timeoutNanos = UInt64(max(0, seconds)) * 1_000_000_000 + UInt64(max(0, attoseconds) / 1_000_000_000)
@@ -88,6 +104,7 @@ final class IOPool: @unchecked Sendable {
         if shutDown { cond.unlock(); job.fail(CancellationError()); return }
         if isStuck(job) { cond.unlock(); job.fail(ReadError.volumeStuck); return }
         job.priority.observeMoves { [weak self] in self?.priorityMoved() }
+        job.pool = self
         queue.append(job)
         cond.signal()
         cond.unlock()
@@ -98,11 +115,33 @@ final class IOPool: @unchecked Sendable {
     /// Priority moves heard of, for tests.
     var priorityMoves: Int { cond.withLock { moves } }
 
-    /// Drops a cancelled job that has not started; a running one stops at its next chunk.
+    /// Drops a cancelled job that has not started; a running one stops at its next chunk (a paused one at once).
     func withdraw(_ job: IOJob) {
         cond.lock()
         queue.removeAll { $0 === job }
+        cond.broadcast()   // a paused job sees its cancellation
         cond.unlock()
+    }
+
+    /// Called by a running job before each chunk: a neighbour read (the viewer's, not current) waits here while a
+    /// current read runs on another thread, then goes on (returning at once when cancelled, so its caller stops). The
+    /// watchdog leaves a paused job alone: it reads nothing because it was told to wait, not because its volume hangs.
+    func yieldToCurrent(_ job: IOJob) {
+        cond.lock()
+        defer { cond.unlock() }
+        guard !job.background else { return }
+        var paused = false
+        while !job.isCancelled, !shutDown, !job.priority.isCurrent,
+              running.contains(where: { $0 !== job && !$0.background && $0.priority.isCurrent }) {
+            if !paused {
+                paused = true
+                job.paused = true
+            }
+            cond.wait()
+        }
+        guard paused else { return }
+        job.paused = false
+        job.touch()   // its timeout counts from here
     }
 
     /// Lets idle threads exit; queued callers get `CancellationError`. Lost threads that come back
@@ -137,20 +176,23 @@ final class IOPool: @unchecked Sendable {
     /// none may start.
     private func nextIndex() -> (index: Int, background: Bool)? {
         let background = running.reduce(0) { $0 + ($1.background ? 1 : 0) }
+        let neighbours = running.reduce(0) { $0 + (!$1.background && !$1.priority.isCurrent ? 1 : 0) }
         let foregroundRoom = running.count - background < foregroundLimit
+        let neighbourRoom = foregroundRoom && neighbours < neighbourLimit
         let backgroundRoom = background < backgroundLimit
         var best: (index: Int, value: Int, background: Bool)?
         for (i, job) in queue.enumerated() {
             let isBackground = job.priority.isBackground
-            guard isBackground ? backgroundRoom : foregroundRoom else { continue }
+            let room = isBackground ? backgroundRoom : job.priority.isCurrent ? foregroundRoom : neighbourRoom
+            guard room else { continue }
             let value = job.priority.value
             if best == nil || value < best!.value { best = (i, value, isBackground) }
         }
         return best.map { ($0.index, $0.background) }
     }
 
-    /// A queued job's priority moved: idle workers look again (a job that may not start now never becomes able to
-    /// by a move alone, the class being fixed, but a worker deciding now sees the new order).
+    /// A job's priority moved: idle workers look again (a neighbour that became current may start on the reserved
+    /// thread), and paused neighbours check whether a current read still runs.
     private func priorityMoved() {
         cond.lock()
         moves += 1
@@ -243,7 +285,7 @@ final class IOPool: @unchecked Sendable {
         cond.lock()
         running.removeAll { job in
             let last = job.lastProgress
-            guard now > last, now - last > timeoutNanos else { return false }
+            guard !job.paused, now > last, now - last > timeoutNanos else { return false }
             job.lost = true
             timedOut.append(job)
             return true

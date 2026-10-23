@@ -1068,6 +1068,12 @@ extension ThumbnailStore {
         names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
+    /// The viewer's current photo needs the share: the covers' thumbnail reads in flight stop (`coverCell` makes them
+    /// again once the viewer is idle).
+    func cancelCoverReads() {
+        for read in coverReads.values { read.cancel() }
+    }
+
     /// Waits while the viewer cache is not idle (the user stepping through photos), so a running cover reads nothing
     /// meanwhile; false once the task is cancelled.
     private func idleViewer() async -> Bool {
@@ -1103,7 +1109,23 @@ extension ThumbnailStore {
                             reader: reader, decodeLimit: decodeLimit, decoder: decoder, cachedBytes: { _, _ in nil },
                             readEnded: {}, readAgain: {}, rank: Self.coverReadPriority)
         var timing = Timing()
-        guard case .made(let jpeg, let info, let stamp) = await Self.generate(recipe, &timing) else { return nil }
+        var outcome = Outcome.cancelled
+        // A read the viewer's current photo took the share from (`cancelCoverReads`) is made again once it is idle.
+        while true {
+            guard await idleViewer() else { return nil }
+            nextCoverRead += 1
+            let id = nextCoverRead
+            let read = Task { () -> (Outcome, Timing) in
+                var t = Timing()
+                return (await Self.generate(recipe, &t), t)
+            }
+            coverReads[id] = read
+            (outcome, timing) = await withTaskCancellationHandler { await read.value } onCancel: { read.cancel() }
+            coverReads[id] = nil
+            if case .cancelled = outcome, read.isCancelled, !Task.isCancelled { continue }
+            break
+        }
+        guard case .made(let jpeg, let info, let stamp) = outcome else { return nil }
         log?("cover \(url.lastPathComponent): read \(Self.ms(timing.read)) ms (\(timing.source)), "
              + "decode \(Self.ms(timing.decode)) ms")
         if let location, perform("cover", { db -> Bool in

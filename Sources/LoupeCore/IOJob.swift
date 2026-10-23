@@ -32,6 +32,10 @@ class IOJob: @unchecked Sendable {
     var lost = false
     /// Guarded by the pool lock: running in the background share (`ReadPriority.isBackground`).
     var background = false
+    /// Guarded by the pool lock: waiting in `IOPool.yieldToCurrent` for a current read to end.
+    var paused = false
+    /// The pool it was submitted to, for `betweenChunks`.
+    weak var pool: IOPool?
     /// Queued jobs start lowest value first; the caller may move it at any time (the pool reads it when it picks).
     let priority: ReadPriority
 
@@ -51,6 +55,13 @@ class IOJob: @unchecked Sendable {
     var lastProgress: UInt64 { lock.withLock { progressAt } }
     var isCancelled: Bool { lock.withLock { cancelled } }
     func markCancelled() { lock.withLock { cancelled = true } }
+
+    /// Called by the work before each chunk it reads: a neighbour read waits while a current read runs
+    /// (`IOPool.yieldToCurrent`); a cancelled job stops here.
+    func betweenChunks() throws {
+        pool?.yieldToCurrent(self)
+        if isCancelled { throw CancellationError() }
+    }
 
     /// Runs the work on the calling pool thread and returns the delivery of its result, so the pool
     /// can finish its bookkeeping before the caller resumes.

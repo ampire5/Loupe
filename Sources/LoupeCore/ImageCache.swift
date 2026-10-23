@@ -348,13 +348,14 @@ public actor ImageCache<Loader: PyramidLoader> {
             }
         }
         // While flipping (not dwelling) a neighbour starts no read: it would only queue ahead of the photo the user
-        // lands on. A read already in flight goes on (re-ranked); a neighbour whose bytes are resident may still
-        // decode. The current photo (and its pair's other page, `isCurrent`) always reads at once, and so does a
-        // visible session's.
-        let dwelling = focus?.dwelling == true
+        // lands on. Nor before the current photo's preview is up: until then the share is the current photo's alone
+        // (a neighbour read already running would only pause for it). A read already in flight goes on (re-ranked); a
+        // neighbour whose bytes are resident may still decode. The current photo (and its pair's other page,
+        // `isCurrent`) always reads at once, and so does a visible session's.
+        let neighboursRead = focus?.dwelling == true && currentPreviewUp()
         for item in plan {
             let url = files[item.index]
-            start(url, item.goal, mayRead: isCurrent(url) || dwelling)
+            start(url, item.goal, mayRead: isCurrent(url) || neighboursRead)
         }
         for (url, goal) in short { start(url, goal, mayRead: true) }
         for (url, e) in entries {
@@ -376,6 +377,15 @@ public actor ImageCache<Loader: PyramidLoader> {
             }
         }
         evictToFit()
+    }
+
+    /// The current photo, and its pair's other page, have their preview resident (or failed: nothing more is coming
+    /// for them): neighbours may read now.
+    private func currentPreviewUp() -> Bool {
+        [currentURL, companionURL].compactMap { $0 }.allSatisfy { url in
+            guard let e = entries[url] else { return false }
+            return e.failure != nil || isSatisfied(url, e, .preview)
+        }
     }
 
     /// A visible inactive session's short plan (spec windows-and-tabs §3.2): its current photo up to what its screen

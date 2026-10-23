@@ -430,6 +430,28 @@ private final class FakeListing: @unchecked Sendable {
         #expect(await eventually { queued.isSet })
     }
 
+    /// V7: a cover's thumbnail read already in flight is cancelled when the viewer's current photo needs the share, and
+    /// read again once the viewer is idle: the cover still gets all its pictures.
+    @Test func coverReadInFlightYieldsToTheCurrentPhoto() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/photos/f", ["1.jpg", "2.jpg"])
+        listing.set("/photos/f", files: ["1.jpg", "2.jpg"])
+        let first = URL(fileURLWithPath: "/photos/f/1.jpg")
+        let gate = reader.hold(first)
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
+        #expect(await eventually { reader.reads.contains(first) })
+        await store.setViewerActivity(.current)
+        #expect(await eventually { reader.cancelled.contains(first) })
+        gate.open()
+        await store.setViewerActivity(.idle)
+        #expect(await task.value?.count == 2)
+        #expect(reader.readCount(first) >= 2)
+    }
+
     /// Fix round 2: a share's resolves and listings that hang fill their own lanes; a local folder still resolves
     /// (as local) and its covers are made.
     @Test func hungShareLeavesLocalResolvesAlone() async {

@@ -60,6 +60,11 @@ private final class Gates: @unchecked Sendable {
     let entered = DispatchSemaphore(value: 0)
 
     func block(_ name: String) { lock.lock(); gates[name] = DispatchSemaphore(value: 0); lock.unlock() }
+    /// Opens one file's gate for good.
+    func release(_ name: String) {
+        lock.lock(); let g = gates.removeValue(forKey: name); lock.unlock()
+        if let g { for _ in 0..<64 { g.signal() } }
+    }
     func gate(for name: String) -> DispatchSemaphore? { lock.lock(); defer { lock.unlock() }; return gates[name] }
     /// Opens every gate for good (generously signalled, so repeated reads also pass).
     func releaseAll() {
@@ -501,10 +506,12 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     for name in ["v1", "v2"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
     let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
-    let held = ["v1", "v2"].map { name in Task { try await reader.read(urls[name]!, priority: 0) } }
+    // Current reads (a pair's two pages): neighbours keep to one thread (`currentReadGetsTheReservedThread`).
+    func current() -> ReadPriority { let p = ReadPriority(0); p.isCurrent = true; return p }
+    let held = ["v1", "v2"].map { name in Task { try await reader.read(urls[name]!, priority: current()) } }
     await waitEntered(gates)
     await waitEntered(gates)
-    let third = Task { try await reader.read(urls["v3"]!, priority: 0) }
+    let third = Task { try await reader.read(urls["v3"]!, priority: current()) }
     try await waitQueued(reader, 1)
 
     let bg = urls["bg"]!
@@ -577,4 +584,105 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     gates.releaseAll()
     _ = try await first.value
     _ = try await queued.value
+}
+
+// MARK: - The current photo first (V7)
+
+/// Neighbour reads (viewer reads not flagged current) take at most `viewerThreads − 1` threads: with two of them
+/// blocked in a read, the second waits, and the current photo's read still gets a thread and its first chunk.
+@Test(.timeLimit(.minutes(1))) func currentReadGetsTheReservedThread() async throws {
+    let files = try TempFiles()
+    var urls: [String: URL] = [:]
+    for name in ["n1", "n2", "cur"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let gates = Gates()
+    for name in ["n1", "n2"] { gates.block("\(name).bin") }
+    defer { gates.releaseAll() }
+    let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
+    let neighbours = ["n1", "n2"].map { name in Task { try await reader.read(urls[name]!, priority: ReadPriority(3)) } }
+    await waitEntered(gates)
+    try await waitQueued(reader, 1)   // the second neighbour waits: the other viewer thread is the current photo's
+
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let cur = urls["cur"]!
+    let read = await within(.seconds(5)) { try await reader.read(cur, priority: current).data.count }
+    #expect(read.flatMap { try? $0.get() } == mib / 4)
+
+    gates.releaseAll()
+    for task in neighbours { #expect(try await task.value.data.count == mib / 4) }
+}
+
+/// While a current read runs, a running neighbour read issues no further chunk (its bytes so far are kept), and goes
+/// on to the end once the current read is done.
+@Test(.timeLimit(.minutes(1))) func neighbourPausesWhileCurrentReads() async throws {
+    let files = try TempFiles()
+    let (n, nData) = try files.make("n.bin", size: 4 * mib)
+    let (c, _) = try files.make("c.bin", size: mib / 4)
+    let gates = Gates()
+    gates.block("n.bin")
+    gates.block("c.bin")
+    defer { gates.releaseAll() }
+    let chunks = Counter()
+    let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: { fd, buf, count, offset in
+        if fileName(fd) == "n.bin" { chunks.bump() }
+        return gates.reader(fd, buf, count, offset)
+    })
+    let neighbour = Task { try await reader.read(n, priority: ReadPriority(3)) }
+    await waitEntered(gates)                 // the neighbour is in its first chunk
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let cur = Task { try await reader.read(c, priority: current) }
+    await waitEntered(gates)                 // the current read is in its first chunk
+    gates.release("n.bin")                   // the neighbour's first chunk ends while the current read runs
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(chunks.value == 1)
+
+    gates.release("c.bin")
+    #expect(try await cur.value.data.count == mib / 4)
+    #expect(try await neighbour.value.data == nData)
+    #expect(chunks.value == 4)
+}
+
+/// A neighbour paused for longer than the timeout is not written off as hung: it read nothing because it was told to
+/// wait, not because the share stopped answering.
+@Test(.timeLimit(.minutes(1))) func pausedNeighbourIsNotHung() async throws {
+    let files = try TempFiles()
+    let (n, nData) = try files.make("n.bin", size: 2 * mib)
+    let (c, _) = try files.make("c.bin", size: 8 * mib)
+    let reader = FileReader(threads: 4, timeout: .seconds(1), isLocal: { _ in false }, chunkReader: { fd, buf, count, offset in
+        if fileName(fd) == "c.bin" { usleep(200_000) }   // a slow but steady current read: 1.6 s in all
+        return realPread(fd, buf, count, offset)
+    })
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let cur = Task { try await reader.read(c, priority: current) }
+    try await Task.sleep(for: .milliseconds(50))
+    let neighbour = Task { try await reader.read(n, priority: ReadPriority(3)) }
+    #expect(try await cur.value.data.count == 8 * mib)
+    #expect(try await neighbour.value.data == nData)
+}
+
+/// A paused neighbour that is cancelled stops at once, without waiting for the current read.
+@Test(.timeLimit(.minutes(1))) func pausedNeighbourCancels() async throws {
+    let files = try TempFiles()
+    let (n, _) = try files.make("n.bin", size: 4 * mib)
+    let (c, _) = try files.make("c.bin", size: mib / 4)
+    let gates = Gates()
+    gates.block("n.bin")
+    gates.block("c.bin")
+    defer { gates.releaseAll() }
+    let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
+    let neighbour = Task { try await reader.read(n, priority: ReadPriority(3)) }
+    await waitEntered(gates)
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let cur = Task { try await reader.read(c, priority: current) }
+    await waitEntered(gates)
+    gates.release("n.bin")
+    try await Task.sleep(for: .milliseconds(100))   // paused before its second chunk
+    neighbour.cancel()
+    let outcome = await within(.seconds(2)) { try await neighbour.value }
+    #expect(outcome.map { if case .failure(let e) = $0 { e is CancellationError } else { false } } == true)
+    gates.release("c.bin")
+    _ = try await cur.value
 }

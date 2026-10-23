@@ -85,14 +85,18 @@ struct ImageCacheTests {
         let gate = AsyncGate()
         rig.reader.hang(files[5], on: gate)
         await rig.focus(files, 5, dwelling: true)
-        #expect(await eventually {
-            let four = await rig.state(files[4]), six = await rig.state(files[6])
-            return atLeast(.preview, four) && atLeast(.preview, six)
-        })
+        // The neighbours wait for the current photo's preview (V7: the share is its alone until then)…
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(rig.reader.readCount(files[4]) == 0 && rig.reader.readCount(files[6]) == 0)
         #expect(await rig.cache.entry(files[5])?.failure == nil)
         gate.open(.failure(ReadError.notResponding))
         #expect(await eventually { await rig.cache.entry(files[5])?.failure != nil })
         #expect(await rig.cache.entry(files[5])?.pyramid == nil)
+        // …and once its read fails (nothing more is coming for it), they load.
+        #expect(await eventually {
+            let four = await rig.state(files[4]), six = await rig.state(files[6])
+            return atLeast(.preview, four) && atLeast(.preview, six)
+        })
         await rig.clear()
     }
 
@@ -259,11 +263,16 @@ struct ImageCacheTests {
         let files = fileURLs(30)
         let a = files[10], b = files[9], n1 = files[11]
         let probeGate = BlockingGate(), neighbourGate = BlockingGate()
+        // n1's bytes and preview first (flipping: nothing else is read), so on A its full decode, the next photo's,
+        // needs no read: neighbours read only after the current preview (V7), a resident one decodes at once.
+        await rig.focus(files, 11)
+        #expect(await eventually { atLeast(.preview, await rig.state(n1)) })
+        #expect(await rig.settle())
         rig.decoder.gateProbe(a, probeGate)
-        rig.decoder.gateDecodes(n1, neighbourGate)   // holds the only shared slot
+        rig.decoder.gateFull(n1, neighbourGate)   // holds the only shared slot
         await rig.focus(files, 10, dwelling: true)
         #expect(await eventually {
-            rig.decoder.calls(a).contains(.probe) && rig.decoder.calls(n1).contains(.preview(1))
+            rig.decoder.calls(a).contains(.probe) && rig.decoder.calls(n1).contains(.full)
         })
 
         await rig.focus(files, 9, direction: -1)
@@ -627,9 +636,12 @@ struct ImageCacheTests {
         for url in files { rig.decoder.setProgressive(url) }
         rig.decoder.gateFull(files[4], neighbours)
         rig.decoder.gateFull(files[6], neighbours)
-        rig.decoder.gateDecodes(files[5], current)   // the current photo comes after a neighbour holds the gate
+        // The current full is held too (its preview is not: neighbours read only after it, V7), so the neighbours have
+        // every chance at both slots of the gate.
+        rig.decoder.gateFull(files[5], current)
         await rig.focus(files, 5, dwelling: true)
         #expect(await eventually { rig.decoder.calls(files[4]).contains(.full) || rig.decoder.calls(files[6]).contains(.full) })
+        #expect(await eventually { rig.decoder.calls(files[5]).contains(.full) }, "the current full waited for a neighbour's")
         current.open()
         #expect(await eventually { await rig.state(files[5]) == .full }, "the current full waited for a neighbour's")
         try? await Task.sleep(for: .milliseconds(50))   // every chance for the second neighbour to start
@@ -649,11 +661,18 @@ struct ImageCacheTests {
     /// progressive full decodes: with every decode held, two start, not the pool's three.
     @Test func fullDecodePreviewsLimited() async {
         let rig = Rig()
-        let files = fileURLs(10)
         let gate = BlockingGate()
-        for url in files { rig.decoder.setPreviewNeedsFull(url) }
+        // Three previews wanted at once: the active session's current photo and those of two visible inactive
+        // sessions (their short plans read at once). Neighbours read only once the current preview is up (V7), so
+        // they cannot be the others here. Every file is named 0…9.jpg, so one decoder setting covers all three folders.
+        let folders = ["a", "b", "c"].map { name in (0..<10).map { URL(fileURLWithPath: "/fake/\(name)/\($0).jpg") } }
+        for url in folders.joined() { rig.decoder.setPreviewNeedsFull(url) }
         rig.decoder.gateAllDecodes(gate)
-        await rig.focus(files, 5, dwelling: true)
+        let ids = [CacheSessionID(1), CacheSessionID(2), CacheSessionID(3)]
+        for (id, files) in zip(ids, folders).reversed() {
+            await rig.open(id, active: id == ids[0], visible: true)
+            await rig.focus(id, files, 5, dwelling: id == ids[0])
+        }
         #expect(await eventually { rig.decoder.calls.filter { if case .preview = $0.kind { true } else { false } }.count >= 2 })
         try? await Task.sleep(for: .milliseconds(50))   // every chance for a third to start
         let started = rig.decoder.calls.filter { if case .preview = $0.kind { true } else { false } }.count
@@ -662,7 +681,7 @@ struct ImageCacheTests {
         gate.open()
         #expect(await rig.settle())
         #expect(rig.decoder.peakConcurrentFulls <= 2, "peak \(rig.decoder.peakConcurrentFulls)")
-        await rig.clear()
+        for id in ids { await rig.cache.unregister(id) }
     }
 
     /// One notification per stored stage: read, probe, preview decoded, preview uploaded, full decoded, full uploaded.
@@ -680,7 +699,7 @@ struct ImageCacheTests {
 
     // MARK: Reads by priority (Task 11e)
 
-    /// One read slot, held by the current photo's read, with its neighbours' reads queued behind it. Focus jumps to
+    /// One read slot, held by a neighbour's read, with the other neighbours' reads queued behind it. Focus jumps to
     /// one of them: its queued read is moved to priority 0 and is the next to get the slot (FIFO would run 1…4 first).
     @Test func currentReadJumpsTheQueue() async {
         let queue = QueueReader(slots: 1)
@@ -688,20 +707,19 @@ struct ImageCacheTests {
         let files = fileURLs(20)
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }
-        queue.hold(files[0])
-        // The current read takes the slot first; only then does dwelling queue the neighbours behind it (on a slow
-        // machine their reads could otherwise reach the reader first and run through the free slot).
-        await rig.focus(files, 0)
-        #expect(await eventually { queue.started == [files[0]] })
+        // The current photo reads alone; its neighbours read once its preview is up (V7), and whichever of them gets
+        // the slot first holds it.
+        holdNeighbours(queue, files, sparing: [0, 5])
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 6 })
         #expect(queue.queuedPriority(files[5]).map { $0 > 0 } == true)
+        let holder = queue.started[1]
         await rig.focus(files, 5)
         #expect(await eventually { queue.queuedPriority(files[5]) == 0 })
         #expect(log.events.contains { $0.url == files[5] && $0.kind == .readReprioritized && $0.priority == 0 })
-        queue.release(files[0])
-        #expect(await eventually { queue.started.count >= 2 })
-        #expect(queue.started.prefix(2) == [files[0], files[5]], "\(queue.started.map(\.lastPathComponent))")
+        queue.release(holder)
+        #expect(await eventually { queue.started.count >= 3 })
+        #expect(queue.started.prefix(3) == [files[0], holder, files[5]], "\(queue.started.map(\.lastPathComponent))")
         #expect(await eventually { atLeast(.preview, await rig.state(files[5])) })
         await rig.clear()
     }
@@ -712,20 +730,18 @@ struct ImageCacheTests {
         let queue = QueueReader(slots: 1)
         let rig = Rig(queueReader: queue)
         let files = fileURLs(20)
-        queue.hold(files[0])
+        // As in currentReadJumpsTheQueue: a neighbour's read holds the slot, the others queue behind it.
+        holdNeighbours(queue, files, sparing: [0, 5])
         let gap = queue.delaySubmit(files[5])
-        // The current read first, then the neighbours (as in currentReadJumpsTheQueue): asked for together, a
-        // neighbour's read could reach the free slot ahead of it.
-        await rig.focus(files, 0)
-        #expect(await eventually { queue.started == [files[0]] })
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 5 && queue.hasArrived(files[5]) })
+        let holder = queue.started[1]
         await rig.focus(files, 5)
         gap.open()
         #expect(await eventually { queue.queuedPriority(files[5]) != nil })
-        queue.release(files[0])
-        #expect(await eventually { queue.started.count >= 2 })
-        #expect(queue.started.prefix(2) == [files[0], files[5]], "\(queue.started.map(\.lastPathComponent))")
+        queue.release(holder)
+        #expect(await eventually { queue.started.count >= 3 })
+        #expect(queue.started.prefix(3) == [files[0], holder, files[5]], "\(queue.started.map(\.lastPathComponent))")
         await rig.clear()
     }
 
@@ -1658,10 +1674,14 @@ extension ImageCacheTests {
         let files = fileURLs(40)   // 30 and 31 lie beyond the dwelling neighbourhood of 0: never read before
         let log = TraceEvents()
         await rig.cache.setTrace { log.add($0) }
-        queue.hold(files[0])
+        // The current photo reads alone; the first neighbour to read after its preview (V7) holds the slot.
+        holdNeighbours(queue, files, sparing: [0, 30, 31])
         await rig.focus(files, 0, dwelling: true)
         #expect(await eventually { queue.queuedCount >= 6 })
         let waiting = Set(files.filter { queue.queuedPriority($0) != nil })
+        let holder = queue.started[1]
+        // The current photo's own work (its full decode after the dwell) is done before the scrub.
+        #expect(await eventually { await rig.state(files[0]) == .full })
 
         await rig.focus(files, 30, scrubbing: true)
         #expect(await eventually { queue.queuedCount == 0 })
@@ -1677,7 +1697,7 @@ extension ImageCacheTests {
 
         await rig.focus(files, 31)
         #expect(await eventually { queue.queuedPriority(files[31]) == 0 })
-        queue.release(files[0])
+        queue.release(holder)
         #expect(await eventually { atLeast(.preview, await rig.state(files[31])) })
         await rig.clear()
     }
@@ -1726,4 +1746,9 @@ extension ImageCacheTests {
         #expect(rig.reader.stampPriorities.count == checks + 1)
         await rig.clear()
     }
+}
+
+/// Holds the reads of every file of `files` but those at `sparing`: whichever neighbour gets a slot first keeps it.
+func holdNeighbours(_ queue: QueueReader, _ files: [URL], sparing: Set<Int>) {
+    for (i, url) in files.enumerated() where !sparing.contains(i) { queue.hold(url) }
 }

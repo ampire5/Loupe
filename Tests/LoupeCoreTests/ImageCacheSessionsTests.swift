@@ -582,3 +582,108 @@ private func idleSetup(_ rig: Rig) async -> (a: [URL], b: [URL]) {
     #expect(await rig.settle())
     return (a, b)
 }
+
+// MARK: - The current photo first (V7)
+
+/// Stage boundaries the cache traced, from any thread.
+private final class Traced: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [CacheTraceEvent] = []
+    func add(_ e: CacheTraceEvent) { lock.withLock { items.append(e) } }
+    var events: [CacheTraceEvent] { lock.withLock { items } }
+    func first(_ url: URL, _ kind: CacheTraceEvent.Kind) -> CacheTraceEvent? {
+        events.first { $0.url == url && $0.kind == kind }
+    }
+}
+
+/// A chunk reader that parks reads of every file but `free` until released (a share answering slowly for them).
+private final class SlowShare: @unchecked Sendable {
+    private let lock = NSLock()
+    private let free: Set<String>
+    private let gate = DispatchSemaphore(value: 0)
+    private var released = false
+    private var parked = 0
+
+    init(free: Set<String>) { self.free = free }
+
+    /// Reads parked right now.
+    var parkedCount: Int { lock.withLock { parked } }
+
+    func releaseAll() {
+        lock.withLock { released = true }
+        for _ in 0..<256 { gate.signal() }
+    }
+
+    var reader: @Sendable (Int32, UnsafeMutableRawPointer, Int, Int) -> Int {
+        { fd, buf, count, offset in
+            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            let name = fcntl(fd, F_GETPATH, &path) != -1 ? URL(fileURLWithPath: String(cString: path)).lastPathComponent : ""
+            let parks = !self.free.contains(name) && self.lock.withLock { () -> Bool in
+                guard !self.released else { return false }
+                self.parked += 1
+                return true
+            }
+            if parks {
+                self.gate.wait()
+                self.lock.withLock { self.parked -= 1 }
+            }
+            return Darwin.pread(fd, buf, count, off_t(offset))
+        }
+    }
+}
+
+extension ImageCacheSessionsTests {
+    /// After a dwell the neighbours read, and on a slow share their reads hang; a step to a photo not in flight still
+    /// gets its read requested and delivered: neighbours keep to one of the viewer's two threads, the other is the
+    /// current photo's.
+    @Test func stepReadsPastBlockedNeighbours() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("loupe-v7-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // A file's bytes are its name, as the fake decoder expects.
+        let files = try (0..<40).map { i -> URL in
+            let url = dir.appendingPathComponent("\(i).jpg")
+            try Data(url.lastPathComponent.utf8).write(to: url)
+            return url
+        }
+        let share = SlowShare(free: ["0.jpg", "30.jpg"])
+        defer { share.releaseAll() }
+        let reader = FileReader(threads: 4, timeout: .seconds(30), isLocal: { _ in false }, chunkReader: share.reader)
+        let decoder = FakeDecoder(size: rigPhoto)
+        let cache = ImageCache(loader: FakeLoader(), reader: reader, pool: DecodePool(), decoder: { _ in decoder },
+                               limits: CacheLimits.at3G)
+        let traced = Traced()
+        await cache.setTrace { traced.add($0) }
+        func focus(_ current: Int, dwelling: Bool) async {
+            await cache.setFocus(files: files, focus: CacheFocus(count: files.count, current: current, direction: 1,
+                                                                 dwelling: dwelling, needsFull: false, screen: rigScreen))
+        }
+        await focus(0, dwelling: true)
+        #expect(await eventually { share.parkedCount >= 1 })
+        try await Task.sleep(for: .milliseconds(200))   // room for a second neighbour to take a thread, if it may
+
+        await focus(30, dwelling: false)
+        #expect(await eventually { traced.first(files[30], .readDelivered) != nil })
+        #expect(traced.first(files[30], .readRequested) != nil)
+        share.releaseAll()
+        await cache.setFocus(files: [], focus: CacheFocus(count: 0, current: 0, direction: 1, dwelling: false,
+                                                          needsFull: false, screen: rigScreen))
+        #expect(await eventually { await cache.isIdle })
+    }
+
+    /// Neighbours start reading only once the current photo's preview is up, not as soon as the dwell is: until then
+    /// the share is the current photo's alone.
+    @Test func neighboursReadAfterTheCurrentPreview() async {
+        let rig = Rig()
+        let files = folder("a")
+        rig.decoder.setLatency(files[0], 0.2)
+        let traced = Traced()
+        await rig.cache.setTrace { traced.add($0) }
+        await rig.focus(files, 0, dwelling: true)
+        #expect(await rig.settle())
+        let preview = traced.events.first { $0.url == files[0] && $0.kind == .uploadDone && $0.goal == .preview }
+        let neighbour = traced.events.first { $0.url != files[0] && $0.kind == .readRequested }
+        #expect(preview != nil && neighbour != nil)
+        if let preview, let neighbour { #expect(neighbour.time > preview.time) }
+    }
+}

@@ -58,6 +58,7 @@ public final class ReadPriority: @unchecked Sendable {
 
     private let lock = NSLock()
     private var current: Int
+    private var currentPhoto = false
     private var onMove: (@Sendable () -> Void)?
 
     public init(_ value: Int, isBackground: Bool = false) {
@@ -72,6 +73,21 @@ public final class ReadPriority: @unchecked Sendable {
             let moved = lock.withLock { () -> (@Sendable () -> Void)? in
                 let changed = current != newValue
                 current = newValue
+                return changed ? onMove : nil
+            }
+            moved?()
+        }
+    }
+
+    /// The read is the current photo's (the viewer's photo on screen, or its pair's other page): `FileReader` keeps a
+    /// viewer thread for such reads, and running neighbour reads pause between chunks while one runs. The caller moves
+    /// it as the photo becomes current or stops being so; the pool reads it each time it picks and between chunks.
+    public var isCurrent: Bool {
+        get { lock.withLock { currentPhoto } }
+        set {
+            let moved = lock.withLock { () -> (@Sendable () -> Void)? in
+                let changed = currentPhoto != newValue
+                currentPhoto = newValue
                 return changed ? onMove : nil
             }
             moved?()
@@ -134,8 +150,9 @@ extension FileReading {
 /// most a few written-off threads, never the UI or the decoders.
 ///
 /// Local volumes are memory-mapped. Network volumes are copied in 1 MiB chunks instead: mmap
-/// on SMB turns a vanished file into SIGBUS, and chunks give the watchdog progress to see and
-/// cancellation a place to stop. Prefix reads use those same chunks to stop early; a mapped file is mapped whole.
+/// on SMB turns a vanished file into SIGBUS, and chunks give the watchdog progress to see,
+/// cancellation a place to stop and a neighbour read a place to pause while the current photo reads (`IOPool`).
+/// Prefix reads use those same chunks to stop early; a mapped file is mapped whole.
 public final class FileReader: FileReading, @unchecked Sendable {
     static let chunkSize = 1 << 20
 
@@ -192,7 +209,7 @@ public final class FileReader: FileReading, @unchecked Sendable {
             // cancellation and the watchdog work as for a file; a prefix read gives the whole entry.
             return try await submit(url, priority: priority) { job in
                 try ArchiveReader.shared.read(url, io: ArchiveReader.IO(chunkReader) {
-                    if job.isCancelled { throw CancellationError() }
+                    try job.betweenChunks()
                     job.touch()
                 })
             }
@@ -279,7 +296,7 @@ public final class FileReader: FileReading, @unchecked Sendable {
 
         var filled = 0
         while filled < size {
-            if job.isCancelled { free(buffer); throw CancellationError() }
+            do { try job.betweenChunks() } catch { free(buffer); throw error }
             let n = chunkReader(fd, buffer + filled, min(chunkSize, size - filled), filled)
             if n < 0 {
                 if errno == EINTR { continue }
