@@ -4,6 +4,7 @@ import LoupeCore
 
 // LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>
 // LoupeBench thumbs --covers [--listings N] [--decodes N] [--size PX] <folder>
+// LoupeBench thumbs --ahead [--listings N] [--decodes N] [--size PX] <folder>
 //
 // Generates the thumbnails of a folder (files `from` ..< `from + limit` in Finder order) the way the app does with
 // the viewer idle: a real ThumbnailStore with the real FileReader (4 threads, as in the app) and DecodePool, its
@@ -22,10 +23,18 @@ import LoupeCore
 // date as the parent's listing gives it; a card whose summary is pending (pictures from the catalog at once) stays in
 // the queue for its follow-up, as Home's does. Prints covers per second, the time until the first 12 cards have their
 // pictures and until they have their summary, and the process's CPU time per pass.
+//
+// With --ahead (thumbs-ahead spec, stage 4): the same cards, on a fresh catalog each pass, without and then with the
+// work ahead: once a card in view (the first 12) is done, its subfolders' names come from the store
+// (`subfolderNames`, never a listing) and go to the queue's `ahead` tier, each made by `folderCard` at the date
+// `subfolderModified` gives, as Home does. Prints the time until the cards are done, until every subfolder of the
+// cards in view has its cover, and the peak cores busy (process CPU over 250 ms windows) while the cards were made
+// and over the whole pass.
 
 enum ThumbsBench {
     static let usage = "usage: LoupeBench thumbs [--from N] [--limit N] [--reads 1|2] [--decodes N] [--size PX] <folder>\n"
-        + "       LoupeBench thumbs --covers [--listings N] [--decodes N] [--size PX] <folder>"
+        + "       LoupeBench thumbs --covers [--listings N] [--decodes N] [--size PX] <folder>\n"
+        + "       LoupeBench thumbs --ahead [--listings N] [--decodes N] [--size PX] <folder>"
 
     struct Options {
         var folder = ""
@@ -35,13 +44,20 @@ enum ThumbsBench {
         var decodes = ThumbnailStore.defaultDecodes
         var size = 512
         var covers = false
+        var ahead = false
         var listings = CoverQueue.listingLimit
     }
 
     static func main(_ arguments: [String]) -> Never {
         let options = parse(arguments)
         Task {
-            if options.covers { await runCovers(options) } else { await run(options) }
+            if options.ahead {
+                await runAhead(options)
+            } else if options.covers {
+                await runCovers(options)
+            } else {
+                await run(options)
+            }
             exit(0)
         }
         dispatchMain()
@@ -65,6 +81,7 @@ enum ThumbsBench {
             case "--decodes": o.decodes = number(arg, min: 1)
             case "--size": o.size = number(arg, min: 16)
             case "--covers": o.covers = true
+            case "--ahead": o.ahead = true
             case "--listings": o.listings = number(arg, min: 1)
             case _ where arg.hasPrefix("--"): fail("unknown option \(arg)\n\(usage)")
             default:
@@ -246,6 +263,154 @@ extension ThumbsBench {
             try? await Task.sleep(for: .seconds(1.5))
         }
         print()
+    }
+}
+
+extension ThumbsBench {
+    private static func runAhead(_ o: Options) async {
+        let root = URL(fileURLWithPath: o.folder)
+        let listed = ((try? FolderSiblings.listEntries(root)) ?? []).filter { $0.isDirectory && !$0.isPackage }
+            .sorted { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }
+        let dates = Dictionary(listed.map { ($0.url.path, $0.modified) }, uniquingKeysWith: { a, _ in a })
+        let ids = listed.map(\.url.path)
+        guard !ids.isEmpty else { fail("no subfolders in \(o.folder)") }
+        let visible = min(12, ids.count)
+        print("### ahead: \(ids.count) cards, \(visible) in view, listings \(o.listings), decodes \(o.decodes), "
+              + "size \(o.size), F_NOCACHE\n")
+        print("| pass | cards s | subfolders | subfolders covered | all subfolders s | peak cores (cards) "
+              + "| peak cores (pass) | CPU s |")
+        print("|---|---|---|---|---|---|---|---|")
+        for withAhead in [false, true] {
+            let cacheDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("loupe-ahead-bench-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: cacheDir) }
+            let reader = FileReader(threads: 4, chunkReader: { fd, buffer, count, offset in
+                if offset == 0 { _ = fcntl(fd, F_NOCACHE, 1) }
+                return FileReader.pread(fd, buffer, count, offset)
+            })
+            let store = ThumbnailStore(directory: cacheDir, reader: reader, thumbSize: o.size, limitBytes: 2 << 30,
+                                       idleDelay: .zero, decodes: o.decodes)
+            let queue = CoverQueue(listingLimit: o.listings, resumeDelay: .zero)
+            guard case .located(let shown) = await store.folderLocation(root) else { fail("cannot resolve \(o.folder)") }
+            let state = AheadState()
+            let sampler = CoreSampler()
+            sampler.start()
+            let start = ContinuousClock.now
+            let work: @Sendable (String) async -> Bool = { id in
+                let folder = URL(fileURLWithPath: id, isDirectory: true)
+                if let parent = state.parent(of: id) {
+                    let location = shown.subfolder(parent).subfolder(folder.lastPathComponent)
+                    let modified = await store.subfolderModified(folder, in: location)
+                    guard let card = await store.folderCard(folder, archive: false, in: location, maxPixel: 16,
+                                                            modified: modified) else { return false }
+                    guard !card.summaryPending else { return false }
+                    state.subfolderDone(id, covered: !card.images.isEmpty, at: msSince(start))
+                    return true
+                }
+                let location = shown.subfolder(folder.lastPathComponent)
+                guard let card = await store.folderCard(folder, archive: false, in: location, maxPixel: 256,
+                                                        modified: dates[id] ?? nil) else { return false }
+                guard !card.summaryPending else { return false }
+                if withAhead, ids.prefix(visible).contains(id),
+                   let names = await store.subfolderNames(of: folder, in: location) {
+                    state.add(names.map { folder.appendingPathComponent($0).path }, parent: folder.lastPathComponent)
+                }
+                state.cardDone(id, at: msSince(start))
+                return true
+            }
+            var sentAhead = -1
+            let deadline = start + .seconds(120 + 5 * ids.count)
+            while ContinuousClock.now < deadline {
+                let ahead = state.aheadIDs
+                if ahead.count != sentAhead {
+                    sentAhead = ahead.count
+                    await queue.want(ids, visible: visible, ahead: ahead, isNetwork: { _ in false }, work: work)
+                }
+                if state.cardsDone == ids.count, !withAhead || state.subfoldersDone == ahead.count { break }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            let seconds = msSince(start) / 1000
+            let cardsAt = state.cardsAt / 1000
+            sampler.stop()
+            let cpu = sampler.cpuSeconds
+            func f(_ v: Double, _ digits: Int = 2) -> String { String(format: "%.\(digits)f", v) }
+            print("| \(withAhead ? "with ahead" : "cards only") | \(f(cardsAt)) | \(state.aheadIDs.count) "
+                  + "| \(state.covered) | \(withAhead ? f(seconds) : "–") | \(f(sampler.peak(until: cardsAt), 1)) "
+                  + "| \(f(sampler.peak(until: .infinity), 1)) | \(f(cpu, 1)) |")
+            await queue.want([], visible: 0, isNetwork: { _ in false }) { _ in true }
+            try? await Task.sleep(for: .seconds(1.5))
+        }
+        print()
+    }
+}
+
+/// The work ahead of an `--ahead` pass: each subfolder's parent card, and when cards and subfolders were done.
+final class AheadState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var parents: [String: String] = [:]
+    private var order: [String] = []
+    private var cards: [String: Double] = [:]
+    private var subfolders: [String: Bool] = [:]
+
+    func add(_ ids: [String], parent: String) {
+        lock.withLock {
+            for id in ids where parents[id] == nil {
+                parents[id] = parent
+                order.append(id)
+            }
+        }
+    }
+
+    func parent(of id: String) -> String? { lock.withLock { parents[id] } }
+    func cardDone(_ id: String, at ms: Double) { lock.withLock { cards[id] = ms } }
+    func subfolderDone(_ id: String, covered: Bool, at ms: Double) { lock.withLock { subfolders[id] = covered } }
+    var aheadIDs: [String] { lock.withLock { order } }
+    var cardsDone: Int { lock.withLock { cards.count } }
+    var cardsAt: Double { lock.withLock { cards.values.max() ?? 0 } }
+    var subfoldersDone: Int { lock.withLock { subfolders.count } }
+    var covered: Int { lock.withLock { subfolders.values.filter { $0 }.count } }
+}
+
+/// The process's CPU time sampled every 250 ms: the cores busy in each window.
+final class CoreSampler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var windows: [(end: Double, cores: Double)] = []
+    private var task: Task<Void, Never>?
+    private var first = 0.0, last = 0.0
+
+    func start() {
+        let begin = ContinuousClock.now
+        first = cpuTimeMs()
+        task = Task.detached(priority: .high) { [self] in
+            var previous = first
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                let now = cpuTimeMs()
+                let at = msSince(begin) / 1000
+                lock.withLock { windows.append((at, (now - previous) / 250)) }
+                previous = now
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        last = cpuTimeMs()
+    }
+
+    var cpuSeconds: Double { (last - first) / 1000 }
+
+    /// The busiest window that ended by `seconds` (and the one it was in).
+    func peak(until seconds: Double) -> Double {
+        lock.withLock {
+            var best = 0.0
+            for window in windows {
+                best = max(best, window.cores)
+                if window.end >= seconds { break }
+            }
+            return best
+        }
     }
 }
 

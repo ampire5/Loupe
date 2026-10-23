@@ -83,6 +83,14 @@ public struct CoverNames: Equatable, Sendable {
     }
 }
 
+/// A folder's direct subfolders from its card's complete listing (`ThumbnailStore.coverSubfolders`): their names in
+/// listing order, the dates a listing with stat gave, and when they were last asked for.
+struct CoverSubfolders {
+    var names: [String]
+    var dates: [String: Date]
+    var use: UInt64
+}
+
 /// A folder's pick from a complete listing (`ThumbnailStore.coverPicks`): its photos (spread across it, the one last
 /// viewed first) or, without any, its subfolders.
 struct CoverPick {
@@ -151,6 +159,10 @@ extension ThumbnailStore {
     /// Folders whose last pick is remembered (`coverPicks`): a few names each, so a few hundred kilobytes at most, for
     /// the folders of any browsing session.
     static let coverPickLimit = 4000
+    /// Subfolder names remembered for the work ahead (`coverSubfolders`), in all: a few megabytes at most.
+    static let coverSubfolderNameLimit = 50_000
+    /// Subfolders of one folder remembered at most: a card with more prepares none ahead.
+    static let coverSubfoldersPerFolder = 1_000
     /// Subfolders looked into below a folder without photos: its own, and theirs.
     static let coverDepth = 2
     /// Threads in a cover's blocking call at most, per lane (`CoverLane`: listings and resolves, each on local volumes
@@ -390,7 +402,7 @@ extension ThumbnailStore {
         }
         if made.listed, !Task.isCancelled { noteSummaryTried(key) }
         return card(made.images, listing: made.listing, problem: isOffline(volume) ? .offline : made.problem,
-                    modified: modified, location: location)
+                    modified: modified, location: location, folder: archive ? nil : folder)
     }
 
     /// How many of a folder's photos the catalog must have for its card's pictures to come from there, without a
@@ -466,7 +478,7 @@ extension ThumbnailStore {
             images = made
         }
         return card(images, listing: listing, problem: isOffline(volume) ? .offline : coverProblems[key],
-                    modified: place.modified, location: location)
+                    modified: place.modified, location: location, folder: place.archive ? nil : place.folder)
     }
 
     /// What a remembered pick gave (`pickedCover`).
@@ -502,11 +514,13 @@ extension ThumbnailStore {
 
     /// The card with a complete listing's summary, queued for the catalog when it changed, or the stored one. The
     /// stored summary is read again here: one written while the listing ran (the folder opened meanwhile, with dates)
-    /// is what a names-only count keeps the dates of.
+    /// is what a names-only count keeps the dates of. A folder's (not a zip's) subfolders are remembered for the work
+    /// ahead (`subfolderNames`).
     private func card(_ images: [CGImage], listing: CoverListing?, problem: CardProblem?, modified: Date?,
-                      location: ThumbnailLocation?) -> FolderCard {
+                      location: ThumbnailLocation?, folder: URL?) -> FolderCard {
         let stored = location.flatMap { storedSummary(at: $0) }
         guard let listing else { return FolderCard(images: images, summary: stored, problem: problem) }
+        if let folder { rememberSubfolders(of: folder, listing) }
         var summary = Self.summary(of: listing, modified: modified, stored: stored)
         if let location {
             if let write = Self.summaryToStore(summary, stored: stored) {
@@ -885,6 +899,56 @@ extension ThumbnailStore {
         let path = folder.standardizedFileURL.path
         guard let modified else { return path }
         return path + "\u{0}" + String(modified.timeIntervalSinceReferenceDate)
+    }
+
+    /// The names of `folder`'s direct subfolders, in Finder order, for the work ahead (thumbs-ahead spec, stage 4),
+    /// never from a new listing: those of its card's complete listing this session, else the catalog's (the stored
+    /// summaries of its subfolders, at `location`'s, when there are as many as its own stored summary counts:
+    /// `childSummaries`' query). Nil when neither knows them all.
+    public func subfolderNames(of folder: URL, in location: ThumbnailLocation?) async -> [String]? {
+        let path = folder.standardizedFileURL.path
+        if let known = coverSubfolders[path] {
+            coverSubfolderUses += 1
+            coverSubfolders[path]?.use = coverSubfolderUses
+            return Self.finderSorted(known.names)
+        }
+        guard let location, let stored = storedSummary(at: location) else { return nil }
+        guard stored.folders > 0 else { return [] }
+        let children = childSummaryPhotos(of: location)
+        guard children.count == stored.folders else { return nil }
+        return Self.finderSorted(children.keys.map { ($0 as NSString).lastPathComponent })
+    }
+
+    /// The modification date the work ahead makes a subfolder's card at (`folderCard`'s `modified`, which a stored
+    /// summary must match to be fresh): its parent's dated listing's this session, else its stored summary's own (the
+    /// catalog trusted: the card's own work, once its parent is open, compares it with its listing date). Nil when
+    /// neither has one.
+    public func subfolderModified(_ subfolder: URL, in location: ThumbnailLocation?) async -> Date? {
+        let url = subfolder.standardizedFileURL
+        if let date = coverSubfolders[url.deletingLastPathComponent().path]?.dates[url.lastPathComponent] {
+            return date
+        }
+        return location.flatMap { storedSummary(at: $0) }?.folderModified
+    }
+
+    /// `folder`'s subfolders from its complete listing, for `subfolderNames`. A folder of more than
+    /// `coverSubfoldersPerFolder` is not remembered (its work ahead would be most of a session's); past
+    /// `coverSubfolderNameLimit` names in all, the least recently used tenth of the folders goes.
+    private func rememberSubfolders(of folder: URL, _ listing: CoverListing) {
+        let path = folder.standardizedFileURL.path
+        if let old = coverSubfolders.removeValue(forKey: path) { coverSubfolderNames -= old.names.count }
+        let names = listing.names.folders
+        guard names.count <= Self.coverSubfoldersPerFolder else { return }
+        coverSubfolderUses += 1
+        coverSubfolders[path] = CoverSubfolders(names: names, dates: listing.folderDates, use: coverSubfolderUses)
+        coverSubfolderNames += names.count
+        guard coverSubfolderNames > Self.coverSubfolderNameLimit || coverSubfolders.count > Self.coverPickLimit
+        else { return }
+        let old = coverSubfolders.sorted { $0.value.use < $1.value.use }.prefix(max(1, coverSubfolders.count / 10))
+        for (key, kept) in old {
+            coverSubfolders[key] = nil
+            coverSubfolderNames -= kept.names.count
+        }
     }
 
     /// The pick remembered for `key`; a folder's photos only when made for the same last-viewed photo.

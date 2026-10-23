@@ -323,6 +323,103 @@ private final class TryCount: @unchecked Sendable {
         #expect(all[before + 1] - all[before] < .milliseconds(800))
         await queue.want([], visible: 0, isNetwork: { _ in false }, work: work)
     }
+
+    // MARK: Work ahead (thumbs-ahead plan, stage 4: the visible cards' subfolders)
+
+    /// The subfolders of the visible cards (`ahead`) go after every client's margin: in view of all, then margins of
+    /// all, then the work ahead, each client's in its order.
+    @Test func aheadRunsAfterEveryMargin() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1)
+        let log = CoverLog()
+        let gate = HoldGate()
+        let work: @Sendable (String) async -> Bool = { id in
+            log.begin(id, network: false)
+            if id == "h" { try? await gate.wait() }
+            log.end(id, network: false, cancelled: false)
+            return true
+        }
+        await queue.want(["h", "m1"], visible: 1, ahead: ["h/a1", "h/a2"], client: 1, isNetwork: { _ in false },
+                         work: work)
+        #expect(await eventually { log.started == ["h"] })
+        await queue.want(["v2", "m2"], visible: 1, ahead: ["v2/b1"], client: 2, isNetwork: { _ in false }, work: work)
+        gate.open()
+        #expect(await eventually { log.ended.count == 7 })
+        #expect(log.started == ["h", "v2", "m1", "m2", "h/a1", "h/a2", "v2/b1"])
+    }
+
+    /// A card that left the visible set takes its subfolders with it: those waiting are dropped, the one running is
+    /// cancelled.
+    @Test func subfoldersLeaveWithTheirParent() async {
+        let queue = CoverQueue(listingLimit: 1, networkListingLimit: 1)
+        let log = CoverLog()
+        await queue.want(["p"], visible: 1, isNetwork: { _ in false }, work: Self.work(log, time: .milliseconds(1)))
+        #expect(await eventually { log.ended.contains("p") })
+        // Its subfolders come; "p/a" hangs until cancelled.
+        await queue.want(["p"], visible: 1, ahead: ["p/a", "p/b"], isNetwork: { _ in false },
+                         work: Self.work(log, time: .seconds(30)))
+        #expect(await eventually { log.started.contains("p/a") })
+        await queue.want(["q"], visible: 1, isNetwork: { _ in false }, work: Self.work(log, time: .milliseconds(1)))
+        #expect(await eventually { log.ended.contains("q") })
+        #expect(log.cancelled == ["p/a"])
+        #expect(!log.started.contains("p/b"))
+        #expect(await queue.pendingCount == 0)
+        #expect(await eventually { await queue.runningCount == 0 })
+    }
+
+    /// On a share the work ahead keeps to the one listing in flight: never two network tasks at once, whatever the
+    /// tiers.
+    @Test func shareKeepsOneListingWithSubfolders() async {
+        let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1)
+        let log = CoverLog()
+        let ids = ["net1", "net2", "local1"]
+        let ahead = (1...4).map { "net1/s\($0)" } + (1...2).map { "net2/s\($0)" } + ["local1/s1"]
+        await queue.want(ids, visible: 2, ahead: ahead, isNetwork: Self.isNetwork, work: Self.work(log))
+        #expect(await eventually { log.ended.count == ids.count + ahead.count })
+        #expect(log.peak(network: true) == 1)
+        #expect(log.peak(network: false) == 2)
+    }
+
+    /// Each tier counts what is wanted and what is done, per client.
+    @Test func progressCountsEachTier() async {
+        let queue = CoverQueue(listingLimit: 4, networkListingLimit: 1)
+        let gate = HoldGate()
+        let work: @Sendable (String) async -> Bool = { id in
+            if id.hasPrefix("m") { try? await gate.wait() }
+            return true
+        }
+        await queue.want(["v1", "v2", "m1"], visible: 2, ahead: ["v1/a"], client: 3, isNetwork: { _ in false },
+                         work: work)
+        #expect(await eventually {
+            await queue.progress(client: 3) == CoverProgress(inView: WorkCount(done: 2, total: 2),
+                                                              margin: WorkCount(done: 0, total: 1),
+                                                              ahead: WorkCount(done: 1, total: 1))
+        })
+        gate.open()
+        #expect(await eventually { await queue.progress(client: 3).margin == WorkCount(done: 1, total: 1) })
+        #expect(await queue.progress(client: 4) == CoverProgress())
+        // A card wanted again elsewhere drops out of the count.
+        await queue.want(["v1"], visible: 1, client: 3, isNetwork: { _ in false }, work: work)
+        #expect(await queue.progress(client: 3) == CoverProgress(inView: WorkCount(done: 1, total: 1)))
+    }
+
+    /// The progress handler hears the client whose counts may have changed.
+    @Test func progressIsAnnounced() async {
+        let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1)
+        let heard = HeardClients()
+        await queue.setOnProgress { heard.add($0) }
+        await queue.want(["v1"], visible: 1, ahead: ["v1/a"], client: 7, isNetwork: { _ in false }) { _ in true }
+        #expect(await eventually { await queue.progress(client: 7).ahead.done == 1 })
+        #expect(heard.all.count >= 3)   // the want, and each card done
+        #expect(Set(heard.all) == [7])
+    }
+}
+
+/// Clients the progress handler heard.
+private final class HeardClients: @unchecked Sendable {
+    private let lock = NSLock()
+    private var clients: [Int] = []
+    func add(_ client: Int) { lock.withLock { clients.append(client) } }
+    var all: [Int] { lock.withLock { clients } }
 }
 
 /// When each try happened.

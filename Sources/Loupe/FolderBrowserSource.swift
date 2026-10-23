@@ -88,6 +88,11 @@ extension Notification.Name {
     /// Until then a card's picture is made (it needs none), but no summary is listed for it (`followUps` wait): one
     /// counted without the folder's date would never be fresh.
     private var shownDated = false
+    /// The direct subfolders of the cards in view, by card id, in Finder order, for the work ahead (thumbs-ahead spec,
+    /// stage 4: `ThumbnailStore.subfolderNames`, never a listing of its own). Asked for once per card, and again when
+    /// its facts come (its work may have listed it meanwhile); until the folder changes.
+    private var subfolders: [String: [String]] = [:]
+    private var subfoldersAsked: Set<String> = []
     private var observers: [NSObjectProtocol] = []
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
@@ -385,6 +390,10 @@ extension Notification.Name {
     /// The first `visible` of `ids` are in view, the rest is the margin around it. Photos come from the strip's store,
     /// those in view first; folder and zip cards go to the cover queue.
     func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
+        // `thumbs-ahead = off`: only what is in view, no margin.
+        if Settings.shared.config.thumbsAhead == .off, visible < ids.count {
+            return wantImages(Array(ids.prefix(visible)), visible: visible, width: width)
+        }
         let scale = view?.window?.backingScaleFactor ?? 2
         maxPixel = Int((width * scale).rounded())
         let wanted = ids.compactMap { shown[$0] }
@@ -440,6 +449,8 @@ extension Notification.Name {
         cards.reset()
         facts = [:]
         followUps = []
+        subfolders = [:]
+        subfoldersAsked = []
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
         lastInView = []
@@ -464,6 +475,9 @@ extension Notification.Name {
     /// puts them together (`showSummary`). Nil from the store is "not now", and the queue tries again later; so is a
     /// card whose summary is still to be listed, or that is offline without pictures (the queue asks again at its pace,
     /// and a share that answers asks at once: `shareAnswered`).
+    ///
+    /// With `thumbs-ahead = folder`, the subfolders of the cards in view follow every window's margin in the queue
+    /// (`aheadWork`), in the grid's order, once the folder's entries are dated.
     private func sendCovers() {
         guard !isPaused, let place = coverPlace, let size = coverSize, let folderPath = coverFolder else { return }
         let shownLocation: ThumbnailLocation?, network: Bool
@@ -481,6 +495,8 @@ extension Notification.Name {
         let ids = Array(pending.prefix(visiblePending)) + inView + pending.dropFirst(visiblePending)
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
+        let ahead = shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadCards(in: shownLocation) : []
+        let aheadByID = Dictionary(ahead.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let layout = shownCoverLayout, side = size.width, scale = size.scale
         let compact = view?.shownStyle == .cards   // board B: the layout kept at 76 pt
         let cellPixels = layout.cellPixels(width: side, scale: scale)
@@ -505,7 +521,9 @@ extension Notification.Name {
             self.cards.delivered(id, mosaic)
             self.view?.setImage(mosaic, for: id)
         }
+        let subfolderWork = aheadWork(network: network, folderPath: folderPath)
         let work: @Sendable (String) async -> Bool = { id in
+            if let subfolder = aheadByID[id] { return await subfolderWork(subfolder) }
             guard let card = await lookup(id) else { return true }
             let entry = card.entry
             // Only its summary is wanted: that waits for the folder's date (`shownDated`), which brings it back.
@@ -534,8 +552,91 @@ extension Notification.Name {
             await deliver(id, mosaic, facts, again)
             return !again
         }
+        let aheadIDs = ahead.map(\.id)
         sendToQueue { queue, client in
-            await queue.want(ids, visible: visible, client: client, isNetwork: { _ in network }, work: work)
+            await queue.want(ids, visible: visible, ahead: aheadIDs, client: client, isNetwork: { _ in network },
+                             work: work)
+        }
+    }
+
+    /// A subfolder of a card in view, as the work ahead makes it.
+    private struct AheadCard: Sendable {
+        var id: String
+        var parent: String
+        var url: URL
+        var location: ThumbnailLocation?
+        var parentLocation: ThumbnailLocation?
+    }
+
+    /// The decoded cells of a subfolder made ahead are dropped (only the catalog keeps what it made: no view shows
+    /// it), so they are decoded as small as can be: the thumbnails kept are the store's own size whatever this is.
+    private static let aheadCellPixels = 16
+
+    /// The subfolders of the folder cards in view, card by card in the grid's order (the last ask's), those whose
+    /// names are known; the others' names are asked for (`askSubfolders`), and they come with a later `sendCovers`.
+    private func aheadCards(in shownLocation: ThumbnailLocation?) -> [AheadCard] {
+        var cards: [AheadCard] = []
+        for id in lastAsked where lastInView.contains(id) {
+            guard let entry = shown[id], entry.kind == .folder else { continue }
+            let location = shownLocation?.subfolder(entry.url.lastPathComponent)
+            guard let names = subfolders[id] else {
+                askSubfolders(id, of: entry.url, in: location)
+                continue
+            }
+            for name in names {
+                let url = entry.url.appendingPathComponent(name, isDirectory: true)
+                cards.append(AheadCard(id: url.path, parent: id, url: url, location: location?.subfolder(name),
+                                       parentLocation: location))
+            }
+        }
+        return cards
+    }
+
+    /// The card's subfolders' names from the store (memory or catalog, never a listing), off the main thread; known,
+    /// the covers are sent again with them.
+    private func askSubfolders(_ id: String, of folder: URL, in location: ThumbnailLocation?) {
+        guard subfoldersAsked.insert(id).inserted else { return }
+        if facts[id]?.summary?.folders == 0 {
+            subfolders[id] = []
+            return
+        }
+        let thumbnails = self.thumbnails, folderPath = coverFolder
+        Task { @MainActor [weak self] in
+            guard let names = await thumbnails.subfolderNames(of: folder, in: location) else { return }
+            guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
+            self.subfolders[id] = names
+            if !names.isEmpty { self.sendCovers() }
+        }
+    }
+
+    /// The work ahead on one subfolder: its card (`ThumbnailStore.folderCard`, at the date its parent's listing gave,
+    /// else its stored summary's: `subfolderModified`) for the catalog only, with "not now" and a summary still to be
+    /// listed as a card's; a summary that came refreshes its parent card's "+N inside".
+    private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadCard) async -> Bool {
+        let thumbnails = self.thumbnails
+        let lastViewed: @MainActor (AheadCard) -> String?? = { [weak self] card in
+            guard let self, self.coverFolder == folderPath, self.shown[card.parent] != nil else { return nil }
+            return .some(self.positions.fileName(in: card.url))
+        }
+        let refresh: @MainActor (String, ChildSummaries) -> Void = { [weak self] parent, inside in
+            guard let self, self.coverFolder == folderPath, self.facts[parent] != nil else { return }
+            self.facts[parent]?.inside = inside
+            self.showSummary(parent)
+        }
+        return { card in
+            guard let viewed = await lastViewed(card) else { return true }
+            let modified = await thumbnails.subfolderModified(card.url, in: card.location)
+            guard let made = await thumbnails.folderCard(card.url, archive: false, in: card.location, network: network,
+                                                         maxPixel: Self.aheadCellPixels, lastViewed: viewed,
+                                                         modified: modified) else { return false }
+            guard !Task.isCancelled else { return true }
+            let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
+            if !again, made.summary != nil, let parentLocation = card.parentLocation {
+                let inside = await thumbnails.childSummaries(of: parentLocation)
+                guard !Task.isCancelled else { return true }
+                await refresh(card.parent, inside)
+            }
+            return !again
         }
     }
 
@@ -550,6 +651,8 @@ extension Notification.Name {
         facts[id] = new
         if again { followUps.insert(id) } else { followUps.remove(id) }
         showSummary(id)
+        // Its work may have listed it: its subfolders' names may be known now.
+        if subfolders[id] == nil, subfoldersAsked.remove(id) != nil, lastInView.contains(id) { sendCovers() }
     }
 
     /// The card's facts with its visit and two-page keys as they are now (folder settings and positions are in memory).

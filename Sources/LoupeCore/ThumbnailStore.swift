@@ -146,6 +146,11 @@ public actor ThumbnailStore {
     /// recently used go first): its next cover needs no listing.
     var coverPicks: [String: CoverPick] = [:]
     var coverPickUses: UInt64 = 0
+    /// The direct subfolders of each folder whose card had a complete listing this session, by path
+    /// (`subfolderNames`), at most `coverSubfolderNameLimit` names in all (the least recently used folders go first).
+    var coverSubfolders: [String: CoverSubfolders] = [:]
+    var coverSubfolderUses: UInt64 = 0
+    var coverSubfolderNames = 0
     /// What the cards of folders and zips this session have against them (a malformed zip), by `memoKey`; cleared by
     /// a listing that answers. At most `coverPickLimit` (then forgotten at once).
     var coverProblems: [String: CardProblem] = [:]

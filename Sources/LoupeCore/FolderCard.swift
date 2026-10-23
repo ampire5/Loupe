@@ -9,11 +9,16 @@ public struct CoverListing: Equatable, Sendable {
     public var summary: FolderSummary?
     /// The photos' modification dates (folder cards' "+N new"); nil from a names-only listing and for a zip.
     public var photoDates: [Date]?
+    /// The subfolders' modification dates by name, those a listing with stat gave (the work ahead's freshness:
+    /// `ThumbnailStore.subfolderModified`); empty from a names-only listing.
+    public var folderDates: [String: Date]
 
-    public init(names: CoverNames, summary: FolderSummary? = nil, photoDates: [Date]? = nil) {
+    public init(names: CoverNames, summary: FolderSummary? = nil, photoDates: [Date]? = nil,
+                folderDates: [String: Date] = [:]) {
         self.names = names
         self.summary = summary
         self.photoDates = photoDates
+        self.folderDates = folderDates
     }
 
     /// From a listing (`BrowserListingSource.names`, with stat on a local volume: the summary and the photos' dates
@@ -22,7 +27,9 @@ public struct CoverListing: Equatable, Sendable {
         let files = entries.filter { $0.kind == .file }, folders = entries.filter { $0.kind == .folder }
         self.init(names: CoverNames(files: files.map(\.name), folders: folders.map(\.name)),
                   summary: dated ? .of(listing: entries, folderModified: nil) : nil,
-                  photoDates: dated ? files.compactMap(\.date) : nil)
+                  photoDates: dated ? files.compactMap(\.date) : nil,
+                  folderDates: dated ? Dictionary(folders.compactMap { entry in entry.date.map { (entry.name, $0) } },
+                                                  uniquingKeysWith: { first, _ in first }) : [:])
     }
 }
 

@@ -14,6 +14,11 @@ import Foundation
 /// Each window's Home is a `client` of the one queue (the limits are the app's, not a window's): a client's `want`
 /// replaces its own cards only, and the cards in view in every window go before any margin. Only the ids of each
 /// client's last `want` are kept: what waits is bounded by the cards on screen and in the margins.
+///
+/// After every client's margin comes the work ahead (thumbs-ahead spec, stage 4): the direct subfolders of the cards
+/// in view, whose covers and summaries go to the catalog only, so that entering a folder finds its cards made. They
+/// share the same limits (one listing at a time on a share, whatever the tier) and leave with the card they belong
+/// to: the caller sends a card's subfolders only while it is in view.
 public actor CoverQueue {
     /// Covers in flight on local volumes. `LoupeBench thumbs --covers` on a local SSD folder of 48 subfolders of 40
     /// progressive 3456 x 2160 JPEGs (i7-10700K, 8 cores, 3 thumbnail decode slots; 4 thumbnails a cover, ~155 ms of
@@ -21,6 +26,12 @@ public actor CoverQueue {
     /// 1/2/3/3/3 cores busy. Two halve the wait for a quarter of the machine; a third takes the store's last decode
     /// slot, which the open folders' own thumbnails need, and more only wait for those slots. From the catalog (the
     /// next session) the 48 come in 0.13 s.
+    ///
+    /// The work ahead (the visible cards' subfolders) adds no listing slot: `LoupeBench thumbs --ahead` on a synthetic
+    /// local folder of 16 subfolders, each of 10 JPEG 2400 x 1600 and 6 subfolders of 12 (SSD, the same machine; 12
+    /// cards in view, so 72 subfolders ahead): the 16 cards are done in 1.3-1.6 s either way, the 72 subfolders have their
+    /// covers 5.4-6.5 s later (two runs), and the peak cores busy over 250 ms windows stay 2.0-2.3 with and without
+    /// the work ahead (the CPU over the pass: 3 s for the cards, 14.5 s with the subfolders).
     public static let listingLimit = 2
     /// Covers in flight on shares: one, so a share already slow for the folder the user opened gets one more listing
     /// at a time, never a burst (on the share of docs/bench/2026-10-15-m2.5-thumb-speed.md a second read adds only a
@@ -35,6 +46,11 @@ public actor CoverQueue {
     public static let defaultRetryDelay: Duration = .seconds(1)
     public static let defaultMaxRetryDelay: Duration = .seconds(60)
 
+    /// Where a card stands in the order: in view, in the margin, or work ahead (a visible card's subfolder).
+    enum Tier: Sendable {
+        case inView, margin, ahead
+    }
+
     /// A card of a client: two windows may show the same folder.
     private struct Key: Hashable {
         let client: Int
@@ -44,7 +60,7 @@ public actor CoverQueue {
     private struct Item {
         let key: Key
         let network: Bool
-        let visible: Bool
+        let tier: Tier
         let work: @Sendable (String) async -> Bool
     }
 
@@ -59,11 +75,13 @@ public actor CoverQueue {
     private let resumeDelay: Duration
     private let retryDelay: Duration
     private let maxRetryDelay: Duration
-    /// The cards of each client's last `want`, in their order (visible first).
+    /// The cards of each client's last `want`, in their order (visible first, then the margin, then the work ahead).
     private var clients: [Int: [Item]] = [:]
-    /// Every client's cards in the order they start: the visible ones of all, then the margins; those running or done
-    /// are skipped.
+    /// Every client's cards in the order they start: the visible ones of all, then the margins, then the work ahead;
+    /// those running or done are skipped.
     private var wanted: [Item] = []
+    /// Told the client whose counts (`progress`) may have changed; the caller coalesces.
+    private var onProgress: (@Sendable (Int) -> Void)?
     private var running: [Key: Running] = [:]
     /// Cancelled tasks still ending, by token: they hold their place in the limits.
     private var ending: [UInt64: Bool] = [:]
@@ -91,15 +109,17 @@ public actor CoverQueue {
     }
 
     /// The cards of `client` that want a cover now, in the order they start: the `visible` ones on screen first, then
-    /// the margin. A card of the client's running or waiting that is not among them is cancelled or dropped; one
-    /// already done stays done while it stays wanted. Other clients' cards are left as they are. `isNetwork` must answer without touching the disk (it runs on the queue for every id;
-    /// `ThumbnailLocation.isNetwork` of the folder Home shows). `work` makes and delivers the card's cover, at
-    /// `.utility` for a visible card and `.background` for the margin's, should end soon once cancelled, and returns
-    /// false for "not now": the card is tried again after `retryDelay`, twice that after the next "not now", and so on
-    /// up to `maxRetryDelay`, while it stays wanted.
-    public func want(_ ids: [String], visible: Int, client: Int = 0, isNetwork: (String) -> Bool,
-                     work: @escaping @Sendable (String) async -> Bool) {
-        let keys = Set(ids.map { Key(client: client, id: $0) })
+    /// the margin, then `ahead` (the visible cards' subfolders, after every client's margin; an id already among
+    /// `ids` counts there). A card of the client's running or waiting that is not among them is cancelled or dropped;
+    /// one already done stays done while it stays wanted. Other clients' cards are left as they are. `isNetwork` must
+    /// answer without touching the disk (it runs on the queue for every id; `ThumbnailLocation.isNetwork` of the
+    /// folder Home shows). `work` makes and delivers the card's cover, at `.utility` for a visible card and
+    /// `.background` for the margin's and the work ahead, should end soon once cancelled, and returns false for "not
+    /// now": the card is tried again after `retryDelay`, twice that after the next "not now", and so on up to
+    /// `maxRetryDelay`, while it stays wanted.
+    public func want(_ ids: [String], visible: Int, ahead: [String] = [], client: Int = 0,
+                     isNetwork: (String) -> Bool, work: @escaping @Sendable (String) async -> Bool) {
+        let keys = Set((ids + ahead).map { Key(client: client, id: $0) })
         func gone(_ key: Key) -> Bool { key.client == client && !keys.contains(key) }
         for (key, job) in running where gone(key) {
             job.task.cancel()
@@ -111,14 +131,36 @@ public actor CoverQueue {
         notNows = notNows.filter { !gone($0.key) }
         var seen: Set<String> = []
         // A repeated id counts once, at its first place.
-        let items = ids.enumerated().compactMap { index, id -> Item? in
+        let tiered = ids.enumerated().map { ($1, $0 < visible ? Tier.inView : .margin) } + ahead.map { ($0, Tier.ahead) }
+        let items = tiered.compactMap { id, tier -> Item? in
             guard seen.insert(id).inserted else { return nil }
-            return Item(key: Key(client: client, id: id), network: isNetwork(id), visible: index < visible, work: work)
+            return Item(key: Key(client: client, id: id), network: isNetwork(id), tier: tier, work: work)
         }
         clients[client] = items.isEmpty ? nil : items
         let all = clients.keys.sorted().flatMap { clients[$0]! }
-        wanted = all.filter(\.visible) + all.filter { !$0.visible }
+        wanted = all.filter { $0.tier == .inView } + all.filter { $0.tier == .margin } + all.filter { $0.tier == .ahead }
+        onProgress?(client)
         pump()
+    }
+
+    /// How far `client`'s cards of its last `want` are, per tier: done (made, while wanted) of wanted.
+    public func progress(client: Int) -> CoverProgress {
+        var progress = CoverProgress()
+        for item in clients[client] ?? [] {
+            let made = done.contains(item.key) ? 1 : 0
+            switch item.tier {
+            case .inView: progress.inView.total += 1; progress.inView.done += made
+            case .margin: progress.margin.total += 1; progress.margin.done += made
+            case .ahead: progress.ahead.total += 1; progress.ahead.done += made
+            }
+        }
+        return progress
+    }
+
+    /// `handler` hears the client whose `progress` may have changed (a `want`, a card done or forgotten), on the
+    /// queue, as it happens: the caller coalesces.
+    public func setOnProgress(_ handler: @escaping @Sendable (Int) -> Void) {
+        onProgress = handler
     }
 
     /// Cards of `client` whose cover is no longer shown (the browser dropped the picture and has none kept): made again
@@ -130,6 +172,7 @@ public actor CoverQueue {
             retryAt[key] = nil
             notNows[key] = nil
         }
+        if !ids.isEmpty { onProgress?(client) }
         pump()
     }
 
@@ -208,7 +251,7 @@ public actor CoverQueue {
     private func start(_ item: Item) {
         nextToken += 1
         let token = nextToken, key = item.key, work = item.work
-        let task = Task(priority: item.visible ? .utility : .background) {
+        let task = Task(priority: item.tier == .inView ? .utility : .background) {
             let made = await work(key.id)
             self.finished(key, token: token, made: made)
         }
@@ -227,6 +270,7 @@ public actor CoverQueue {
             if made {
                 done.insert(id)
                 notNows[id] = nil
+                onProgress?(id.client)
             } else {
                 let times = notNows[id, default: 0]
                 notNows[id] = times + 1
@@ -234,5 +278,19 @@ public actor CoverQueue {
             }
         }
         pump()
+    }
+}
+
+/// How far a client's covers are (`CoverQueue.progress`): the cards in view, the margin, and the work ahead (the
+/// visible cards' subfolders), each done of wanted.
+public struct CoverProgress: Equatable, Sendable {
+    public var inView: WorkCount
+    public var margin: WorkCount
+    public var ahead: WorkCount
+
+    public init(inView: WorkCount = WorkCount(), margin: WorkCount = WorkCount(), ahead: WorkCount = WorkCount()) {
+        self.inView = inView
+        self.margin = margin
+        self.ahead = ahead
     }
 }
