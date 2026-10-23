@@ -799,6 +799,10 @@ import UniformTypeIdentifiers
     private var tabMemory = HomeTabMemory()
     private var homeObservers: [NSObjectProtocol] = []
 
+    /// The browser's last folder goes to Loupe.db here (`BrowserPlaces.lastFolder`): one write after another, never on
+    /// the main thread.
+    private static let placesWriter = DispatchQueue(label: "local.loupe.browserPlaces", qos: .utility)
+
     private func makeHome() -> HomeView {
         let places = registry?.browserPlaces ?? BrowserPlaces(database: nil)
         let folders = FolderBrowserSource(thumbnails: thumbnails, places: places, settings: folderSettings,
@@ -827,7 +831,8 @@ import UniformTypeIdentifiers
         let browser = view.browser
         browser.onLocation = { [weak self] location in
             guard let self else { return }
-            if case .folder(let url) = location { places.lastFolder = url }
+            // A write to Loupe.db: off the main thread, in the order of the moves.
+            if case .folder(let url) = location { Self.placesWriter.async { places.lastFolder = url } }
             let tab = HomeCollections.tab(of: location)
             if tab == .folders { self.hasBrowsed = true }
             // A source chosen in the sidebar (or Back to it) is the one a new tab opens on.

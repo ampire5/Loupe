@@ -167,10 +167,11 @@ extension Notification.Name {
             }
             progressTask?.cancel()
             progressTask = nil
-            // Nothing of the browser's goes on reading while the viewer shows what was clicked.
+            // Nothing of the browser's goes on reading while the viewer shows what was clicked; its request stays,
+            // made of nothing (`holdRequest`), so back on Home its folder needs no new sync.
             pictureTask?.cancel()
             waiting.removeAll()
-            Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
+            holdRequest()
             // Those made stay made (`cards`): back on Home, only the cards still waiting are sent again.
             stopQueuedCovers()
         }
@@ -189,6 +190,7 @@ extension Notification.Name {
     func stop() {
         endOwnWalk()
         isPaused = true
+        Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
         _ = gate.begin(nil)
         stopWatching()
         showCovers(of: nil)
@@ -207,6 +209,13 @@ extension Notification.Name {
     }
 
     func parent(of folder: URL) -> BrowserLocation { BrowserListingSource.parent(of: folder) }
+
+    /// The folder's complete listing kept from an earlier visit (`memory`): the browser draws it in the move's turn.
+    func lastListing(for location: BrowserLocation) -> BrowserListing? {
+        guard case .folder(let folder) = location else { return nil }
+        let path = folder.standardizedFileURL.path
+        return memory.last { $0.path == path }?.listing
+    }
 
     /// The folders and zips in `folder` for the path's sibling menu: from a listing kept in memory, else names only off
     /// the main thread (no stat, so a slow share answers as soon as it can); a cancelled request stops at the next part.
@@ -285,11 +294,15 @@ extension Notification.Name {
         // A zip's listing is its photos: no cards with covers.
         showCovers(of: ArchivePath.isArchive(folder) ? nil : folder)
         return AsyncThrowingStream { continuation in
+            // The kept listing at once, in the move's turn: the browser draws it then (`lastListing`) and asks for its
+            // pictures by id, which must find its entries here.
+            if let remembered { deliver(remembered, token: token, to: continuation) }
             let task = Task { @MainActor [weak self] in
                 /// Still the place on screen: else nothing of this listing reaches the source's state or the view.
                 @MainActor func wanted() -> Bool { !Task.isCancelled && self?.gate.isCurrent(token) == true }
-                @MainActor func deliver(_ listing: BrowserListing) { if wanted() { self?.deliver(listing, to: continuation) } }
-                if let remembered { deliver(remembered) }
+                @MainActor func deliver(_ listing: BrowserListing) {
+                    if wanted() { self?.deliver(listing, token: token, to: continuation) }
+                }
                 do {
                     let started = ContinuousClock.now
                     for try await listing in BrowserListingSource.listings(folder, archives: archives) {
@@ -351,7 +364,12 @@ extension Notification.Name {
         watcher.stop()
     }
 
-    private func deliver(_ listing: BrowserListing, to continuation: AsyncThrowingStream<BrowserListing, Error>.Continuation) {
+    /// A listing of the place on screen to the source's state and the view; a names-only part after a complete listing
+    /// of the same place (a relist's first pass on a share) goes nowhere: it would drop the stamps, the dates and the
+    /// follow-ups the complete one gave (`BrowserListingGate.admits`).
+    private func deliver(_ listing: BrowserListing, token: Int,
+                         to continuation: AsyncThrowingStream<BrowserListing, Error>.Continuation) {
+        guard gate.admits(complete: listing.complete, token: token) else { return }
         remember(listing.entries)
         let wasDated = shownDated
         shownDated = listing.complete
@@ -813,6 +831,17 @@ extension Notification.Name {
     private func dropCovers() {
         cards.dropImages()
         stopQueuedCovers()
+    }
+
+    /// The browser's request while the viewer shows (`isPaused`): the folder's files and stamps as they are, so the
+    /// store keeps its folder open and synced, but nothing of it to make (no file in view, nothing outward from them).
+    /// Back on Home, the same files and stamps reorder its queue only (`ThumbnailStore.setRequest`).
+    private func holdRequest() {
+        guard !shownFiles.isEmpty else { return }
+        let request = ThumbnailRequest(files: shownFiles, current: -1, visible: [], isKey: false, isHome: true,
+                                       visibleOnly: true)
+        let stamps = self.stamps, thumbnails = self.thumbnails, window = thumbnailWindow
+        Task { await thumbnails.setRequest(window: window, request, stamps: stamps) }
     }
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.
