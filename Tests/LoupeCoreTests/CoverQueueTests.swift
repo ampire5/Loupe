@@ -397,7 +397,7 @@ private final class TryCount: @unchecked Sendable {
         gate.open()
         #expect(await eventually { await queue.progress(client: 3).margin == WorkCount(done: 1, total: 1) })
         #expect(await queue.progress(client: 4) == CoverProgress())
-        // A card wanted again elsewhere drops out of the count.
+        // Wanted again without the margin and the work ahead: they drop out of the count.
         await queue.want(["v1"], visible: 1, client: 3, isNetwork: { _ in false }, work: work)
         #expect(await queue.progress(client: 3) == CoverProgress(inView: WorkCount(done: 1, total: 1)))
     }

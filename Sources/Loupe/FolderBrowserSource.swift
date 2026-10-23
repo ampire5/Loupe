@@ -93,6 +93,9 @@ extension Notification.Name {
     /// its facts come (its work may have listed it meanwhile); until the folder changes.
     private var subfolders: [String: [String]] = [:]
     private var subfoldersAsked: Set<String> = []
+    /// Cards whose "+N inside" is to be counted again (a subfolder made ahead wrote its summary), each once per
+    /// `insideRefreshDelay` however many of its subfolders do.
+    private var insideRefresh: [String: Task<Void, Never>] = [:]
     private var observers: [NSObjectProtocol] = []
 
     init(thumbnails: ThumbnailStore, places: BrowserPlaces, settings: FolderSettings?, positions: FolderPositions,
@@ -451,6 +454,8 @@ extension Notification.Name {
         followUps = []
         subfolders = [:]
         subfoldersAsked = []
+        for task in insideRefresh.values { task.cancel() }
+        insideRefresh = [:]
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
         lastAsked = []
         lastInView = []
@@ -610,33 +615,50 @@ extension Notification.Name {
     }
 
     /// The work ahead on one subfolder: its card (`ThumbnailStore.folderCard`, at the date its parent's listing gave,
-    /// else its stored summary's: `subfolderModified`) for the catalog only, with "not now" and a summary still to be
-    /// listed as a card's; a summary that came refreshes its parent card's "+N inside".
+    /// else its own stat's: `subfolderModified`, "not now" when that does not answer) for the catalog only, with "not
+    /// now" and a summary still to be listed as a card's. A summary it wrote (new or changed) has its parent card's
+    /// "+N inside" counted again (`refreshInside`); a fresh one skipped costs the parent nothing.
     private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadCard) async -> Bool {
         let thumbnails = self.thumbnails
         let lastViewed: @MainActor (AheadCard) -> String?? = { [weak self] card in
             guard let self, self.coverFolder == folderPath, self.shown[card.parent] != nil else { return nil }
             return .some(self.positions.fileName(in: card.url))
         }
-        let refresh: @MainActor (String, ChildSummaries) -> Void = { [weak self] parent, inside in
-            guard let self, self.coverFolder == folderPath, self.facts[parent] != nil else { return }
-            self.facts[parent]?.inside = inside
-            self.showSummary(parent)
+        let refresh: @MainActor (String, ThumbnailLocation) -> Void = { [weak self] parent, location in
+            guard let self, self.coverFolder == folderPath else { return }
+            self.refreshInside(of: parent, at: location)
         }
         return { card in
             guard let viewed = await lastViewed(card) else { return true }
-            let modified = await thumbnails.subfolderModified(card.url, in: card.location)
+            guard case .known(let modified) = await thumbnails.subfolderModified(card.url, in: card.location)
+            else { return false }
+            guard !Task.isCancelled else { return true }
             guard let made = await thumbnails.folderCard(card.url, archive: false, in: card.location, network: network,
                                                          maxPixel: Self.aheadCellPixels, lastViewed: viewed,
                                                          modified: modified) else { return false }
             guard !Task.isCancelled else { return true }
-            let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
-            if !again, made.summary != nil, let parentLocation = card.parentLocation {
-                let inside = await thumbnails.childSummaries(of: parentLocation)
-                guard !Task.isCancelled else { return true }
-                await refresh(card.parent, inside)
-            }
-            return !again
+            if made.summaryWritten, let parentLocation = card.parentLocation { await refresh(card.parent, parentLocation) }
+            return !(made.summaryPending || (made.problem == .offline && made.images.isEmpty))
+        }
+    }
+
+    /// How long a card waits before its "+N inside" is counted again after a subfolder's summary was written: the
+    /// summaries of its subfolders made meanwhile go in the same count (one catalog query and one redraw per card per
+    /// this, not one per subfolder).
+    private static let insideRefreshDelay: Duration = .milliseconds(500)
+
+    /// The card `parent`'s "+N inside" from its subfolders' stored summaries (`ThumbnailStore.childSummaries`, at
+    /// `location`), after `insideRefreshDelay`, once for every summary written meanwhile.
+    private func refreshInside(of parent: String, at location: ThumbnailLocation) {
+        guard insideRefresh[parent] == nil else { return }
+        let thumbnails = self.thumbnails, folderPath = coverFolder
+        insideRefresh[parent] = Task { @MainActor [weak self] in
+            guard (try? await Task.sleep(for: Self.insideRefreshDelay)) != nil else { return }
+            self?.insideRefresh[parent] = nil
+            let inside = await thumbnails.childSummaries(of: location)
+            guard let self, self.coverFolder == folderPath, self.facts[parent] != nil else { return }
+            self.facts[parent]?.inside = inside
+            self.showSummary(parent)
         }
     }
 

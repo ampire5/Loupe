@@ -301,7 +301,8 @@ extension ThumbsBench {
                 let folder = URL(fileURLWithPath: id, isDirectory: true)
                 if let parent = state.parent(of: id) {
                     let location = shown.subfolder(parent).subfolder(folder.lastPathComponent)
-                    let modified = await store.subfolderModified(folder, in: location)
+                    guard case .known(let modified) = await store.subfolderModified(folder, in: location)
+                    else { return false }
                     guard let card = await store.folderCard(folder, archive: false, in: location, maxPixel: 16,
                                                             modified: modified) else { return false }
                     guard !card.summaryPending else { return false }

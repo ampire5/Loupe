@@ -131,6 +131,7 @@ public actor ThumbnailStore {
     // MARK: Folder covers
 
     var coverLister: DatedCoverLister = ThumbnailStore.listCover
+    var coverStat: CoverStat = ThumbnailStore.statFolder
     var coverNetworkTimeout = ThumbnailStore.coverListingTimeout
     var coverLocalTimeout = ThumbnailStore.coverLocalListingTimeout
     var coverVolumeIsNetwork: @Sendable (URL) -> Bool = ThumbnailStore.mountIsNetwork

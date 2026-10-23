@@ -940,6 +940,21 @@ private final class FakeDatedListing: @unchecked Sendable {
     }
 }
 
+/// The subfolders' own stats of the work ahead (`ThumbnailStore.setCoverStat`): which were asked, all answered `date`.
+private final class StatLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked: [String] = []
+    private let date: Date?
+    init(_ date: Date?) { self.date = date }
+    var calls: [String] { lock.withLock { asked } }
+    var stat: ThumbnailStore.CoverStat {
+        { url in
+            self.lock.withLock { self.asked.append(url.path) }
+            return self.date
+        }
+    }
+}
+
 /// Task 6 of the folder cards: the cover queue's task brings the folder's summary too, from a listing with dates on a
 /// local volume and names only on a share, kept in the catalog; a stored summary still fresh and the four thumbnails
 /// in the catalog make the card without a listing; a broken zip and a share that does not answer are told.
@@ -1116,7 +1131,7 @@ private final class FakeDatedListing: @unchecked Sendable {
     // MARK: Work ahead (thumbs-ahead plan, stage 4)
 
     /// A card's complete listing tells its subfolders' names and dates: the work ahead asks for them without another
-    /// listing, in Finder order.
+    /// listing, in Finder order; a subfolder the listing gave no date for has its own stat.
     @Test func subfolderNamesFromTheCardsListing() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -1125,16 +1140,20 @@ private final class FakeDatedListing: @unchecked Sendable {
         photos(reader, in: "/photos/p", names)
         listing.set("/photos/p", files: names.map { .init(name: $0, date: Self.day(1), size: 10) },
                     folders: ["b10", "b9", "a"], folderDates: ["a": Self.day(4), "b9": Self.day(5)])
-        let store = store(reader, dir: dir)
+        let store = store(reader, dir: dir), stats = StatLog(Self.day(8))
         await store.setCoverListing(dated: listing.lister)
+        await store.setCoverStat(stats.stat)
         let parent = URL(fileURLWithPath: "/photos/p")
         #expect(await store.subfolderNames(of: parent, in: loc("/photos/p")) == nil)   // not known yet
         _ = await store.folderCard(parent, archive: false, in: loc("/photos/p"), maxPixel: 64, modified: Self.day(6))
         #expect(listing.calls == ["/photos/p"])
         #expect(await store.subfolderNames(of: parent, in: loc("/photos/p")) == ["a", "b9", "b10"])
         #expect(await store.subfolderModified(parent.appendingPathComponent("b9"), in: loc("/photos/p/b9"))
-                == Self.day(5))
-        #expect(await store.subfolderModified(parent.appendingPathComponent("b10"), in: loc("/photos/p/b10")) == nil)
+                == .known(Self.day(5)))
+        #expect(stats.calls.isEmpty)
+        #expect(await store.subfolderModified(parent.appendingPathComponent("b10"), in: loc("/photos/p/b10"))
+                == .known(Self.day(8)))
+        #expect(stats.calls == ["/photos/p/b10"])
         #expect(listing.calls == ["/photos/p"])
     }
 
@@ -1154,14 +1173,29 @@ private final class FakeDatedListing: @unchecked Sendable {
         #expect(await store.subfolderNames(of: parent, in: loc("/photos/p")) == nil)   // one of two known
         await store.putFolderSummaries([(loc("/photos/p/w"), FolderSummary(photos: 1, folders: 0))])
         #expect(await store.subfolderNames(of: parent, in: loc("/photos/p")) == ["w", "x"])
-        #expect(await store.subfolderModified(parent.appendingPathComponent("x"), in: loc("/photos/p/x")) == Self.day(1))
+        // The date is the subfolder's own (one stat), never its stored summary's.
+        await store.setCoverStat(StatLog(Self.day(9)).stat)
+        #expect(await store.subfolderModified(parent.appendingPathComponent("x"), in: loc("/photos/p/x"))
+                == .known(Self.day(9)))
         await store.putFolderSummaries([(loc("/photos/e"), FolderSummary(photos: 2, folders: 0))])
         #expect(await store.subfolderNames(of: URL(fileURLWithPath: "/photos/e"), in: loc("/photos/e")) == [])
         #expect(listing.calls.isEmpty)
     }
 
+    /// A folder of more subfolders than `coverSubfoldersPerFolder` prepares none ahead, from the catalog too.
+    @Test func subfolderNamesCapInTheCatalog() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let store = store(ThumbReader(), dir: dir)
+        let count = ThumbnailStore.coverSubfoldersPerFolder + 1
+        await store.putFolderSummaries([(loc("/photos/big"), FolderSummary(photos: 0, folders: count))]
+                                       + (1...count).map { (loc("/photos/big/s\($0)"), FolderSummary(photos: 1, folders: 0)) })
+        #expect(await store.subfolderNames(of: URL(fileURLWithPath: "/photos/big"), in: loc("/photos/big")) == nil)
+    }
+
     /// A subfolder whose stored summary is fresh and whose four thumbnails are in the catalog: the next session's work
-    /// ahead learns its name and date from the catalog and makes its card without a listing.
+    /// ahead learns its name from the catalog and its date from one stat, and makes its card without a listing,
+    /// writing nothing (its parent's "inside" needs no refresh).
     @Test func aheadSkipsFreshSubfolders() async throws {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -1175,29 +1209,67 @@ private final class FakeDatedListing: @unchecked Sendable {
         let parent = URL(fileURLWithPath: "/photos/p"), sub = parent.appendingPathComponent("s")
         // The parent's card (a folder of one subfolder: its cover is the subfolder's), then the subfolder ahead.
         _ = await first.folderCard(parent, archive: false, in: loc("/photos/p"), maxPixel: 64, modified: Self.day(3))
-        let date = await first.subfolderModified(sub, in: loc("/photos/p/s"))
-        #expect(date == Self.day(2))
-        var made = try #require(await first.folderCard(sub, archive: false, in: loc("/photos/p/s"), maxPixel: 64,
-                                                       modified: date))
-        if made.summaryPending {
-            made = try #require(await first.folderCard(sub, archive: false, in: loc("/photos/p/s"), maxPixel: 64,
-                                                       modified: date))
-        }
+        #expect(await first.subfolderModified(sub, in: loc("/photos/p/s")) == .known(Self.day(2)))
+        let made = try await aheadCard(first, sub, date: Self.day(2))
         #expect(made.summary?.photos == 6 && made.images.count == 4)
         await first.commit()
         let calls = listing.calls.count, reads = reader.reads.count
 
         let next = store(reader, dir: dir)   // next session: nothing in memory
         await next.setCoverListing(dated: listing.lister)
+        let stats = StatLog(Self.day(2))
+        await next.setCoverStat(stats.stat)
         #expect(await next.subfolderNames(of: parent, in: loc("/photos/p")) == ["s"])
-        let stored = await next.subfolderModified(sub, in: loc("/photos/p/s"))
-        #expect(stored == Self.day(2))
+        #expect(await next.subfolderModified(sub, in: loc("/photos/p/s")) == .known(Self.day(2)))
+        #expect(stats.calls == ["/photos/p/s"])
         let card = try #require(await next.folderCard(sub, archive: false, in: loc("/photos/p/s"), maxPixel: 64,
-                                                      modified: stored))
+                                                      modified: Self.day(2)))
         #expect(!card.summaryPending)
+        #expect(!card.summaryWritten)
         #expect(card.images.count == 4)
         #expect(listing.calls.count == calls)
         #expect(reader.reads.count == reads)
+    }
+
+    /// A subfolder changed since its stored summary (its own date moved on): the next session's work ahead lists it
+    /// again and writes its new summary.
+    @Test func changedSubfolderIsListedAgainAhead() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeDatedListing()
+        let names = (1...6).map { "\($0).jpg" }
+        photos(reader, in: "/photos/p/s", names + ["7.jpg"])
+        listing.set("/photos/p", folders: ["s"], folderDates: ["s": Self.day(2)])
+        listing.set("/photos/p/s", files: names.map { .init(name: $0, date: Self.day(1), size: 10) })
+        let first = store(reader, dir: dir)
+        await first.setCoverListing(dated: listing.lister)
+        let parent = URL(fileURLWithPath: "/photos/p"), sub = parent.appendingPathComponent("s")
+        _ = await first.folderCard(parent, archive: false, in: loc("/photos/p"), maxPixel: 64, modified: Self.day(3))
+        let made = try await aheadCard(first, sub, date: Self.day(2))
+        #expect(made.summaryWritten && made.summary?.photos == 6)
+        await first.commit()
+
+        listing.set("/photos/p/s", files: (names + ["7.jpg"]).map { .init(name: $0, date: Self.day(6), size: 10) })
+        let next = store(reader, dir: dir)
+        await next.setCoverListing(dated: listing.lister)
+        await next.setCoverStat(StatLog(Self.day(7)).stat)
+        let calls = listing.calls.count
+        #expect(await next.subfolderModified(sub, in: loc("/photos/p/s")) == .known(Self.day(7)))
+        let card = try await aheadCard(next, sub, date: Self.day(7))
+        #expect(listing.calls.count == calls + 1)
+        #expect(card.summaryWritten)
+        #expect(card.summary?.photos == 7 && card.summary?.folderModified == Self.day(7))
+        #expect(await next.folderSummary(at: loc("/photos/p/s"))?.photos == 7)
+    }
+
+    /// The work ahead's card of `sub` at `date`, its summary's follow-up included (the queue's next call).
+    private func aheadCard(_ store: ThumbnailStore, _ sub: URL, date: Date) async throws -> FolderCard {
+        let location = loc(sub.path)
+        var card = try #require(await store.folderCard(sub, archive: false, in: location, maxPixel: 64, modified: date))
+        if card.summaryPending {
+            card = try #require(await store.folderCard(sub, archive: false, in: location, maxPixel: 64, modified: date))
+        }
+        return card
     }
 
     /// A zip whose directory cannot be read: the card says it is broken (and is not dimmed for it), once a session.

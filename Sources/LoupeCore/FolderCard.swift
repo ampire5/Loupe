@@ -33,6 +33,14 @@ public struct CoverListing: Equatable, Sendable {
     }
 }
 
+/// A subfolder's modification date for the work ahead (`ThumbnailStore.subfolderModified`).
+public enum SubfolderDate: Equatable, Sendable {
+    /// From its parent's dated listing, or its own stat; nil when the stat gave none (the folder gone, unreadable).
+    case known(Date?)
+    /// Its stat's lane was full or the stat did not answer in time: ask again later.
+    case notNow
+}
+
 /// What a folder card has against it (folder cards spec, "Значки").
 public enum CardProblem: Equatable, Sendable {
     /// The zip's directory cannot be read: the card says so but is not dimmed (it opens, with the viewer's message).
@@ -60,14 +68,18 @@ public struct FolderCard: Sendable {
     /// in a debug build on an 8-core Intel iMac, four 512 px thumbnails of a 200-photo folder; the queue's retry delay
     /// grows to a minute).
     public var summaryPending: Bool
+    /// This pass's listing gave the folder a new or changed summary, queued for the catalog: what its parent's
+    /// "+N inside" counts may have changed (the work ahead refreshes the parent card only then).
+    public var summaryWritten: Bool
 
     public init(images: [CGImage], summary: FolderSummary? = nil, problem: CardProblem? = nil,
-                photoDates: [Date]? = nil, summaryPending: Bool = false) {
+                photoDates: [Date]? = nil, summaryPending: Bool = false, summaryWritten: Bool = false) {
         self.images = images
         self.summary = summary
         self.problem = problem
         self.photoDates = photoDates
         self.summaryPending = summaryPending
+        self.summaryWritten = summaryWritten
     }
 }
 

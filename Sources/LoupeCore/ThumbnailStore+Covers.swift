@@ -522,14 +522,17 @@ extension ThumbnailStore {
         guard let listing else { return FolderCard(images: images, summary: stored, problem: problem) }
         if let folder { rememberSubfolders(of: folder, listing) }
         var summary = Self.summary(of: listing, modified: modified, stored: stored)
+        var written = false
         if let location {
             if let write = Self.summaryToStore(summary, stored: stored) {
                 queueSummary(write, at: location)
+                written = true
             } else if let stored {
                 summary = stored   // the same facts: the stored one keeps its folder date
             }
         }
-        return FolderCard(images: images, summary: summary, problem: problem, photoDates: listing.photoDates)
+        return FolderCard(images: images, summary: summary, problem: problem, photoDates: listing.photoDates,
+                          summaryWritten: written)
     }
 
     /// Listings on a share in a row without a name in time (or with an I/O error) before the share is offline: every
@@ -904,7 +907,8 @@ extension ThumbnailStore {
     /// The names of `folder`'s direct subfolders, in Finder order, for the work ahead (thumbs-ahead spec, stage 4),
     /// never from a new listing: those of its card's complete listing this session, else the catalog's (the stored
     /// summaries of its subfolders, at `location`'s, when there are as many as its own stored summary counts:
-    /// `childSummaries`' query). Nil when neither knows them all.
+    /// `childSummaries`' query). Nil when neither knows them all, and for a folder of more than
+    /// `coverSubfoldersPerFolder` (a card with more prepares none ahead).
     public func subfolderNames(of folder: URL, in location: ThumbnailLocation?) async -> [String]? {
         let path = folder.standardizedFileURL.path
         if let known = coverSubfolders[path] {
@@ -914,21 +918,49 @@ extension ThumbnailStore {
         }
         guard let location, let stored = storedSummary(at: location) else { return nil }
         guard stored.folders > 0 else { return [] }
+        // More than a card prepares ahead (as a listing's are not remembered: `rememberSubfolders`).
+        guard stored.folders <= Self.coverSubfoldersPerFolder else { return nil }
         let children = childSummaryPhotos(of: location)
+        // A deleted subfolder's leftover row can make the counts match without a new one's (accepted: that one waits
+        // for its parent's listing).
         guard children.count == stored.folders else { return nil }
         return Self.finderSorted(children.keys.map { ($0 as NSString).lastPathComponent })
     }
 
     /// The modification date the work ahead makes a subfolder's card at (`folderCard`'s `modified`, which a stored
-    /// summary must match to be fresh): its parent's dated listing's this session, else its stored summary's own (the
-    /// catalog trusted: the card's own work, once its parent is open, compares it with its listing date). Nil when
-    /// neither has one.
-    public func subfolderModified(_ subfolder: URL, in location: ThumbnailLocation?) async -> Date? {
+    /// summary must match to be fresh): its parent's dated listing's this session, else one stat of the subfolder
+    /// itself (nothing inside it), in the covers' listing lane of its volume (a share's or the local volumes') with
+    /// that lane's time limit. `.notNow` when the lane is full or the stat does not answer in time. Called from the
+    /// cover queue's work, never on the main thread.
+    public func subfolderModified(_ subfolder: URL, in location: ThumbnailLocation?) async -> SubfolderDate {
         let url = subfolder.standardizedFileURL
         if let date = coverSubfolders[url.deletingLastPathComponent().path]?.dates[url.lastPathComponent] {
-            return date
+            return .known(date)
         }
-        return location.flatMap { storedSummary(at: $0) }?.folderModified
+        let stat = coverStat, network = location?.isNetwork ?? coverVolumeIsNetwork(url)
+        let outcome = await Self.onThread(coverThreads, lane: CoverLane(network: network, resolving: false),
+                                          timeout: network ? coverNetworkTimeout : coverLocalTimeout) {
+            (_: @Sendable (Date?) -> Bool) -> Date? in
+            try stat(url)
+        }
+        switch outcome {
+        case .value(let date, _): return .known(date)
+        case .failed: return .known(nil)
+        case .busy, .timedOut: return .notNow
+        }
+    }
+
+    /// One stat of a folder: its own modification date (a URL of its own, so no cached resource value is used).
+    typealias CoverStat = @Sendable (URL) throws -> Date?
+
+    @Sendable static func statFolder(_ folder: URL) throws -> Date? {
+        try URL(fileURLWithPath: folder.path, isDirectory: true)
+            .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    /// Tests: a fake stat for `subfolderModified`.
+    func setCoverStat(_ stat: @escaping CoverStat) {
+        coverStat = stat
     }
 
     /// `folder`'s subfolders from its complete listing, for `subfolderNames`. A folder of more than
