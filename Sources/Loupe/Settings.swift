@@ -212,27 +212,43 @@ extension Notification.Name {
         return IconPackage.isPackage(url) ? url : nil
     }
 
-    /// The `app-icon` pictures, by section: `owl` and the bundled alternates (Built-in), the pictures in
-    /// ~/.config/loupe/icons (Yours; a name there shows its own picture, as `appIconURL` picks it), and the current
-    /// value when it is a path (Other). Files only: the grid makes each thumbnail at its size, off the main thread.
+    /// The `app-icon` pictures: built-ins, loose files, one pack for each folder in ~/.config/loupe/icons, and the
+    /// current path if it is outside those. The grid makes each thumbnail at its size, off the main thread.
     static func appIconChoices() -> [IconChoice] {
         var words = [AppIcon.bundle]
         words += AppIcon.alternates.filter {
             Bundle.main.url(forResource: $0, withExtension: "icns", subdirectory: "AppIcons") != nil
         }
-        let builtIn = Set(words)
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let files = (try? FileManager.default.contentsOfDirectory(at: userIcons, includingPropertiesForKeys: nil)) ?? []
+        let extensions = ["png", "icns", "jpg", "jpeg", "heic", "tif", "tiff", IconPackage.pathExtension]
         let own = files.filter { ["png", "icns", IconPackage.pathExtension].contains($0.pathExtension.lowercased()) }
             .map { $0.deletingPathExtension().lastPathComponent.lowercased() }
-            .filter { !$0.isEmpty && $0.unicodeScalars.allSatisfy(allowed.contains) }
-        for name in Set(own).sorted() where !words.contains(name) { words.append(name) }
-        let current = shared.config.appIcon
-        if AppIcon.isPath(current) { words.append(current) }
-        return words.map { word in
-            let section = AppIcon.isPath(word) ? "Other" : builtIn.contains(word) ? "Built-in" : "Yours"
-            return IconChoice(word: word, file: iconFile(word), section: section)
+            .filter { !$0.isEmpty }
+        var choices = words.map {
+            IconChoice(word: $0, file: iconFile($0), section: "Built-in")
         }
+        for name in Set(own).sorted() where !words.contains(name) {
+            choices.append(IconChoice(word: name, file: iconFile(name), section: "Yours"))
+        }
+
+        let packs = files.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && !IconPackage.isPackage($0)
+        }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        for pack in packs {
+            let contents = (try? FileManager.default.contentsOfDirectory(at: pack, includingPropertiesForKeys: nil)) ?? []
+            for file in contents.filter({ extensions.contains($0.pathExtension.lowercased()) })
+                .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+                let path = file.standardizedFileURL.path
+                choices.append(IconChoice(word: path, file: iconFile(path), section: pack.lastPathComponent,
+                                          pack: pack.standardizedFileURL.path))
+            }
+        }
+
+        let current = shared.config.appIcon
+        if AppIcon.isPath(current), !choices.contains(where: { $0.word == current }) {
+            choices.append(IconChoice(word: current, file: iconFile(current), section: "Other"))
+        }
+        return choices
     }
 
     /// The picture file of an `app-icon` value: its file (`appIconURL`), or for `owl` the bundle's own icon. An Icon
@@ -261,12 +277,23 @@ extension Notification.Name {
     /// Upscale Small Images in Fit (M4b spec §4.4); then the Zoom Stops section (Fit Width, Fit Height, 100 %, Haptic
     /// Feedback). The checkboxes without a key write loupe.conf.
     func makeZoomMenu() -> NSMenu {
+        makeZoomMenu(includeToolbarActions: true)
+    }
+
+    /// The toolbar's Zoom Options: the menu without the entries the zoom block has.
+    func makeZoomToolbarMenu() -> NSMenu {
+        makeZoomMenu(includeToolbarActions: false)
+    }
+
+    private func makeZoomMenu(includeToolbarActions: Bool) -> NSMenu {
         let menu = ZoomTopMenu(title: "Zoom")
         menu.delegate = self   // `menuHasKeyEquivalent`
-        let keys: [(String, KeyAction)] = [
+        let keys: [(String, KeyAction)] = includeToolbarActions ? [
             ("Fit", .fit), ("Actual Size", .actual100), ("200 %", .actual200), ("400 %", .actual400),
             ("Fit Width", .fitWidth), ("Fit Height", .fitHeight), ("Fill", .fill), ("Fit ↔ 100 %", .toggleFitActual),
             ("Zoom In", .zoomIn), ("Zoom Out", .zoomOut),
+        ] : [
+            ("200 %", .actual200), ("400 %", .actual400), ("Fit ↔ 100 %", .toggleFitActual),
         ]
         for (title, action) in keys { menu.addItem(.viewerKey(title, action)) }
         menu.addItem(.separator())

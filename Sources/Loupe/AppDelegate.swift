@@ -456,7 +456,7 @@ import UniformTypeIdentifiers
         guard let store = settingsStore else { return }
         settings.settingsStore = store
         let context = SettingsPanelContext(configURL: settings.fileURL, inputURL: settings.inputFileURL,
-                                           iconChoices: { Settings.appIconChoices() },
+                                           iconChoices: { Settings.appIconChoices() }, iconFolder: Settings.userIcons,
                                            translateKey: { KeyboardLayout.translate(keyCode: $0, shift: $1) },
                                            reloadInput: { Settings.shared.reload() },
                                            menuRows: { MenuShortcuts.rows() },

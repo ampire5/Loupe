@@ -133,7 +133,7 @@ public enum InfoPanelContent {
 
     /// `2024-05-01 12:34`, local time. One formatter for every call: making one costs more than the rest of the panel's
     /// text, and the diagnostics timer rebuilds the text twice a second.
-    private static func dateText(_ date: Date) -> String {
+    public static func dateText(_ date: Date) -> String {
         dateFormat.format(date)
     }
 

@@ -33,6 +33,44 @@ public enum LaunchReveal: String, Sendable {
     case settled, immediate
 }
 
+/// `stats-toast-position`, `toast-position`: where a toast sits, one of the window's six places. `left`, `center` and
+/// `right` (the first three values this key had) are the bottom ones.
+public enum StatsToastPosition: String, Sendable, CaseIterable {
+    case topLeft = "top-left", top, topRight = "top-right"
+    case bottomLeft = "bottom-left", bottom, bottomRight = "bottom-right"
+
+    public static let left = bottomLeft, center = bottom, right = bottomRight
+
+    public init?(text: String) {
+        switch text.lowercased() {
+        case "left": self = .bottomLeft
+        case "center", "centre": self = .bottom
+        case "right": self = .bottomRight
+        case let other: self.init(rawValue: other)
+        }
+    }
+
+    public var isTop: Bool { self == .topLeft || self == .top || self == .topRight }
+    /// -1 left, 0 middle, 1 right.
+    public var column: Int {
+        switch self {
+        case .topLeft, .bottomLeft: -1
+        case .top, .bottom: 0
+        case .topRight, .bottomRight: 1
+        }
+    }
+}
+
+/// `fullscreen-toolbar`: the viewer's toolbar when a window goes full screen. `remember`: as `⌥⌘T` left it.
+public enum FullScreenToolbar: String, Sendable {
+    case remember, shown, hidden
+}
+
+/// `stats-bar-position`: `auto` is the top in a window and the bottom (above the strip) in full screen.
+public enum StatsBarPosition: String, Sendable {
+    case auto, top, bottom
+}
+
 /// `open-in`: where a file that no open tab shows yet goes. `tab` (the default): a new tab in the front viewer window;
 /// `window`: a new window; `replace`: the current tab shows it, as before tabs.
 public enum OpenIn: String, Sendable {
@@ -410,13 +448,44 @@ public struct Config: Equatable, Sendable {
     /// `toast-duration`: milliseconds a toast (the key's one-line answer) stays before it fades, 500...10000.
     public var toastDurationMilliseconds = 2000
 
-    /// `stats-progress`: the stats bar's background is filled left to right up to the folder position.
+    /// `stats-progress`: the image status' thin progress track fills to the current folder position.
     public var statsProgress = true
-    /// `stats-progress-opacity`: how strongly the filled part is lightened, as the opacity of white laid over the bar,
+    /// `stats-progress-opacity`: how strongly the filled part is lightened, as the opacity of white laid over the glass,
     /// 0.02...0.6 (user, Build 2 trial: the first fill, the bar's own grey a little more opaque, was hard to see).
     public var statsProgressOpacity = 0.15
-    /// `stats-folder-name`: the open folder's name in the middle of the stats bar.
+    /// `stats-bar-opacity`: how strongly the stats bar's glass is tinted, 0.05...1 (the darkness of the part the fill has
+    /// not reached; the fill lightens it by `stats-progress-opacity`).
+    public var statsBarOpacity = 0.34
+    /// `stats-folder-name`: show the open folder's name in the image status.
     public var statsFolderName = true
+    /// `stats-toast`: show a short glass progress toast when changing images in full screen.
+    public var statsToast = true
+    /// `stats-toast-position`: one of six places (`top-left`... `bottom-right`; `left`, `center`, `right` are the bottom ones).
+    public var statsToastPosition = StatsToastPosition.bottom
+    /// `stats-toast-opacity`: how strongly the toast's glass is tinted, 0...1.
+    public var statsToastOpacity = 0.34
+    /// `stats-toast-clear`: the toasts' glass without the system's frosting (the picture shows through).
+    public var statsToastClear = false
+    /// `toast-position`: where the key's one-line answer sits (as `stats-toast-position`).
+    public var toastPosition = StatsToastPosition.bottom
+    /// `stats-bar-position`: where the stats bar sits (`StatsBarPosition`).
+    public var statsBarPosition = StatsBarPosition.auto
+    /// `stats-bar-clear`: the stats bar's glass without the system's frosting.
+    public var statsBarClear = false
+    /// `stats-bar-with-toolbar`: the stats bar stays while the toolbar is on screen (`no`: it shows only without it).
+    public var statsBarWithToolbar = true
+    /// `fullscreen-toolbar`: the viewer's toolbar in full screen (`FullScreenToolbar`).
+    public var fullScreenToolbar = FullScreenToolbar.remember
+    /// `stats-modified`: the photo's modification date in the stats bar.
+    public var statsModified = true
+    /// `stats-bar-autohide`: the stats bar fades out by itself after `stats-bar-hide-delay` and comes back with a photo.
+    public var statsBarAutohide = false
+    /// `stats-bar-hide-delay`: milliseconds the bar stays after a photo came, 500...30000.
+    public var statsBarHideDelayMilliseconds = 3000
+    /// `stats-icons`: a small symbol in front of each field of the stats bar.
+    public var statsIcons = true
+    /// `stats-monochrome`: the stats bar in white and grey, without the yellow of the parameters.
+    public var statsMonochrome = false
 
     /// `background`: the colour around the picture.
     public var background = BackgroundColor.default
@@ -593,7 +662,9 @@ public struct Config: Equatable, Sendable {
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
                               "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
-                              "stats-progress", "stats-progress-opacity", "stats-folder-name",
+                              "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-folder-name", "stats-toast", "stats-toast-position", "stats-toast-opacity",
+                              "stats-toast-clear", "toast-position", "stats-bar-position", "stats-bar-clear", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome",
+                              "fullscreen-toolbar", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
 
     /// The scaling filters a folder may set for itself. `pixel-art` and `pyramid-filter` stay global.
@@ -726,7 +797,22 @@ public struct Config: Equatable, Sendable {
         case "config-warnings": return configWarnings ? "yes" : "no"
         case "stats-progress": return statsProgress ? "yes" : "no"
         case "stats-progress-opacity": return formatNumber(statsProgressOpacity)
+        case "stats-bar-opacity": return formatNumber(statsBarOpacity)
         case "stats-folder-name": return statsFolderName ? "yes" : "no"
+        case "stats-toast": return statsToast ? "yes" : "no"
+        case "stats-toast-position": return statsToastPosition.rawValue
+        case "stats-toast-opacity": return formatNumber(statsToastOpacity)
+        case "stats-toast-clear": return statsToastClear ? "yes" : "no"
+        case "toast-position": return toastPosition.rawValue
+        case "stats-bar-position": return statsBarPosition.rawValue
+        case "stats-bar-clear": return statsBarClear ? "yes" : "no"
+        case "stats-bar-with-toolbar": return statsBarWithToolbar ? "yes" : "no"
+        case "fullscreen-toolbar": return fullScreenToolbar.rawValue
+        case "stats-modified": return statsModified ? "yes" : "no"
+        case "stats-bar-autohide": return statsBarAutohide ? "yes" : "no"
+        case "stats-bar-hide-delay": return String(statsBarHideDelayMilliseconds)
+        case "stats-icons": return statsIcons ? "yes" : "no"
+        case "stats-monochrome": return statsMonochrome ? "yes" : "no"
         case "background": return background.text
         case "launch-reveal": return launchReveal.rawValue
         case "open-in": return openIn.rawValue
@@ -1004,8 +1090,38 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { statsProgress = v } else { return .badValue }
         case "stats-progress-opacity":
             if let v = Double(value), (0.02...0.6).contains(v) { statsProgressOpacity = v } else { return .badValue }
+        case "stats-bar-opacity":
+            if let v = Double(value), (0...1).contains(v) { statsBarOpacity = v } else { return .badValue }
         case "stats-folder-name":
             if let v = Self.bool(value) { statsFolderName = v } else { return .badValue }
+        case "stats-toast":
+            if let v = Self.bool(value) { statsToast = v } else { return .badValue }
+        case "stats-toast-position":
+            if let v = StatsToastPosition(text: value) { statsToastPosition = v } else { return .badValue }
+        case "toast-position":
+            if let v = StatsToastPosition(text: value) { toastPosition = v } else { return .badValue }
+        case "stats-bar-position":
+            if let v = StatsBarPosition(rawValue: value.lowercased()) { statsBarPosition = v } else { return .badValue }
+        case "stats-toast-clear":
+            if let v = Self.bool(value) { statsToastClear = v } else { return .badValue }
+        case "stats-bar-clear":
+            if let v = Self.bool(value) { statsBarClear = v } else { return .badValue }
+        case "stats-bar-with-toolbar":
+            if let v = Self.bool(value) { statsBarWithToolbar = v } else { return .badValue }
+        case "fullscreen-toolbar":
+            if let v = FullScreenToolbar(rawValue: value.lowercased()) { fullScreenToolbar = v } else { return .badValue }
+        case "stats-modified":
+            if let v = Self.bool(value) { statsModified = v } else { return .badValue }
+        case "stats-bar-autohide":
+            if let v = Self.bool(value) { statsBarAutohide = v } else { return .badValue }
+        case "stats-bar-hide-delay":
+            if let v = Int(value), (500...30_000).contains(v) { statsBarHideDelayMilliseconds = v } else { return .badValue }
+        case "stats-icons":
+            if let v = Self.bool(value) { statsIcons = v } else { return .badValue }
+        case "stats-monochrome":
+            if let v = Self.bool(value) { statsMonochrome = v } else { return .badValue }
+        case "stats-toast-opacity":
+            if let v = Double(value), (0...1).contains(v) { statsToastOpacity = v } else { return .badValue }
         case "background":
             if let v = BackgroundColor(text: value) { background = v } else { return .badValue }
         case "launch-reveal":

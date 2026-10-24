@@ -1,6 +1,6 @@
 import Foundation
 
-/// Whether the stats bar shows (`I` toggles `hidden ↔ compact`). A stored `extended` (the old second-line mode) reads as compact.
+/// Whether the image status shows (`I` toggles `hidden ↔ compact`). A stored `extended` (the old second-line mode) reads as compact.
 public enum StatsMode: String, Sendable {
     case hidden, compact
 

@@ -16,6 +16,11 @@ import Testing
         #expect(line == "a.jpg   3 / 150   10502×14000   52.3 MB   JPEG   Fit 10 %   decode 1234 ms")
     }
 
+    @Test func folderPositionSupportsSpreadsAndUncountedFolders() {
+        #expect(StatsLine.position(index: 5, companion: 6, count: 20) == "6–7 / 20")
+        #expect(StatsLine.position(index: 5, count: 20, counted: false) == "6 / …")
+    }
+
     @Test func progressiveAndActualSize() {
         let t = ViewTransform(imageSize: CGSize(width: 100, height: 100), viewSize: CGSize(width: 50, height: 50), mode: .actual(1))
         let line = StatsLine.loaded(name: "b.jpg", index: 0, count: 1, info: info(progressive: true), transform: t, decodeMs: nil)

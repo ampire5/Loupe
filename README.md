@@ -67,7 +67,7 @@ Measured on a MacBook Pro with M4 Max (36 GB), macOS 27, on the public images cr
 
 Lossy JPEG XL: 194 ms vs ImageIO's 580 ms. The 20 ms preview comes from `JxlDecoderGetDCImage`, a small addition to libjxl that Loupe ships with: you see the whole photo almost at once, and the full resolution replaces it a moment later.
 
-While you look, the stats bar (`i`) shows the file, its place in the folder, size, format, zoom and decode time. The info panel's Diagnostics (`⌘I`) adds the decoder, its timings, cache, memory and GPU frame times.
+While you look, the toolbar's centre shows the file, its place in the folder, size, format and zoom, and the stats bar (`i`) under it is one glass line with the same, the folder's name and the decode time; its glass darkens from the left up to the photo's place in the folder. Its place (`stats-bar-position`), glass (`stats-bar-opacity`, `stats-bar-clear`), icons and monochrome look (`stats-icons`, `stats-monochrome`) and whether it shows beside the toolbar (`stats-bar-with-toolbar`) are settings. In full screen the toolbar is the system's (it slides in with the menu bar; `⌥⌘T` takes it away), the stats bar floats over the picture, and a short progress toast appears as you move between photos (`stats-toast`, `stats-toast-position`; the glass of every toast: `stats-toast-opacity`, `stats-toast-clear`; the key answers' place: `toast-position`). The info panel's Diagnostics (`⌘I`) adds the decoder, its timings, cache, memory and GPU frame times.
 
 <p align="center"><img src="docs/images/stats-bar.webp" alt="The stats bar over a Hubble galaxy: file name, 1 / 9, 11477×7965, 39.7 MB, JPEG, Fit 24 %, decode 359 ms"></p>
 

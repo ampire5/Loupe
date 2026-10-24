@@ -1,7 +1,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// The text of the compact stats bar (spec §10), as a pure function so what the bar says is tested
+/// The text of the compact image status (spec §10), as a pure function so its position display is tested
 /// without AppKit.
 public enum StatsLine {
     /// `name   N / M   W×H   size MB   FORMAT[ progressive]   Mode NN %   decode NNNN ms`.
@@ -40,11 +40,11 @@ public enum StatsLine {
                                                                   counted: counted)
     }
 
-    private static func position(index: Int, companion: Int? = nil, count: Int, counted: Bool) -> String {
+    public static func position(index: Int, companion: Int? = nil, count: Int, counted: Bool = true) -> String {
         (companion.map { "\(index + 1)–\($0 + 1)" } ?? "\(index + 1)") + " / " + (counted ? "\(count)" : "…")
     }
 
-    /// How much of the stats bar's width its progress fill covers (`stats-progress`): the folder position
+    /// How much of the status track its progress fill covers (`stats-progress`): the folder position
     /// `(index + 1) / count`, so the last photo fills the bar; clamped to 0...1, 0 for an empty folder.
     public static func progress(index: Int, count: Int) -> Double {
         guard count > 0 else { return 0 }

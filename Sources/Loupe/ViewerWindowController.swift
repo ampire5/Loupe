@@ -7,9 +7,9 @@ import LoupeRender
 import StashKitUI
 import UniformTypeIdentifiers
 
-/// One viewer window: owns its `ViewerSession` and lays out the stats bar, the viewer and the thumbnail strip
-/// inside it. Windowed, the bar is a strip above the viewer (the viewer shrinks to make room); in native full
-/// screen the viewer fills the window and the bar floats over its top edge. The thumbnail strip floats over the
+/// One viewer window: owns its `ViewerSession` and lays out the stats status, the viewer and the thumbnail strip
+/// inside it. Windowed, the status sits above the viewer (the viewer shrinks to make room); in native full
+/// screen the viewer fills the window and the status floats over its top edge. The thumbnail strip floats over the
 /// viewer's bottom edge, except windowed with `strip-window=beside`, where the viewer ends at the strip's top. The info
 /// panel (`⌘I`, M4a spec §3) floats at the viewer's top right while it is open.
 @MainActor final class ViewerWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
@@ -18,6 +18,21 @@ import UniformTypeIdentifiers
     /// The app's viewer windows; set when added. The one whose `active` this is remembers full screen.
     weak var registry: WindowRegistry?
     private let statsBar = StatsBar()
+    private let statsProgressToast = StatsProgressToastView()
+    /// The progress toast's column (`stats-toast-position`): one of these is active; the key toast's likewise.
+    private let statsToastLeft: NSLayoutConstraint
+    private let statsToastCenter: NSLayoutConstraint
+    private let statsToastRight: NSLayoutConstraint
+    private let keyToastLeft: NSLayoutConstraint
+    private let keyToastCenter: NSLayoutConstraint
+    private let keyToastRight: NSLayoutConstraint
+    /// The toasts' rows: at the top under the bar or at the window's top, at the bottom over the bar or the strip.
+    private let statsToastBelowBar: NSLayoutConstraint
+    private let statsToastAtTop: NSLayoutConstraint
+    private let keyToastBelowBar: NSLayoutConstraint
+    private let keyToastAtTop: NSLayoutConstraint
+    private let keyToastAboveBar: NSLayoutConstraint
+    private let keyToastAboveStrip: NSLayoutConstraint
     private let strip: StripController
     private let loadingIndicator = LoadingIndicator()
     /// Over the viewer while the photo navigated to cannot be shown yet (`switch-preview`, `ViewerSession.standIn`).
@@ -64,17 +79,62 @@ import UniformTypeIdentifiers
     private var shownWarnings: [String] = []
     private let warningsBelowBar: NSLayoutConstraint
     private let warningsAtTop: NSLayoutConstraint
-    /// The back button's top: under the stats bar while the bar is on screen, else from the window's top.
+    /// The back button's top: under the image status in a window, else from the window's top.
     private let backBelowBar: NSLayoutConstraint
     private let backAtTop: NSLayoutConstraint
-    private let viewerBelowBar: NSLayoutConstraint
     private let viewerAtTop: NSLayoutConstraint
-    /// The pan pills' top: below the stats bar while it shows in a window, the container's top otherwise.
-    private let pillsBelowBar: NSLayoutConstraint
+    /// The pan pills' top: below the toolbar in a window, the container's top in full screen.
     private let pillsAtTop: NSLayoutConstraint
     private let viewerAboveStrip: NSLayoutConstraint
     private let viewerAtBottom: NSLayoutConstraint
+    private let statsAtTop: NSLayoutConstraint
+    private let viewerAtScreenTop: NSLayoutConstraint
+    private let pillsAtScreenTop: NSLayoutConstraint
+    private let statsAtBottom: NSLayoutConstraint
+    /// The progress toast sits above the stats bar while it shows, above the strip otherwise.
+    private let toastAboveBar: NSLayoutConstraint
+    private let toastAboveStrip: NSLayoutConstraint
+    private lazy var viewerToolbar = ViewerToolbarController(actions: .init(
+        back: { [weak self] in self?.goBack(nil) },
+        step: { [weak self] step in self?.performViewerAction(step < 0 ? .previous : .next) },
+        zoom: { [weak self] action in self?.performViewerAction(action) },
+        colour: { [weak self] action in self?.performViewerAction(action) },
+        setValue: { [weak self] key, value in self?.setColourValue(key, value) },
+        stats: { [weak self] in self?.toggleStats() },
+        strip: { [weak self] in self?.strip.togglePin() },
+        info: { [weak self] in self?.toggleInfoPanel(nil) }))
     private var isFullScreen = false
+    /// Full screen: the toolbar is the system's (it slides in with the menu bar when the pointer reaches the top edge);
+    /// `⌥⌘T` takes it away or gives it back. The stats bar (`I`) is shown over the picture on its own.
+    private var fullScreenToolbarOverride: Bool?
+    private var fullScreenToolbar: Bool {
+        get {
+            if let fullScreenToolbarOverride { return fullScreenToolbarOverride }
+            switch Settings.shared.config.fullScreenToolbar {
+            case .shown: return true
+            case .hidden: return false
+            case .remember: return UserDefaults.standard.object(forKey: "fullScreenToolbar") as? Bool ?? true
+            }
+        }
+        set {
+            fullScreenToolbarOverride = newValue
+            if Settings.shared.config.fullScreenToolbar == .remember { UserDefaults.standard.set(newValue, forKey: "fullScreenToolbar") }
+        }
+    }
+    /// `⌥⌘T` in a window: the toolbar shown or hidden, in every window and across launches.
+    private var windowToolbar: Bool {
+        get { UserDefaults.standard.object(forKey: "viewerToolbar") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "viewerToolbar") }
+    }
+    private var toolbarWanted: Bool { isFullScreen ? fullScreenToolbar : windowToolbar }
+    /// What the window's toolbar was last told, so the system's slide-in in full screen is not pinned by telling it again.
+    private var toolbarWasWanted = true
+    /// Remembered like the windowed `statsMode`, for the next full screen.
+    private var fullScreenStatus: Bool {
+        get { UserDefaults.standard.bool(forKey: "fullScreenStatus") }
+        set { UserDefaults.standard.set(newValue, forKey: "fullScreenStatus") }
+    }
+    private var lastStatsToastKey: String?
     private static let statsModeKey = "statsMode"
     /// The viewer windows' tabbing identifier, and the first window's frame autosave name.
     static let frameName = "LoupeViewer"
@@ -148,6 +208,8 @@ import UniformTypeIdentifiers
                                   styleMask: [.titled, .resizable, .closable, .miniaturizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
         window.toolbarStyle = .unified
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.title = "Loupe"
         window.collectionBehavior = .fullScreenPrimary
         window.tabbingMode = .preferred
@@ -163,7 +225,7 @@ import UniformTypeIdentifiers
         statsBar.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(viewerView)
         container.addSubview(standInView)   // right over the picture, under everything else
-        container.addSubview(statsBar)   // above the viewer in z-order, for the full-screen overlay
+        container.addSubview(statsBar)   // above the viewer in z-order, including the full-screen overlay
         // Above both: as a sibling over the viewer it wins its hit tests, so the viewer's hand cursor and cursor
         // autohide leave it alone (`isMouseOverPicture`).
         container.addSubview(strip.view)
@@ -176,6 +238,7 @@ import UniformTypeIdentifiers
         container.addSubview(loadingIndicator)
         // Over the strip too, centred above it; takes no clicks.
         container.addSubview(toast)
+        container.addSubview(statsProgressToast)
         container.addSubview(backButton)
         // Over everything, top centre; the sibling's hit test passes every click outside the box through.
         container.addSubview(warningsOverlay)
@@ -188,21 +251,37 @@ import UniformTypeIdentifiers
         let overlayWidth = warningsOverlay.widthAnchor.constraint(lessThanOrEqualToConstant: 640)
         let overlayFits = warningsOverlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32)
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
-        viewerBelowBar = viewerView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
         viewerAtTop = viewerView.topAnchor.constraint(equalTo: top)
-        pillsBelowBar = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
         pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: top)
         viewerAboveStrip = viewerView.bottomAnchor.constraint(equalTo: strip.view.topAnchor)
         viewerAtBottom = viewerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        statsAtTop = statsBar.topAnchor.constraint(equalTo: top, constant: StatsBar.margin)
+        statsAtBottom = statsBar.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -StatsBar.margin)
+        toastAboveBar = statsProgressToast.bottomAnchor.constraint(equalTo: statsBar.topAnchor, constant: -8)
+        toastAboveStrip = statsProgressToast.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -12)
+        viewerAtScreenTop = viewerView.topAnchor.constraint(equalTo: container.topAnchor)
+        pillsAtScreenTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: container.topAnchor)
+        statsToastLeft = statsProgressToast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 26)
+        statsToastCenter = statsProgressToast.centerXAnchor.constraint(equalTo: container.centerXAnchor)
+        statsToastRight = statsProgressToast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -26)
+        keyToastLeft = toast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 26)
+        keyToastCenter = toast.centerXAnchor.constraint(equalTo: container.centerXAnchor)
+        keyToastRight = toast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -26)
+        statsToastBelowBar = statsProgressToast.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 8)
+        statsToastAtTop = statsProgressToast.topAnchor.constraint(equalTo: top, constant: 12)
+        keyToastBelowBar = toast.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 8)
+        keyToastAtTop = toast.topAnchor.constraint(equalTo: top, constant: 12)
+        keyToastAboveBar = toast.bottomAnchor.constraint(equalTo: statsBar.topAnchor, constant: -8)
+        keyToastAboveStrip = toast.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -12)
         NSLayoutConstraint.activate([
             viewerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             viewerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             viewerView.panIndicatorsView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             viewerView.panIndicatorsView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             viewerView.panIndicatorsView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            statsBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            statsBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            statsBar.topAnchor.constraint(equalTo: top),
+            statsAtTop,
+            statsBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: StatsBar.margin),
+            statsBar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -StatsBar.margin),
             strip.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             strip.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             strip.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -214,9 +293,10 @@ import UniformTypeIdentifiers
             standInView.bottomAnchor.constraint(equalTo: viewerView.bottomAnchor),
             loadingIndicator.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor, constant: -12),
             loadingIndicator.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -10),
-            toast.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            toast.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -12),
             toast.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
+            statsToastCenter,
+            toastAboveStrip,
+            statsProgressToast.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
             backButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             cheatSheet.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             cheatSheet.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -226,6 +306,9 @@ import UniformTypeIdentifiers
         window.initialFirstResponder = viewerView
         window.center()
         super.init(window: window)
+        window.toolbar = viewerToolbar.nsToolbar
+        toolbarWasWanted = windowToolbar
+        viewerToolbar.nsToolbar.isVisible = toolbarWasWanted
 
         session.onChange = { [weak self] in self?.sessionDidChange() }
         session.cellPicture = { [weak self] in self?.strip.cellPicture(for: $0) }
@@ -325,6 +408,9 @@ import UniformTypeIdentifiers
                 self?.updateEffectiveConfig()
                 self?.session.setFitUpscale(Settings.shared.config.fitUpscale)
                 self?.statsBar.apply(Settings.shared.config)
+                if let self { self.statsBar.update(from: self.session) }
+                self?.applyStatsLayout()
+                self?.applyStatsToastPosition()
                 self?.updateConfigWarnings()
                 self?.cheatSheet.inputMapChanged(Settings.shared.inputMap)
             }
@@ -355,7 +441,9 @@ import UniformTypeIdentifiers
         applyStatsLayout()
         applyStripLayout()
         statsBar.apply(Settings.shared.config)
+        applyStatsToastPosition()
         statsBar.update(from: session)
+        viewerToolbar.updateStatus(from: session)
         updateConfigWarnings()
         applyInfoPanel()
     }
@@ -398,6 +486,7 @@ import UniformTypeIdentifiers
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
+        applyStatsLayout()
         rememberFullScreen(true)
         viewerView.holdReveal(false)
         finishFullScreenEntry()
@@ -778,6 +867,10 @@ import UniformTypeIdentifiers
         _ = Settings.shared.saveAsDefault(["home-sidebar": homeView.isSidebarVisible ? "yes" : "no"])
     }
 
+    @objc func toggleSidebar(_ sender: Any?) {
+        toggleHomeSidebar(sender)
+    }
+
     /// Home over the viewer on `tab` (nil: `home-tab`); Stash only with `stash-url` set, else Recent. Recent and the
     /// sessions are read afresh each time they are shown; Folders comes back where it was (`browseAt` and a restored
     /// tab's folder go first; the first time, the last folder of the last run).
@@ -787,7 +880,11 @@ import UniformTypeIdentifiers
         let wanted = tab ?? config.homeTab
         let shown: HomeTab = wanted == .stash && StashLibrary.Source.current == nil ? .recent : wanted
         let view = homeView ?? makeHome()
+        if !isShowingHome { titleVisibilityBeforeHome = window.titleVisibility }
+        attachHome(view)
         view.isHidden = false
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.toolbar = view.browser.nsToolbar
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
@@ -822,15 +919,95 @@ import UniformTypeIdentifiers
     func hideHome() {
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
-        window?.toolbar = nil
+        homeView.removeFromSuperview()
+        window?.toolbar = viewerToolbar.nsToolbar
+        // The toolbar comes back as it was left (Home's own toolbar had the window meanwhile).
+        if !isFullScreen || !toolbarWanted { window?.toolbar?.isVisible = toolbarWanted }
+        toolbarWasWanted = toolbarWanted
+        window?.titlebarAppearsTransparent = true
+        if let titleVisibilityBeforeHome {
+            window?.titleVisibility = titleVisibilityBeforeHome
+            self.titleVisibilityBeforeHome = nil
+        }
         homeSources?.folders.isPaused = true
         updateBackButton()
         window?.makeFirstResponder(viewerView)
         updateTitle()
     }
 
+    private func applyStatsToastPosition() {
+        let config = Settings.shared.config
+        // Deactivate first: the three are alternatives for one axis and must never be active together.
+        func column(_ position: StatsToastPosition, _ left: NSLayoutConstraint, _ center: NSLayoutConstraint,
+                    _ right: NSLayoutConstraint) {
+            left.isActive = false
+            center.isActive = false
+            right.isActive = false
+            (position.column < 0 ? left : position.column > 0 ? right : center).isActive = true
+        }
+        column(config.statsToastPosition, statsToastLeft, statsToastCenter, statsToastRight)
+        column(config.toastPosition, keyToastLeft, keyToastCenter, keyToastRight)
+        applyToastRows()
+    }
+
+    /// Where the stats bar is: `stats-bar-position`, `auto` being the top in a window and the bottom in full screen.
+    private var statsBarAtBottom: Bool {
+        switch Settings.shared.config.statsBarPosition {
+        case .top: false
+        case .bottom: true
+        case .auto: isFullScreen
+        }
+    }
+
+    /// The toasts' rows: the top ones stand under the bar when it is at the top, the bottom ones over the bar when it
+    /// is at the bottom, else at the window's edge (the strip). Both in one place: the progress toast steps aside.
+    private func applyToastRows() {
+        let config = Settings.shared.config
+        let barShown = !statsBar.isHidden, barAtBottom = statsBarAtBottom
+        let progress = config.statsToastPosition, key = config.toastPosition
+        let shift: CGFloat = progress == key ? 48 : 0
+        for constraint in [toastAboveBar, toastAboveStrip, statsToastBelowBar, statsToastAtTop,
+                           keyToastAboveBar, keyToastAboveStrip, keyToastBelowBar, keyToastAtTop] {
+            constraint.isActive = false
+        }
+        toastAboveBar.constant = -8 - shift
+        toastAboveStrip.constant = -12 - shift
+        statsToastBelowBar.constant = 8 + shift
+        statsToastAtTop.constant = 12 + shift
+        (progress.isTop ? (barShown && !barAtBottom ? statsToastBelowBar : statsToastAtTop)
+                        : (barShown && barAtBottom ? toastAboveBar : toastAboveStrip)).isActive = true
+        (key.isTop ? (barShown && !barAtBottom ? keyToastBelowBar : keyToastAtTop)
+                   : (barShown && barAtBottom ? keyToastAboveBar : keyToastAboveStrip)).isActive = true
+    }
+
+    /// A toolbar slider of the colour values: recorded for the folder like the keys' steps.
+    private func setColourValue(_ key: String, _ value: Double) {
+        guard let folder else { return }
+        folderSettings.set(key, FolderAdjust.text(value), for: folder)
+    }
+
+    private func performViewerAction(_ action: KeyAction) {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.representedObject = action.rawValue
+        viewerView.performKeyAction(item)
+    }
+
+    /// Home is in the window while it shows only: a hidden split view with a sidebar item left in it makes the system
+    /// keep room for a sidebar in the viewer's toolbar (full screen put it a sidebar's width from the left edge).
+    private func attachHome(_ view: HomeView) {
+        guard view.superview == nil, let container = window?.contentView else { return }
+        container.addSubview(view, positioned: .below, relativeTo: cheatSheet)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+    }
+
     /// Home: the sidebar and the browser, made on first show; nil until then.
     private var homeView: HomeView?
+    private var titleVisibilityBeforeHome: NSWindow.TitleVisibility?
     /// Home's sources (the view holds its source weakly: kept here).
     private var homeSources: (folders: FolderBrowserSource, collections: CollectionSource, home: LoupeHomeSource)?
     /// A place or a folder was shown: Folders goes back to it, not to the last run's folder.
@@ -861,15 +1038,6 @@ import UniformTypeIdentifiers
         source.view = view.browser
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
-        if let container = window?.contentView {
-            container.addSubview(view, positioned: .below, relativeTo: cheatSheet)
-            NSLayoutConstraint.activate([
-                view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                view.topAnchor.constraint(equalTo: container.topAnchor),
-                view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            ])
-        }
         let browser = view.browser
         browser.onWindowText = { [weak self] title, subtitle in
             guard let self else { return }
@@ -1393,6 +1561,7 @@ import UniformTypeIdentifiers
     }
 
     private func updateBackButton() {
+        viewerToolbar.setBackEnabled(canGoBack)
         let shown = BackButtonPolicy.isShown(wasShown: backButtonShown, pointer: pointerInButtonSpace,
                                              button: backButton.frame, canGoBack: canGoBack)
         if let backTarget { backButton.title = Self.tabTitle(backTarget) }
@@ -1416,7 +1585,16 @@ import UniformTypeIdentifiers
     private func sessionDidChange() {
         updateFolder()
         viewerView.sessionDidChange()
-        statsBar.update(from: session)
+        let snapshot = statsBar.update(from: session)
+        if isFullScreen, let previousKey = lastStatsToastKey, let snapshot,
+           previousKey != snapshot.navigationKey, Settings.shared.config.statsToast {
+            statsProgressToast.show(snapshot)
+        }
+        if let snapshot {
+            if lastStatsToastKey != snapshot.navigationKey { statsBar.reveal() }
+            lastStatsToastKey = snapshot.navigationKey
+        }
+        viewerToolbar.updateStatus(from: session)
         strip.sessionDidChange()
         updateInfoPanel()
         updateLoadingIndicator()
@@ -1478,6 +1656,7 @@ import UniformTypeIdentifiers
             }
         }
         effectiveConfig = config
+        viewerToolbar.updateColour(config)
         applyResampling()
         session.setColor(ColorSettings(config: config), reach: config.cachePreviews)
         session.updateSpreadRules()   // `D`, `⌥D` here or in another window, a reload: the pair follows at once
@@ -1520,14 +1699,25 @@ import UniformTypeIdentifiers
                                        height: Int((screen.frame.height * k).rounded()))
     }
 
-    /// `I` and View › Stats Bar: hidden ↔ compact.
+    /// `I` and View › Image Status: windowed hidden ↔ compact, fullscreen hidden ↔ shown.
     private func toggleStats() {
-        statsMode = statsMode.next
+        if isFullScreen {
+            fullScreenStatus.toggle()
+        } else {
+            statsMode = statsMode.next
+        }
+        statsBar.reveal()
+        applyStatsLayout()
+    }
+
+    @objc func toggleViewerToolbar(_ sender: Any?) {
+        if isFullScreen { fullScreenToolbar.toggle() } else { windowToolbar.toggle() }
         applyStatsLayout()
     }
 
     private func setFullScreen(_ on: Bool) {
         isFullScreen = on
+        if on { fullScreenToolbarOverride = nil }   // `fullscreen-toolbar` decides at each entry
         applyStatsLayout()
         strip.setFullScreen(on)
     }
@@ -1574,7 +1764,7 @@ import UniformTypeIdentifiers
     /// View › Strip Beside the Photo: the same as `⇧T`.
     @objc func toggleStripPlacement(_ sender: Any?) { strip.togglePlacement() }
 
-    /// View › Stats Bar: the same as `I`.
+    /// View › Image Status: the same as `I`.
     @objc func toggleStatsBar(_ sender: Any?) { toggleStats() }
 
     /// View › Two Pages: the same as `D`.
@@ -1661,7 +1851,9 @@ import UniformTypeIdentifiers
         case #selector(toggleStripPlacement(_:)):
             item.state = Settings.shared.config.stripWindow == .beside && !isFullScreen ? .on : .off
         case #selector(toggleStatsBar(_:)):
-            item.state = statsMode != .hidden ? .on : .off
+            item.state = (isFullScreen ? fullScreenStatus : statsMode != .hidden) ? .on : .off
+        case #selector(toggleViewerToolbar(_:)):
+            item.state = toolbarWanted ? .on : .off
         case #selector(toggleTwoPages(_:)):
             item.state = effectiveConfig.spread ? .on : .off
             return folder != nil
@@ -1702,17 +1894,26 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Hidden: no bar. Windowed: the viewer starts under the bar. Full screen: the viewer fills the
-    /// window and the translucent bar covers its top edge.
+    /// The stats bar (`I`) floats over the picture and reserves no room: windowed under the toolbar, in full screen at
+    /// the bottom above the filmstrip (the system's toolbar slides over the top there). The picture always fills what
+    /// is left of the toolbar. The progress toast stands above the bar.
     private func applyStatsLayout() {
-        let visible = statsMode != .hidden
+        let toolbarWanted = toolbarWanted
+        // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it.
+        let visible = (isFullScreen ? fullScreenStatus : statsMode != .hidden)
+            && (Settings.shared.config.statsBarWithToolbar || !toolbarWanted)
         statsBar.isHidden = !visible
         guard !isClosed else { return }
-        statsBar.isOverlay = isFullScreen
-        infoPanel.place()   // under the bar, or from the top
-        // The problems box sits under the bar when the bar is on screen (full screen too, where it floats).
-        // Deactivate first: both are required and must never be active together.
-        if visible {
+        // Left alone while it is wanted: the system slides it in and out with the menu bar; setting it visible again
+        // pins it on screen.
+        if toolbarWanted != toolbarWasWanted {
+            toolbarWasWanted = toolbarWanted
+            window?.toolbar?.isVisible = toolbarWanted
+        }
+        infoPanel.place()   // away from the bar
+        // Deactivate first: the alternatives of one edge are all required and must never be active together.
+        let atTop = visible && !statsBarAtBottom
+        if atTop {
             warningsAtTop.isActive = false
             warningsBelowBar.isActive = true
             backAtTop.isActive = false
@@ -1723,19 +1924,16 @@ import UniformTypeIdentifiers
             backBelowBar.isActive = false
             backAtTop.isActive = true
         }
-        let belowBar = visible && !isFullScreen
-        // Deactivate first: the two top constraints are both required and must never be active together.
-        if belowBar {
-            viewerAtTop.isActive = false
-            viewerBelowBar.isActive = true
-            pillsAtTop.isActive = false
-            pillsBelowBar.isActive = true
-        } else {
-            viewerBelowBar.isActive = false
-            viewerAtTop.isActive = true
-            pillsBelowBar.isActive = false
-            pillsAtTop.isActive = true
-        }
+        statsAtTop.isActive = false
+        statsAtBottom.isActive = false
+        if visible { (statsBarAtBottom ? statsAtBottom : statsAtTop).isActive = true }
+        applyToastRows()
+        viewerAtTop.isActive = false
+        viewerAtScreenTop.isActive = false
+        pillsAtTop.isActive = false
+        pillsAtScreenTop.isActive = false
+        (isFullScreen ? viewerAtScreenTop : viewerAtTop).isActive = true
+        (isFullScreen ? pillsAtScreenTop : pillsAtTop).isActive = true
     }
 
     // MARK: Info panel (M4a spec §3, InfoPanelKit)
@@ -1813,13 +2011,15 @@ import UniformTypeIdentifiers
         infoPanel.show([])
     }
 
-    /// The part of the viewer the panel may cover, in the content view's points with y down: under the bar while the
-    /// bar is on screen (windowed the viewer starts there anyway; in full screen it floats over the viewer), above the
-    /// strip while the strip is on screen; below the back button while it is shown, for a panel in the top left corner.
+    /// The part of the viewer the panel may cover, in the content view's points with y down: under the status (in a
+    /// window it reserves the room, in full screen it floats over the picture), above the strip while it is on screen, and below the back
+    /// button while it is shown for a panel in the top left corner.
     private func infoPanelArea(in container: NSView) -> CGRect {
         let viewer = viewerView.frame
         var top = viewer.maxY, bottom = viewer.minY
-        if !statsBar.isHidden { top = min(top, statsBar.frame.minY) }
+        if !statsBar.isHidden {
+            if statsBarAtBottom { bottom = max(bottom, statsBar.frame.maxY) } else { top = min(top, statsBar.frame.minY) }
+        }
         if strip.isShown { bottom = max(bottom, strip.view.frame.maxY) }
         let area = CGRect(x: viewer.minX, y: container.bounds.height - top, width: viewer.width, height: max(0, top - bottom))
         guard backButtonShown else { return area }
