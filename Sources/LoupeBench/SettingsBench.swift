@@ -2,8 +2,9 @@ import AppKit
 import Foundation
 import LoupeCore
 import LoupeSettings
+import SettingsKit
 
-/// `LoupeBench settings [--rounds N] [--settle MS]` (docs/bench/2026-10-24-settings-switch.md): the main thread's work
+/// `LoupeBench settings [--rounds N] [--settle MS] [--icons N]` (docs/bench/2026-10-24-settings-switch.md): the main thread's work
 /// per page switch of the settings window — the real window and pages over an empty loupe.conf/input.conf in a temp
 /// dir, shown on screen, opened on the first page. A round goes down the sidebar to the last page and back up to the
 /// first, one ↓ or ↑ key event at a time sent to the window itself, which need not be key (the search field has focus
@@ -11,22 +12,52 @@ import LoupeSettings
 /// (default 1500): long enough for SwiftUI's update, layout and the Core Animation commit. Prints the main thread's CPU
 /// ms per switch onto each page — the first visit, and the median and max of the later ones — and the total of each
 /// round; then the cost of one setting changed by the store, and where ⇥ stops once around the Mouse & Trackpad page
-/// (none of the stops may be on a page that is not open). The window's frame and last page go to LoupeBench's own
-/// defaults, not Loupe's.
+/// (none of the stops may be on a page that is not open). `--icons N` gives the Dock icon row N pictures of the user's
+/// own, as a well-stocked ~/.config/loupe/icons has (1024² PNGs of ~1 MB in a temp folder; default 85); 0 leaves
+/// the row with none. The window's frame and last page go to LoupeBench's own defaults, not Loupe's.
 enum SettingsBench {
     static func main(_ arguments: [String]) -> Never {
-        var rounds = 3, settle = 1500
+        var rounds = 3, settle = 1500, icons = 85
         var args = arguments[...]
         while let arg = args.popFirst() {
             if arg == "--rounds", let n = args.popFirst().flatMap(Int.init), n > 0 { rounds = n; continue }
             if arg == "--settle", let n = args.popFirst().flatMap(Int.init), n > 0 { settle = n; continue }
+            if arg == "--icons", let n = args.popFirst().flatMap(Int.init), n >= 0 { icons = n; continue }
             fail("settings: unknown argument \(arg)")
         }
-        MainActor.assumeIsolated { run(rounds: rounds, settle: settle) }
+        MainActor.assumeIsolated { run(rounds: rounds, settle: settle, icons: icons) }
         exit(0)
     }
 
-    @MainActor private static func run(rounds: Int, settle: Int) {
+    /// `count` 1024² PNGs of a gradient with grain (~1 MB each, as photos made into icons are) in `folder`.
+    private static func makeIcons(_ count: Int, in folder: URL) -> [URL] {
+        guard count > 0 else { return [] }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        return (0..<count).compactMap { n in
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8,
+                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let data = rep.bitmapData else { return nil }
+            for y in 0..<1024 {
+                for x in 0..<1024 {
+                    seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    let grain = UInt8(truncatingIfNeeded: seed >> 59)
+                    let p = data + y * rep.bytesPerRow + x * 4
+                    p[0] = UInt8(truncatingIfNeeded: x / 4 + n * 9) &+ grain
+                    p[1] = UInt8(truncatingIfNeeded: y / 4) &+ grain
+                    p[2] = UInt8(truncatingIfNeeded: (x + y) / 8 + n * 31)
+                    p[3] = 255
+                }
+            }
+            let url = folder.appendingPathComponent(String(format: "icon-%03d.png", n))
+            guard let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: url)) != nil
+            else { return nil }
+            return url
+        }
+    }
+
+    @MainActor private static func run(rounds: Int, settle: Int, icons: Int) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("settings-bench-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -39,7 +70,13 @@ enum SettingsBench {
         app.finishLaunching()
         var config = Config()
         let store = ConfigSettingsStore(fileURL: conf, current: { config }, reload: {})
-        let context = SettingsPanelContext(configURL: conf, inputURL: input)
+        let iconFolder = dir.appendingPathComponent("icons", isDirectory: true)
+        let iconFiles = makeIcons(icons, in: iconFolder)
+        let context = SettingsPanelContext(configURL: conf, inputURL: input, iconChoices: {
+            [IconChoice(word: "owl", section: "Built-in")]
+                + iconFiles.map { IconChoice(word: $0.deletingPathExtension().lastPathComponent, file: $0, section: "Yours") }
+        }, iconFolder: iconFolder)
+        if icons > 0 { print("icons: \(icons) PNGs, \(iconFiles.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) } >> 20) MB") }
         let ids = SettingsPanel.pages().map(\.id)
         let titles = Dictionary(uniqueKeysWithValues: SettingsPanel.pages().map { ($0.id, $0.title) })
 

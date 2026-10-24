@@ -255,7 +255,7 @@ struct PagesTests {
 
     /// `app-icon` is an icon pop-up whose items come from the app (the context).
     @Test func appIconAsksTheContext() {
-        guard case .icon(let choices) = row("app-icon")?.kind else {
+        guard case .icon(let choices, _) = row("app-icon")?.kind else {
             Issue.record("app-icon is not an icon row")
             return
         }
@@ -263,7 +263,7 @@ struct PagesTests {
         defer { SettingsPanel.context = saved }
         SettingsPanel.context = SettingsPanelContext(configURL: URL(fileURLWithPath: "/tmp/loupe.conf"),
                                                      inputURL: URL(fileURLWithPath: "/tmp/input.conf"),
-                                                     iconChoices: { [(word: "owl", image: nil), (word: "hat", image: nil)] })
+                                                     iconChoices: { [IconChoice(word: "owl"), IconChoice(word: "hat")] })
         #expect(choices().map(\.word) == ["owl", "hat"])
         SettingsPanel.context = nil
         #expect(choices().isEmpty)

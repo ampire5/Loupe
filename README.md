@@ -163,7 +163,7 @@ As far as we know, no other Mac app goes this deep into Logitech hardware, and i
 
 <p align="center"><img src="docs/images/icons.webp" width="80%" alt="Loupe's icons: the glass owl, Aphrodite, the chrome profile and the hat"></p>
 
-Liquid Glass icons made in Icon Composer. The glass owl follows macOS's light, dark, clear and tinted icon styles; the alternates swap in from **Settings → General → Dock icon**, with a picture of each in the menu. Or bring your own: drop a PNG, an `.icns` or a whole Icon Composer `.icon` package into `~/.config/loupe/icons`, and Loupe compiles it and puts it in the Dock — no rebuild.
+Liquid Glass icons made in Icon Composer. The glass owl follows macOS's light, dark, clear and tinted icon styles; the alternates swap in from **Settings → General → Dock icon**, with a picture of each in the menu. Or bring your own: drop loose pictures or folders of pictures into `~/.config/loupe/icons`. Folders are packs: choose a pack, then its icon. A whole Icon Composer `.icon` package works too; Loupe compiles it and puts it in the Dock — no rebuild.
 
 <p align="center"><img src="docs/images/icon-modes.webp" width="70%" alt="The owl in light, dark, clear light and clear dark styles"></p>
 

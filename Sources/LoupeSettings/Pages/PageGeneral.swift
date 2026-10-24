@@ -42,10 +42,12 @@ extension SettingsPanel {
                             + "do not bring it back. 1–600000 ms, or no; default 1000."),
             ]),
             SettingsCard([
-                .icon("app-icon", "Dock icon", choices: { context?.iconChoices() ?? [] }, symbol: "app.badge",
+                .icon("app-icon", "Dock icon", choices: { context?.iconChoices() ?? [] }, folder: context?.iconFolder,
+                      symbol: "app.badge",
                       description: "While Loupe runs (Finder always shows the owl): a built-in picture, or one of "
-                        + "yours from ~/.config/loupe/icons (<name>.png, .icns or an Icon Composer .icon, compiled once with Xcode); a file path set in loupe.conf "
-                        + "shows as its own item. Default owl."),
+                        + "yours from ~/.config/loupe/icons: loose pictures, or pictures in a folder pack (choose the "
+                        + "pack first); an Icon Composer .icon is compiled once with Xcode. Choose… adds loose pictures "
+                        + "there too. A file path set in loupe.conf shows as its own picture. Default owl."),
             ]),
         ]),
         SettingsSection("Home", [

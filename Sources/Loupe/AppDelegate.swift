@@ -757,6 +757,9 @@ import UniformTypeIdentifiers
         let fullScreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         view.addItem(.separator())
+        let toolbar = view.addItem(withTitle: "Toggle Toolbar", action: #selector(ViewerWindowController.toggleViewerToolbar(_:)),
+                                   keyEquivalent: "t")
+        toolbar.keyEquivalentModifierMask = [.option, .command]
         // The same pin as `T` in the viewer, whose key it shows; the checkmark is the pin (ViewerWindowController
         // validates it). `F` toggles full screen in the viewer too; the item shows the macOS-standard key.
         let strip = view.addItem(withTitle: "Thumbnail Strip", action: #selector(ViewerWindowController.toggleThumbnailStrip(_:)),
@@ -766,8 +769,8 @@ import UniformTypeIdentifiers
         let placement = view.addItem(withTitle: "Strip Beside the Photo",
                                      action: #selector(ViewerWindowController.toggleStripPlacement(_:)), keyEquivalent: "")
         placement.showKey(of: .toggleStripPlacement)
-        // The same as `I`, whose key it shows; the checkmark is the bar on screen.
-        let stats = view.addItem(withTitle: "Stats Bar", action: #selector(ViewerWindowController.toggleStatsBar(_:)),
+        // The same as `I`, whose key it shows; the checkmark reflects the status card's visibility.
+        let stats = view.addItem(withTitle: "Image Status", action: #selector(ViewerWindowController.toggleStatsBar(_:)),
                                  keyEquivalent: "")
         stats.showKey(of: .cycleStats)
         // Retitled Hide Info while the panel is open (ViewerWindowController validates it).

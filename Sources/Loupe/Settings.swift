@@ -173,6 +173,7 @@ extension Notification.Name {
     /// written to loupe.conf like a menu toggle.
     private lazy var iconPicker = IconPickerWindowController(
         choices: { Self.appIconChoices() },
+        folder: Self.userIcons,
         current: { [unowned self] in config.appIcon },
         onPick: { [unowned self] word in change("app-icon") { $0.appIcon = word } })
 
@@ -211,13 +212,15 @@ extension Notification.Name {
         return IconPackage.isPackage(url) ? url : nil
     }
 
-    /// The settings window's `app-icon` pop-up: `owl`, the bundled alternates, the pictures in ~/.config/loupe/icons
-    /// (a name there shows its own picture, as `appIconURL` picks it), and the current value when it is a path.
-    static func appIconChoices() -> [(word: String, image: NSImage?)] {
+    /// The `app-icon` pictures, by section: `owl` and the bundled alternates (Built-in), the pictures in
+    /// ~/.config/loupe/icons (Yours; a name there shows its own picture, as `appIconURL` picks it), and the current
+    /// value when it is a path (Other). Files only: the grid makes each thumbnail at its size, off the main thread.
+    static func appIconChoices() -> [IconChoice] {
         var words = [AppIcon.bundle]
         words += AppIcon.alternates.filter {
             Bundle.main.url(forResource: $0, withExtension: "icns", subdirectory: "AppIcons") != nil
         }
+        let builtIn = Set(words)
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let files = (try? FileManager.default.contentsOfDirectory(at: userIcons, includingPropertiesForKeys: nil)) ?? []
         let own = files.filter { ["png", "icns", IconPackage.pathExtension].contains($0.pathExtension.lowercased()) }
@@ -226,28 +229,21 @@ extension Notification.Name {
         for name in Set(own).sorted() where !words.contains(name) { words.append(name) }
         let current = shared.config.appIcon
         if AppIcon.isPath(current) { words.append(current) }
-        return words.map { (word: $0, image: iconImage($0)) }
+        return words.map { word in
+            let section = AppIcon.isPath(word) ? "Other" : builtIn.contains(word) ? "Built-in" : "Yours"
+            return IconChoice(word: word, file: iconFile(word), section: section)
+        }
     }
 
-    /// The pictures of `appIconChoices`, by file and its modification date (read lazily, when a menu draws them).
-    private static var iconImages: [String: NSImage] = [:]
-
-    /// The picture of an `app-icon` value: its file (`appIconURL`), or for `owl` the bundle's own icon.
-    private static func iconImage(_ value: String) -> NSImage? {
+    /// The picture file of an `app-icon` value: its file (`appIconURL`), or for `owl` the bundle's own icon. An Icon
+    /// Composer package not compiled yet has none: it is compiled now, and shows the next time the grid reads it.
+    private static func iconFile(_ value: String) -> URL? {
         if appIconURL(value) == nil, let package = iconPackage(value) {
-            // Not compiled yet: compiled now, so the pop-up shows it the next time it opens.
             Task { _ = await IconPackage.compile(package) }
             return nil
         }
-        let url = appIconURL(value)
+        return appIconURL(value)
             ?? (value == AppIcon.bundle ? Bundle.main.url(forResource: "AppIcon", withExtension: "icns") : nil)
-        guard let url else { return nil }
-        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        let key = "\(url.path)@\(modified?.timeIntervalSince1970 ?? 0)"
-        if let image = iconImages[key] { return image }
-        let image = NSImage(byReferencing: url)
-        iconImages[key] = image
-        return image
     }
 
     private func pushLimits() {
