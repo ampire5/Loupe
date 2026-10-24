@@ -9,10 +9,10 @@ let package = Package(
         .executable(name: "LoupeBench", targets: ["LoupeBench"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.2.0"),
+        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.3.0"),
         .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.1.0"),
         .package(url: "https://github.com/ampire5/LogiHIDPP.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.3.0"),
+        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.4.0"),
         .package(url: "https://github.com/ampire5/StashKit.git", from: "0.1.0"),
     ],
     targets: [
