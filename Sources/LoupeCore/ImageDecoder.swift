@@ -33,6 +33,10 @@ public protocol ImageDecoder: Sendable {
 /// Whom a decode is for: the photo on screen, or a neighbour or thumbnail that must leave it room.
 public enum DecodeRole: Sendable {
     case current, other
+    /// A thumbnail in the background store: decoded smaller like `other`, but on one libjxl thread. The store's decode
+    /// slots are its parallelism (one busy core each); a second thread per slot took 5.5 of 8 cores for 3 slots on an
+    /// i7-10700K (3.2 with one, for 23 files/s against 37).
+    case thumbnail
 }
 
 extension ImageDecoder {

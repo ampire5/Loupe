@@ -275,6 +275,8 @@ private func expectGrayMatchesCoreGraphics(_ png: Data, tolerance: Int, _ label:
     let current = try #require(JXLDecoder(options: options).forRole(.current) as? JXLDecoder)
     let other = try #require(JXLDecoder(options: options).forRole(.other) as? JXLDecoder)
     #expect(current.threads == 9 && other.threads == 3)
+    let thumbnail = try #require(JXLDecoder(options: options).forRole(.thumbnail) as? JXLDecoder)
+    #expect(thumbnail.threads == 1)
 }
 
 @Test func fallbackPassesTheRole() throws {

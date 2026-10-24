@@ -3,7 +3,9 @@ import Testing
 
 /// JPEG XL made by the reference encoder (Homebrew's cjxl), so decoders are tested on real libjxl output.
 enum TestJXL {
-    static let cjxlPath = "/opt/homebrew/bin/cjxl"
+    /// Homebrew's prefix: `/opt/homebrew` on Apple silicon, `/usr/local` on Intel.
+    static let cjxlPath = ["/opt/homebrew/bin/cjxl", "/usr/local/bin/cjxl"]
+        .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/opt/homebrew/bin/cjxl"
     static let available = FileManager.default.isExecutableFile(atPath: cjxlPath)
 
     /// `input` (any file cjxl reads, named `inputName`: a .jpg is transcoded losslessly by default) encoded to JXL.

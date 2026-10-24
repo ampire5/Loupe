@@ -10,8 +10,8 @@ import Foundation
 /// 3 or coarser (`JXLDecoder+DC.swift`). Finer previews are the full decode made smaller. Anything
 /// libjxl rejects throws and `FallbackDecoder` hands the file to ImageIO.
 ///
-/// Every call creates its own `JxlDecoder` and thread pool, so calls from the decode pool never
-/// share state.
+/// Every call creates its own `JxlDecoder` and parallel runner (`JXLParallelRunner`: GCD workers at the caller's QoS),
+/// so calls from the decode pool never share state.
 public struct JXLDecoder: ImageDecoder {
     /// "libjxl+dc": Loupe's own libjxl (scripts/build-deps.sh) with the 1:8 DC image functions. Calling
     /// `JxlDecoderLoupeVersion` also keeps a build against Homebrew's libjxl from linking.
@@ -20,8 +20,15 @@ public struct JXLDecoder: ImageDecoder {
     public let options: JXLOptions
     public let role: DecodeRole
 
-    /// Worker threads for libjxl's parallel runner: `jxl-threads-current` or `jxl-threads-other` by role.
-    public var threads: Int { role == .current ? options.threadsCurrent : options.threadsOther }
+    /// Worker threads for libjxl's parallel runner: `jxl-threads-current` or `jxl-threads-other` by role; one for a
+    /// thumbnail.
+    public var threads: Int {
+        switch role {
+        case .current: options.threadsCurrent
+        case .other: options.threadsOther
+        case .thumbnail: 1
+        }
+    }
 
     public init(options: JXLOptions = JXLSetting.shared.options, role: DecodeRole = .current) {
         self.options = options
@@ -47,7 +54,7 @@ public struct JXLDecoder: ImageDecoder {
     public func preview(_ data: Data, info: ImageInfo, level: Int) throws -> LevelImage {
         if level >= Self.dcLevel, let dc = try? dcImage(data, info: info) { return dc }
         let full = try decodeFull(data, info: info)
-        guard role == .other else { return LevelImage(image: full, level: 0) }
+        guard role != .current else { return LevelImage(image: full, level: 0) }
         let grid = TileGrid(imageSize: info.pixelSize)
         let target = min(level, grid.levelCount - 1)
         guard target > 0 else { return LevelImage(image: full, level: 0) }
@@ -105,7 +112,7 @@ public struct JXLDecoder: ImageDecoder {
     /// One libjxl decoder (and, for pixels, its thread pool) over borrowed input bytes.
     final class Session {
         private let decoder: OpaquePointer
-        private var runner: UnsafeMutableRawPointer?
+        private var runner: JXLParallelRunner?
 
         /// `dcImage`: stops at the DC (`decodeDC`) instead of the full image.
         private init(forPixels: Bool, threads: Int, dcImage: Bool) throws {
@@ -121,11 +128,9 @@ public struct JXLDecoder: ImageDecoder {
                   !dcImage || JxlDecoderSetProgressiveDetail(decoder, kDC) == JXL_DEC_SUCCESS
             else { throw DecodeError.unreadable }
             if forPixels {
-                guard let runner = JxlThreadParallelRunnerCreate(nil, threads) else {
-                    throw DecodeError.outOfMemory
-                }
+                let runner = JXLParallelRunner(threads: threads)
                 self.runner = runner
-                guard JxlDecoderSetParallelRunner(decoder, JxlThreadParallelRunner, runner) == JXL_DEC_SUCCESS else {
+                guard JxlDecoderSetParallelRunner(decoder, JXLParallelRunner.run, runner.opaque) == JXL_DEC_SUCCESS else {
                     throw DecodeError.unreadable
                 }
             }
@@ -133,7 +138,6 @@ public struct JXLDecoder: ImageDecoder {
 
         deinit {
             JxlDecoderDestroy(decoder)
-            if let runner { JxlThreadParallelRunnerDestroy(runner) }
         }
 
         /// The input must stay valid for the session's life, so the session only exists inside `body`.

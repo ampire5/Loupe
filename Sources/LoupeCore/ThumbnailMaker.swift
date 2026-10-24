@@ -62,7 +62,7 @@ public enum ThumbnailMaker {
     /// and whatever the decoder throws when the prefix gives no DC image.
     public static func makeFromJXLPrefix(_ prefix: Data, fullSize info: ImageInfo, maxSide: Int) throws -> Data {
         guard prefixIsSharpEnough(info, maxSide: maxSide) else { throw ThumbnailMakerError.prefixTooCoarse }
-        let decoder = JXLDecoder(role: .other)
+        let decoder = JXLDecoder(role: .thumbnail)
         guard let dc = try decoder.firstLook(prefix, info: info) else { throw DecodeError.unreadable }
         return try encode(dc.image, size: thumbnailSize(of: info.pixelSize, maxSide: maxSide), orientation: info.orientation)
     }

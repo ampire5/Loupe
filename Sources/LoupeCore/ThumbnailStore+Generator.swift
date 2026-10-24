@@ -239,7 +239,7 @@ extension ThumbnailStore {
         do {
             if let data = await r.cachedBytes(r.url, r.listedStamp) {
                 await r.readEnded()
-                let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.other), maxSide: r.maxSide) }
+                let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
                 return .made(jpeg: jpeg, info: info, stamp: r.listedStamp)
             }
             if let outcome = try await fromFirstRead(r, &t) { return outcome }
@@ -251,7 +251,7 @@ extension ThumbnailStore {
             t.source = "prefix+full"
             await r.readEnded()
             let data = bytes.data
-            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.other), maxSide: r.maxSide) }
+            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
             return .made(jpeg: jpeg, info: info, stamp: bytes.stamp)
         } catch {
             return Task.isCancelled || error is CancellationError ? .cancelled : .failed
@@ -269,7 +269,7 @@ extension ThumbnailStore {
         let data = bytes.data, stamp = bytes.stamp
         if data.count >= stamp.size {
             t.source = "full"
-            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.other), maxSide: r.maxSide) }
+            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
             return .made(jpeg: jpeg, info: info, stamp: stamp)
         }
         t.source = "prefix"
