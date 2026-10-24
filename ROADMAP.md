@@ -7,7 +7,7 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 - **Light, dark or system theme everywhere.** Home, the folder browser and the keys cheat sheet follow the choice in Settings, as the Settings window already does.
 - **Compare two photos side by side.** Two images in one window with zoom and pan locked together — for picking the best shot of a burst, the best of several AI renders, or checking an edit against the original.
 - **Favorites and Viewed.** Mark photos and folders, see at a glance what you haven't looked at yet, filter by *Unviewed*.
-- **A new stats bar and strip** in the viewer, in the style of the new Home.
+- **A new stats bar, strip and toolbar** in the viewer, in the style of the new Home. Home's own toolbar is the system's now, as in Photos; the viewer's is next.
 - **Stash: write back.** Rating, O count and Organized from the viewer; `F` for full screen on the Stash tab.
 
 ## Planned

@@ -95,7 +95,7 @@ While you look, the stats bar (`i`) shows the file, its place in the folder, siz
 <td><img src="docs/images/thumbs-aspect.webp" alt="Thumbnails in their own aspect ratio"></td>
 </tr>
 <tr>
-<td colspan="2"><b>Two thumbnail modes.</b> <i>Square</i> for a calm, even grid like Photos; <i>Aspect</i> to see every picture whole, in its own proportions. One click in the toolbar, and Loupe remembers it.</td>
+<td colspan="2"><b>Two thumbnail modes.</b> <i>Square</i> for a calm, even grid like Photos; <i>Aspect</i> to see every picture whole, in its own proportions. One choice in the toolbar's View menu, and Loupe remembers it.</td>
 </tr>
 <tr>
 <td><img src="docs/images/autocolour.webp" alt="Auto colour and vibrance, before and after"></td>
