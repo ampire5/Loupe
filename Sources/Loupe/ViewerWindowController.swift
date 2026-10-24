@@ -142,8 +142,12 @@ import UniformTypeIdentifiers
         appliedResampling = ResampleSettings(config: Settings.shared.config)
         viewerView = ViewerView(session: session, resampling: appliedResampling)
         strip = StripController(session: session, store: thumbnails)
-        let window = ViewerWindow(contentRect: Self.initialFrame(), styleMask: [.titled, .resizable, .closable, .miniaturizable],
+        // The content runs under the title bar and the toolbar Home brings, as Home's grid does; the viewer's parts hold to
+        // `contentLayoutGuide` (the area below them), so under a bare title bar they stand where they always stood.
+        let window = ViewerWindow(contentRect: Self.initialFrame(),
+                                  styleMask: [.titled, .resizable, .closable, .miniaturizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
+        window.toolbarStyle = .unified
         window.title = "Loupe"
         window.collectionBehavior = .fullScreenPrimary
         window.tabbingMode = .preferred
@@ -153,6 +157,8 @@ import UniformTypeIdentifiers
         window.isReleasedWhenClosed = false
 
         let container = ViewerContainerView()
+        window.contentView = container
+        let top = (window.contentLayoutGuide as! NSLayoutGuide).topAnchor
         viewerView.translatesAutoresizingMaskIntoConstraints = false
         statsBar.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(viewerView)
@@ -176,16 +182,16 @@ import UniformTypeIdentifiers
         // Over everything, the whole window: while open it takes every click (see CheatSheetView).
         container.addSubview(cheatSheet)
         warningsBelowBar = warningsOverlay.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 8)
-        warningsAtTop = warningsOverlay.topAnchor.constraint(equalTo: container.topAnchor, constant: 8)
+        warningsAtTop = warningsOverlay.topAnchor.constraint(equalTo: top, constant: 8)
         backBelowBar = backButton.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 16)
-        backAtTop = backButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 16)
+        backAtTop = backButton.topAnchor.constraint(equalTo: top, constant: 16)
         let overlayWidth = warningsOverlay.widthAnchor.constraint(lessThanOrEqualToConstant: 640)
         let overlayFits = warningsOverlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32)
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
         viewerBelowBar = viewerView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
-        viewerAtTop = viewerView.topAnchor.constraint(equalTo: container.topAnchor)
+        viewerAtTop = viewerView.topAnchor.constraint(equalTo: top)
         pillsBelowBar = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: statsBar.bottomAnchor)
-        pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: container.topAnchor)
+        pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: top)
         viewerAboveStrip = viewerView.bottomAnchor.constraint(equalTo: strip.view.topAnchor)
         viewerAtBottom = viewerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         NSLayoutConstraint.activate([
@@ -196,7 +202,7 @@ import UniformTypeIdentifiers
             viewerView.panIndicatorsView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             statsBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             statsBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            statsBar.topAnchor.constraint(equalTo: container.topAnchor),
+            statsBar.topAnchor.constraint(equalTo: top),
             strip.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             strip.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             strip.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -214,10 +220,9 @@ import UniformTypeIdentifiers
             backButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             cheatSheet.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             cheatSheet.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            cheatSheet.topAnchor.constraint(equalTo: container.topAnchor),
+            cheatSheet.topAnchor.constraint(equalTo: top),
             cheatSheet.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        window.contentView = container
         window.initialFirstResponder = viewerView
         window.center()
         super.init(window: window)
@@ -708,19 +713,32 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// The window's title (its tab's label) from what is on screen now: Home's tab, a restored tab not shown yet, or
-    /// the photo. Every change of Home, the pending tab or the session ends here.
+    /// The tab's label (`WindowTitle.text`: Home's tab, a restored tab not shown yet, or the photo) and the window's own
+    /// title, which is that too, except on Home, where the browser gives the folder's name and the line under it
+    /// (`homeWindowText`). Every change of Home, the pending tab or the session ends here.
     private func updateTitle() {
         let home = isShowingHome ? shownTab : nil
+        let text: String
         if home == nil, let pending {
-            window?.title = WindowTitle.text(of: pending)
+            text = WindowTitle.text(of: pending)
         } else {
             // A pair names both pages, in reading order (spread spec, «Положение»).
             let list = session.playlist, pages = session.currentPages
-            window?.title = WindowTitle.text(home: home, file: pages.flatMap { p in list?.files[p.first] } ?? list?.current,
-                                             companion: pages?.second.flatMap { k in list?.files[k] })
+            text = WindowTitle.text(home: home, file: pages.flatMap { p in list?.files[p.first] } ?? list?.current,
+                                    companion: pages?.second.flatMap { k in list?.files[k] })
+        }
+        window?.tab.title = text
+        if home != nil, let homeWindowText {
+            window?.title = homeWindowText.title
+            window?.subtitle = homeWindowText.subtitle
+        } else {
+            window?.title = text
+            window?.subtitle = ""
         }
     }
+
+    /// What the browser last said the window's title and subtitle are (`HomeBrowserView.onWindowText`).
+    private var homeWindowText: (title: String, subtitle: String)?
 
     // MARK: Home (Home spec §2.1, Photos style spec §3)
 
@@ -770,6 +788,7 @@ import UniformTypeIdentifiers
         let shown: HomeTab = wanted == .stash && StashLibrary.Source.current == nil ? .recent : wanted
         let view = homeView ?? makeHome()
         view.isHidden = false
+        window.toolbar = view.browser.nsToolbar
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
         homeSources?.folders.isPaused = false
@@ -803,6 +822,7 @@ import UniformTypeIdentifiers
     func hideHome() {
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
+        window?.toolbar = nil
         homeSources?.folders.isPaused = true
         updateBackButton()
         window?.makeFirstResponder(viewerView)
@@ -851,6 +871,11 @@ import UniformTypeIdentifiers
             ])
         }
         let browser = view.browser
+        browser.onWindowText = { [weak self] title, subtitle in
+            guard let self else { return }
+            self.homeWindowText = (title, subtitle)
+            if self.isShowingHome { self.updateTitle() }
+        }
         browser.onLocation = { [weak self] location in
             guard let self else { return }
             // A write to Loupe.db: off the main thread, in the order of the moves.
