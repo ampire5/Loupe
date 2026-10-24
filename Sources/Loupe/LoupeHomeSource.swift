@@ -134,6 +134,13 @@ import LoupeCore
     /// The progress popover's Stop preparing (while the walk runs): the walk ends.
     func stopSubtree(in location: BrowserLocation) { folders.stopSubtree() }
 
+    /// The room the folder's volume has (`1.2 TB free` under the folder's name): asked of the volume off the main thread,
+    /// a second at most, so a share that does not answer leaves the line as it was.
+    func freeSpace(for location: BrowserLocation) async -> Int64? {
+        guard case .folder(let url) = location else { return nil }
+        return await BrowserPlaces.freeSpace(of: [url], timeout: .seconds(1))[url]
+    }
+
     func pageFilterChosen(_ index: Int, in source: String) {
         if source == HomeCollections.stash { collections.onStashFilter?(index) }
     }
