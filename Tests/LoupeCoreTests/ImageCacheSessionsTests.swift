@@ -416,6 +416,28 @@ struct ImageCacheSessionsTests {
         #expect(b.allSatisfy { rig.reader.readCount($0) == 0 })
     }
 
+    /// The active window going off screen and back (a Space switch, occlusion): only its visibility changes; it stays
+    /// active and nothing is checked or read again, as no activation is taken.
+    @Test func activeVisibilityIsNoActivation() async {
+        let rig = Rig()
+        let a = folder("a")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3)
+        #expect(await eventually { atLeast(.preview, await rig.state(a[3])) })
+        #expect(await rig.settle())
+        let reads = rig.readsSoFar
+        rig.reader.setStamp(a[3], FileStamp(modified: Date(timeIntervalSince1970: 2), size: 2000))
+
+        await rig.cache.setVisibility(sessionA, visible: false)
+        #expect(await rig.cache.sessions[sessionA]?.isVisible == false)
+        await rig.cache.setVisibility(sessionA, visible: true)
+        #expect(await rig.settle())
+        #expect(await rig.cache.active == sessionA)
+        #expect(await rig.cache.sessions[sessionA]?.isVisible == true)
+        #expect(rig.readsSoFar == reads)
+    }
+
     /// Back to a window whose photo was rewritten meanwhile: the activation itself checks the current photo's stamp
     /// (no `setFocus` follows it), as a focus that makes a photo current does (ImageCacheTests' `staleFileReset`).
     @Test func activationChecksStamp() async {

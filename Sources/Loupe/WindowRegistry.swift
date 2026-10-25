@@ -23,6 +23,8 @@ import StashKitUI
     private(set) var active: ViewerWindowController?
     /// The last viewer window closed (not when the app quits with windows open).
     var onLastClosed: (() -> Void)?
+    /// The app is quitting (`applicationWillTerminate`): the windows closing then hand the active session to none.
+    var isQuitting = false
     /// A new controller with the app's shared stores, already added (`AppDelegate.makeController`).
     var makeController: (() -> ViewerWindowController)?
 
@@ -261,10 +263,12 @@ import StashKitUI
     /// one by one): saved when they leave none, so Last Session keeps every tab of the last window.
     private var beforeCloses: SessionSnapshot?
 
-    /// The viewer windows front to back, each with its tabs in the tab bar's order.
+    /// The viewer windows front to back, each with its tabs in the tab bar's order. Front to back is by the last time a
+    /// window (any of its tabs) was key, then by `NSApp.orderedWindows`: for windows in full-screen Spaces that is the
+    /// order they were made in, not the one on screen, and the window left in front would not be restored in front.
     func snapshot() -> SessionSnapshot {
         var seen = Set<ObjectIdentifier>()
-        var windows: [SessionSnapshot.Window] = []
+        var groups: [(rank: Int, window: SessionSnapshot.Window)] = []
         let ours = Set(entries.compactMap { $0.controller.window.map(ObjectIdentifier.init) })
         let ordered = NSApp.orderedWindows.filter { ours.contains(ObjectIdentifier($0)) }
             + entries.compactMap(\.controller.window)
@@ -275,10 +279,14 @@ import StashKitUI
             guard !controllers.isEmpty else { continue }
             let shown = window.tabGroup?.selectedWindow ?? window
             let selected = controllers.firstIndex { $0.window === shown } ?? 0
-            windows.append(.init(frame: shown.frame, screen: shown.screen?.localizedName,
+            groups.append((controllers.map(activityRank).max() ?? 0,
+                           .init(frame: shown.frame, screen: shown.screen?.localizedName,
                                  fullScreen: shown.styleMask.contains(.fullScreen), selected: selected,
-                                 tabs: controllers.map { $0.sessionTab() }))
+                                 tabs: controllers.map { $0.sessionTab() })))
         }
+        // A stable sort: windows never key keep the system's order behind those that were.
+        let windows = groups.enumerated().sorted { ($0.element.rank, -$0.offset) > ($1.element.rank, -$1.offset) }
+            .map(\.element.window)
         return SessionSnapshot(windows: windows)
     }
 
@@ -324,6 +332,7 @@ import StashKitUI
             restore.turn {
                 guard let front = steps.first, let lead = self.restoreWindow(front, reused: first, below: nil, restore) else { return }
                 lead.bringToFront()
+                restore.lead = lead
                 restore.below = lead.window
             }
             self.restoreNext(restore, index: 1)
@@ -339,6 +348,8 @@ import StashKitUI
         let main: CGRect
         /// The window the next one goes under: the one made last.
         weak var below: NSWindow?
+        /// The front window's selected tab.
+        weak var lead: ViewerWindowController?
         /// In the order made, front to back.
         var fullScreen: [ViewerWindowController] = []
         var cpu = 0.0, longest = 0.0
@@ -367,7 +378,10 @@ import StashKitUI
                          + "CPU, longest turn \(Int(restore.longest)) ms")
             restoresUnderway -= 1
             scheduleLastSave()   // the windows as restored: each made one asked for it while the restore was out
-            return enterFullScreenInTurn(Array(restore.fullScreen.reversed()), completion: restore.completion)
+            return enterFullScreenInTurn(Array(restore.fullScreen.reversed())) { [weak self] in
+                self?.frontAfterFullScreen(restore)
+                restore.completion?()
+            }
         }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -408,6 +422,14 @@ import StashKitUI
         let selected = tabs[step.selected]
         if below != nil, let group = window.tabGroup, let shown = selected.window { group.selectedWindow = shown }
         return selected
+    }
+
+    /// The windows that went to full screen each took their Space and showed it, and the front window may not be the
+    /// last of them: the launch's window enters full screen on its own, before the others are made. It is shown again
+    /// unless the user went to another window meanwhile (its Space; it is key all along, so no activation comes of it).
+    private func frontAfterFullScreen(_ restore: Restore) {
+        guard !restore.fullScreen.isEmpty, let lead = restore.lead, active === lead else { return }
+        lead.bringToFront()
     }
 
     /// Each of `controllers` into full screen after the previous one got there (each in its own Space).
@@ -497,7 +519,7 @@ import StashKitUI
             return
         }
         scheduleLastSave()
-        guard active === controller else { return }
+        guard active === controller, !isQuitting else { return }
         let selected = group?.selectedWindow.flatMap { selected in
             selected === controller.window ? nil : entries.first { $0.controller.window === selected }?.controller
         }

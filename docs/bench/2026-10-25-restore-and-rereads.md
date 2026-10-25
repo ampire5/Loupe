@@ -78,3 +78,31 @@ same five files.
   the front from `NSApp.orderedWindows`, which for windows in other Spaces is apparently not the order on screen.
 - Not measured here: Intel (the one ~300 ms block was the candidate for the first freeze there,
   spikes/rust/REPORT.md §3.4; the same scripts).
+
+## Fixed: one activation, and the window left in front comes back in front (2026-10-26)
+
+What: scratchpad `front-check.py` (to go to `scripts/` with the other benches): five windows (`open-in=window`) on one
+147 MP JPEG XL each (`PIR020_s0{1..5}_fullres`, PC share), the first put in full screen (the others follow it),
+quit; this run's Last Session row read from `Loupe.db`; relaunch with `session-restore=last`, 14 s, `window 1` of the
+process asked through System Events; the `activate` lines of the relaunch counted. M4 Max, release builds.
+
+| Build | Window in front at quit | Last Session order | In front after the restore | `activate` in the restore | at quit |
+|---|---|---|---|---|---|
+| before (`50db527`) | s05 | s01 s02 s03 s04 s05 | s02 | 4 (all window 1) | 4 |
+| after, run 1 | s05 | s05 s04 s03 s02 s01 | s05 | 1 | 4 |
+| after, run 2 | s05 | s05 s04 s03 s02 s01 | s05 | 1 | 4 |
+| after, quit fix | s05 | s05 s04 s03 s02 s01 | s05 | 1 | 0 |
+
+Three causes, each fixed on its own:
+
+- **Order.** `NSApp.orderedWindows` gives windows in full-screen Spaces in the order they were made: the snapshot
+  listed the first window made as the front one. `WindowRegistry.snapshot` now orders by the last time a window was
+  key, the system's order only among windows never key.
+- **Front.** The launch's window enters full screen on its own, before the restore makes the others; they then
+  entered theirs back to front and the last of them (the second window) kept its Space on screen, while the front
+  window stayed key in a Space not shown: keys went to a window the user could not see. Once the full-screen windows
+  are in, the front one is shown again (`frontAfterFullScreen`), unless the user went to another window meanwhile.
+- **Activations.** An activation was sent on every visibility change of the active window (the window put on screen,
+  its Space shown, occlusion); the restore's 4 `activate 1` were one activation and three visibility changes. Those
+  now send only the visibility (`ImageCache.setVisibility`): one activation per restore, as spec §5 asks. At quit each
+  window closing made the next one active and started its reads (4 activations, 16–20 reads); quitting, none is.

@@ -342,23 +342,30 @@ import LoupeRender
         didSet { if lastActive != oldValue { sendThumbnailRequest() } }
     }
 
-    /// Tells the cache whether this session is the active one and whether it is on screen. An activation is always
-    /// sent (the cache may have made another session active meanwhile), numbered so the cache drops one overtaken by a
-    /// later one from another session's chain; anything else only when it changed. The cache checks the current
-    /// photo's stamp on the activation itself (a file changed while another window was in front). A window that cannot
-    /// be seen polls no folder and starts no colour analysis (windows spec §3.6); `lastActive` goes to the thumbnails.
+    /// Tells the cache whether this session is the active one and whether it is on screen. An activation is sent when
+    /// the session becomes active, numbered so the cache drops one overtaken by a later one from another session's
+    /// chain; the active session coming into view or leaving it (a Space switch, an occlusion change) sends only its
+    /// visibility, so one activation is one stamp check and one `activate` line; anything else only when it changed.
+    /// The cache checks the current photo's stamp on the activation itself (a file changed while another window was in
+    /// front). A window that cannot be seen polls no folder and starts no colour analysis (windows spec §3.6);
+    /// `lastActive` goes to the thumbnails.
     /// With `LOUPE_DEBUG` an activation logs what it found (`StatsLine.activationLog`, windows spec §3.8).
     func setActivity(active: Bool, visible: Bool, lastActive: Int) {
         guard !closed else { return }
         self.lastActive = lastActive
         watcher.isPaused = !visible
         colorCorrector.isPaused = !visible
-        guard active || active != isCacheActive || visible != isCacheVisible else { return }
+        guard active != isCacheActive || visible != isCacheVisible else { return }
+        let cache = self.cache, id = cacheID
+        if active, isCacheActive {
+            isCacheVisible = visible
+            enqueue { await cache.setVisibility(id, visible: visible) }
+            return
+        }
         isCacheActive = active
         isCacheVisible = visible
         let order = Self.nextActivation
         if active { Self.nextActivation += 1 }
-        let cache = self.cache, id = cacheID
         enqueue {
             let activation = await cache.setActivity(id, active: active, visible: visible, order: active ? order : nil)
             if let activation { DebugLog.log(StatsLine.activationLog(session: id.raw, activation)) }

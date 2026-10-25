@@ -94,6 +94,15 @@ extension ImageCache {
         return CacheActivation(current: current, jobs: nextJobID - launched, stats: stats())
     }
 
+    /// Only whether `session`'s window is on screen: the active one stays active (a Space switch or an occlusion
+    /// change is no activation: no stamp check, no `CacheActivation`), an inactive one keeps or gets its photo.
+    public func setVisibility(_ session: CacheSessionID, visible: Bool) {
+        guard let s = sessions[session], s.isVisible != visible else { return }
+        if s.isVisible { sessions[session]?.hiddenSince = .now }
+        sessions[session]?.isVisible = visible
+        reconcile()
+    }
+
     private func deactivate(_ session: CacheSessionID) {
         sessions[session]?.stampCheck?.cancel()
         sessions[session]?.stampCheck = nil

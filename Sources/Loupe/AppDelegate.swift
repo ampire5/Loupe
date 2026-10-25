@@ -277,6 +277,7 @@ import UniformTypeIdentifiers
 
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
+        registry.isQuitting = true   // each window closing would make the next one active and start its reads
         if let handOverObserver { DistributedNotificationCenter.default().removeObserver(handOverObserver) }
         if !isSecondary {
             // Every tab's photo keeps its zoom and position; the active window's full screen is the one restored.
