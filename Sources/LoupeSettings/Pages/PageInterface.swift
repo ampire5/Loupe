@@ -29,7 +29,7 @@ extension SettingsPanel {
                     ]),
             .toggle("stats-modified", "Modification date", symbol: "calendar",
                     description: "The file's modification date at the end of the line. Default on."),
-            .toggle("stats-bar-autohide", "Hide by itself", symbol: "eye.slash",
+            .toggle("stats-bar-autohide", "Hide by itself", symbol: "eye.circle",
                     description: "The bar fades out after the delay and comes back with the next photo or when "
                         + "you switch it with I. Default off.",
                     nested: [
@@ -39,7 +39,7 @@ extension SettingsPanel {
             .toggle("stats-icons", "Icons", symbol: "chart.bar.doc.horizontal",
                     description: "A small symbol in front of each field: name, place, size, weight, format, zoom, "
                         + "decode time. Default on."),
-            .toggle("stats-monochrome", "Monochrome", symbol: "circle.lefthalf.filled",
+            .toggle("stats-monochrome", "Monochrome", symbol: "swatchpalette",
                     description: "White and grey only, without the yellow of the parameters. Default off."),
             .toggle("stats-folder-name", "Folder name", symbol: "folder",
                     description: "The open folder's name in the middle of the bar. Default on."),
@@ -48,7 +48,7 @@ extension SettingsPanel {
             .choice("fullscreen-toolbar", "Toolbar", [
                 (word: "remember", title: "As you left it"), (word: "shown", title: "Shown"),
                 (word: "hidden", title: "Hidden"),
-            ], symbol: "menubar.rectangle",
+            ], symbol: "arrow.up.backward.and.arrow.down.forward",
                     description: "The viewer's toolbar when a window goes full screen. ⌥⌘T still switches it for "
                         + "the time in full screen. Default As you left it."),
         ]),
@@ -56,9 +56,9 @@ extension SettingsPanel {
             .choice("toast-position", "Position", Self.toastPositions, symbol: "align.horizontal.center",
                     description: "Where the one-line answer of a key sits. Default Bottom."),
             .number("stats-toast-opacity", "Glass darkness", step: 0.01,
-                    symbol: "circle.lefthalf.striped.horizontal",
+                    symbol: "circle.lefthalf.striped.horizontal.inverse",
                     description: "How dark the glass of the toasts is: the tint's opacity, 0–1, default 0.34."),
-            .toggle("stats-toast-clear", "Clear glass", symbol: "drop",
+            .toggle("stats-toast-clear", "Clear glass", symbol: "drop.circle",
                     description: "The glass without the system's frosting. Default off."),
             .toggle("stats-toast", "Progress toast in full screen", symbol: "gauge.with.dots.needle.33percent",
                     description: "A short glass toast with the photo's name, place in the folder and a progress bar "
@@ -66,7 +66,7 @@ extension SettingsPanel {
                         + "duration and never shows while you stay on a photo. Default on.",
                     nested: [
                         .choice("stats-toast-position", "Position", Self.toastPositions,
-                                symbol: "align.horizontal.center",
+                                symbol: "rectangle.split.3x3",
                                 description: "Where it sits; in the place of the key toast it steps aside. "
                                     + "Default Bottom."),
                     ]),
