@@ -83,12 +83,16 @@ public struct CacheStats: Equatable, Sendable {
     /// What the entries of the inactive windows' keep sets hold now (spec window-cache-ownership §1), those the
     /// active window keeps for itself aside: the memory kept for a switch back.
     public let keptForOtherWindows: Int
+    /// Files read again after their bytes had been evicted, since launch: what a switch back or a return to a photo
+    /// cost the share.
+    public let rereads: Int
 
     public init(bytesCount: Int, previewCount: Int, fullCount: Int, usedBytes: Int, limitBytes: Int,
                 effectiveLimitBytes: Int, evictedInactive: (count: Int, bytes: Int) = (0, 0),
                 graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil, readyCount: Int = 0,
-                keptForOtherWindows: Int = 0) {
+                keptForOtherWindows: Int = 0, rereads: Int = 0) {
         self.keptForOtherWindows = keptForOtherWindows
+        self.rereads = rereads
         self.bytesCount = bytesCount
         self.readyCount = readyCount
         self.previewCount = previewCount
@@ -106,6 +110,7 @@ public struct CacheStats: Equatable, Sendable {
             == (b.bytesCount, b.previewCount, b.fullCount, b.readyCount)
             && (a.usedBytes, a.limitBytes, a.effectiveLimitBytes) == (b.usedBytes, b.limitBytes, b.effectiveLimitBytes)
             && a.evictedInactive == b.evictedInactive && a.keptForOtherWindows == b.keptForOtherWindows
+            && a.rereads == b.rereads
             && a.graphicsUsedBytes == b.graphicsUsedBytes && a.graphicsLimitBytes == b.graphicsLimitBytes
     }
 }
@@ -149,6 +154,8 @@ final class CacheEntry<Pyramid: AnyObject & Sendable> {
     var timings = LoadTimings()
     /// The read in flight; decode jobs await it, so the file is read once.
     var read: Task<Data, Error>?
+    /// The entry held the file's bytes once: a read now is a re-read (`CacheStats.rereads`).
+    var hadBytes = false
     var readID = 0
     /// The queue position of the read in flight, shared with the reader: moving it moves the read whether it is
     /// queued yet or still on its way to the queue.

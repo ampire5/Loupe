@@ -798,3 +798,26 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     #expect(try await kept.value.data == kData)
     #expect(chunks.value == 4)
 }
+
+/// A chunked read reports how much of the file it has read, in its priority box (`ReadPriority.progress`): the cache
+/// finishes a read past `FileReader.finishReadAbove` rather than drop it.
+@Test(.timeLimit(.minutes(1))) func chunkedReadReportsProgress() async throws {
+    let files = try TempFiles()
+    let (url, data) = try files.make("p.bin", size: 4 * mib)
+    let hold = DispatchSemaphore(value: 0)
+    let entered = DispatchSemaphore(value: 0)
+    let reader = FileReader(threads: 1, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: { fd, buf, count, offset in
+        if offset == 2 * mib { entered.signal(); hold.wait() }
+        return realPread(fd, buf, count, offset)
+    })
+    let box = ReadPriority(3)
+    #expect(box.progress == 0)
+    let read = Task { try await reader.read(url, priority: box) }
+    await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+        DispatchQueue.global().async { entered.wait(); c.resume() }
+    }
+    #expect(box.progress == 0.5)
+    hold.signal()
+    #expect(try await read.value.data == data)
+    #expect(box.progress == 1)
+}

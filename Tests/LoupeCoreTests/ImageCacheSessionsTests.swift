@@ -696,6 +696,50 @@ struct ImageCacheSessionsTests {
         #expect(rig.reader.readCount(a[4]) == 1)
     }
 
+    /// A read nothing waits for any more is finished when more than `finishReadAbove` of the file is in (its bytes
+    /// kept like any other, a later visit reads nothing), and stopped when less is.
+    @Test(arguments: [(0.6, true), (0.3, false)]) func readPastHalfIsFinished(fraction: Double, finished: Bool) async {
+        let rig = Rig()
+        let a = folder("a"), c = folder("c")
+        let gate = AsyncGate()
+        rig.reader.hang(a[4], on: gate)
+        rig.reader.setProgress(a[4], fraction)
+        let traced = Traced()
+        await rig.cache.setTrace { traced.add($0) }
+        await rig.focus(a, 3, dwelling: true)
+        #expect(await eventually { traced.first(a[4], .readRequested) != nil })
+        await rig.focus(c, 0)   // a's photos leave the plan: a[4]'s jobs go, its read is left alone or stopped
+        #expect((traced.first(a[4], .readCancelled) != nil) == !finished)
+        gate.open()
+        #expect(await rig.settle())
+        #expect((await rig.cache.inspect([a[4]])[0]?.hasBytes ?? false) == finished)
+    }
+
+    /// `rereads`: a file read again after its bytes were evicted; nothing counted when a window comes back to what it
+    /// kept.
+    @Test func rereadCountedWhenBytesWereEvicted() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        await rig.open(sessionB, active: true, visible: true)
+        await rig.open(sessionA, active: false, visible: false)
+        await rig.focus(sessionB, b, 5)
+        #expect(await eventually { atLeast(.preview, await rig.state(b[5])) })
+        #expect(await rig.settle())
+        #expect(await rig.cache.stats().rereads == 0)
+
+        await rig.switchTo(sessionA, from: sessionB)
+        await rig.setMemory(1)
+        await rig.focus(sessionA, a, 0)
+        #expect(await rig.settle())
+        #expect(await rig.state(b[5]) == nil)
+
+        await rig.cache.setActivity(sessionB, active: false, visible: true)
+        #expect(await eventually { atLeast(.preview, await rig.state(b[5])) })
+        #expect(await rig.settle())
+        #expect(rig.reader.readCount(b[5]) == 2)
+        #expect(await rig.cache.stats().rereads == 1)
+    }
+
     /// `keptForOtherWindows`: what the entries of the inactive windows' keep sets hold now.
     @Test func keptForOtherWindowsCounted() async {
         let rig = Rig()

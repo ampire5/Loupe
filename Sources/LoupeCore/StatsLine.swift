@@ -171,13 +171,14 @@ public enum StatsLine {
     }
 
     /// The debug log's line for an activation (spec windows-and-tabs §3.8): `activate 2 state=full reads=0 · 2.7 / 3.0 GB
-    /// · other windows −3 (412 MB) · kept 96 MB`; `reads` counts the reads and decodes it started, `state=none` when nothing of the
+    /// · other windows −3 (412 MB) · kept 96 MB · rereads 4` (files read again since launch, once there are any);
+    /// `reads` counts the reads and decodes it started, `state=none` when nothing of the
     /// current photo is held.
     public static func activationLog(session: Int, _ activation: CacheActivation) -> String {
         let stats = activation.stats
         return "activate \(session) state=\(activation.current.map(stateName) ?? "none") reads=\(activation.jobs) · "
             + "\(gigabytes(stats.usedBytes)) / \(gigabytes(stats.effectiveLimitBytes)) GB" + otherWindows(stats.evictedInactive)
-            + kept(stats.keptForOtherWindows, "kept")
+            + kept(stats.keptForOtherWindows, "kept") + (stats.rereads > 0 ? " · rereads \(stats.rereads)" : "")
     }
 
     private static func stateName(_ goal: CacheGoal) -> String {

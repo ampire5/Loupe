@@ -11,6 +11,7 @@ extension ImageCache {
     /// reader shares, so a move made before the read reaches the reader's queue still counts.
     func readTask(_ url: URL, _ e: CacheEntry<Pyramid>) -> Task<Data, Error> {
         if let read = e.read { return read }
+        if e.hadBytes { rereads += 1 }
         e.readID += 1
         let priority = ReadPriority(readPriority(url))
         priority.isCurrent = isCurrent(url)
@@ -25,6 +26,7 @@ extension ImageCache {
                     emit(url, .readDelivered)
                     e.read = nil
                     e.data = bytes.data
+                    e.hadBytes = true
                     e.stamp = bytes.stamp
                     e.timings.readMs = start.millisecondsElapsed
                     notify(url)

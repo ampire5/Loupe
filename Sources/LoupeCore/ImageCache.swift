@@ -55,6 +55,8 @@ public actor ImageCache<Loader: PyramidLoader> {
     var idleTimer: Task<Void, Never>?
     /// What `evictToFit` took from inactive sessions since launch (`CacheStats.evictedInactive`).
     var evictedInactive = (count: 0, bytes: 0)
+    /// Files read again after their bytes were evicted, since launch (`CacheStats.rereads`).
+    var rereads = 0
     /// At most two progressive JPEG full decodes at a time, one of them reserved for the current photo (spec
     /// §11.1.6): libjpeg-turbo holds its coefficient arrays (≈ 0.4–1.5 GB at 147 MP) for each, and the current
     /// photo never waits for a neighbour's. An async limiter, taken before the decode slot with the same live
@@ -196,7 +198,8 @@ public actor ImageCache<Loader: PyramidLoader> {
                           usedBytes: tiered ? usedSystemBytes() : usedBytes(),
                           limitBytes: limits.memory, effectiveLimitBytes: effectiveMemory,
                           evictedInactive: evictedInactive, graphicsUsedBytes: usedGraphicsBytes(),
-                          graphicsLimitBytes: limits.graphicsMemory, readyCount: ready, keptForOtherWindows: kept)
+                          graphicsLimitBytes: limits.graphicsMemory, readyCount: ready, keptForOtherWindows: kept,
+                          rereads: rereads)
     }
 
     /// What the inactive sessions' keep sets hold, at the highest level any asks, less what the active one's holds
@@ -392,8 +395,11 @@ public actor ImageCache<Loader: PyramidLoader> {
         // reads at once.
         for item in keep { start(item.url, item.goal, mayRead: neighboursRead || item.onScreen) }
         for (url, e) in entries {
-            // A read nothing waits for any more is stopped (its bytes would only be kept, not needed).
-            if wants[url]?[.bytes] == nil, e.jobs.isEmpty, let read = e.read {
+            // A read nothing waits for any more is stopped (its bytes would only be kept, not needed), unless most of
+            // the file is in (`FileReader.finishReadAbove`): it is finished at its unplanned rank, behind everything,
+            // and its bytes are kept like any other.
+            if wants[url]?[.bytes] == nil, e.jobs.isEmpty, let read = e.read,
+               (e.readPriority?.progress ?? 0) < FileReader.finishReadAbove {
                 read.cancel()
                 e.read = nil
                 e.readID += 1   // a late result of the cancelled read is ignored

@@ -68,6 +68,7 @@ public final class ReadPriority: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Int
     private var currentPhoto = false
+    private var done = 0.0
     private var onMove: (@Sendable () -> Void)?
 
     public init(_ value: Int, isBackground: Bool = false) {
@@ -86,6 +87,14 @@ public final class ReadPriority: @unchecked Sendable {
             }
             moved?()
         }
+    }
+
+    /// How much of the file a chunked read has in so far, 0…1, set by the reader after each chunk (a mapped or
+    /// archived read reports nothing): the cache finishes a read past `FileReader.finishReadAbove` that nothing waits
+    /// for any more rather than drop it.
+    public var progress: Double {
+        get { lock.withLock { done } }
+        set { lock.withLock { done = newValue } }
     }
 
     /// The class as of now: `isCurrent` and `isBackground` first, then the value (a keep set's from `keepBase`).
@@ -171,6 +180,10 @@ extension FileReading {
 /// Prefix reads use those same chunks to stop early; a mapped file is mapped whole.
 public final class FileReader: FileReading, @unchecked Sendable {
     static let chunkSize = 1 << 20
+    /// A read nothing waits for any more (its photo left the plan) is finished, not stopped, once this much of the
+    /// file is in (`ReadPriority.progress`, spec window-cache-ownership §2): the rest costs less than reading it all
+    /// again on a later visit. The spec's starting value; to be confirmed on a NAS (the window-ownership bench).
+    public static let finishReadAbove = 0.5
 
     private let pool: IOPool
     private let isLocal: @Sendable (URL) -> Bool
@@ -323,6 +336,7 @@ public final class FileReader: FileReading, @unchecked Sendable {
             if n == 0 { break }                              // shrank under us
             filled += n
             job.touch()
+            job.priority.progress = Double(filled) / Double(size)
             if let isEnough, filled < size,
                isEnough(Data(bytesNoCopy: buffer, count: filled, deallocator: .none)) { break }
         }

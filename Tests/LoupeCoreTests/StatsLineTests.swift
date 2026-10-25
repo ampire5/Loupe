@@ -183,6 +183,16 @@ import Testing
                 == "activate 2 state=full reads=0 · 2.7 / 3.0 GB · other windows −3 (412 MB) · kept 96 MB")
     }
 
+    /// Spec window-cache-ownership §2: the re-reads since launch at the end of the activation's log line, once
+    /// there are any.
+    @Test func activationLogShowsRereads() {
+        let stats = CacheStats(bytesCount: 6, previewCount: 20, fullCount: 2, usedBytes: 2_899_102_925,
+                               limitBytes: 3 << 30, effectiveLimitBytes: 3 << 30, keptForOtherWindows: 96 << 20,
+                               rereads: 4)
+        #expect(StatsLine.activationLog(session: 3, CacheActivation(current: .bytes, jobs: 2, stats: stats))
+                == "activate 3 state=bytes reads=2 · 2.7 / 3.0 GB · kept 96 MB · rereads 4")
+    }
+
     /// Spec windows-and-tabs §3.8: the debug log's line for an activation.
     @Test func activationLog() {
         let evicted = CacheStats(bytesCount: 6, previewCount: 20, fullCount: 2, usedBytes: 2_899_102_925,

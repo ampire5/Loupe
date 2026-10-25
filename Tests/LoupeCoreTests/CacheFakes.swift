@@ -67,6 +67,7 @@ final class FakeReader: FileReading, @unchecked Sendable {
     private var hangs: [URL: AsyncGate] = [:]
     private var latencies: [URL: Duration] = [:]
     private var padding: [URL: Int] = [:]
+    private var progress: [URL: Double] = [:]
     private var stampPriorityLog: [Int] = []
 
     /// The priorities stamp checks were queued with, in order.
@@ -79,6 +80,9 @@ final class FakeReader: FileReading, @unchecked Sendable {
     /// `url`'s bytes are its name followed by `bytes` zeros (the decoder stops at the first zero), so the compressed
     /// file weighs something in `usedBytes`.
     func pad(_ url: URL, _ bytes: Int) { lock.withLock { padding[url] = bytes } }
+    /// Reads of `url` report `fraction` of the file read as soon as they start (`ReadPriority.progress`), as a
+    /// chunked read parked part-way would.
+    func setProgress(_ url: URL, _ fraction: Double) { lock.withLock { progress[url] = fraction } }
     func readCount(_ url: URL) -> Int { lock.withLock { reads[url] ?? 0 } }
     /// Every URL a read was asked for, in order (repeats included).
     var readOrder: [URL] { lock.withLock { order } }
@@ -94,6 +98,7 @@ final class FakeReader: FileReading, @unchecked Sendable {
             reads[url, default: 0] += 1
             order.append(url)
             priorities[url, default: []].append(priority.value)
+            if let fraction = progress[url] { priority.progress = fraction }
             return (hangs[url], latencies[url], padding[url] ?? 0)
         }
         if let latency { try await Task.sleep(for: latency) }
