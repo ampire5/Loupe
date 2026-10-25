@@ -694,3 +694,107 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
     gates.release("c.bin")
     _ = try await cur.value
 }
+
+// MARK: - Read classes (spec window-cache-ownership §2)
+
+/// A read's class follows its priority: the current photo's, the active window's other reads, the keep sets of the
+/// windows not in front (from `ReadPriority.keepBase`), the thumbnails'.
+@Test func readClassFromPriority() {
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    #expect(current.readClass == .current)
+    #expect(ReadPriority(5).readClass == .foreground)
+    #expect(ReadPriority(ReadPriority.keepBase - 1).readClass == .foreground)
+    #expect(ReadPriority(ReadPriority.keepBase + 3).readClass == .keep)
+    #expect(ReadPriority(ReadPriority.background, isBackground: true).readClass == .background)
+    let moved = ReadPriority(ReadPriority.keepBase)
+    moved.value = 2
+    #expect(moved.readClass == .foreground)
+}
+
+/// One thread, held: queued reads start the current photo's first, then the active window's, then the keep sets',
+/// then the thumbnails'.
+@Test(.timeLimit(.minutes(1))) func keepReadQueuesBehindForeground() async throws {
+    let files = try TempFiles()
+    var urls: [String: URL] = [:]
+    for name in ["a", "bg", "keep", "fg", "cur"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let gates = Gates()
+    gates.block("a.bin")
+    defer { gates.releaseAll() }
+    let order = StartOrder()
+    let reader = FileReader(threads: 1, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: { fd, buf, count, offset in
+        if offset == 0 { order.add(fileName(fd)) }
+        return gates.reader(fd, buf, count, offset)
+    })
+    let first = Task { try await reader.read(urls["a"]!, priority: 0) }
+    await waitEntered(gates)
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let priorities: [(String, ReadPriority)] = [
+        ("bg", ReadPriority(ReadPriority.background, isBackground: true)), ("keep", ReadPriority(ReadPriority.keepBase + 1)),
+        ("fg", ReadPriority(3)), ("cur", current),
+    ]
+    var reads: [Task<FileBytes, Error>] = []
+    for (name, p) in priorities {
+        reads.append(Task { try await reader.read(urls[name]!, priority: p) })
+        try await waitQueued(reader, reads.count)
+    }
+    gates.releaseAll()
+    _ = try await first.value
+    for r in reads { _ = try await r.value }
+    #expect(order.value == ["a.bin", "cur.bin", "fg.bin", "keep.bin", "bg.bin"])
+}
+
+/// A keep read runs in the viewer's share: with the thumbnails' threads held, it still starts at once.
+@Test(.timeLimit(.minutes(1))) func keepReadsUseViewerShare() async throws {
+    let files = try TempFiles()
+    var urls: [String: URL] = [:]
+    for name in ["bg1", "bg2", "keep"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let gates = Gates()
+    for name in ["bg1", "bg2"] { gates.block("\(name).bin") }
+    defer { gates.releaseAll() }
+    let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
+    let stuck = ["bg1", "bg2"].map { name in
+        Task { try await reader.read(urls[name]!, priority: ReadPriority(ReadPriority.background, isBackground: true)) }
+    }
+    await waitEntered(gates)
+    await waitEntered(gates)
+    let keep = urls["keep"]!
+    let read = await within(.seconds(5)) {
+        try await reader.read(keep, priority: ReadPriority(ReadPriority.keepBase + 1)).data.count
+    }
+    #expect(read.flatMap { try? $0.get() } == mib / 4)
+    gates.releaseAll()
+    for task in stuck { _ = try await task.value }
+}
+
+/// A keep read is work for a window not in front: like the active window's neighbours it pauses before its next chunk
+/// while the current photo reads (CLAUDE.md: the background yields to the foreground), and goes on afterwards.
+@Test(.timeLimit(.minutes(1))) func keepReadPausesWhileCurrentReads() async throws {
+    let files = try TempFiles()
+    let (k, kData) = try files.make("k.bin", size: 4 * mib)
+    let (c, _) = try files.make("c.bin", size: mib / 4)
+    let gates = Gates()
+    gates.block("k.bin")
+    gates.block("c.bin")
+    defer { gates.releaseAll() }
+    let chunks = Counter()
+    let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: { fd, buf, count, offset in
+        if fileName(fd) == "k.bin" { chunks.bump() }
+        return gates.reader(fd, buf, count, offset)
+    })
+    let kept = Task { try await reader.read(k, priority: ReadPriority(ReadPriority.keepBase + 1)) }
+    await waitEntered(gates)
+    let current = ReadPriority(0)
+    current.isCurrent = true
+    let cur = Task { try await reader.read(c, priority: current) }
+    await waitEntered(gates)
+    gates.release("k.bin")
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(chunks.value == 1)
+
+    gates.release("c.bin")
+    #expect(try await cur.value.data.count == mib / 4)
+    #expect(try await kept.value.data == kData)
+    #expect(chunks.value == 4)
+}

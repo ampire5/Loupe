@@ -123,8 +123,9 @@ final class IOPool: @unchecked Sendable {
         cond.unlock()
     }
 
-    /// Called by a running job before each chunk: a neighbour read (the viewer's, not current) waits here while a
-    /// current read runs on another thread, then goes on (returning at once when cancelled, so its caller stops). The
+    /// Called by a running job before each chunk: a neighbour read (the viewer's, not current: the active window's or a
+    /// keep set's, CLAUDE.md's background yielding to the foreground) waits here while a current read runs on another
+    /// thread, then goes on (returning at once when cancelled, so its caller stops). The
     /// watchdog leaves a paused job alone: it reads nothing because it was told to wait, not because its volume hangs.
     func yieldToCurrent(_ job: IOJob) {
         cond.lock()
@@ -188,11 +189,16 @@ final class IOPool: @unchecked Sendable {
         let backgroundRoom = background < backgroundLimit
         var best: (index: Int, value: Int, background: Bool)?
         for (i, job) in queue.enumerated() {
-            let isBackground = job.priority.isBackground
-            let room = isBackground ? backgroundRoom : job.priority.isCurrent ? currentRoom : neighbourRoom
+            // A keep set's read (a window not in front) shares the neighbours' thread; its value is past theirs.
+            let readClass = job.priority.readClass
+            let room = switch readClass {
+            case .background: backgroundRoom
+            case .current: currentRoom
+            case .foreground, .keep: neighbourRoom
+            }
             guard room else { continue }
             let value = job.priority.value
-            if best == nil || value < best!.value { best = (i, value, isBackground) }
+            if best == nil || value < best!.value { best = (i, value, readClass == .background) }
         }
         return best.map { ($0.index, $0.background) }
     }

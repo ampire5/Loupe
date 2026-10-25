@@ -44,6 +44,12 @@ public enum ReadError: Error, Equatable {
     case volumeStuck
 }
 
+/// Whose read it is (spec window-cache-ownership §2), from its priority (`ReadPriority.readClass`): the current photo's,
+/// the active window's other reads, the keep sets of the windows not in front, the thumbnails'. They start in that
+/// order; all but the thumbnails' run in the viewer's share of the threads, and all but the current photo's pause while
+/// a current read runs (`IOPool.yieldToCurrent`).
+public enum ReadClass: Sendable { case current, foreground, keep, background }
+
 /// A read's place in the queue, shared by the caller and the queue: the caller moves it whenever its plan changes,
 /// and the queue reads it each time it picks the next job. Being shared from the moment the read is asked for,
 /// a move made before the read reaches the queue is not lost.
@@ -80,6 +86,13 @@ public final class ReadPriority: @unchecked Sendable {
             }
             moved?()
         }
+    }
+
+    /// The class as of now: `isCurrent` and `isBackground` first, then the value (a keep set's from `keepBase`).
+    public var readClass: ReadClass {
+        if isBackground { return .background }
+        if isCurrent { return .current }
+        return value >= Self.keepBase ? .keep : .foreground
     }
 
     /// The read is the current photo's (the viewer's photo on screen, or its pair's other page): `FileReader` keeps a
