@@ -888,6 +888,7 @@ import UniformTypeIdentifiers
         window.toolbar = view.browser.nsToolbar
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
+        view.isParked = false
         homeSources?.folders.isPaused = false
         applyBrowserSettings()
         returnsTo = nil
@@ -919,7 +920,7 @@ import UniformTypeIdentifiers
     func hideHome() {
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
-        homeView.removeFromSuperview()
+        homeView.isParked = true
         window?.toolbar = viewerToolbar.nsToolbar
         // The toolbar comes back as it was left (Home's own toolbar had the window meanwhile).
         if !isFullScreen || !toolbarWanted { window?.toolbar?.isVisible = toolbarWanted }
@@ -992,8 +993,10 @@ import UniformTypeIdentifiers
         viewerView.performKeyAction(item)
     }
 
-    /// Home is in the window while it shows only: a hidden split view with a sidebar item left in it makes the system
-    /// keep room for a sidebar in the viewer's toolbar (full screen put it a sidebar's width from the left edge).
+    /// Home goes into the window the first time it shows and stays there, hidden and parked (`HomeView.isParked`: its
+    /// sidebar item collapsed, else the system keeps room for a sidebar in the viewer's toolbar, and in full screen
+    /// put it a sidebar's width from the left edge) while the viewer shows. Taken out and put back on every Return it
+    /// cost 25 ms of main thread each way on an M4 Max (docs/bench/2026-10-26-viewer-to-folders.md).
     private func attachHome(_ view: HomeView) {
         guard view.superview == nil, let container = window?.contentView else { return }
         container.addSubview(view, positioned: .below, relativeTo: cheatSheet)
@@ -1170,6 +1173,7 @@ import UniformTypeIdentifiers
     /// Return or a double click on a photo (`browse`): Home on its folder with it selected; with no photo, Folders
     /// where it was.
     @objc func browseFolder(_ sender: Any?) {
+        DebugLog.measureTurn("browse")
         let target = session.playlist.map { BrowseTarget.location(for: $0.current) }
         browseAt = target
         showHome(tab: .folders)
@@ -1252,6 +1256,7 @@ import UniformTypeIdentifiers
 
     /// A photo, folder or zip opened from the browser: here (unless another tab shows it), or in a new tab or window.
     private func openFromBrowser(_ target: OpenTarget, _ how: HomeClick) {
+        DebugLog.measureTurn("open from browser")
         let force: OpenForce? = how == .openNewTab ? .tab : how == .openNewWindow ? .window : nil
         registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: .folders)
     }
