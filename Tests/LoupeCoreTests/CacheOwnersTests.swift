@@ -8,13 +8,25 @@ private func url(_ name: String) -> URL { URL(fileURLWithPath: "/photos/\(name).
 
 /// A session listing `names` in order (index = position).
 private func session(_ id: Int, _ names: [String], current: Int? = nil, direction: Int = 1, active: Bool = false,
-                     visible: Bool = false, idleFor minutes: Int = 0, hiddenFor hidden: Int? = nil) -> CacheOwnerFacts {
+                     visible: Bool = false, idleFor minutes: Int = 0, hiddenFor hidden: Int? = nil,
+                     goal: CacheGoal = .preview, withNeighbours: Bool = false) -> CacheOwnerFacts {
     var index: [URL: Int] = [:]
     for (i, name) in names.enumerated() { index[url(name)] = i }
-    return CacheOwnerFacts(id: CacheSessionID(id), fileIndex: index, current: current, direction: direction,
-                           isActive: active, isVisible: visible, lastActive: now - .seconds(minutes * 60),
-                           hiddenSince: hidden.map { now - .seconds($0 * 60) })
+    var facts = CacheOwnerFacts(id: CacheSessionID(id), fileIndex: index, current: current, direction: direction,
+                                isActive: active, isVisible: visible, lastActive: now - .seconds(minutes * 60),
+                                hiddenSince: hidden.map { now - .seconds($0 * 60) })
+    if let current, names.indices.contains(current) {
+        facts.currentURL = url(names[current])
+        facts.currentGoal = goal
+        if withNeighbours {
+            if current > 0 { facts.previousURL = url(names[current - 1]) }
+            if current + 1 < names.count { facts.nextURL = url(names[current + 1]) }
+        }
+    }
+    return facts
 }
+
+private func cost(_ url: URL, _ goal: CacheGoal) -> Int { goal >= .full ? 600 : 100 }
 
 private func order(_ urls: [String], _ sessions: [CacheOwnerFacts]) -> [String] {
     CacheOwners.evictionOrder(urls.map(url), sessions: sessions).map { $0.deletingPathExtension().lastPathComponent }
@@ -123,5 +135,81 @@ private func order(_ urls: [String], _ sessions: [CacheOwnerFacts]) -> [String] 
         let hiddenThenUsed = session(3, ["c"], idleFor: 10, hiddenFor: 60)
         #expect(CacheOwners.idle([justHidden, longHidden, hiddenThenUsed], now: now, after: .seconds(30 * 60))
                 == [CacheSessionID(2)])
+    }
+
+    // MARK: keep sets
+
+    /// Five windows, each on its own folder: a..e, current 1, neighbours 0 and 2; `e` is active, `a` the oldest.
+    private func five(activeGoal: CacheGoal = .preview) -> [CacheOwnerFacts] {
+        let letters = ["a", "b", "c", "d", "e"]
+        return letters.enumerated().map { i, l in
+            session(i + 1, ["\(l)0", "\(l)1", "\(l)2"], current: 1, active: l == "e", idleFor: 50 - i * 10,
+                    goal: l == "e" ? activeGoal : .preview, withNeighbours: true)
+        }
+    }
+
+    @Test func keepSetsHoldCurrentAndNeighbours() {
+        let sets = CacheOwners.keepSets(five(activeGoal: .full), share: 3500, estimate: cost)
+        #expect(sets.count == 5)
+        #expect(sets[CacheSessionID(1)] == [url("a1"): .preview, url("a0"): .preview, url("a2"): .preview])
+        #expect(sets[CacheSessionID(5)] == [url("e1"): .full, url("e0"): .preview, url("e2"): .preview])
+    }
+
+    @Test func keepSetsTruncateOldestFirst() {
+        // Full: 4 × 300 + 800 = 2000. Share 1400: neighbours of the three oldest go (600), the rest stays.
+        let sets = CacheOwners.keepSets(five(activeGoal: .full), share: 1400, estimate: cost)
+        for id in 1...3 { #expect(sets[CacheSessionID(id)]?.count == 1) }
+        #expect(sets[CacheSessionID(1)] == [url("a1"): .preview])
+        #expect(sets[CacheSessionID(4)]?.count == 3)
+        #expect(sets[CacheSessionID(5)]?.count == 3)
+    }
+
+    @Test func keepSetsDowngradeCurrentAfterNeighbours() {
+        let sessions = [session(1, ["a0", "a1", "a2"], current: 1, idleFor: 20, goal: .full, withNeighbours: true),
+                        session(2, ["b0", "b1", "b2"], current: 1, active: true, idleFor: 0, goal: .full, withNeighbours: true)]
+        // Full: 800 + 800. Share 1000: A's neighbours (200) → 1400, then A's current to preview (500) → 900.
+        let sets = CacheOwners.keepSets(sessions, share: 1000, estimate: cost)
+        #expect(sets[CacheSessionID(1)] == [url("a1"): .preview])
+        #expect(sets[CacheSessionID(2)] == [url("b1"): .full, url("b0"): .preview, url("b2"): .preview])
+    }
+
+    @Test func keepSetsActiveNeverBelowItsCurrent() {
+        let sets = CacheOwners.keepSets(five(activeGoal: .full), share: 1, estimate: cost)
+        #expect(sets[CacheSessionID(5)] == [url("e1"): .full])
+        #expect(sets[CacheSessionID(1)] == nil || sets[CacheSessionID(1)]?.isEmpty == true)
+    }
+
+    @Test func keepSetsZeroShareIsTodaysProtection() {
+        var sessions = five()
+        sessions[1].isVisible = true     // b
+        let sets = CacheOwners.keepSets(sessions, share: 0, estimate: cost)
+        let kept = Set(CacheOwners.kept(sets).keys)
+        #expect(kept == CacheOwners.protected(sessions))
+    }
+
+    @Test func sharedEntryCountedOnce() {
+        // Two windows on one folder, both on photo 1: 100 once, not twice, so a share of 100 holds both.
+        let a = session(1, ["s0", "s1"], current: 1, idleFor: 5)
+        let b = session(2, ["s0", "s1"], current: 1, active: true)
+        let sets = CacheOwners.keepSets([a, b], share: 100, estimate: cost)
+        #expect(sets[CacheSessionID(1)] == [url("s1"): .preview])
+        #expect(sets[CacheSessionID(2)] == [url("s1"): .preview])
+        #expect(CacheOwners.kept(sets) == [url("s1"): .preview])
+    }
+
+    @Test func keptTakesTheHigherGoal() {
+        let a = session(1, ["s0", "s1"], current: 1, idleFor: 5, goal: .full)
+        let b = session(2, ["s0", "s1"], current: 1, active: true)
+        #expect(CacheOwners.kept(CacheOwners.keepSets([a, b], share: 10_000, estimate: cost))[url("s1")] == .full)
+    }
+
+    @Test func keptNeverInEvictionOrder() {
+        let sessions = five(activeGoal: .full)
+        let sets = CacheOwners.keepSets(sessions, share: 1400, estimate: cost)
+        let kept = Set(CacheOwners.kept(sets).keys)
+        let all = ["a", "b", "c", "d", "e"].flatMap { l in (0...2).map { url("\(l)\($0)") } }
+        let result = CacheOwners.evictionOrder(all, sessions: sessions, kept: kept)
+        #expect(Set(result).isDisjoint(with: kept))
+        #expect(result.count == all.count - kept.count)
     }
 }

@@ -22,6 +22,13 @@ public struct CacheOwnerFacts: Sendable {
     public var hiddenSince: ContinuousClock.Instant?
     /// The URL at `current`, when the caller knows it: saves `protected` a scan of `fileIndex`.
     public var currentURL: URL?
+    /// The neighbours the session's keep set holds at preview level, when the caller knows them.
+    public var previousURL: URL?
+    public var nextURL: URL?
+    /// The level the photo on screen needs: `.full` at a zoom that shows more than the preview, else `.preview`.
+    public var currentGoal: CacheGoal = .preview
+    /// The second page of a spread on screen, held at the same level as `currentURL`.
+    public var companionURL: URL?
 
     public init(id: CacheSessionID, fileIndex: [URL: Int], current: Int?, direction: Int, isActive: Bool,
                 isVisible: Bool, lastActive: ContinuousClock.Instant, hiddenSince: ContinuousClock.Instant? = nil,
@@ -41,6 +48,80 @@ public struct CacheOwnerFacts: Sendable {
 /// Which session an entry belongs to and who goes first when memory runs short (spec windows-and-tabs §3.4–3.5).
 /// Pure logic: `ImageCache` feeds it the sessions' facts and applies the result.
 public enum CacheOwners {
+    /// What one session keeps resident while it is not in front: URL → the level it is held at.
+    public typealias KeepSet = [URL: CacheGoal]
+
+    /// Keep sets (spec window-cache-ownership §1): per session the photo on screen (and the second page of a
+    /// spread) at `currentGoal` plus one neighbour each side at `.preview`. When the sum of estimated sizes, an
+    /// entry listed by several sessions counted once at its highest level, exceeds `share`, they are truncated
+    /// in the order of the longest unused session first: the inactive sessions' neighbours, then their current
+    /// photos down to `.preview`, then the whole sets of those neither active nor visible, and last the active
+    /// session's neighbours (its own plan reads them anyway). The active session keeps its current photo at the
+    /// level it needs whatever the share; with `share` 0 what is left is `protected`.
+    public static func keepSets(_ sessions: [CacheOwnerFacts], share: Int,
+                                estimate: (URL, CacheGoal) -> Int) -> [CacheSessionID: KeepSet] {
+        struct Held {
+            var current: KeepSet = [:]
+            var neighbours: KeepSet = [:]
+            var set: KeepSet { current.merging(neighbours) { max($0, $1) } }
+        }
+        var held: [CacheSessionID: Held] = [:]
+        for s in sessions {
+            var h = Held()
+            if let url = currentURL(of: s) {
+                h.current[url] = s.currentGoal
+                if let c = s.companionURL { h.current[c] = max(h.current[c] ?? .bytes, s.currentGoal) }
+                for n in [s.previousURL, s.nextURL] {
+                    if let n, h.current[n] == nil { h.neighbours[n] = .preview }
+                }
+            }
+            held[s.id] = h
+        }
+        let order = sessions.sorted { a, b in
+            if a.isActive != b.isActive { return b.isActive }
+            if a.lastActive != b.lastActive { return a.lastActive < b.lastActive }
+            return a.id.raw < b.id.raw
+        }
+        func total() -> Int {
+            var union: KeepSet = [:]
+            for h in held.values { union.merge(h.set) { max($0, $1) } }
+            return union.reduce(0) { $0 + estimate($1.key, $1.value) }
+        }
+        var sum = total()
+        func dropNeighbours(_ s: CacheOwnerFacts) {
+            guard sum > share, !(held[s.id]?.neighbours.isEmpty ?? true) else { return }
+            held[s.id]?.neighbours = [:]
+            sum = total()
+        }
+        for s in order where !s.isActive { dropNeighbours(s) }
+        for s in order where sum > share && !s.isActive {
+            guard var h = held[s.id], h.current.contains(where: { $0.value > .preview }) else { continue }
+            for (url, goal) in h.current { h.current[url] = min(goal, .preview) }
+            held[s.id] = h
+            sum = total()
+        }
+        for s in order where sum > share && !s.isActive && !s.isVisible {
+            guard let h = held[s.id], !h.current.isEmpty else { continue }
+            held[s.id] = Held()
+            sum = total()
+        }
+        for s in order where s.isActive { dropNeighbours(s) }
+        return held.mapValues(\.set)
+    }
+
+    /// The union of the sessions' keep sets: every URL held by any of them, at the highest level any asks.
+    public static func kept(_ sets: [CacheSessionID: KeepSet]) -> [URL: CacheGoal] {
+        var union: [URL: CacheGoal] = [:]
+        for set in sets.values { union.merge(set) { max($0, $1) } }
+        return union
+    }
+
+    private static func currentURL(of s: CacheOwnerFacts) -> URL? {
+        if let url = s.currentURL { return url }
+        guard let current = s.current else { return nil }
+        return s.fileIndex.first(where: { $0.value == current })?.key
+    }
+
     /// URLs that are never evicted: the current photo of the active and of every visible session.
     public static func protected(_ sessions: [CacheOwnerFacts]) -> Set<URL> {
         var urls = Set<URL>()
@@ -58,7 +139,11 @@ public enum CacheOwners {
     /// session the entries farthest from its current photo go first (ties: the one behind the direction of
     /// travel, as `ImageCache.evictToFit`), its current photo last.
     public static func evictionOrder(_ urls: [URL], sessions: [CacheOwnerFacts]) -> [URL] {
-        let keep = protected(sessions)
+        evictionOrder(urls, sessions: sessions, kept: protected(sessions))
+    }
+
+    /// As above, with `kept` (the keep sets' URLs, see `keepSets`) in place of `protected`.
+    public static func evictionOrder(_ urls: [URL], sessions: [CacheOwnerFacts], kept keep: Set<URL>) -> [URL] {
         struct Ranked {
             let url: URL
             let position: Int
