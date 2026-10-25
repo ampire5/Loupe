@@ -216,12 +216,13 @@ import StashKitUI
     }
 
     /// A new tab on screen in `anchor`'s window, empty.
-    private func makeTab(beside anchor: ViewerWindowController?) -> ViewerWindowController? {
+    private func makeTab(beside anchor: ViewerWindowController?, key: Bool = true) -> ViewerWindowController? {
         guard let anchorWindow = anchor?.window, let controller = makeController?(), let window = controller.window else {
             return nil
         }
         anchorWindow.addTabbedWindow(window, ordered: .above)
-        controller.showWindow(nil)
+        // `key` false: a tab of a restored session (`restoreWindow`), whose selected tab alone may be made key.
+        if key { controller.showWindow(nil) } else { window.makeFirstResponder(controller.viewerView) }
         controller.syncFullScreen()   // a tab of a full-screen window is in full screen without entering it
         return controller
     }
@@ -253,6 +254,9 @@ import StashKitUI
     var positions: FolderPositions?
     var pathStores: [any PathMoving] = []
     private var lastSaveScheduled = false
+    /// Session restores not done yet (`open(session:)`): their windows come one per turn, and a snapshot taken meanwhile
+    /// would leave the ones not made yet out of Last Session (a quit during the restore keeps the one saved before).
+    private var restoresUnderway = 0
     /// The windows as they were before the closes of this turn of the run loop (a window of several tabs closes them
     /// one by one): saved when they leave none, so Last Session keeps every tab of the last window.
     private var beforeCloses: SessionSnapshot?
@@ -288,14 +292,14 @@ import StashKitUI
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self else { return }
             self.lastSaveScheduled = false
-            guard !self.entries.isEmpty else { return }
+            guard !self.entries.isEmpty, self.restoresUnderway == 0 else { return }
             self.sessions?.saveLast(self.snapshot())
         }
     }
 
     /// Last Session now, written before returning: quitting, or the last window closing.
     func saveLastNow() {
-        guard let sessions, !entries.isEmpty else { return }
+        guard let sessions, !entries.isEmpty, restoresUnderway == 0 else { return }
         sessions.saveLast(snapshot())
         sessions.flush()
     }
@@ -303,40 +307,107 @@ import StashKitUI
     /// The windows of `session` next to those open (Home spec §2.6). `first`: an empty window to take the first
     /// session window (the launch's), whose full screen the launch restores itself. Only each window's selected tab
     /// opens at once; full-screen windows go to full screen one after another. `completion` once the windows are up.
+    /// The session's front window is made first and alone made key (one activation, one plan for the cache); the others
+    /// one per turn of the main thread, each ordered below the one made before it without becoming key, so a
+    /// restore of many windows is no one long block and input gets through between them (spikes/rust/REPORT.md §3.4).
     func open(session: SessionSnapshot, first: ViewerWindowController? = nil, completion: (() -> Void)? = nil) {
         let paths = session.windows.flatMap(\.tabs).compactMap { tab -> String? in
             if case .file(let path, _) = tab { return path }
             return nil
         }
+        restoresUnderway += 1
         Task { [weak self] in
             let found = await HomeGrid.availability(of: paths, timeout: .seconds(1))
             guard let self else { return }
             let steps = SessionRestorePlan.steps(session) { found[$0] ?? nil }
-            var fullScreen: [ViewerWindowController] = []
-            let screens = NSScreen.screens.map(\.visibleFrame)
-            let main = NSScreen.main?.visibleFrame ?? screens.first ?? .zero
-            // Back to front: the session's front window is made last, so it ends up in front and key.
-            for (k, step) in steps.enumerated().reversed() {
-                let reused = k == 0 ? first : nil
-                guard let lead = reused ?? self.makeController?(), let window = lead.window else { continue }
-                if reused == nil {
-                    window.setFrame(SessionFrames.fit(step.frame, screens: screens, main: main), display: false)
-                    window.tabbingMode = .disallowed
-                    lead.showWindow(nil)
-                    window.tabbingMode = .preferred
-                    if step.fullScreen { fullScreen.append(lead) }
-                }
-                var tabs = [lead]
-                for _ in step.tabs.dropFirst() {
-                    guard let tab = self.makeTab(beside: tabs.last) else { break }
-                    tabs.append(tab)
-                }
-                for (controller, tabStep) in zip(tabs, step.tabs) { controller.restore(tabStep) }
-                if tabs.indices.contains(step.selected) { tabs[step.selected].bringToFront() }
+            let restore = Restore(steps: steps, tabCount: session.tabCount, completion: completion)
+            restore.turn {
+                guard let front = steps.first, let lead = self.restoreWindow(front, reused: first, below: nil, restore) else { return }
+                lead.bringToFront()
+                restore.below = lead.window
             }
-            DebugLog.log("session opened: \(steps.count) windows, \(session.tabCount) tabs")
-            self.enterFullScreenInTurn(fullScreen, completion: completion)
+            self.restoreNext(restore, index: 1)
         }
+    }
+
+    /// A session restore under way: what it made so far and the main thread's CPU time it took.
+    private final class Restore {
+        let steps: [SessionRestorePlan.WindowStep]
+        let tabCount: Int
+        let completion: (() -> Void)?
+        let screens = NSScreen.screens.map(\.visibleFrame)
+        let main: CGRect
+        /// The window the next one goes under: the one made last.
+        weak var below: NSWindow?
+        /// In the order made, front to back.
+        var fullScreen: [ViewerWindowController] = []
+        var cpu = 0.0, longest = 0.0
+
+        init(steps: [SessionRestorePlan.WindowStep], tabCount: Int, completion: (() -> Void)?) {
+            self.steps = steps
+            self.tabCount = tabCount
+            self.completion = completion
+            main = NSScreen.main?.visibleFrame ?? screens.first ?? .zero
+        }
+
+        func turn(_ work: () -> Void) {
+            let started = ThreadCPU.milliseconds()
+            work()
+            let spent = ThreadCPU.milliseconds() - started
+            cpu += spent
+            longest = max(longest, spent)
+        }
+    }
+
+    /// The session's window at `index` in this turn and the next one in the next turn; after the last, the full-screen
+    /// ones go to full screen back to front, so the front one is the last to take its Space and stays in front.
+    private func restoreNext(_ restore: Restore, index: Int) {
+        guard index < restore.steps.count else {
+            DebugLog.log("session opened: \(restore.steps.count) windows, \(restore.tabCount) tabs; main \(Int(restore.cpu)) ms "
+                         + "CPU, longest turn \(Int(restore.longest)) ms")
+            restoresUnderway -= 1
+            scheduleLastSave()   // the windows as restored: each made one asked for it while the restore was out
+            return enterFullScreenInTurn(Array(restore.fullScreen.reversed()), completion: restore.completion)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            restore.turn {
+                let lead = self.restoreWindow(restore.steps[index], reused: nil, below: restore.below, restore)
+                if let window = lead?.window { restore.below = window }
+            }
+            self.restoreNext(restore, index: index + 1)
+        }
+    }
+
+    /// One session window with its tabs, its selected tab the group's. `below` nil: the front window, shown and made
+    /// key as any new window; else ordered below it, not key (no activation: it becomes active when the user goes
+    /// to it). Returns the selected tab's controller.
+    private func restoreWindow(_ step: SessionRestorePlan.WindowStep, reused: ViewerWindowController?, below: NSWindow?,
+                               _ restore: Restore) -> ViewerWindowController? {
+        guard let lead = reused ?? makeController?(), let window = lead.window else { return nil }
+        if reused == nil {
+            window.setFrame(SessionFrames.fit(step.frame, screens: restore.screens, main: restore.main), display: false)
+            window.tabbingMode = .disallowed
+            if let below {
+                window.order(.below, relativeTo: below.windowNumber)
+                window.makeFirstResponder(lead.viewerView)
+            } else {
+                lead.showWindow(nil)
+            }
+            window.tabbingMode = .preferred
+            if step.fullScreen { restore.fullScreen.append(lead) }
+        }
+        var tabs = [lead]
+        for _ in step.tabs.dropFirst() {
+            // Not key either: the selected tab is made key by `bringToFront` (the front window) or none is.
+            guard let tab = makeTab(beside: tabs.last, key: false) else { break }
+            tabs.append(tab)
+        }
+        for (controller, tabStep) in zip(tabs, step.tabs) { controller.restore(tabStep) }
+        guard tabs.indices.contains(step.selected) else { return lead }
+        let selected = tabs[step.selected]
+        if below != nil, let group = window.tabGroup, let shown = selected.window { group.selectedWindow = shown }
+        return selected
     }
 
     /// Each of `controllers` into full screen after the previous one got there (each in its own Space).
