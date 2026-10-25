@@ -91,9 +91,11 @@ struct ImageCacheSessionsTests {
         #expect(!rig.decoder.calls(a[1]).contains { if case .preview = $0 { true } else { false } })
     }
 
-    /// An inactive (and invisible) session's focus starts no read and no decode.
+    /// With `keep-share=0` (no keep sets) an inactive (and invisible) session's focus starts no read and no decode.
     @Test func inactiveStartsNothing() async {
-        let rig = Rig()
+        var limits = CacheLimits.at3G
+        limits.keepShare = 0
+        let rig = Rig(limits: limits)
         let a = folder("a"), b = folder("b")
         await rig.open(sessionA, active: true, visible: true)
         await rig.open(sessionB, active: false, visible: false)
@@ -137,9 +139,12 @@ struct ImageCacheSessionsTests {
         #expect(activation?.jobs == 0)
     }
 
-    /// Spec §3.8: an activation reports the work it started; one only setting visibility reports nothing.
+    /// Spec §3.8: an activation reports the work it started; one only setting visibility reports nothing. Without
+    /// keep sets (`keep-share=0`), so B has nothing loaded before it is made active.
     @Test func activationReportsItsWork() async {
-        let rig = Rig()
+        var limits = CacheLimits.at3G
+        limits.keepShare = 0
+        let rig = Rig(limits: limits)
         let a = folder("a"), b = folder("b")
         await rig.open(sessionA, active: true, visible: true)
         await rig.open(sessionB, active: false, visible: false)
@@ -184,7 +189,8 @@ struct ImageCacheSessionsTests {
     }
 
     /// Spec §3.4: short of memory for the active session, the longest-unused session's photos go first; a more
-    /// recent one keeps its photos, its current one included, while the older one still has levels to give.
+    /// recent one keeps its photos, its current one included, while the older one still has levels to give beyond
+    /// its keep set.
     @Test func evictsOldestInactiveFirst() async {
         let rig = Rig()
         let a = folder("a"), b = folder("b"), c = folder("c")
@@ -209,7 +215,12 @@ struct ImageCacheSessionsTests {
         #expect(await eventually { await rig.state(c[0]) == .full })
         #expect(await rig.settle())
         #expect(await rig.pyramidBytes(a) < bytesA)
-        #expect(await rig.states(b) == heldB)
+        // Keep sets (spec window-cache-ownership §1): A gives all but its photo and its neighbour before B gives
+        // anything, and B then its farthest photos; both keep sets stay.
+        let nowA = await rig.states(a), nowB = await rig.states(b)
+        #expect(atLeast(.preview, nowA[0]) && atLeast(.preview, nowA[1]))
+        #expect(a.indices.dropFirst(2).allSatisfy { !atLeast(.coarse, nowA[$0]) })
+        #expect(Array(nowB.prefix(5)) == Array(heldB.prefix(5)))
         #expect(await rig.state(b[0]) == .full)
     }
 
@@ -565,6 +576,142 @@ struct ImageCacheSessionsTests {
 
         await rig.cache.trimIdle(now: .now + .seconds(31 * 60))
         #expect(await rig.cache.stats().evictedInactive == counted)
+    }
+
+    // MARK: Keep sets (spec window-cache-ownership §1–2)
+
+    /// A at 3 (dwelling: 3 full, its neighbours previews), then B made active and A hidden, with room for the keep
+    /// sets and B's photo but not for all of A: returns the size of one preview.
+    private func leaveA(_ rig: Rig, _ a: [URL], _ b: [URL], previews: Int = 8) async -> Int {
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        #expect(await eventually { await rig.state(a[3]) == .full })
+        #expect(await rig.settle())
+        let preview = await rig.pyramidBytes([a[2]])
+        await rig.setMemory(preview * previews)
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 0, dwelling: true)
+        #expect(await eventually { await rig.state(b[0]) == .full })
+        #expect(await rig.settle())
+        return preview
+    }
+
+    /// A window left keeps its photo and one neighbour each side at their previews while the active one fills the
+    /// rest of the limit: the rest of the window goes first, and the kept ones are not read again.
+    @Test func inactiveSessionKeepsNeighbours() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        _ = await leaveA(rig, a, b)
+        for i in [2, 3, 4] {
+            #expect(atLeast(.preview, await rig.state(a[i])), "a\(i) kept")
+            #expect(rig.reader.readCount(a[i]) == 1, "a\(i) read again")
+        }
+        #expect(!atLeast(.preview, await rig.state(a[7])), "a7 is beyond the keep set")
+    }
+
+    /// The active window steps through its whole folder: the other's keep set stays as it was, nothing of it read
+    /// or decoded again.
+    @Test func keepSetSurvivesOtherWindowsFill() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        _ = await leaveA(rig, a, b)
+        // Traced, not counted by the fake decoder, which tells files apart by name (a's 2.jpg is b's too).
+        let traced = Traced()
+        await rig.cache.setTrace { traced.add($0) }
+        for i in 1..<b.count {
+            await rig.focus(sessionB, b, i, dwelling: true)
+            #expect(await eventually { await rig.state(b[i]) == .full })
+            #expect(await rig.settle())
+        }
+        for i in [2, 3, 4] {
+            #expect(atLeast(.preview, await rig.state(a[i])), "a\(i) kept")
+            #expect(rig.reader.readCount(a[i]) == 1, "a\(i) read again")
+            #expect(!traced.events.contains { $0.url == a[i] && $0.kind == .jobLaunched }, "a\(i) decoded again")
+        }
+    }
+
+    /// Under critical pressure (a quarter of the limit, and of the keep share) the keep sets are truncated, the
+    /// longest unused window's neighbours first, the active window's photo untouched; back to normal, the neighbours
+    /// come back from their bytes, not read again.
+    @Test func keepSetsTruncateUnderPressure() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b"), c = folder("c")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.open(sessionC, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        #expect(await eventually { await rig.state(a[3]) == .full })
+        #expect(await rig.settle())
+        let preview = await rig.pyramidBytes([a[2]])
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 3, dwelling: true)
+        #expect(await eventually { await rig.state(b[3]) == .full })
+        #expect(await rig.settle())
+        await rig.switchTo(sessionC, from: sessionB)
+        await rig.focus(sessionC, c, 0, dwelling: true)
+        #expect(await eventually { await rig.state(c[0]) == .full })
+        #expect(await rig.settle())
+        // Critical: the limit 10.75 previews, the keep share 5.375: A's and B's sets (3 + 3) lose A's neighbours.
+        await rig.setMemory(preview * 43)
+        await rig.cache.setMemoryPressure(.critical)
+        #expect(await rig.settle())
+        #expect(await rig.state(c[0]) == .full)
+        for i in [2, 3, 4] { #expect(atLeast(.preview, await rig.state(b[i])), "b\(i) kept") }
+        #expect(atLeast(.preview, await rig.state(a[3])))
+        let a2 = await rig.state(a[2]), a4 = await rig.state(a[4])
+        #expect(!atLeast(.preview, a2) && !atLeast(.preview, a4))
+
+        await rig.cache.setMemoryPressure(.normal)
+        #expect(await eventually {
+            let a2 = await rig.state(a[2]), a4 = await rig.state(a[4])
+            return atLeast(.preview, a2) && atLeast(.preview, a4)
+        })
+        #expect(await rig.settle())
+        #expect(rig.reader.readCount(a[2]) == 1 && rig.reader.readCount(a[4]) == 1)
+    }
+
+    /// A neighbour's job of the window left, still waiting for its read, is not cancelled: it goes on in the keep
+    /// class, behind the active window's work.
+    @Test func keepJobsRunInKeepClass() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        let gate = AsyncGate()
+        rig.reader.hang(a[4], on: gate)
+        let traced = Traced()
+        await rig.cache.setTrace { traced.add($0) }
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        #expect(await eventually { traced.first(a[4], .readRequested) != nil })
+        #expect(await rig.cache.inspect([a[4]])[0]?.jobClasses[.preview] == .foreground)
+
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 0, dwelling: true)
+        #expect(await rig.cache.inspect([a[4]])[0]?.jobClasses[.preview] == .keep)
+        #expect(!traced.events.contains { $0.url == a[4] && $0.kind == .jobCancelled && $0.goal == .preview })
+        gate.open()
+        #expect(await eventually { atLeast(.preview, await rig.state(a[4])) })
+        #expect(await rig.settle())
+        #expect(rig.reader.readCount(a[4]) == 1)
+    }
+
+    /// `keptForOtherWindows`: what the entries of the inactive windows' keep sets hold now.
+    @Test func keptForOtherWindowsCounted() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        #expect(await eventually { await rig.state(a[3]) == .full })
+        #expect(await rig.settle())
+        #expect(await rig.cache.stats().keptForOtherWindows == 0)
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 0, dwelling: true)
+        #expect(await rig.settle())
+        let kept = [a[2], a[3], a[4]]
+        let files = kept.reduce(0) { $0 + $1.lastPathComponent.utf8.count }
+        #expect(await rig.cache.stats().keptForOtherWindows == (await rig.pyramidBytes(kept)) + files)
     }
 }
 

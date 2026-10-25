@@ -169,6 +169,20 @@ import Testing
         #expect(value(rows, "Cache use") == "20 previews · 2 full · 2.9 / 3.2 GB · other windows −3 (412 MB)")
     }
 
+    /// Spec window-cache-ownership §1: what the other windows' keep sets hold, on the Cache use row and in the
+    /// activation's log line; nothing while they hold nothing.
+    @Test func showsKeptForOtherWindows() {
+        let kept = CacheStats(bytesCount: 6, previewCount: 20, fullCount: 2, usedBytes: 2_899_102_925,
+                              limitBytes: 3 << 30, effectiveLimitBytes: 3 << 30,
+                              evictedInactive: (count: 3, bytes: 412 << 20), keptForOtherWindows: 96 << 20)
+        let rows = StatsLine.diagnostics(colorSpace: nil, decoder: nil, timings: timings, fromCache: false, state: .full,
+                                         cache: kept, ramBytes: 0, gpuBytes: 0, frames: FrameStats())
+        #expect(value(rows, "Cache use")
+                == "20 previews · 2 full · 2.9 / 3.2 GB · other windows −3 (412 MB) · kept for other windows 96 MB")
+        #expect(StatsLine.activationLog(session: 2, CacheActivation(current: .full, jobs: 0, stats: kept))
+                == "activate 2 state=full reads=0 · 2.7 / 3.0 GB · other windows −3 (412 MB) · kept 96 MB")
+    }
+
     /// Spec windows-and-tabs §3.8: the debug log's line for an activation.
     @Test func activationLog() {
         let evicted = CacheStats(bytesCount: 6, previewCount: 20, fullCount: 2, usedBytes: 2_899_102_925,

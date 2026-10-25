@@ -50,6 +50,9 @@ public enum ReadError: Error, Equatable {
 public final class ReadPriority: @unchecked Sendable {
     /// The value the thumbnail generator reads at, behind every planned viewer read.
     public static let background = 1_000_000
+    /// Where the keep sets of the windows not in front start (spec window-cache-ownership §2): behind every item of
+    /// the active window's plan (whose positions stay far below), ahead of the thumbnails.
+    public static let keepBase = 500_000
 
     /// A background read (the thumbnail generator's): `FileReader` keeps those to the threads beyond the viewer's two,
     /// so the viewer never waits behind them, even when they hang on a dead share. Fixed at creation: the value only

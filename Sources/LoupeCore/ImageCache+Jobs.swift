@@ -73,7 +73,7 @@ extension ImageCache {
         nextJobID += 1
         runningJobs += 1
         let id = nextJobID
-        let phase = JobPhase(forCurrent: isCurrent(url))
+        let phase = JobPhase(forCurrent: isCurrent(url), jobClass: jobClass(url, goal))
         let task = Task {
             if goal == .ready {
                 await runReadyJob(url, e, phase: phase)
@@ -100,10 +100,12 @@ extension ImageCache {
     }
 
     /// The priority to queue with, read live right before each `pool.run`: whether the photo is current now,
-    /// and the goal's position in the latest plan. Marks the job as waiting (restartable) in that class.
+    /// and the goal's position in the latest plan (a keep set's behind the active plan's, `ReadPriority.keepBase`).
+    /// Marks the job as waiting (restartable) in that class.
     private func priority(_ url: URL, _ goal: CacheGoal, _ phase: JobPhase) -> (forCurrent: Bool, rank: Int) {
         let forCurrent = isCurrent(url)
         phase.markWaiting(forCurrent: forCurrent)
+        phase.jobClass = jobClass(url, goal)
         return (forCurrent, planned[url]?[goal] ?? Int.max)
     }
 

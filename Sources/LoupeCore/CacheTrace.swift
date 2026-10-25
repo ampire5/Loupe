@@ -64,6 +64,8 @@ public struct CacheEntryProbe: Sendable {
     public let jobs: [CacheGoal: Bool]
     /// The latest plan's goals for the entry → position in the plan.
     public let planned: [CacheGoal: Int]
+    /// Jobs in flight by goal → whose work they are (`JobClass`).
+    public var jobClasses: [CacheGoal: JobClass] = [:]
 }
 
 extension ImageCache {
@@ -76,7 +78,8 @@ extension ImageCache {
             guard let e = entries[url] else { return nil }
             return CacheEntryProbe(state: state(of: url, e), finest: e.pyramid.flatMap { loader.finestResidentLevel(of: $0) },
                                    hasBytes: e.data != nil, reading: e.read != nil,
-                                   jobs: e.jobs.mapValues { $0.phase.isWaiting }, planned: planned[url] ?? [:])
+                                   jobs: e.jobs.mapValues { $0.phase.isWaiting }, planned: planned[url] ?? [:],
+                                   jobClasses: e.jobs.mapValues { $0.phase.jobClass })
         }
     }
 

@@ -74,7 +74,7 @@ public enum StatsLine {
     /// `Colour space` (`Display P3`), `Load` (`read 98 · preview 112 · full 171 · upload 40 ms`), `Cache` (`full`),
     /// `Cache use` (`20 previews · 2 full · 2.9 / 3.2 GB`; on a discrete card those are the system tier's figures,
     /// followed by the graphics tier's, ` · GPU 3.8 / 4.3 GB`; then ` · other windows −3 (412 MB)` once eviction took
-    /// from inactive windows), `Memory` (`RAM 3.4 GB · GPU 2.8 GB`), `Frame` (`GPU 1.2/1.9 ms · 0 dropped`, `–` before
+    /// from inactive windows, and ` · kept for other windows 96 MB` while their keep sets hold something), `Memory` (`RAM 3.4 GB · GPU 2.8 GB`), `Frame` (`GPU 1.2/1.9 ms · 0 dropped`, `–` before
     /// there are frame times).
     /// `Load` is "cached" when the photo was shown from the cache (its timings are from an earlier visit). The cache
     /// state is `thumb` while only the seeded thumbnail is resident (`isSeededOnly`, M2.5 spec §5.2), whatever goal that
@@ -102,7 +102,7 @@ public enum StatsLine {
         rows.append(InfoRow(label: "Cache use", value: "\(cache.previewCount) previews · \(cache.fullCount) full · "
                             + "\(decimal(cache.usedBytes)) / \(HardwareAdvice.decimalGB(cache.effectiveLimitBytes))"
                             + (pressure ? " (pressure)" : "") + graphicsTier(cache)
-                            + otherWindows(cache.evictedInactive)))
+                            + otherWindows(cache.evictedInactive) + kept(cache.keptForOtherWindows, "kept for other windows")))
         rows.append(InfoRow(label: "Memory", value: "RAM \(gigabytes(ramBytes)) GB · GPU \(gigabytes(gpuBytes)) GB"))
         if let p50 = frames.gpuP50, let p90 = frames.gpuP90 {
             rows.append(InfoRow(label: "Frame", value: String(format: "GPU %.1f/%.1f ms · %d dropped", p50, p90, frames.dropped)))
@@ -171,12 +171,13 @@ public enum StatsLine {
     }
 
     /// The debug log's line for an activation (spec windows-and-tabs §3.8): `activate 2 state=full reads=0 · 2.7 / 3.0 GB
-    /// · other windows −3 (412 MB)`; `reads` counts the reads and decodes it started, `state=none` when nothing of the
+    /// · other windows −3 (412 MB) · kept 96 MB`; `reads` counts the reads and decodes it started, `state=none` when nothing of the
     /// current photo is held.
     public static func activationLog(session: Int, _ activation: CacheActivation) -> String {
         let stats = activation.stats
         return "activate \(session) state=\(activation.current.map(stateName) ?? "none") reads=\(activation.jobs) · "
             + "\(gigabytes(stats.usedBytes)) / \(gigabytes(stats.effectiveLimitBytes)) GB" + otherWindows(stats.evictedInactive)
+            + kept(stats.keptForOtherWindows, "kept")
     }
 
     private static func stateName(_ goal: CacheGoal) -> String {
@@ -201,6 +202,13 @@ public enum StatsLine {
     private static func otherWindows(_ evicted: (count: Int, bytes: Int)) -> String {
         guard evicted.count > 0 else { return "" }
         return " · other windows −\(evicted.count) (\(Int((Double(evicted.bytes) / Double(1 << 20)).rounded())) MB)"
+    }
+
+    /// ` · kept for other windows 96 MB` (`label`): what the inactive windows' keep sets hold now
+    /// (`CacheStats.keptForOtherWindows`, MB of 2^20 bytes); empty while they hold nothing.
+    private static func kept(_ bytes: Int, _ label: String) -> String {
+        guard bytes > 0 else { return "" }
+        return " · \(label) \(Int((Double(bytes) / Double(1 << 20)).rounded())) MB"
     }
 
     /// Decimal GB as Finder and Settings count them (`HardwareAdvice.decimalGigabytes`), for the Cache use row.

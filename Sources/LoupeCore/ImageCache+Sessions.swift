@@ -85,13 +85,24 @@ extension ImageCache {
         sessions[session]?.lastActive = .now
     }
 
+    /// The sessions as `CacheOwners` sees them, with what their keep sets hold: the photo on screen (and its pair's
+    /// other page) at the level the zoom needs, and the photos either side of it.
     func ownerFacts() -> [CacheOwnerFacts] {
         let now = ContinuousClock.now
         return sessions.map { id, s in
-            CacheOwnerFacts(id: id, fileIndex: s.fileIndex, current: s.currentURL == nil ? nil : s.focus?.current,
-                            direction: s.focus?.direction ?? 1, isActive: id == active, isVisible: s.isVisible,
-                            lastActive: id == active ? now : s.lastActive, hiddenSince: s.hiddenSince,
-                            currentURL: s.currentURL)
+            var facts = CacheOwnerFacts(id: id, fileIndex: s.fileIndex, current: s.currentURL == nil ? nil : s.focus?.current,
+                                        direction: s.focus?.direction ?? 1, isActive: id == active, isVisible: s.isVisible,
+                                        lastActive: id == active ? now : s.lastActive, hiddenSince: s.hiddenSince,
+                                        currentURL: s.currentURL)
+            if let focus = s.focus, s.currentURL != nil {
+                let pages = [focus.current, focus.companion].compactMap { $0 }
+                let before = (pages.min() ?? focus.current) - 1, after = (pages.max() ?? focus.current) + 1
+                facts.previousURL = s.files.indices.contains(before) ? s.files[before] : nil
+                facts.nextURL = s.files.indices.contains(after) ? s.files[after] : nil
+                facts.currentGoal = focus.needsFull ? .full : .preview
+                facts.companionURL = s.companionURL
+            }
+            return facts
         }
     }
 
@@ -173,6 +184,9 @@ extension ImageCache {
         guard let after = limits.idleTrim else { return }
         let idle = Set(CacheOwners.idle(owners, now: now, after: after))
         guard !idle.isEmpty else { return }
+        // The idle sessions' keep sets shrink to their current photos (`keepFacts`): replanned first, so their
+        // neighbours are no longer planned and go below.
+        reconcile(now: now)
         // The current photo and the other page of its pair, both on screen.
         let current = Set(idle.flatMap { id in [sessions[id]?.currentURL, sessions[id]?.companionURL].compactMap { $0 } })
         let spared = CacheOwners.protected(owners)

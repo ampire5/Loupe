@@ -80,10 +80,15 @@ public struct CacheStats: Equatable, Sendable {
     public let evictedInactive: (count: Int, bytes: Int)
     public let graphicsUsedBytes: Int
     public let graphicsLimitBytes: Int?
+    /// What the entries of the inactive windows' keep sets hold now (spec window-cache-ownership §1), those the
+    /// active window keeps for itself aside: the memory kept for a switch back.
+    public let keptForOtherWindows: Int
 
     public init(bytesCount: Int, previewCount: Int, fullCount: Int, usedBytes: Int, limitBytes: Int,
                 effectiveLimitBytes: Int, evictedInactive: (count: Int, bytes: Int) = (0, 0),
-                graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil, readyCount: Int = 0) {
+                graphicsUsedBytes: Int = 0, graphicsLimitBytes: Int? = nil, readyCount: Int = 0,
+                keptForOtherWindows: Int = 0) {
+        self.keptForOtherWindows = keptForOtherWindows
         self.bytesCount = bytesCount
         self.readyCount = readyCount
         self.previewCount = previewCount
@@ -100,7 +105,7 @@ public struct CacheStats: Equatable, Sendable {
         (a.bytesCount, a.previewCount, a.fullCount, a.readyCount)
             == (b.bytesCount, b.previewCount, b.fullCount, b.readyCount)
             && (a.usedBytes, a.limitBytes, a.effectiveLimitBytes) == (b.usedBytes, b.limitBytes, b.effectiveLimitBytes)
-            && a.evictedInactive == b.evictedInactive
+            && a.evictedInactive == b.evictedInactive && a.keptForOtherWindows == b.keptForOtherWindows
             && a.graphicsUsedBytes == b.graphicsUsedBytes && a.graphicsLimitBytes == b.graphicsLimitBytes
     }
 }
@@ -171,6 +176,10 @@ struct CacheJob {
     let phase: JobPhase
 }
 
+/// Whose work a job is (spec window-cache-ownership §2): the active window's plan, or the keep set of a window not in
+/// front, which queues behind all of the active one's (its plan position is past `ReadPriority.keepBase`).
+public enum JobClass: Sendable { case foreground, keep }
+
 /// Whether a job is still only waiting (for bytes or a decode slot), so cancelling or restarting it loses
 /// nothing, and the priority class it is (or will be) queued with. Set by the job on the actor and by its
 /// decode work on the pool thread.
@@ -179,11 +188,21 @@ final class JobPhase: @unchecked Sendable {
     private var waiting = true
     private var current: Bool
     private var abandoned = false
+    private var owner: JobClass
 
-    init(forCurrent: Bool) { current = forCurrent }
+    init(forCurrent: Bool, jobClass: JobClass = .foreground) {
+        current = forCurrent
+        owner = jobClass
+    }
 
     var isWaiting: Bool { lock.withLock { waiting } }
     var forCurrent: Bool { lock.withLock { current } }
+    /// Moved by the cache as the job's goal goes from the active window's plan to a keep set and back: a job of the
+    /// window left that its keep set still wants goes on in `.keep` rather than being cancelled.
+    var jobClass: JobClass {
+        get { lock.withLock { owner } }
+        set { lock.withLock { owner = newValue } }
+    }
     func markWaiting(forCurrent: Bool) { lock.withLock { waiting = true; current = forCurrent } }
     func markBusy() { lock.withLock { waiting = false } }
 

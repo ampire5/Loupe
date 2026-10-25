@@ -5,11 +5,12 @@ import Foundation
 /// kept: state the plan no longer wants stays while everything fits `cache-memory`, and goes farthest from the
 /// current photo first when it does not (lazy eviction).
 ///
-/// It serves several sessions (a window's tab each, spec windows-and-tabs §3) sharing one `cache-memory`: only the
-/// active one plans (`setActivity`); the others start nothing and keep what they have, except that a visible one
-/// gets its current photo back if it lost it (a short plan). The current photo of the active and of every visible
-/// session, and the photo such a session has on screen (`setPinned`), are never evicted; the rest goes by owner
-/// (`CacheOwners.evictionOrder`). A session hidden and inactive for `cache-idle-trim` keeps only its current photo
+/// It serves several sessions (a window's tab each, spec windows-and-tabs §3) sharing one `cache-memory`: the active
+/// one plans (`setActivity`); each of the others keeps its keep set (spec window-cache-ownership §1: its photo and one
+/// neighbour each side, within `keep-share` of the limit, `CacheOwners.keepSets`), loaded and held in the `.keep`
+/// class behind the active one's work. Eviction goes by owner (`CacheOwners.evictionOrder`) and never takes a keep
+/// set below its levels (they are planned); the current photo of the active and of every visible session, and the
+/// photo such a session has on screen (`setPinned`), are never evicted. A session hidden and inactive for `cache-idle-trim` keeps only its current photo
 /// (`trimIdle`).
 ///
 /// The actor only does bookkeeping. Reads go through `FileReading` (its own threads), decodes run inside
@@ -46,6 +47,8 @@ public actor ImageCache<Loader: PyramidLoader> {
     var activationOrder: UInt64 = 0
     /// The sessions as `CacheOwners` sees them, rebuilt whenever one changes.
     private(set) var owners: [CacheOwnerFacts] = []
+    /// Each session's keep set as the latest `reconcile` worked it out (`CacheOwners.keepSets`).
+    var keepSetsNow: [CacheSessionID: CacheOwners.KeepSet] = [:]
     /// What the idle trim's timer sleeps on (`updateIdleTimer`).
     let clock: any Clock<Duration>
     /// Wakes once a minute to trim idle sessions (`trimIdle`) while there may be one (`updateIdleTimer`).
@@ -185,11 +188,22 @@ public actor ImageCache<Loader: PyramidLoader> {
             }
         }
         let tiered = limits.graphicsMemory != nil
+        let kept = keptElsewhere().keys.reduce(0) { total, url in
+            guard let e = entries[url] else { return total }
+            return total + pyramidBytes(e) + (e.data?.count ?? 0) + (e.ready?.image.buffer.length ?? 0)
+        }
         return CacheStats(bytesCount: bytes, previewCount: previews, fullCount: full,
                           usedBytes: tiered ? usedSystemBytes() : usedBytes(),
                           limitBytes: limits.memory, effectiveLimitBytes: effectiveMemory,
                           evictedInactive: evictedInactive, graphicsUsedBytes: usedGraphicsBytes(),
-                          graphicsLimitBytes: limits.graphicsMemory, readyCount: ready)
+                          graphicsLimitBytes: limits.graphicsMemory, readyCount: ready, keptForOtherWindows: kept)
+    }
+
+    /// What the inactive sessions' keep sets hold, at the highest level any asks, less what the active one's holds
+    /// (its own plan's).
+    func keptElsewhere() -> CacheOwners.KeepSet {
+        let mine = active.flatMap { keepSetsNow[$0] } ?? [:]
+        return CacheOwners.kept(keepSetsNow.filter { $0.key != active }).filter { mine[$0.key] == nil }
     }
 
     /// Resident levels' slot arrays of `e` (not its uploads in flight). A pending pyramid (`CacheEntry.pending`)
@@ -310,21 +324,33 @@ public actor ImageCache<Loader: PyramidLoader> {
 
     /// Replans and brings jobs and residency in line: cancels what left the plan, starts what is missing in
     /// plan order, then evicts what does not fit (`evictToFit`). The plan is the active session's (none without
-    /// one), followed by the visible inactive sessions' short plans. Synchronous, so no other actor work interleaves
-    /// with it.
-    func reconcile() {
+    /// one), followed by the other sessions' keep sets (`keepPlans`, positions from `ReadPriority.keepBase`), worked
+    /// out first within `keep-share` of the effective limit; the active session plans against what they leave.
+    /// Synchronous, so no other actor work interleaves with it.
+    func reconcile(now: ContinuousClock.Instant = .now) {
         defer { updateActivity() }
         let files = self.files
-        // Planned against the effective memory, so what pressure just evicted is not planned (and decoded) again.
-        // Pressure divides only `cache-memory`: a graphics tier is planned against as it is.
+        // Planned against the effective memory, so what pressure just evicted is not planned (and decoded) again; the
+        // keep share is divided with it. Pressure divides only `cache-memory`: a graphics tier is planned against as
+        // it is.
+        // The share is the other sessions': the active one's own set (which it plans anyway) is added to it, so it
+        // takes nothing of theirs; truncated as `keepSets` says, it is still touched last.
+        let owned = keepFacts(now: now)
+        let own = owned.first(where: \.isActive).map { session in
+            CacheOwners.keepSets([session], share: .max, estimate: keepEstimate).values
+                .reduce(0) { $0 + $1.reduce(0) { $0 + keepEstimate($1.key, $1.value) } }
+        } ?? 0
+        keepSetsNow = CacheOwners.keepSets(owned, share: limits.keepBytes(effectiveMemory: effectiveMemory) + own,
+                                           estimate: keepEstimate)
         var planLimits = limits
-        planLimits.memory = effectiveMemory
+        planLimits.memory = max(0, effectiveMemory - keptElsewhere().reduce(0) { $0 + keepEstimate($1.key, $1.value) })
         let plan = focus.map { focus in CachePlan.make(focus: focus, limits: planLimits) { facts(files[$0]) } } ?? []
-        let short = shortPlan()
+        let keep = keepPlans()
         var wants: [URL: [CacheGoal: Int]] = [:]
         var first: [URL: CacheGoal] = [:]
-        for (position, item) in (plan.map { (files[$0.index], $0.goal) } + short).enumerated() {
-            let (url, goal) = item
+        let items = plan.enumerated().map { (position: $0.offset, url: files[$0.element.index], goal: $0.element.goal) }
+            + keep.enumerated().map { (position: ReadPriority.keepBase + $0.offset, url: $0.element.url, goal: $0.element.goal) }
+        for (position, url, goal) in items {
             if wants[url]?[goal] == nil { wants[url, default: [:]][goal] = position }
             if first[url] == nil && goal.isPyramid { first[url] = goal }
         }
@@ -337,6 +363,9 @@ public actor ImageCache<Loader: PyramidLoader> {
         // is busy decoding or uploading stays registered even when its goal left the plan: if the goal comes
         // back (flipping A→B→A) it is reused instead of decoding again, otherwise it uploads its result only if
         // that fits `cache-memory` and starts no further stage (spec §11.1).
+        // A waiting job a keep set still wants moves to the `.keep` class instead (and back): it is not cancelled. One
+        // already queued for a decode slot keeps its place there until its next stage (at most a stage of one photo
+        // per window, ahead of the active one's neighbours).
         for (url, e) in entries {
             for (goal, job) in e.jobs where job.phase.isWaiting {
                 // `abandonIfWaiting`: a ready decode granted its slot a moment ago does not start after all.
@@ -344,6 +373,8 @@ public actor ImageCache<Loader: PyramidLoader> {
                     job.task.cancel()
                     e.jobs[goal] = nil
                     emit(url, .jobCancelled, goal)
+                } else {
+                    job.phase.jobClass = jobClass(url, goal)
                 }
             }
         }
@@ -357,7 +388,9 @@ public actor ImageCache<Loader: PyramidLoader> {
             let url = files[item.index]
             start(url, item.goal, mayRead: isCurrent(url) || neighboursRead)
         }
-        for (url, goal) in short { start(url, goal, mayRead: true) }
+        // A keep set reads as the active session's neighbours do, but the photo a visible session has on screen
+        // reads at once.
+        for item in keep { start(item.url, item.goal, mayRead: neighboursRead || item.onScreen) }
         for (url, e) in entries {
             // A read nothing waits for any more is stopped (its bytes would only be kept, not needed).
             if wants[url]?[.bytes] == nil, e.jobs.isEmpty, let read = e.read {
@@ -388,22 +421,76 @@ public actor ImageCache<Loader: PyramidLoader> {
         }
     }
 
-    /// A visible inactive session's short plan (spec windows-and-tabs §3.2): its current photo up to what its screen
-    /// needs (its preview, or full resolution if its zoom needs it), nothing of its neighbours; most recently
-    /// active session first.
-    private func shortPlan() -> [(url: URL, goal: CacheGoal)] {
-        sessions.filter { $0.key != active && $0.value.isVisible }
+    /// The keep sets of the sessions other than the active one, as plan items (spec window-cache-ownership §1): the
+    /// most recently active session first, in each its photo on screen (and its pair's other page) before its
+    /// neighbours. None without an active session (nothing is planned then) and none of a scrubbing one.
+    /// `onScreen`: the photo a visible session shows.
+    private func keepPlans() -> [(url: URL, goal: CacheGoal, onScreen: Bool)] {
+        guard active != nil else { return [] }
+        return sessions.filter { $0.key != active && $0.value.focus?.scrubbing == false }
             .sorted { a, b in (b.value.lastActive, a.key.raw) < (a.value.lastActive, b.key.raw) }
-            .compactMap { _, s in
-                guard let url = s.currentURL, let focus = s.focus, !focus.scrubbing else { return nil }
-                return (url, focus.needsFull ? .full : .preview)
+            .flatMap { id, s -> [(url: URL, goal: CacheGoal, onScreen: Bool)] in
+                let set = keepSetsNow[id] ?? [:]
+                let pages = [s.currentURL, s.companionURL].compactMap { $0 }
+                let shown = pages.compactMap { url in set[url].map { (url, $0, s.isVisible) } }
+                let around = set.filter { !pages.contains($0.key) }.sorted { $0.key.path < $1.key.path }
+                return shown + around.map { ($0.key, $0.value, false) }
             }
     }
 
-    /// Starts what `goal` of `url` still needs; `mayRead`: a read of the file may start for it.
+    /// The facts the keep sets are worked out from: a session idle for `cache-idle-trim` (`CacheOwners.idle`) keeps
+    /// only its current photo, at the level `cache-idle-keep` leaves it.
+    private func keepFacts(now: ContinuousClock.Instant) -> [CacheOwnerFacts] {
+        guard let after = limits.idleTrim else { return owners }
+        let idle = Set(CacheOwners.idle(owners, now: now, after: after))
+        guard !idle.isEmpty else { return owners }
+        return owners.map { facts in
+            guard idle.contains(facts.id) else { return facts }
+            var trimmed = facts
+            trimmed.previousURL = nil
+            trimmed.nextURL = nil
+            if limits.idleKeep == .preview { trimmed.currentGoal = .preview }
+            return trimmed
+        }
+    }
+
+    /// What `goal` of `url` costs resident, as the plan counts it (`CachePlan`): from its header when probed, else a
+    /// stand-in photo's (`CachePlan.defaultPixelSize`) on its holder's screen.
+    func keepEstimate(_ url: URL, _ goal: CacheGoal) -> Int {
+        let grid: TileGrid, lfit: Int, coarse: Int
+        if let info = entries[url]?.info {
+            (grid, lfit, coarse) = levels(info, url)
+        } else {
+            let focus = CacheOwners.holder(of: url, sessions: owners).flatMap { sessions[$0]?.focus } ?? self.focus
+            grid = TileGrid(imageSize: CachePlan.defaultPixelSize)
+            lfit = grid.previewLevel(forScreen: focus?.screen ?? PixelSize(width: 0, height: 0), orientation: .up)
+            coarse = min(lfit + 1, grid.levelCount - 1)
+        }
+        switch goal {
+        case .bytes, .ready: return 0
+        case .coarse: return grid.byteCount(levels: coarse..<grid.levelCount)
+        case .preview: return grid.byteCount(levels: lfit..<grid.levelCount)
+        case .full: return grid.byteCount(levels: 0..<grid.levelCount)
+        }
+    }
+
+    /// The class a job of `goal` of `url` is in now: `.keep` when only a keep set plans it.
+    func jobClass(_ url: URL, _ goal: CacheGoal) -> JobClass {
+        guard let position = planned[url]?[goal], position >= ReadPriority.keepBase else { return .foreground }
+        return .keep
+    }
+
+    /// Starts what `goal` of `url` still needs; `mayRead`: a read of the file may start for it (without, nothing of
+    /// an entry not held can start, and none is made for it).
     private func start(_ url: URL, _ goal: CacheGoal, mayRead: Bool) {
         let e: CacheEntry<Pyramid>
-        if let existing = entries[url] { e = existing } else { e = CacheEntry(); entries[url] = e }
+        if let existing = entries[url] {
+            e = existing
+        } else {
+            guard mayRead else { return }
+            e = CacheEntry()
+            entries[url] = e
+        }
         guard e.failure == nil else { return }
         if goal == .bytes {
             if e.data == nil && mayRead { _ = readTask(url, e) }
