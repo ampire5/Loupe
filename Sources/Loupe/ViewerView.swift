@@ -586,14 +586,17 @@ import QuartzCore
     func watchSharp(session: Int) { renderLoop.watchSharp(session: session, since: CACurrentMediaTime()) }
     func frameStats() -> FrameStats { renderLoop.frameStats() }
 
-    /// Stops every display link the view owns, the render thread last; the window controller calls it when the window
-    /// closes.
+    /// Stops every display link the view owns, the render thread last, and lets the images shown go (their levels are
+    /// graphics memory, which the cache frees with the window's session); the window controller calls it when the
+    /// window closes.
     func teardown() {
         stopInertiaAtZoomTarget()
         stopWheelLink()
         cursorAutohide.stop()
         setFrameStatsEnabled(false)
         renderLoop.stop()
+        shownImage = nil
+        shownCompanion = nil
     }
 
     /// The wheel's link belongs to the window it was made for.

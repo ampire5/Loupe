@@ -295,8 +295,8 @@ struct ImageCacheSessionsTests {
         #expect(updatesB.urls.dropFirst(heardB).contains(a[6]))
     }
 
-    /// The active session closed: nothing is planned (no read starts) until another is made active, and its
-    /// photos, listed by no session now, are the first to go.
+    /// The active session closed: nothing is planned (no read starts) until another is made active; what only it
+    /// listed is freed at once (window-cache-ownership spec, close release), the other window's photos untouched.
     @Test func unregisterActiveKeepsOthersIdle() async {
         let rig = Rig()
         let a = folder("a"), b = folder("b")
@@ -310,18 +310,56 @@ struct ImageCacheSessionsTests {
         #expect(await eventually { await rig.state(a[0]) == .full })
         #expect(await rig.settle())
         let reads = rig.readsSoFar, decodes = rig.decodesSoFar
-        let bytesA = await rig.pyramidBytes(a)
         let heldB = await rig.states(b)
 
         await rig.cache.unregister(sessionA)
         #expect(await rig.settle())
         #expect(rig.readsSoFar == reads)
         #expect(rig.decodesSoFar == decodes)
-        await rig.setMemory((await rig.cache.stats()).usedBytes - bytesA / 2)
-        #expect(await rig.settle())
-        #expect(await rig.pyramidBytes(a) < bytesA)
+        #expect(await rig.pyramidBytes(a) == 0)
         #expect(await rig.states(b) == heldB)
-        #expect(rig.readsSoFar == reads)
+    }
+
+    /// A closed window's entries that no other window lists are gone at once, and what the cache holds is the other
+    /// window's alone.
+    @Test func unregisterFreesWhatNobodyLists() async {
+        let rig = Rig()
+        let a = folder("a"), b = folder("b")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        #expect(await eventually { await rig.state(a[3]) == .full })
+        #expect(await rig.settle())
+        await rig.switchTo(sessionB, from: sessionA)
+        await rig.focus(sessionB, b, 0, dwelling: true)
+        #expect(await eventually { await rig.state(b[0]) == .full })
+        #expect(await rig.settle())
+
+        await rig.cache.unregister(sessionA)
+        #expect(await rig.settle())
+        #expect(await rig.cache.entries.keys.allSatisfy { b.contains($0) })
+        let files = await b.asyncReduce(0) { total, url in
+            total + ((await rig.cache.inspect([url])[0]?.hasBytes ?? false) ? url.lastPathComponent.utf8.count : 0)
+        }
+        #expect(await rig.cache.stats().usedBytes == (await rig.pyramidBytes(b)) + files)
+    }
+
+    /// Two windows on one folder: closing one frees nothing the other lists.
+    @Test func unregisterKeepsWhatAnotherLists() async {
+        let rig = Rig()
+        let a = folder("a")
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        await rig.focus(sessionA, a, 3, dwelling: true)
+        await rig.focus(sessionB, a, 6)
+        #expect(await eventually { await rig.state(a[3]) == .full })
+        #expect(await rig.settle())
+        let held = await rig.states(a)
+        await rig.cache.setActivity(sessionB, active: true, visible: true)
+        await rig.cache.unregister(sessionA)
+        #expect(await rig.settle())
+        let now = await rig.states(a)
+        for i in a.indices where held[i] != nil { #expect(now[i] != nil, "a\(i) freed") }
     }
 
     /// Only `setActivity` changes the active session: an inactive session's focus leaves the active one planning.
@@ -944,5 +982,14 @@ extension ImageCacheSessionsTests {
         let neighbour = traced.events.first { $0.url != files[0] && $0.kind == .readRequested }
         #expect(preview != nil && neighbour != nil)
         if let preview, let neighbour { #expect(neighbour.time > preview.time) }
+    }
+}
+
+extension Sequence {
+    /// `reduce` with an async step.
+    func asyncReduce<T>(_ initial: T, _ next: (T, Element) async -> T) async -> T {
+        var value = initial
+        for element in self { value = await next(value, element) }
+        return value
     }
 }

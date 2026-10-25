@@ -25,13 +25,29 @@ extension ImageCache {
         sessions[session, default: CacheSessionState()].onUpdate = onUpdate
     }
 
-    /// Removes a session (its tab closed). Its entries no other session lists are kept but go first when memory runs
-    /// short. Removing the active one leaves none: nothing is planned until `setActivity` makes another active.
+    /// Removes a session (its tab closed). What it listed or had on screen that no other session lists or has on
+    /// screen is freed at once (spec window-cache-ownership, close release): its jobs and read cancelled, its levels,
+    /// file and ready decode dropped, the entry forgotten, and the freed buffers handed back to the system. Entries it
+    /// did not list (a folder it had left) are left to eviction as before. Removing the active one leaves none:
+    /// nothing is planned until `setActivity` makes another active.
     public func unregister(_ session: CacheSessionID) {
         guard let state = sessions.removeValue(forKey: session) else { return }
         state.stampCheck?.cancel()
         if active == session { active = nil }
+        let shownElsewhere = Set(sessions.values.flatMap(\.pinnedPages))
+        var freed = 0
+        for url in Set(state.files).union(state.pinnedPages) where !isListed(url) && !shownElsewhere.contains(url) {
+            guard let e = entries[url] else { continue }
+            e.jobs.values.forEach { $0.task.cancel() }
+            e.read?.cancel()
+            freed += pyramidBytes(e) + (e.data?.count ?? 0) + (e.ready?.image.buffer.length ?? 0)
+            entries[url] = nil   // a job or read still running finds its entry gone and keeps nothing
+        }
         reconcile()
+        if freed > 0 {
+            // As after memory pressure: the freed buffers go back to the system.
+            Task.detached(priority: .utility) { _ = malloc_zone_pressure_relief(nil, 0) }
+        }
     }
 
     /// active: this session becomes the active one (the previous active one gets lastActive = now);
