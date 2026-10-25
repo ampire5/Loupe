@@ -8,8 +8,9 @@ import LoupeCore
 /// 2026-10-15), and a poll while the app is active for what kqueue does not report — a file rewritten in place (only
 /// the directory's own entries raise its events). With the source armed the poll is a safety net every
 /// 10 × `folder-poll`; without one (the folder could not be opened) every `folder-poll`; one interval after the last
-/// listing finished and stretched on a slow share either way (`FolderPollSchedule`). The app's activation re-reads
-/// the folder (files may have come or gone meanwhile, spec §4.5) — unless the window cannot be seen (`isPaused`).
+/// listing finished and stretched on a slow share either way (`FolderPollSchedule`). The app's activation and the
+/// window shown again re-read the folder (files may have come or gone meanwhile, spec §4.5) only when a change may
+/// have gone unseen (`FolderPollSchedule.rereadOnReturn`): kqueue goes on while the app is in the background.
 @MainActor final class FolderWatcher {
     static let debounce: Duration = .milliseconds(300)
 
@@ -18,10 +19,10 @@ import LoupeCore
     var onChange: ((_ isPoll: Bool) -> Void)?
     private(set) var folder: URL?
     /// The window cannot be seen (windows spec §3.6; on a share every poll is network traffic): no polls, and a folder
-    /// event is dropped (the re-read when the pause is lifted covers it). Lifted, the folder is re-read at once ("when
-    /// its window appears"), the app active or not; the activation's re-read that may follow is an idle request too,
-    /// which the listing still running takes in, so a window shown as the app comes forward lists its folder once
-    /// whatever comes first.
+    /// event is dropped and marks the folder missed (the re-read when the pause is lifted covers it). Lifted, the
+    /// folder is re-read at once ("when its window appears") if `rereadOnReturn` says so, the app active or not; the
+    /// activation's re-read that may follow is an idle request too, which the listing still running takes in, so a
+    /// window shown as the app comes forward lists its folder once whatever comes first.
     var isPaused = false {
         didSet {
             guard isPaused != oldValue, let folder else { return }
@@ -31,7 +32,7 @@ import LoupeCore
                 debounceTask?.cancel()   // the re-read when the pause is lifted covers it
                 debounceTask = nil
             } else {
-                reread()
+                returned()
             }
         }
     }
@@ -40,8 +41,11 @@ import LoupeCore
     private let opener = FolderOpener()
     private var debounceTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
-    /// How long the session's last listing of this folder took; nil before the first.
+    /// How long the session's last listing of this folder took and when it ended; nil before the first.
     private var lastListing: Duration?
+    private var lastListingEnded: ContinuousClock.Instant?
+    /// Since when a change may have gone unseen: an event dropped while paused, or a listing that failed.
+    private var missedSince: ContinuousClock.Instant?
     private var observers: [NSObjectProtocol] = []
     /// The folder whose failure to open was last logged: a share without events retries at every listing.
     private var loggedOpenFailure: URL?
@@ -49,7 +53,7 @@ import LoupeCore
     init() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.isPaused == false { self?.reread() } }
+            MainActor.assumeIsolated { if self?.isPaused == false { self?.returned() } }
         })
         // Polling is for the folder the user is looking at; kqueue goes on in the background (it costs nothing).
         observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -62,6 +66,8 @@ import LoupeCore
         guard folder != self.folder else { return }
         self.folder = folder
         lastListing = nil
+        lastListingEnded = nil
+        missedSince = nil
         debounceTask?.cancel()
         debounceTask = nil
         DebugLog.log("folder watch \(folder.lastPathComponent)")
@@ -72,7 +78,14 @@ import LoupeCore
     /// A listing of the folder finished, taking `duration`: the next poll is one interval from now. A folder that
     /// lists again after its source was lost (deleted and made again, a share remounted) is watched again.
     func listed(in duration: Duration, succeeded: Bool) {
+        let now = ContinuousClock.now
         lastListing = duration
+        lastListingEnded = now
+        if !succeeded {
+            missedSince = missedSince ?? now
+        } else if let since = missedSince, since <= now - duration {
+            missedSince = nil   // a listing that began after the miss saw it
+        }
         // An open still out will deliver (a folder event re-arms itself); another would only repeat it.
         if succeeded && source == nil && !opener.isOpening { arm() }
         schedulePoll()
@@ -138,7 +151,10 @@ import LoupeCore
 
     private func folderEvent(_ events: DispatchSource.FileSystemEvent) {
         if !events.isDisjoint(with: [.delete, .rename, .revoke]) { arm() }
-        guard !isPaused else { return }
+        guard !isPaused else {
+            missedSince = missedSince ?? .now
+            return
+        }
         // The first event of a burst starts the window; the rest of the burst lands in the same re-read.
         guard debounceTask == nil else { return }
         DebugLog.log("folder event \(events.rawValue)")
@@ -151,6 +167,20 @@ import LoupeCore
     }
 
     // MARK: Polling
+
+    /// The app came to the front or the window was shown again: the folder is re-read if a change may have gone
+    /// unseen, else only the polls start again.
+    private func returned() {
+        guard let folder else { return }
+        let reread = FolderPollSchedule.rereadOnReturn(pollMilliseconds: Settings.shared.config.folderPollMilliseconds,
+                                                       watched: source != nil, missed: missedSince != nil,
+                                                       lastListing: lastListing,
+                                                       sinceListing: lastListingEnded.map { ContinuousClock.now - $0 })
+        if reread { return self.reread() }
+        DebugLog.log("folder watch \(folder.lastPathComponent): back, no re-read (kqueue on, listed "
+                     + "\(lastListingEnded.map { Int((ContinuousClock.now - $0) / .seconds(1)) } ?? 0) s ago)")
+        schedulePoll()
+    }
 
     /// Re-reads the folder now (an idle request: a listing running will do) and polls from here.
     private func reread() {

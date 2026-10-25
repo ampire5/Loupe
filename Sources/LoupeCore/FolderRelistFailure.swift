@@ -18,6 +18,28 @@ public enum FolderRelistFailure: Equatable, Sendable {
         self = witness == .answers && Self.isNoSuchFile(error as NSError) ? .gone : .notAnswering
     }
 
+    /// The first listing of the folder Home shows failed: how long until it is listed again, one unwatched poll later
+    /// (`FolderPollSchedule`, stretched by how long the failure took), as a relist that failed would be (a failed first
+    /// listing arms no watcher, spikes/rust/reports/listing-unavailable-bug.md, candidate C). nil: not again — the
+    /// folder is `gone`, a permission was refused (another try gets the same answer), or polling is off.
+    public static func retryFirstListing(after error: Error, ancestors: [Probe], pollMilliseconds: Int,
+                                         took: Duration) -> Duration? {
+        guard FolderRelistFailure(error, ancestors: ancestors) == .notAnswering, !isPermission(error as NSError) else { return nil }
+        return FolderPollSchedule.interval(pollMilliseconds: pollMilliseconds, watched: false, lastListing: took)
+    }
+
+    private static func isPermission(_ error: NSError) -> Bool {
+        switch error.domain {
+        case NSPOSIXErrorDomain:
+            if error.code == Int(EACCES) || error.code == Int(EPERM) { return true }
+        case NSCocoaErrorDomain:
+            if error.code == CocoaError.fileReadNoPermission.rawValue { return true }
+        default: break
+        }
+        guard let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+        return isPermission(underlying)
+    }
+
     /// No such file or directory (or not a directory), as POSIX or Cocoa say it, or under a wrapping error.
     private static func isNoSuchFile(_ error: NSError) -> Bool {
         switch error.domain {

@@ -49,6 +49,10 @@ extension Notification.Name {
     /// The ancestors' probe after a failed relist of the open folder (`FolderRelistFailure`): one in flight at most.
     private let ancestorProbe = AncestorProbe()
     private var watchChanges: AsyncStream<Void>.Continuation?
+    /// A failed first listing of the place on screen waiting to be tried again (`retryFirstListing`); `retryWhenShown`:
+    /// its time came while the tab was hidden.
+    private var retryTask: Task<Void, Never>?
+    private var retryWhenShown = false
     /// Pictures asked for that were not made yet: they come with the store's `thumbnailChanged`.
     private var waiting: [URL: String] = [:]
     private var pictureTask: Task<Void, Never>?
@@ -162,6 +166,11 @@ extension Notification.Name {
         didSet {
             watcher.isPaused = isPaused
             guard isPaused else {
+                // A failed listing's turn came while hidden: no cards to ask for, the listing it starts asks anew.
+                if retryWhenShown {
+                    retryWhenShown = false
+                    return retryNow()
+                }
                 // Back from the viewer: the visits and the two-page keys may have changed.
                 showSummaries()
                 progressMayHaveChanged()
@@ -189,7 +198,7 @@ extension Notification.Name {
 
     /// The browser went to one of Home's own sources: no listing, watch or thumbnails of the folder left.
     func leave() {
-        _ = gate.begin(nil)
+        _ = begin(nil)
         stopWatching()
         showCovers(of: nil)
         pictureTask?.cancel()
@@ -202,7 +211,7 @@ extension Notification.Name {
         isStopped = true   // no held request: the window closes, its request goes
         isPaused = true
         Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
-        _ = gate.begin(nil)
+        _ = begin(nil)
         stopWatching()
         showCovers(of: nil)
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -273,7 +282,7 @@ extension Notification.Name {
     /// thread for a second at most: a share that does not answer keeps its card without it.
     private func listPlaces() -> AsyncThrowingStream<BrowserListing, Error> {
         // The Places page is the browser's place now: a folder's listing and watch stop.
-        let token = gate.begin(nil)
+        let token = begin(nil)
         stopWatching()
         showCovers(of: nil)
         return AsyncThrowingStream { continuation in
@@ -300,7 +309,7 @@ extension Notification.Name {
         let path = folder.standardizedFileURL.path
         let remembered = memory.last { $0.path == path }?.listing
         let archives = Settings.shared.config.archiveFolders
-        let token = gate.begin(path)
+        let token = begin(path)
         stopWatching()
         listingFailed = false
         listingAnswered(false, reset: true)
@@ -316,15 +325,16 @@ extension Notification.Name {
                 @MainActor func deliver(_ listing: BrowserListing) {
                     if wanted() { self?.deliver(listing, token: token, to: continuation) }
                 }
+                let started = ContinuousClock.now
                 do {
-                    let started = ContinuousClock.now
+                    var took: Duration?
                     for try await listing in BrowserListingSource.listings(folder, archives: archives) {
                         guard let self, wanted() else { return }
                         deliver(listing)
                         if listing.complete {
                             self.keep(listing, for: path)
                             self.keepSummary(of: folder, listing.entries)
-                            self.watcher.listed(in: ContinuousClock.now - started, succeeded: true)
+                            took = ContinuousClock.now - started
                             if let counted = await self.counted(listing), wanted() {
                                 deliver(counted)
                                 self.keep(counted, for: path)
@@ -335,6 +345,9 @@ extension Notification.Name {
                     let (changes, sink) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
                     self.watchChanges = sink
                     self.watcher.watch(folder)
+                    // After `watch`, which starts a folder afresh: the first poll is stretched by this listing's time, and a
+                    // return to the window right after it lists nothing (`FolderPollSchedule.rereadOnReturn`).
+                    if let took { self.watcher.listed(in: took, succeeded: true) }
                     // The folder's volume while it answers (the mount table, no file system asked): a failed relist's
                     // probe never walks above it, so a share dropped later keeps the grid.
                     let mountPoint = AncestorProbe.mountPoint(of: folder)
@@ -373,6 +386,10 @@ extension Notification.Name {
                     if wanted() {
                         self?.listingFailed = true
                         self?.progressMayHaveChanged()
+                        // With a kept listing the grid stays and the failure is a toast: a retry would repeat that toast.
+                        if remembered == nil {
+                            self?.retryFirstListing(of: folder, token: token, error: error, took: ContinuousClock.now - started)
+                        }
                     }
                     continuation.finish(throwing: error)
                 }
@@ -385,6 +402,40 @@ extension Notification.Name {
                 }
             }
         }
+    }
+
+    /// A new place for the browser (`gate`): a retry of the last one's failed listing goes too.
+    private func begin(_ path: String?) -> Int {
+        retryTask?.cancel()
+        retryTask = nil
+        retryWhenShown = false
+        return gate.begin(path)
+    }
+
+    /// The first listing of the folder on screen failed and nothing would list it again (no watcher is armed without
+    /// one): unless it is gone or refused (`FolderRelistFailure.retryFirstListing`), it is listed again one poll later
+    /// by the browser's own reload, the message going once a listing comes. A tab hidden meanwhile tries when shown.
+    /// Not a child of the listing's task: the stream's end cancels that.
+    private func retryFirstListing(of folder: URL, token: Int, error: Error, took: Duration) {
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            guard let probe = self?.ancestorProbe else { return }
+            let ancestors = await probe.run(folder, mountPoint: AncestorProbe.mountPoint(of: folder), timeout: .seconds(1)) ?? []
+            guard let delay = FolderRelistFailure.retryFirstListing(after: error, ancestors: ancestors,
+                                                                    pollMilliseconds: Settings.shared.config.folderPollMilliseconds,
+                                                                    took: took) else { return }
+            DebugLog.log("folder listing failed: \(folder.lastPathComponent), again in \(Int(delay / .milliseconds(1))) ms")
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled, self.gate.isCurrent(token) else { return }
+            self.retryTask = nil
+            if self.isPaused { self.retryWhenShown = true } else { self.retryNow() }
+        }
+    }
+
+    private func retryNow() {
+        guard case .folder(let folder) = view?.location else { return }
+        DebugLog.log("folder listing again: \(folder.lastPathComponent)")
+        view?.reload()
     }
 
     /// No more polls or relists of the folder left.

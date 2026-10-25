@@ -234,6 +234,34 @@ import Foundation
     #expect(FolderPollSchedule.interval(pollMilliseconds: 3000, watched: true, lastListing: .seconds(4)) == .seconds(40))
     #expect(FolderPollSchedule.interval(pollMilliseconds: 500, watched: true, lastListing: .milliseconds(1300)) == .seconds(13))
 }
+@Test func returnRereadsWhatMayHaveBeenMissed() {   // no events, an event dropped while hidden, a failed or no listing
+    func reread(watched: Bool = true, missed: Bool = false, last: Duration? = .milliseconds(20),
+                since: Duration? = .seconds(1)) -> Bool {
+        FolderPollSchedule.rereadOnReturn(pollMilliseconds: 3000, watched: watched, missed: missed,
+                                          lastListing: last, sinceListing: since)
+    }
+    #expect(reread(watched: false))
+    #expect(reread(missed: true))
+    #expect(reread(last: nil, since: nil))
+    #expect(!reread())
+}
+@Test func returnRereadsOnceThePollWouldHave() {   // a file rewritten in place raises no event: the safety net's interval
+    #expect(!FolderPollSchedule.rereadOnReturn(pollMilliseconds: 3000, watched: true, missed: false,
+                                               lastListing: .milliseconds(20), sinceListing: .seconds(29)))
+    #expect(FolderPollSchedule.rereadOnReturn(pollMilliseconds: 3000, watched: true, missed: false,
+                                              lastListing: .milliseconds(20), sinceListing: .seconds(30)))
+    // A slow share's interval is stretched as the poll's is: ten 4 s listings.
+    #expect(!FolderPollSchedule.rereadOnReturn(pollMilliseconds: 3000, watched: true, missed: false,
+                                               lastListing: .seconds(4), sinceListing: .seconds(39)))
+    #expect(FolderPollSchedule.rereadOnReturn(pollMilliseconds: 3000, watched: true, missed: false,
+                                              lastListing: .seconds(4), sinceListing: .seconds(40)))
+}
+@Test func returnWithPollingOffTrustsTheEvents() {   // folder-poll=0: no safety net while active, none on return either
+    #expect(!FolderPollSchedule.rereadOnReturn(pollMilliseconds: 0, watched: true, missed: false,
+                                               lastListing: .milliseconds(20), sinceListing: .seconds(3600)))
+    #expect(FolderPollSchedule.rereadOnReturn(pollMilliseconds: 0, watched: false, missed: false,
+                                              lastListing: .milliseconds(20), sinceListing: .seconds(1)))
+}
 @Test func quickListGivesTheFolderNamesWithoutStamps() async throws {   // the fast first pass after an open
     let fm = FileManager.default
     let d = fm.temporaryDirectory.appendingPathComponent("loupe-quick-\(UUID().uuidString)")

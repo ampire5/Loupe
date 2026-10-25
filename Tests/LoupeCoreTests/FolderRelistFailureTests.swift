@@ -40,6 +40,27 @@ import Testing
         #expect(FolderRelistFailure(POSIXError(.ENOENT), ancestors: [.missing]) == .notAnswering)   // none answered
         #expect(FolderRelistFailure(POSIXError(.ENOENT), ancestors: []) == .notAnswering)          // no probe
     }
+
+    /// A first listing that failed on a share that does not answer is tried again one unwatched poll later, stretched
+    /// by how long the failure took to come.
+    @Test func failedFirstListingIsRetriedAtThePoll() {
+        #expect(FolderRelistFailure.retryFirstListing(after: POSIXError(.ETIMEDOUT), ancestors: [.noAnswer],
+                                                      pollMilliseconds: 3000, took: .milliseconds(50)) == .seconds(3))
+        #expect(FolderRelistFailure.retryFirstListing(after: POSIXError(.ETIMEDOUT), ancestors: [.answers],
+                                                      pollMilliseconds: 3000, took: .seconds(2)) == .seconds(20))
+    }
+
+    /// Not again: the folder is gone, a permission refused gets the same answer, polling is off.
+    @Test func failedFirstListingNotRetried() {
+        #expect(FolderRelistFailure.retryFirstListing(after: POSIXError(.ENOENT), ancestors: [.answers],
+                                                      pollMilliseconds: 3000, took: .milliseconds(5)) == nil)
+        #expect(FolderRelistFailure.retryFirstListing(after: POSIXError(.EACCES), ancestors: [.answers],
+                                                      pollMilliseconds: 3000, took: .milliseconds(5)) == nil)
+        #expect(FolderRelistFailure.retryFirstListing(after: CocoaError(.fileReadNoPermission), ancestors: [.answers],
+                                                      pollMilliseconds: 3000, took: .milliseconds(5)) == nil)
+        #expect(FolderRelistFailure.retryFirstListing(after: POSIXError(.ETIMEDOUT), ancestors: [.noAnswer],
+                                                      pollMilliseconds: 0, took: .milliseconds(5)) == nil)
+    }
 }
 
 /// The ancestors' probe: walked up from the parent until one is there (or does not answer), never above the folder's
