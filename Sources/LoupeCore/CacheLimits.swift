@@ -25,6 +25,8 @@ public struct CacheLimits: Equatable, Sendable {
     /// `cache-memory`: a fuse over the sum of everything planned; with a graphics tier (`graphicsMemory`), over what
     /// lives in system memory only (the compressed bytes and ready decodes), the pyramids going by that tier.
     public var memory = HardwareAdvice.defaultCacheMemory(.current)
+    /// `keep-share`: the percentage of the effective `memory` the windows not in front keep (their keep sets).
+    public var keepShare = 50
     /// `cache-idle-trim`: how long a tab may go unused before its cache is trimmed; nil: never.
     public var idleTrim: Duration? = .seconds(30 * 60)
     /// `cache-idle-keep`: what the trim leaves.
@@ -42,9 +44,14 @@ public struct CacheLimits: Equatable, Sendable {
         farPreviewsCoarse = config.cacheFarPreviewsCoarse
         files = config.cacheFiles
         memory = config.cacheMemory
+        keepShare = config.keepShare
         graphicsMemory = HardwareAdvice.graphicsMemory(profile)
         idleTrim = config.cacheIdleTrimMinutes == 0 ? nil : .seconds(config.cacheIdleTrimMinutes * 60)
         idleKeep = config.cacheIdleKeep
         showBlurry = config.showBlurry
     }
+
+    /// What the keep sets may hold of `effectiveMemory` (`cache-memory` as it applies now: under pressure it is
+    /// divided, and this with it).
+    public func keepBytes(effectiveMemory: Int) -> Int { effectiveMemory * keepShare / 100 }
 }

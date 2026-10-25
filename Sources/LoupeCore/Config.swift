@@ -321,6 +321,9 @@ public struct Config: Equatable, Sendable {
     /// a discrete card has its own tier, `CacheLimits.graphicsMemory`); by default from the Mac
     /// (`HardwareAdvice.defaultCacheMemory`).
     public var cacheMemory = HardwareAdvice.defaultCacheMemory(.current)
+    /// `keep-share`: the percentage of `cache-memory` kept for the windows not in front (their keep sets, spec
+    /// window-cache-ownership §1), 0...80.
+    public var keepShare = 50
     /// `cache-idle-trim`: minutes without use after which a tab's cache is trimmed, 0...1440 (0: never).
     public var cacheIdleTrimMinutes = 30
     /// `cache-idle-keep`: what an idle tab's current photo keeps when it is trimmed (`CacheIdleKeep`).
@@ -639,7 +642,7 @@ public struct Config: Equatable, Sendable {
                               "pan-indicators-on-switch",
                               "spread", "spread-shift", "spread-direction", "spread-landscape", "spread-wide-ratio",
                               "thumb-wheel-zoom", "thumb-zoom-speed", "thumb-zoom-stops", "thumb-zoom-invert",
-                              "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "cache-idle-trim", "cache-idle-keep",
+                              "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "keep-share", "cache-idle-trim", "cache-idle-keep",
                               "jxl-threads-current", "jxl-threads-other", "jxl-dc-preview",
                               "show-blurry", "switch-preview",
                               "wheel-step", "key-step", "wheel-direction", "cursor-autohide", "launch-reveal", "open-in",
@@ -763,6 +766,7 @@ public struct Config: Equatable, Sendable {
         case "cache-far-previews": return cacheFarPreviewsCoarse ? "coarse" : "full"
         case "cache-files": return String(cacheFiles)
         case "cache-memory": return Self.memoryText(cacheMemory)
+        case "keep-share": return String(keepShare)
         case "cache-idle-trim": return String(cacheIdleTrimMinutes)
         case "cache-idle-keep": return cacheIdleKeep.rawValue
         case "show-blurry": return showBlurry.rawValue
@@ -1012,6 +1016,8 @@ public struct Config: Equatable, Sendable {
             if let v = Int(value), (0...50).contains(v) { cacheFiles = v } else { return .badValue }
         case "cache-memory":
             if let v = Self.memoryBytes(value) { cacheMemory = v } else { return .badValue }
+        case "keep-share":
+            if let v = Int(value), (0...80).contains(v) { keepShare = v } else { return .badValue }
         case "cache-idle-trim":
             if let v = Int(value), (0...1440).contains(v) { cacheIdleTrimMinutes = v } else { return .badValue }
         case "cache-idle-keep":

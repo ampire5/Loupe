@@ -47,6 +47,10 @@ extension SettingsPanel {
                             description: "Neighbours kept in memory as their files (no re-read over SMB), ~12 MB "
                                 + "each; the current photo's always. 0–50, default 24."),
                     .number("cache-memory", "Memory limit", symbol: "memorychip", description: cacheMemoryDescription),
+                    .number("keep-share", "Kept for other windows", unit: "%", step: 5, symbol: "lock.rectangle.stack",
+                            description: "The share of the memory limit the windows and tabs not in front keep: the "
+                                + "photo each shows and one neighbour each side, so a switch back finds them as they "
+                                + "were. 0–80 %, default 50."),
                 ] + graphicsRows(profile) + [
                     .number("cache-idle-trim", "Trim idle windows after", unit: "min", step: 5, symbol: "moon.zzz",
                             description: "A window or tab not active for this many minutes lets go of everything but "

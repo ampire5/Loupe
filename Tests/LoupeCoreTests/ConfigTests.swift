@@ -370,6 +370,39 @@ import Foundation
     #expect(l.idleTrim == .seconds(1800) && l.idleKeep == .preview)
 }
 
+@Test func keepShareDefault50() {
+    #expect(Config().keepShare == 50)
+    #expect(Config().text(forKey: "keep-share") == "50")
+    #expect(CacheLimits(config: Config()).keepShare == 50)
+    #expect(CacheLimits().keepShare == 50)
+}
+
+@Test func keepShareParsedFromConf() {
+    #expect(Config.parse("keep-share=30").0.keepShare == 30)
+    #expect(Config.parse("keep-share=0").0.keepShare == 0)
+    #expect(Config.parse("keep-share=80").0.keepShare == 80)
+    var c = Config()
+    c.keepShare = 25
+    #expect(CacheLimits(config: c).keepShare == 25)
+}
+
+@Test func keepShareOutOfRangeRejected() {
+    for bad in ["keep-share=81", "keep-share=-1", "keep-share=half"] {
+        let (c, warnings) = Config.parse(bad)
+        #expect(warnings.count == 1, "\(bad)")
+        #expect(c.keepShare == 50, "\(bad)")
+    }
+}
+
+@Test func keepBytesIsShareOfEffectiveMemory() {
+    var l = CacheLimits()
+    l.keepShare = 50
+    #expect(l.keepBytes(effectiveMemory: 4 << 30) == 2 << 30)
+    #expect(l.keepBytes(effectiveMemory: 2 << 30) == 1 << 30)   // under pressure the limit is halved, and so is this
+    l.keepShare = 0
+    #expect(l.keepBytes(effectiveMemory: 4 << 30) == 0)
+}
+
 @Test func hapticsValueIsNotACacheValue() {
     let (c, w) = Config.parse("zoom-stop-haptics=2")
     #expect(w == ["loupe.conf:1: bad option 'zoom-stop-haptics=2'"])
@@ -1132,7 +1165,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
     "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
-    "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"),
+    "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"), "keep-share": ("30", "81"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
     "pan-indicators-fade": ("500", "2001"), "toast-duration": ("3000", "499"),
     "cache-full": ("2", "3"), "cache-previews": ("10", "0"), "cache-far-previews": ("full", "mid"),
