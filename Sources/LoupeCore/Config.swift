@@ -454,6 +454,9 @@ public struct Config: Equatable, Sendable {
     /// coloured values (yellow, green, amber) about 0.7; the part the fill has not reached, which the fill lightens by
     /// `stats-progress-opacity`.
     public var statsBarOpacity = 0.7
+    /// `stats-bar-rows`: 2, the facts over the names, or 1, everything in one row (the names, the file and the folder, in the
+    /// middle).
+    public var statsBarRows = 2
     /// `stats-folder-name`: show the open folder's name in the image status.
     public var statsFolderName = true
     /// `toast-position`: where the key's one-line answer sits, one of six places.
@@ -648,7 +651,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
                               "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
-                              "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome",
+                              "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome",
                               "fullscreen-toolbar", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
 
@@ -784,6 +787,7 @@ public struct Config: Equatable, Sendable {
         case "stats-progress": return statsProgress ? "yes" : "no"
         case "stats-progress-opacity": return formatNumber(statsProgressOpacity)
         case "stats-bar-opacity": return formatNumber(statsBarOpacity)
+        case "stats-bar-rows": return String(statsBarRows)
         case "stats-folder-name": return statsFolderName ? "yes" : "no"
         case "toast-position": return toastPosition.rawValue
         case "stats-bar-with-toolbar": return statsBarWithToolbar ? "yes" : "no"
@@ -1074,6 +1078,8 @@ public struct Config: Equatable, Sendable {
             if let v = Double(value), (0.02...0.6).contains(v) { statsProgressOpacity = v } else { return .badValue }
         case "stats-bar-opacity":
             if let v = Double(value), (0.3...1).contains(v) { statsBarOpacity = v } else { return .badValue }
+        case "stats-bar-rows":
+            if let v = Int(value), (1...2).contains(v) { statsBarRows = v } else { return .badValue }
         case "stats-folder-name":
             if let v = Self.bool(value) { statsFolderName = v } else { return .badValue }
         case "toast-position":

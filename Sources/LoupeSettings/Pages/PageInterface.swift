@@ -12,6 +12,11 @@ extension SettingsPanel {
             .number("stats-bar-opacity", "Darkness", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
                     description: "How dark the strip is under the text. White text needs about 0.6 to read over a "
                         + "bright photo, the coloured values 0.7. 0.3–1, default 0.7."),
+            .choice("stats-bar-rows", "Rows", [(word: "2", title: "Two"), (word: "1", title: "One")],
+                    symbol: "rectangle.split.1x2",
+                    description: "Two: the facts in the first row, the file's name and the folder's in the second. One: "
+                        + "everything in one row, the file's name and the folder's in the middle, between the facts and "
+                        + "the date. Default Two."),
             .toggle("stats-progress", "Folder progress", symbol: "rectangle.lefthalf.filled",
                     description: "The strip is lightened from the left up to the photo's place in the folder "
                         + "(N/M). Default on.",

@@ -636,7 +636,9 @@ import Foundation
     let defaults = Config()
     #expect(defaults.statsProgress && defaults.statsFolderName && defaults.statsModified)
     #expect(defaults.text(forKey: "stats-progress") == "yes" && defaults.text(forKey: "stats-folder-name") == "yes")
-    #expect(defaults.statsBarOpacity == 0.7)
+    #expect(defaults.statsBarOpacity == 0.7 && defaults.statsBarRows == 2 && defaults.text(forKey: "stats-bar-rows") == "2")
+    #expect(Config.parse("stats-bar-rows=1").0.statsBarRows == 1)
+    #expect(Config.parse("stats-bar-rows=3").1.count == 1)
     #expect(defaults.toastPosition == .center && defaults.text(forKey: "toast-position") == "bottom")
     let (c, w) = Config.parse("stats-progress=no\nstats-folder-name=no\nstats-bar-opacity=0.8\ntoast-position=left")
     #expect(!c.statsProgress && !c.statsFolderName && c.statsBarOpacity == 0.8 && c.toastPosition == .left && w.isEmpty)
@@ -651,8 +653,8 @@ import Foundation
     let (retired, retiredWarnings) = Config.parse("stats-toast=no\nstats-bar-clear=yes")
     #expect(retired == defaults && retiredWarnings.count == 2)
     // Near the end, just before app-icon.
-    #expect(Array(Config.keys.suffix(13)) == [
-        "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-folder-name", "toast-position",
+    #expect(Array(Config.keys.suffix(14)) == [
+        "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position",
         "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "fullscreen-toolbar",
         "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay", "app-icon",
     ])
@@ -1196,7 +1198,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "mx-panel-force": ("0", "101"), "mx-side-buttons": ("take", "steal"), "haptic-strength": ("35", "101"), "haptic-strong-strength": ("81", "keep"),
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
-    "stats-bar-with-toolbar": ("no", "perhaps"),
+    "stats-bar-rows": ("1", "3"), "stats-bar-with-toolbar": ("no", "perhaps"),
     "fullscreen-toolbar": ("shown", "sliding"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
     "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"),
