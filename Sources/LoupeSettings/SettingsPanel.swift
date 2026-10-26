@@ -11,6 +11,9 @@ public struct SettingsPanelContext {
     /// The `app-icon` row's pictures (a value and its file): the built-in icons and the pictures in
     /// ~/.config/loupe/icons. Asked for the current one while the row is shown, and for all when its grid opens.
     public var iconChoices: @MainActor () -> [IconChoice]
+    /// One `app-icon` value's picture, for the row (which shows only the current one) without reading the whole
+    /// folder; nil: looked up in `iconChoices`.
+    public var iconChoice: (@MainActor (String) -> IconChoice?)?
     /// ~/.config/loupe/icons: the grid's Show in Finder, Add… and drop; nil: no folder buttons.
     public var iconFolder: URL?
     /// The Latin character a key code types, with or without Shift, on the ASCII-capable layout
@@ -27,7 +30,8 @@ public struct SettingsPanelContext {
     public var clearThumbnails: @MainActor () async -> Bool
 
     public init(configURL: URL, inputURL: URL,
-                iconChoices: @escaping @MainActor () -> [IconChoice] = { [] }, iconFolder: URL? = nil,
+                iconChoices: @escaping @MainActor () -> [IconChoice] = { [] },
+                iconChoice: (@MainActor (String) -> IconChoice?)? = nil, iconFolder: URL? = nil,
                 translateKey: @escaping (UInt16, Bool) -> String? = { _, _ in nil },
                 reloadInput: @escaping @MainActor () -> Void = {},
                 menuRows: @escaping @MainActor () -> [(input: String, title: String)] = { [] },
@@ -35,6 +39,7 @@ public struct SettingsPanelContext {
         self.configURL = configURL
         self.inputURL = inputURL
         self.iconChoices = iconChoices
+        self.iconChoice = iconChoice
         self.iconFolder = iconFolder
         self.translateKey = translateKey
         self.reloadInput = reloadInput
