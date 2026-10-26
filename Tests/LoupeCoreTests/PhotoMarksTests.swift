@@ -41,6 +41,15 @@ import Testing
         SpreadRules(on: on, options: SpreadOptions(shift: shift, rightToLeft: false, landscapeAlone: landscapeAlone))
     }
 
+    /// Left at the spread of pages 3–4: the remembered page is one of them, the other was on screen too (review, 6).
+    @Test func rememberedPartnerViewed() {
+        let six = (1...6).map { folder.appendingPathComponent("p\($0).jpg") }
+        let pairs = PhotoMarks.pairs(order: six, rules: rules(), aspects: [])
+        #expect(pairs[six[2]] == six[3] && pairs[six[3]] == six[2])
+        #expect(PhotoMarks.unseen(order: six, remembered: "p3.jpg", visit: visit, modified: old, partner: pairs[six[2]])
+                == [six[4], six[5]])
+    }
+
     @Test func pairedOff() {
         #expect(PhotoMarks.paired(order: files, rules: rules(on: false), aspects: []).isEmpty)
     }

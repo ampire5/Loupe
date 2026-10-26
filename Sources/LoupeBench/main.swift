@@ -10,6 +10,7 @@ import LoupeCore
 // LoupeBench crops … (see CropsBench.swift)
 // LoupeBench autocolour … (see AutoColourBench.swift)
 // LoupeBench browser … (see BrowserBench.swift)
+// LoupeBench marks … (see MarksBench.swift)
 // LoupeBench strip … (see StripBench.swift)
 // LoupeBench panload … (see PanLoadBench.swift)
 // LoupeBench sharesim … (see ShareSimBench.swift)
@@ -58,6 +59,9 @@ if CommandLine.arguments.dropFirst().first == "crops" {
 }
 if CommandLine.arguments.dropFirst().first == "autocolour" {
     AutoColourBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "marks" {
+    MarksBench.main(Array(CommandLine.arguments.dropFirst(2)))
 }
 if CommandLine.arguments.dropFirst().first == "browser" {
     BrowserBench.main(Array(CommandLine.arguments.dropFirst(2)))

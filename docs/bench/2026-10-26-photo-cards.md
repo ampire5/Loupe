@@ -24,14 +24,17 @@ the closed windows of the earlier rounds stay alive until the test ends, an arte
 
 ## Computing the marks
 
-What: a scratch test, debug build, 10 000 photos, `spread` on with `spread-landscape = alone`, every seventh page
-wide.
+What: `LoupeBench marks` (MarksBench.swift; release build: `source scripts/libjxl-env.sh`, then `swift build -c
+release --product LoupeBench --triple "$DEPS_TRIPLE"`): 10 000 photos, two pages on with `spread-landscape = alone`,
+every seventh page wide, the remembered photo halfway; five runs.
 
-| Step | Time |
-|---|---|
-| `Playlist` + `sorted` (the order) | 42–46 ms |
-| `PhotoMarks.unseen` | 4.6–6.1 ms |
-| `PhotoMarks.paired` | 6.6–7.4 ms |
+| Step | Where in the app | Release | Debug (first, scratch) |
+|---|---|---|---|
+| `Playlist` + `sorted` (the order) | off the main thread, once per listing and sort | 34.7–39.9 ms | 42–46 ms |
+| `PhotoMarks.pairs` | main thread, per send | 2.2–2.5 ms | 6.6–7.4 ms |
+| `PhotoMarks.unseen` | main thread, per send | 4.6–5.8 ms | 4.6–6.1 ms |
 
-The order was made on every send at first (each return from the viewer, each arrival of aspects); it is now made once
-per listing and sort (`FolderBrowserSource.markOrder`), so a return from the viewer pays only the two marks.
+The order was made on the main thread on every send at first (each return from the viewer, each arrival of aspects).
+Now it is made off the main thread once per listing and sort (`FolderBrowserSource.markOrder`), and nothing is
+sent while the viewer is in front: a return from the viewer pays ~8 ms of the ~100 ms budget here, on an M4 Max.
+`unseen` is mostly hashing URLs (the stamps' dictionary); on the Intel Mac expect 2–3× (to be measured).
