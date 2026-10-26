@@ -1043,8 +1043,12 @@ final class Locked<T>: @unchecked Sendable {
         let store = store(reader, dir: dir, commitDelay: .zero)
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
         #expect(await eventually { await settled(store, files) })
-        await store.setViewerActivity(.neighbours)
+        // Only the current photo's work stops the thumbnails (6a736dc: the neighbours leave one read going).
+        await store.setViewerActivity(.current)
         await store.clear()
+        // Nothing made again while the test looks: a read after the clear writes into the database it checks.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(reader.reads.count == files.count)
         for url in files { #expect(await store.status(url) == .pending) }
         #expect(try ThumbnailDatabase(directory: dir, thumbSize: 32).storedBytes() == 0)
         await store.setViewerActivity(.idle)
