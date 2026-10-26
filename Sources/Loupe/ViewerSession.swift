@@ -27,6 +27,9 @@ import LoupeRender
             if let left = oldValue?.current, left != playlist?.current { recordView(of: left) }
             // The pair the new position is in (no cache call here: the navigation that set the playlist makes them).
             updateSpread()
+            if playlist?.current.deletingLastPathComponent() != oldValue?.current.deletingLastPathComponent() {
+                brokenFiles = []
+            }
             // Entering another folder (open, folder switch) moves the watcher with it.
             guard !closed, let folder = playlist?.current.deletingLastPathComponent(),
                   folder != oldValue?.current.deletingLastPathComponent() else { return }
@@ -48,6 +51,9 @@ import LoupeRender
     /// The folder an open entered whose listing is not in yet: its interim one-file playlist says nothing of the count,
     /// so the stats bar gives `N / …` (`folderCounted`). Cleared by the quick names pass or the listing, whichever is first.
     private var uncountedFolder: URL?
+    /// Files of the open folder the decoders could not read: a step goes past them (`skipBroken`), without showing their
+    /// failure. Forgotten with the folder; a file that is mended meanwhile is read again when the folder is entered anew.
+    private var brokenFiles = Set<URL>()
     /// False while the current photo's folder is still being listed after an open.
     var folderCounted: Bool { uncountedFolder == nil || uncountedFolder != playlist?.current.deletingLastPathComponent() }
 
@@ -481,7 +487,8 @@ import LoupeRender
     func go(by step: Int, wait: StepWait? = nil) -> Bool {
         guard var list = playlist else { return false }
         let before = list.index
-        guard let target = spread.target(from: before, by: step, count: list.files.count),
+        guard let wanted = spread.target(from: before, by: step, count: list.files.count),
+              let target = folderSpread.on ? wanted : indexPastBroken(wanted, step: step, in: list.files),
               list.move(by: target - before) else {
             stepAfterReread(step)
             return false
@@ -489,6 +496,34 @@ import LoupeRender
         playlist = list
         navigated(direction: step.signum(), from: before, wait: wait)
         return true
+    }
+
+    /// `index`, or the first one beyond it in the direction of `step` that is not a known broken file; nil past the end.
+    private func indexPastBroken(_ index: Int, step: Int, in files: [URL]) -> Int? {
+        let direction = step < 0 ? -1 : 1
+        var i = index
+        while files.indices.contains(i), brokenFiles.contains(files[i]) { i += direction }
+        return files.indices.contains(i) ? i : nil
+    }
+
+    /// A step onto a file the decoders cannot read goes on in its direction, to the next one that may be shown (the
+    /// other way at the end of the folder), and the failure is not shown: a photo the user did not ask for by name is not
+    /// worth an error. The file the user opened, one the strip jumped to and a folder of two pages show it as ever. The
+    /// photo before stays on screen until the next one is in, so the viewer does not flash.
+    private func skipBroken(_ e: CacheEntryView<TiledImage>, failure: String) -> Bool {
+        guard LoadErrorText.isBroken(failure), !opened, !jumpedFromStrip, !folderSpread.on,
+              let list = playlist, list.current == e.url else { return false }
+        brokenFiles.insert(e.url)
+        DebugLog.log("skip broken \(e.url.lastPathComponent)")
+        for direction in [self.direction, -self.direction] {
+            guard let target = indexPastBroken(list.index + direction, step: direction, in: list.files) else { continue }
+            var moved = list
+            guard moved.move(by: target - list.index) else { continue }
+            playlist = moved
+            navigated(direction: direction, from: list.index)
+            return true
+        }
+        return false
     }
 
     /// A step past the end of the known list: once a re-read that started after it is in, the step is retried if
@@ -1078,6 +1113,7 @@ import LoupeRender
         let name = e.url.lastPathComponent
         if let failure = e.failure {
             DebugLog.log("entry \(name): failed \(failure)")
+            if skipBroken(e, failure: failure) { return }
             show(e, atNavigation: atNavigation)
             return
         }

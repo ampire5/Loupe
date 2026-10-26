@@ -760,6 +760,9 @@ import UniformTypeIdentifiers
         let toolbar = view.addItem(withTitle: "Toggle Toolbar", action: #selector(ViewerWindowController.toggleViewerToolbar(_:)),
                                    keyEquivalent: "t")
         toolbar.keyEquivalentModifierMask = [.option, .command]
+        let tuning = view.addItem(withTitle: "Pocket Tuning…", action: #selector(ViewerWindowController.showPocketTuning(_:)),
+                                  keyEquivalent: "t")
+        tuning.keyEquivalentModifierMask = [.option, .command, .shift]
         // The same pin as `T` in the viewer, whose key it shows; the checkmark is the pin (ViewerWindowController
         // validates it). `F` toggles full screen in the viewer too; the item shows the macOS-standard key.
         let strip = view.addItem(withTitle: "Thumbnail Strip", action: #selector(ViewerWindowController.toggleThumbnailStrip(_:)),

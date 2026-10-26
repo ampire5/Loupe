@@ -8,9 +8,16 @@ public enum LoadErrorText {
         "\(name): \(reason(for: error, size: size))"
     }
 
+    /// What a file that is not an image, or one the decoders cannot read, is called (`DecodeError.unreadable`).
+    static let unreadableReason = "unreadable or unsupported image"
+
+    /// The message is about a broken file: it is not worth showing, and a step goes past it. A file too large, one the
+    /// memory does not allow, or a read that failed (a share that went away) may well be shown later.
+    public static func isBroken(_ message: String) -> Bool { message.hasSuffix(": " + unreadableReason) }
+
     static func reason(for error: Error, size: PixelSize?) -> String {
         switch error {
-        case DecodeError.unreadable: return "unreadable or unsupported image"
+        case DecodeError.unreadable: return unreadableReason
         case DecodeError.outOfMemory: return "not enough memory"
         case DecodeError.tooLarge:
             return size.map { "too large to display (\($0.width)×\($0.height))" } ?? "too large to display"

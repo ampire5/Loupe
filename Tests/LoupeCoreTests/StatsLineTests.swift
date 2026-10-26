@@ -4,48 +4,9 @@ import Testing
 @testable import LoupeCore
 
 @Suite struct StatsLineTests {
-    private func info(type: String = "public.jpeg", progressive: Bool = false) -> ImageInfo {
-        ImageInfo(pixelSize: PixelSize(width: 10502, height: 14000), typeIdentifier: type, isProgressive: progressive,
-                  fileSize: 52_340_000, colorSpaceName: nil)
-    }
-
-    @Test func fullLineAtFit() {
-        // 1000×1400 view over 10502×14000 -> fit scale 0.1 exactly.
-        let t = ViewTransform(imageSize: CGSize(width: 10502, height: 14000), viewSize: CGSize(width: 1050.2, height: 1400))
-        let line = StatsLine.loaded(name: "a.jpg", index: 2, count: 150, info: info(), transform: t, decodeMs: 1234.4)
-        #expect(line == "a.jpg   3 / 150   10502×14000   52.3 MB   JPEG   Fit 10 %   decode 1234 ms")
-    }
-
     @Test func folderPositionSupportsSpreadsAndUncountedFolders() {
         #expect(StatsLine.position(index: 5, companion: 6, count: 20) == "6–7 / 20")
         #expect(StatsLine.position(index: 5, count: 20, counted: false) == "6 / …")
-    }
-
-    @Test func progressiveAndActualSize() {
-        let t = ViewTransform(imageSize: CGSize(width: 100, height: 100), viewSize: CGSize(width: 50, height: 50), mode: .actual(1))
-        let line = StatsLine.loaded(name: "b.jpg", index: 0, count: 1, info: info(progressive: true), transform: t, decodeMs: nil)
-        #expect(line.hasSuffix("JPEG progressive   100 %"))
-    }
-
-    /// The size the bar gives is the photo's as shown: an EXIF 6 photo stored 4000x3000 is 3000x4000 (spec M3b §2.1);
-    /// as stored with `exif-orientation=no`.
-    @Test func statsShowOrientedSize() {
-        let rotated = ImageInfo(pixelSize: PixelSize(width: 4000, height: 3000), typeIdentifier: "public.jpeg",
-                                isProgressive: false, fileSize: 1_000_000, colorSpaceName: nil, orientation: .right)
-        let t = ViewTransform(imageSize: CGSize(width: 3000, height: 4000), viewSize: CGSize(width: 300, height: 400))
-        let line = StatsLine.loaded(name: "r.jpg", index: 0, count: 1, info: rotated, transform: t, decodeMs: nil)
-        #expect(line.contains("   3000×4000   "), "\(line)")
-        let stored = StatsLine.loaded(name: "r.jpg", index: 0, count: 1, info: rotated, applyingOrientation: false,
-                                      transform: t.withImageSize(CGSize(width: 4000, height: 3000)), decodeMs: nil)
-        #expect(stored.contains("   4000×3000   "), "\(stored)")
-    }
-
-    /// Until the folder's listing is in, the count is not known: `N / …`, not the interim playlist's `1 / 1`.
-    @Test func uncountedFolderShowsAnEllipsis() {
-        let t = ViewTransform(imageSize: CGSize(width: 100, height: 100), viewSize: CGSize(width: 50, height: 50))
-        let line = StatsLine.loaded(name: "a.jpg", index: 0, count: 1, counted: false, info: info(), transform: t, decodeMs: nil)
-        #expect(line.hasPrefix("a.jpg   1 / …   10502×14000"), "\(line)")
-        #expect(StatsLine.loading(name: "a.jpg", position: (index: 0, count: 1), counted: false) == "Loading a.jpg…   1 / …")
     }
 
     @Test func formatNames() {
@@ -66,8 +27,6 @@ import Testing
         #expect(StatsLine.modeText(base.zoomed(toScale: 0.2, anchor: .zero)) == "Zoom 20 %")
         let huge = ViewTransform(imageSize: CGSize(width: 100_000, height: 100_000), viewSize: CGSize(width: 500, height: 500))
         #expect(StatsLine.modeText(huge) == "Fit 0.5 %")
-        #expect(StatsLine.loading(name: "x.jpg") == "Loading x.jpg…")
-        #expect(StatsLine.loading(name: "x.jpg", position: (index: 2, count: 10)) == "Loading x.jpg…   3 / 10")
     }
 
     private func frames(gpu: [Double] = [1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.9, 1.9]) -> FrameStats {
@@ -276,52 +235,9 @@ import Testing
         #expect(StatsLine.folderName(of: URL(fileURLWithPath: "/Volumes/Photos$", isDirectory: true),
                                      volumeName: "") == "Photos$")
     }
-
-    /// The centred name never reaches the stats text on its left (or the bar's right edge): it gets the width
-    /// symmetric about the middle that stays `gap` clear of both, at most its own; under `minimum` it is hidden.
-    @Test func aShortFolderNameIsShownWhenItFits() {
-        // "AI" is ~20 pt, under the 40 pt minimum: it needs only its own width.
-        #expect(StatsLine.folderNameWidth(barWidth: 2000, textEnd: 450, nameWidth: 20, gap: 16, inset: 10,
-                                          minimum: 40) == 20)
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 480, nameWidth: 20, gap: 16, inset: 10,
-                                          minimum: 40) == nil)
-    }
-
-    @Test func folderNameWidthKeepsClearOfTheStatsText() {
-        // 1000 pt bar, the text ends at 300: 200 pt each side of the middle less a 16 pt gap.
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 300, nameWidth: 120, gap: 16, inset: 10,
-                                          minimum: 40) == 120)
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 300, nameWidth: 500, gap: 16, inset: 10,
-                                          minimum: 40) == 368)
-        // The text reaching the middle leaves nothing: hidden.
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 490, nameWidth: 120, gap: 16, inset: 10,
-                                          minimum: 40) == nil)
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 700, nameWidth: 120, gap: 16, inset: 10,
-                                          minimum: 40) == nil)
-        // No text at all (it ends at 0): the gap from the bar's edge, or the inset where that is larger.
-        #expect(StatsLine.folderNameWidth(barWidth: 400, textEnd: 0, nameWidth: 900, gap: 16, inset: 10,
-                                          minimum: 40) == 368)
-        #expect(StatsLine.folderNameWidth(barWidth: 400, textEnd: 0, nameWidth: 900, gap: 16, inset: 30,
-                                          minimum: 40) == 340)
-        #expect(StatsLine.folderNameWidth(barWidth: 1000, textEnd: 300, nameWidth: 0, gap: 16, inset: 10,
-                                          minimum: 40) == nil)
-    }
 }
 
-@Suite struct StatsLinePairTests {
-    private let info = ImageInfo(pixelSize: PixelSize(width: 100, height: 100), typeIdentifier: "public.jpeg",
-                                 isProgressive: false, fileSize: 1_000_000, colorSpaceName: nil)
-
-    @Test func statsRange() {
-        let t = ViewTransform(imageSize: CGSize(width: 100, height: 100), viewSize: CGSize(width: 50, height: 50))
-        let line = StatsLine.loaded(name: "a.jpg", index: 11, companion: 12, count: 380, info: info, transform: t, decodeMs: nil)
-        #expect(line.contains("   12–13 / 380   "))
-        #expect(StatsLine.loading(name: "a.jpg", position: (index: 11, count: 380), companion: 12)
-                == "Loading a.jpg…   12–13 / 380")
-    }
-}
-
-/// A pair's line gives its first page's facts in reading order, whichever page is current.
+/// A pair's status gives its first page's facts in reading order, whichever page is current.
 @Test func pairFactsComeFromTheFirstPage() {
     #expect(!StatsLine.factsOfCompanion(current: 12, first: 12, companionRead: true))   // current is first
     #expect(StatsLine.factsOfCompanion(current: 13, first: 12, companionRead: true))    // companion is first

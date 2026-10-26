@@ -925,9 +925,17 @@ extension Notification.Name {
         guard let id = waiting.removeValue(forKey: url.standardizedFileURL) else { return }
         let maxPixel = maxPixel
         Task { @MainActor [weak self] in
-            guard let self, let image = await self.thumbnails.cell(url, maxPixel: maxPixel) else { return }
-            self.view?.setImage(image, for: id)
-            self.pictured.insert(url)
+            guard let self else { return }
+            if let image = await self.thumbnails.cell(url, maxPixel: maxPixel) {
+                self.view?.setImage(image, for: id)
+                self.view?.setUnavailable(false, for: id)
+                self.pictured.insert(url)
+            } else if await self.thumbnails.status(url) == .unavailable {
+                // A file the decoders cannot read: its card is faint and the arrow keys go past it. Waited for still, so
+                // a picture that comes later (a share that was away) lifts the mark.
+                self.view?.setUnavailable(true, for: id)
+                self.waiting[url.standardizedFileURL] = id
+            }
         }
     }
 

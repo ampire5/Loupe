@@ -577,7 +577,9 @@ import Foundation
     let (c, w) = Config.parse("strip-magnify=2\nstrip-aspect=crop")
     #expect(w == ["loupe.conf:1: 'strip-magnify' is no longer used", "loupe.conf:2: 'strip-aspect' is no longer used"])
     #expect(c == Config())
-    #expect(Config.retiredKeys == ["strip-aspect", "strip-magnify", "strip-magnify-reach", "strip-magnify-limit"])
+    #expect(Config.retiredKeys == ["strip-aspect", "strip-magnify", "strip-magnify-reach", "strip-magnify-limit",
+                                   "stats-toast", "stats-toast-position", "stats-toast-opacity", "stats-toast-clear",
+                                   "stats-bar-clear"])
     for key in Config.retiredKeys { #expect(!Config.keys.contains(key), "\(key)") }
 }
 
@@ -599,25 +601,28 @@ import Foundation
 
 @Test func statsBarKeys() throws {
     let defaults = Config()
-    #expect(defaults.statsProgress && defaults.statsFolderName && defaults.statsToast)
-    #expect(defaults.text(forKey: "stats-progress") == "yes" && defaults.text(forKey: "stats-folder-name") == "yes"
-            && defaults.text(forKey: "stats-toast") == "yes")
-    #expect(defaults.statsToastPosition == .center && defaults.text(forKey: "stats-toast-position") == "bottom")
-    let (c, w) = Config.parse("stats-progress=no\nstats-folder-name=no\nstats-toast=no\nstats-toast-position=left")
-    #expect(!c.statsProgress && !c.statsFolderName && !c.statsToast && c.statsToastPosition == .left && w.isEmpty)
+    #expect(defaults.statsProgress && defaults.statsFolderName && defaults.statsModified)
+    #expect(defaults.text(forKey: "stats-progress") == "yes" && defaults.text(forKey: "stats-folder-name") == "yes")
+    #expect(defaults.statsBarOpacity == 0.7 && defaults.statsBarPosition == .auto)
+    #expect(defaults.toastPosition == .center && defaults.text(forKey: "toast-position") == "bottom")
+    let (c, w) = Config.parse("stats-progress=no\nstats-folder-name=no\nstats-bar-opacity=0.8\ntoast-position=left")
+    #expect(!c.statsProgress && !c.statsFolderName && c.statsBarOpacity == 0.8 && c.toastPosition == .left && w.isEmpty)
     #expect(c.text(forKey: "stats-progress") == "no" && c.text(forKey: "stats-folder-name") == "no"
-            && c.text(forKey: "stats-toast") == "no")
-    for bad in ["stats-progress=maybe", "stats-folder-name=big", "stats-toast=perhaps", "stats-toast-position=middle"] {
+            && c.text(forKey: "toast-position") == "bottom-left")
+    // Under 0.3 white text is not readable over a bright photo: refused.
+    for bad in ["stats-progress=maybe", "stats-folder-name=big", "stats-bar-opacity=0.1", "toast-position=middle"] {
         let (parsed, warnings) = Config.parse(bad)
         #expect(parsed == defaults && warnings.count == 1, "\(bad)")
     }
+    // The glass keys of the first stats bar are retired: a warning each, no effect.
+    let (retired, retiredWarnings) = Config.parse("stats-toast=no\nstats-bar-clear=yes")
+    #expect(retired == defaults && retiredWarnings.count == 2)
     // Near the end, just before app-icon.
-    #expect(Array(Config.keys.suffix(19)) == [
-        "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-folder-name", "stats-toast",
-        "stats-toast-position", "stats-toast-opacity", "stats-toast-clear", "toast-position", "stats-bar-position",
-        "stats-bar-clear", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "fullscreen-toolbar",
-        "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay", "app-icon",
-    ])
+    let icon = try #require(Config.keys.firstIndex(of: "app-icon"))
+    #expect(Config.keys[icon - 16] == "stats-progress" && Config.keys[icon - 15] == "stats-progress-opacity"
+            && Config.keys[icon - 14] == "stats-bar-opacity" && Config.keys[icon - 13] == "stats-bar-blur"
+            && Config.keys[icon - 12] == "stats-bar-edge" && Config.keys[icon - 11] == "stats-folder-name"
+            && Config.keys[icon - 10] == "viewer-chrome")
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
     #expect(Config.parse(text) == (c, []))
 }
@@ -1157,12 +1162,11 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "haptic-long-armed": ("knock", "bzzz"), "haptic-detent": ("none", "bzzz"),
     "mx-panel-force": ("0", "101"), "mx-side-buttons": ("take", "steal"), "haptic-strength": ("35", "101"), "haptic-strong-strength": ("81", "keep"),
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
-    "stats-toast": ("no", "perhaps"), "stats-toast-position": ("right", "middle"),
-    "stats-bar-opacity": ("0.5", "2"), "stats-toast-opacity": ("0.5", "2"),
-    "stats-toast-clear": ("yes", "maybe"), "toast-position": ("top-right", "middle"), "stats-bar-position": ("bottom", "left"),
-    "stats-bar-clear": ("yes", "maybe"), "stats-bar-with-toolbar": ("no", "maybe"), "stats-icons": ("no", "maybe"),
-    "stats-monochrome": ("yes", "maybe"), "fullscreen-toolbar": ("hidden", "auto"), "stats-modified": ("no", "maybe"),
-    "stats-bar-autohide": ("yes", "maybe"), "stats-bar-hide-delay": ("1000", "400"),
+    "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
+    "stats-bar-position": ("bottom", "left"), "stats-bar-with-toolbar": ("no", "perhaps"),
+    "fullscreen-toolbar": ("shown", "sliding"), "stats-modified": ("no", "perhaps"),
+    "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
+    "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "stats-bar-blur": ("no", "perhaps"), "stats-bar-edge": ("hard", "sharp"), "viewer-chrome": ("pocket", "ribbon"),
     "app-icon": ("profile", "two words"),
     "auto-color": ("yes", "maybe"), "auto-color-method": ("apple-luma", "oil"), "auto-color-strength": ("0.5", "1.5"),
     "auto-color-filters": ("curve", "curve,red"), "auto-color-vibrance-gain": ("2", "5"),

@@ -2,58 +2,8 @@ import AppKit
 import HomeChrome
 import LoupeCore
 
-/// The camera-HUD palette of the photo's facts: white for the numbers that matter, grey for the rest, yellow for the
-/// parameters one changes (format, zoom), as on a camera's screen.
-enum ProCameraStyle {
-    static let yellow = NSColor(srgbRed: 1, green: 0.84, blue: 0.04, alpha: 1)
-    static let primary = NSColor.white
-    static let secondary = NSColor.white.withAlphaComponent(0.62)
-    static let separator = NSColor.white.withAlphaComponent(0.24)
-
-    static func font(_ size: CGFloat, _ weight: NSFont.Weight = .semibold) -> NSFont {
-        .monospacedSystemFont(ofSize: size, weight: weight)
-    }
-
-    /// `2 / 5`: the number lit, the total dim.
-    static func position(_ text: String, size: CGFloat) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let parts = text.components(separatedBy: " / ")
-        result.append(NSAttributedString(string: parts[0], attributes: [.font: font(size), .foregroundColor: primary]))
-        if parts.count > 1 {
-            result.append(NSAttributedString(string: " / " + parts[1],
-                                             attributes: [.font: font(size, .medium), .foregroundColor: secondary]))
-        }
-        return result
-    }
-
-    /// A value with its colour; `bold` for the lit ones.
-    static func value(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight = .semibold) -> NSAttributedString {
-        NSAttributedString(string: text, attributes: [.font: font(size, weight), .foregroundColor: color])
-    }
-}
-
-/// One fact of the photo in the toolbar's status: its text and the width of its slot.
-private struct ViewerToolbarFact: Equatable {
-    enum Kind: CaseIterable { case position, size, file, format, zoom }
-
-    let kind: Kind
-    let value: String
-    let tip: String
-
-    /// Each kind has a slot of its own width, so a new photo or a zoom step does not move the other facts.
-    var slotWidth: CGFloat {
-        switch kind {
-        case .position: 74
-        case .size: 108
-        case .file: 68
-        case .format: 54
-        case .zoom: 88
-        }
-    }
-}
-
 /// The viewer's `NSToolbar`: back and the photo steps, the zoom block and the photo's status on the left and in the
-/// middle; the colour switches with their sliders, the toggles and the scaling menu on the right. A narrow window hides
+/// middle; each colour switch before its slider, the toggles and the scaling menu on the right. A narrow window hides
 /// the items by `visibilityPriority` (the status last, the menus first); the system's overflow keeps them reachable.
 @MainActor final class ViewerToolbarController: NSObject, NSToolbarDelegate {
     struct Actions {
@@ -74,7 +24,7 @@ private struct ViewerToolbarFact: Equatable {
     private var sliders: [String: NSSlider] = [:]
 
     private enum Item: String, CaseIterable {
-        case back, navigation, zoom, zoomModes, zoomMenu, status, colour, strength, vibrance, info, strip, stats, scaling
+        case back, navigation, zoom, zoomModes, zoomMenu, status, autoColour, strength, vibranceSwitch, vibrance, info, strip, stats, scaling
 
         var identifier: NSToolbarItem.Identifier { .init("viewer.\(rawValue)") }
         var priority: Int {
@@ -85,7 +35,8 @@ private struct ViewerToolbarFact: Equatable {
             case .zoom: 80
             case .zoomModes: 70
             case .info: 60
-            case .colour: 50
+            case .autoColour: 50
+            case .vibranceSwitch: 49
             case .strength: 30
             case .vibrance: 29
             case .strip: 20
@@ -105,16 +56,17 @@ private struct ViewerToolbarFact: Equatable {
         ("arrow.up.left.and.arrow.down.right", "Fill", .fill),
     ]
 
-    private static let colourSwitches: [(symbol: String, label: String, action: KeyAction)] = [
-        ("wand.and.stars", "Auto Colour", .toggleAutoColor),
-        ("drop.halffull", "Vibrance", .toggleVibrance),
+    /// The colour switches, each in front of its slider; the `tag` of a switch's item is its index here.
+    private static let colourSwitches: [(item: Item, symbol: String, label: String, action: KeyAction)] = [
+        (.autoColour, "wand.and.stars", "Auto Colour", .toggleAutoColor),
+        (.vibranceSwitch, "drop.halffull", "Vibrance", .toggleVibrance),
     ]
 
     /// Left to right; the flexible spaces centre the status between the left group and the right one.
     private static let order: [NSToolbarItem.Identifier] = [
         Item.back, .navigation, .zoom, .zoomModes, .zoomMenu,
     ].map(\.identifier) + [.flexibleSpace, Item.status.identifier, .flexibleSpace] + [
-        Item.colour, .strength, .vibrance, .info, .strip, .stats, .scaling,
+        Item.autoColour, .strength, .vibranceSwitch, .vibrance, .info, .strip, .stats, .scaling,
     ].map(\.identifier)
 
     init(actions: Actions) {
@@ -151,22 +103,23 @@ private struct ViewerToolbarFact: Equatable {
         case .zoomMenu:
             return menuItem(item, symbol: "ellipsis.circle", label: "Zoom Options", tip: "More zoom options",
                             menu: Settings.shared.makeZoomToolbarMenu())
-        case .colour:
-            let switches = group(item, Self.colourSwitches.map { ($0.symbol, $0.label, $0.label) }, mode: .selectAny,
-                                 action: #selector(colourClicked(_:)))
-            // Each switch asks for its own action: the window's value (the folder's) says what is lit afterwards.
-            for (index, subitem) in switches.subitems.enumerated() {
+        case .autoColour, .vibranceSwitch:
+            let index = Self.colourSwitches.firstIndex { $0.item == item } ?? 0
+            let switchItem = Self.colourSwitches[index]
+            let toggle = group(item, [(switchItem.symbol, switchItem.label, switchItem.label)], mode: .selectAny,
+                               action: #selector(colourClicked(_:)))
+            // The window's value (the folder's) says what is lit afterwards, so the click only asks for the action.
+            for subitem in toggle.subitems {
                 subitem.tag = index
                 subitem.target = self
                 subitem.action = #selector(colourClicked(_:))
             }
-            return switches
+            return toggle
         case .strength:
-            return sliderItem(item, symbol: "wand.and.stars", label: "Auto Colour Strength",
-                              tip: "How strongly Auto Colour is applied", key: "auto-color-strength")
+            return sliderItem(item, label: "Auto Colour Strength", tip: "How strongly Auto Colour is applied",
+                              key: "auto-color-strength")
         case .vibrance:
-            return sliderItem(item, symbol: "drop.halffull", label: "Vibrance Amount", tip: "How much vibrance is added",
-                              key: "vibrance-amount")
+            return sliderItem(item, label: "Vibrance Amount", tip: "How much vibrance is added", key: "vibrance-amount")
         case .stats:
             return button(item, symbol: "text.alignleft", label: "Status", tip: "Show or hide the stats bar (I)",
                           action: #selector(statsClicked))
@@ -227,8 +180,8 @@ private struct ViewerToolbarFact: Equatable {
         return toolbarItem
     }
 
-    /// A small slider with the switch's symbol before it, 0...1.
-    private func sliderItem(_ item: Item, symbol: String, label: String, tip: String, key: String) -> NSToolbarItem {
+    /// A small slider, 0...1; the switch before it names it.
+    private func sliderItem(_ item: Item, label: String, tip: String, key: String) -> NSToolbarItem {
         let slider = NSSlider(value: 0.5, minValue: 0, maxValue: 1, target: self, action: #selector(sliderMoved(_:)))
         slider.controlSize = .small
         slider.isContinuous = true
@@ -237,20 +190,13 @@ private struct ViewerToolbarFact: Equatable {
         slider.toolTip = tip
         slider.translatesAutoresizingMaskIntoConstraints = false
         sliders[key] = slider
-        let icon = NSImageView(image: image(symbol, label))
-        icon.contentTintColor = .secondaryLabelColor
-        icon.translatesAutoresizingMaskIntoConstraints = false
         let box = NSView()
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(icon)
         box.addSubview(slider)
         NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: 112),
+            box.widthAnchor.constraint(equalToConstant: 88),
             box.heightAnchor.constraint(equalToConstant: 28),
-            icon.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 4),
-            icon.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            slider.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            slider.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 4),
             slider.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -4),
             slider.centerYAnchor.constraint(equalTo: box.centerYAnchor),
         ])
@@ -275,9 +221,8 @@ private struct ViewerToolbarFact: Equatable {
 
     /// The colour switches and their sliders follow the window's values (the folder's or loupe.conf's).
     func updateColour(_ config: Config) {
-        guard let colourGroup = items[Item.colour.identifier] as? NSToolbarItemGroup else { return }
-        colourGroup.setSelected(config.autoColor, at: 0)
-        colourGroup.setSelected(config.vibrance, at: 1)
+        (items[Item.autoColour.identifier] as? NSToolbarItemGroup)?.setSelected(config.autoColor, at: 0)
+        (items[Item.vibranceSwitch.identifier] as? NSToolbarItemGroup)?.setSelected(config.vibrance, at: 0)
         set(sliders["auto-color-strength"], to: config.autoColorStrength, enabled: config.autoColor)
         set(sliders["vibrance-amount"], to: config.vibranceAmount, enabled: config.vibrance)
     }
@@ -289,44 +234,10 @@ private struct ViewerToolbarFact: Equatable {
         if abs(slider.doubleValue - value) > 0.004, NSApp.currentEvent?.type != .leftMouseDragged { slider.doubleValue = value }
     }
 
-    func updateStatus(from session: ViewerSession) {
-        let playlist = session.playlist
-        let url = session.entry?.url ?? playlist?.current
-        var title = session.folderMessage ?? session.loadingName.map { "Loading \($0)…" }
-            ?? url.map(ArchivePath.shortName) ?? "Loupe"
-        setZoomMode((session.zoomTarget ?? session.transform).mode)
-        guard session.folderMessage == nil, let playlist else {
-            statusView.update(title: title, facts: [])
-            return
-        }
-        var index = url.flatMap { playlist.files.firstIndex(of: $0) } ?? playlist.index
-        let pages = session.currentPages
-        if session.loadingName == nil, url == playlist.current, let pages, let second = pages.second {
-            title = ArchivePath.shortName(playlist.files[pages.first]) + " · "
-                + ArchivePath.shortName(playlist.files[second])
-            index = pages.first
-        } else if session.loadingName != nil, let first = pages?.first {
-            index = first
-        }
-        let first = pages?.first ?? index
-        var facts = [ViewerToolbarFact(kind: .position,
-                                       value: StatsLine.position(index: first, companion: pages?.second,
-                                                                 count: playlist.files.count,
-                                                                 counted: session.folderCounted),
-                                       tip: "Position in folder")]
-        if session.loadingName == nil, let entry = session.entry, entry.url == url, let info = entry.info {
-            let size = info.displaySize(applying: session.appliesOrientation)
-            facts.append(ViewerToolbarFact(kind: .size, value: "\(size.width)×\(size.height)", tip: "Image dimensions"))
-            facts.append(ViewerToolbarFact(kind: .file,
-                                           value: ByteCountFormatter.string(fromByteCount: Int64(info.fileSize),
-                                                                            countStyle: .file),
-                                           tip: "File size"))
-            facts.append(ViewerToolbarFact(kind: .format, value: StatsLine.formatName(info.typeIdentifier),
-                                           tip: "File format"))
-        }
-        facts.append(ViewerToolbarFact(kind: .zoom, value: StatsLine.modeText(session.zoomTarget ?? session.transform),
-                                       tip: "Zoom mode"))
-        statusView.update(title: title, facts: facts)
+    /// The photo's status in the chip, and the zoom block lit for the mode on screen.
+    func updateStatus(_ status: ImageStatus, zoomMode: ZoomMode) {
+        setZoomMode(zoomMode)
+        statusView.update(status)
     }
 
     private var zoomModeGroup: NSToolbarItemGroup { items[Item.zoomModes.identifier] as! NSToolbarItemGroup }
@@ -367,16 +278,14 @@ private struct ViewerToolbarFact: Equatable {
 }
 
 /// The photo's status in the middle of the toolbar, in the style of a camera's screen: a glass chip of one size, the name
-/// over a row of facts in slots of their own widths with hairlines between them (so nothing jumps when the photo or the
-/// zoom changes), the position and size lit, the format and the zoom in the HUD yellow. Long values are cut, not wrapped.
+/// over the facts in slots of their own widths with hairlines between them (`FactsRowView`, so nothing jumps when the
+/// photo or the zoom changes). Long values are cut, not wrapped.
 @MainActor private final class ViewerToolbarStatusView: NSView {
     private static let width: CGFloat = 480
     private static let height: CGFloat = 46
     private let glass = ChromeGlass(style: .overMedia(.light), cornerRadius: 16)
     private let title = NSTextField(labelWithString: "")
-    private let facts = NSStackView()
-    private var displayedTitle: String?
-    private var displayedFacts: [ViewerToolbarFact] = []
+    private let facts = FactsRowView(style: .init(options: .init(size: 11), formatBadge: true))
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -390,10 +299,7 @@ private struct ViewerToolbarFact: Equatable {
         title.maximumNumberOfLines = 1
         title.alignment = .center
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        facts.orientation = .horizontal
-        facts.alignment = .centerY
-        facts.distribution = .gravityAreas
-        facts.spacing = 0
+        facts.translatesAutoresizingMaskIntoConstraints = false
         let column = NSStackView(views: [title, facts])
         column.orientation = .vertical
         column.alignment = .centerX
@@ -416,86 +322,23 @@ private struct ViewerToolbarFact: Equatable {
             column.trailingAnchor.constraint(lessThanOrEqualTo: glass.contentView.trailingAnchor, constant: -12),
             column.centerXAnchor.constraint(equalTo: glass.contentView.centerXAnchor),
             title.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
+            // The row keeps its natural width while there is room and gives slots up when there is not.
+            facts.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func update(title text: String, facts items: [ViewerToolbarFact]) {
-        if displayedTitle != text {
-            displayedTitle = text
+    func update(_ status: ImageStatus) {
+        // The news about the folder takes the name's place, in the same line: the chip does not change size.
+        let text = status.note ?? (status.title.isEmpty ? "Loupe" : status.title)
+        if title.stringValue != text {
             title.stringValue = text
             title.toolTip = text
         }
-        guard displayedFacts != items else { return }
-        displayedFacts = items
-        facts.arrangedSubviews.forEach {
-            facts.removeArrangedSubview($0)
-            $0.removeFromSuperview()
-        }
-        facts.isHidden = items.isEmpty
-        for (index, fact) in items.enumerated() {
-            if index > 0 { facts.addArrangedSubview(hairline()) }
-            facts.addArrangedSubview(slot(for: fact))
-        }
-    }
-
-    private func hairline() -> NSView {
-        let line = NSView()
-        line.wantsLayer = true
-        line.layer?.backgroundColor = ProCameraStyle.separator.cgColor
-        line.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([line.widthAnchor.constraint(equalToConstant: 1),
-                                     line.heightAnchor.constraint(equalToConstant: 12)])
-        return line
-    }
-
-    private func slot(for fact: ViewerToolbarFact) -> NSView {
-        let label = NSTextField(labelWithString: "")
-        switch fact.kind {
-        case .position: label.attributedStringValue = ProCameraStyle.position(fact.value, size: 11)
-        case .size: label.attributedStringValue = ProCameraStyle.value(fact.value, size: 11, color: ProCameraStyle.primary)
-        case .file: label.attributedStringValue = ProCameraStyle.value(fact.value, size: 11, color: ProCameraStyle.secondary,
-                                                                       weight: .medium)
-        case .format, .zoom: label.attributedStringValue = ProCameraStyle.value(fact.value, size: 11, color: ProCameraStyle.yellow)
-        }
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.toolTip = fact.tip
-        label.translatesAutoresizingMaskIntoConstraints = false
-        let cell = NSView()
-        cell.toolTip = fact.tip
-        cell.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(label)
-        var constraints = [
-            cell.widthAnchor.constraint(equalToConstant: fact.slotWidth),
-            cell.heightAnchor.constraint(equalToConstant: 19),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ]
-        if fact.kind == .format {
-            // A format badge, as a camera marks RAW or JPG: a yellow outline round the letters.
-            let badge = NSView()
-            badge.wantsLayer = true
-            badge.layer?.borderWidth = 1
-            badge.layer?.borderColor = ProCameraStyle.yellow.withAlphaComponent(0.85).cgColor
-            badge.layer?.cornerRadius = 4
-            badge.layer?.cornerCurve = .continuous
-            badge.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(badge, positioned: .below, relativeTo: label)
-            constraints += [
-                badge.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                badge.heightAnchor.constraint(equalToConstant: 16),
-            ]
-        }
-        constraints += [
-            label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
-        ]
-        NSLayoutConstraint.activate(constraints)
-        return cell
+        title.textColor = ProCameraStyle.color(status.note == nil ? status.titleTone : status.noteTone, monochrome: false)
+        facts.update(status.facts)
+        facts.isHidden = status.facts.isEmpty
     }
 }
