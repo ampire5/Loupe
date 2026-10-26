@@ -1881,9 +1881,11 @@ import UniformTypeIdentifiers
     /// left of the toolbar.
     private func applyStatsLayout() {
         let toolbarWanted = toolbarWanted
-        // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it.
+        // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it. In full screen the toolbar
+        // is not on screen but slides in on demand, so it does not count there: the bar shows as `I` says.
+        let toolbarShown = !isFullScreen && toolbarWanted
         let visible = (isFullScreen ? fullScreenStatus : statsMode != .hidden)
-            && (Settings.shared.config.statsBarWithToolbar || !toolbarWanted)
+            && (Settings.shared.config.statsBarWithToolbar || !toolbarShown)
         statsBar.isHidden = !visible
         guard !isClosed else { return }
         applyToolbarVisibility()
