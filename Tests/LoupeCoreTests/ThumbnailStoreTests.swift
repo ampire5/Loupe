@@ -198,29 +198,35 @@ final class Locked<T>: @unchecked Sendable {
 
     // MARK: - Gating
 
-    @Test func generatesWhenIdleOnly() async throws {
+    /// While only the viewer's neighbours read (the user stepping through photos keeps the cache from going idle for
+    /// long), the thumbnails go on one read at a time instead of stopping; idle, `readLimit` at once.
+    @Test func neighboursLeaveOneRead() async throws {
         let reader = ThumbReader()
         let files = photos(3, in: reader)
+        let gates = files.map { reader.hold($0) }
         let store = store(reader, dir: nil)
         await store.setViewerActivity(.neighbours)
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { reader.reads.count == 1 })
         try await Task.sleep(for: .milliseconds(50))
-        #expect(reader.reads.isEmpty)
-        #expect(await store.status(files[0]) == .pending)
-
+        #expect(reader.reads.count == 1)
+        gates[0].open()
+        #expect(await eventually { reader.reads.count == 2 })
         await store.setViewerActivity(.idle)
+        #expect(await eventually { reader.reads.count == 3 })
+        gates.forEach { $0.open() }
         #expect(await eventually { await allReady(store, files) })
-        #expect(reader.priorities == [1_000_000])
+        #expect(reader.priorities.allSatisfy { $0 == 1_000_000 })
     }
 
     @Test func idleMustHoldBeforeReading() async throws {
         let reader = ThumbReader()
         let files = photos(1, in: reader)
         let store = store(reader, dir: nil, idleDelay: .milliseconds(300))
-        await store.setViewerActivity(.neighbours)
+        await store.setViewerActivity(.current)
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
         let idleAt = ContinuousClock.now
-        await store.setViewerActivity(.idle)
+        await store.setViewerActivity(.neighbours)   // the current photo's work is over: neighbours count as idle
         try await Task.sleep(for: .milliseconds(30))
         #expect(reader.reads.isEmpty)
         #expect(await eventually { !reader.reads.isEmpty })
@@ -249,7 +255,9 @@ final class Locked<T>: @unchecked Sendable {
         #expect(reader.readCount(files[2]) == 1)
     }
 
-    @Test func neighboursStopNewReadsOnly() async throws {
+    /// Neighbours reading while two thumbnail reads are in flight: those go on, nothing is cancelled, and no new one
+    /// starts until the reads in flight are down to one.
+    @Test func neighboursCancelNothing() async throws {
         let reader = ThumbReader()
         let files = photos(3, in: reader)
         let gates = files[..<2].map { reader.hold($0) }
@@ -257,10 +265,10 @@ final class Locked<T>: @unchecked Sendable {
         await store.setRequest(window: 1, request(files), stamps: reader.stamps)
         #expect(await eventually { reader.reads.count == 2 })
         await store.setViewerActivity(.neighbours)
-        gates.forEach { $0.open() }
-        #expect(await eventually { await allReady(store, Array(files[..<2])) })   // the reads in flight finished
         try await Task.sleep(for: .milliseconds(30))
         #expect(reader.readCount(files[2]) == 0)
+        gates.forEach { $0.open() }
+        #expect(await eventually { await allReady(store, files) })
         #expect(reader.cancelled.isEmpty)
     }
 
@@ -760,7 +768,7 @@ final class Locked<T>: @unchecked Sendable {
         let expected = [front[2], front[1], front[0]] + back
         let gates = Dictionary(uniqueKeysWithValues: expected.map { ($0, reader.hold($0)) })
         let store = store(reader, dir: tempDir())
-        await store.setViewerActivity(.neighbours)
+        await store.setViewerActivity(.current)   // nothing starts until both windows have asked
         await store.setRequest(window: 1, request(back, isKey: false), stamps: reader.stamps)
         await store.setRequest(window: 2, request(front, current: 1, visible: [2], isKey: true), stamps: reader.stamps)
         await store.setViewerActivity(.idle)

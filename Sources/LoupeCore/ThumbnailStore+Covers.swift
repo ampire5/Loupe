@@ -1074,10 +1074,10 @@ extension ThumbnailStore {
         for read in coverReads.values { read.cancel() }
     }
 
-    /// Waits while the viewer cache is not idle (the user stepping through photos), so a running cover reads nothing
-    /// meanwhile; false once the task is cancelled.
+    /// Waits while the viewer's current photo needs I/O, so a running cover reads nothing meanwhile (neighbours
+    /// reading do not hold it); false once the task is cancelled.
     private func idleViewer() async -> Bool {
-        while activity != .idle {
+        while activity == .current {
             guard (try? await Task.sleep(for: Self.coverIdlePoll)) != nil else { return false }
         }
         return !Task.isCancelled

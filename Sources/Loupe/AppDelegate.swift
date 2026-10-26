@@ -177,9 +177,14 @@ import UniformTypeIdentifiers
 
     /// `~/Library/Caches/Loupe`, made if missing; nil (memory-only thumbnails) if it cannot be. Worked out once, at
     /// launch (the store), not again on each Settings open.
+    /// `LOUPE_CACHE_DIR=<folder>` (debug): the thumbnails and the catalog there instead, so a bench starts from an
+    /// empty cache and leaves the user's alone.
     private static let thumbnailDirectory: URL? = {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let directory = caches.appendingPathComponent("Loupe", isDirectory: true)
+        var directory = caches.appendingPathComponent("Loupe", isDirectory: true)
+        if DebugLog.isEnabled, let path = ProcessInfo.processInfo.environment["LOUPE_CACHE_DIR"], !path.isEmpty {
+            directory = URL(fileURLWithPath: path, isDirectory: true)
+        }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

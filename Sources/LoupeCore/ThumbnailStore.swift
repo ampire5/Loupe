@@ -16,9 +16,10 @@ public enum ThumbnailStatus: Sendable, Equatable {
 ///
 /// The generator keeps out of the viewer's way (spec §3.6): at most `maxReads` thumbnail reads, marked
 /// `ReadPriority.isBackground`, which `FileReader` runs only on threads beyond the viewer's two (so even reads stuck
-/// on a dead share never hold up the viewer's); new ones start only once the viewer cache has been idle for
-/// `idleDelay` (its idle signal flickers between jobs), none start while neighbours are being read, and those still
-/// reading are cancelled when the current photo needs I/O. A finished read is decoded in the store's own `DecodePool`
+/// on a dead share never hold up the viewer's); new ones start only `idleDelay` after the current photo's work is done
+/// (the viewer's signal flickers between jobs), only `neighbourReads` while the viewer's neighbours are being read
+/// (stepping through photos keeps the cache from going idle for long: they stopped altogether before, docs/bench/
+/// 2026-10-26-thumbs-while-flipping.md), and those still reading are cancelled when the current photo needs I/O. A finished read is decoded in the store's own `DecodePool`
 /// (`decodes` at once, at utility QoS, so the viewer's decodes win the cores) while the next one runs. A new thumbnail lands in memory at once and reaches the database in batches
 /// (every `commitDelay` or 100 thumbnails), so the writer costs a few ms per second at most.
 ///
@@ -377,30 +378,33 @@ public actor ThumbnailStore {
         }
     }
 
-    /// The viewer cache's activity: new reads wait until `.idle` has held for `idleDelay`, `.current` cancels the
+    /// The viewer cache's activity: new reads wait until the current photo's work has been over for `idleDelay`
+    /// (`.idle` or `.neighbours`), and while neighbours read only `neighbourReads` go at once. `.current` cancels the
     /// jobs still reading or waiting to (their files go back in the queue) and lets the decodes finish: their bytes
     /// are already here, and decodes take their own slot. `.current` also cancels the covers' thumbnail reads in flight
-    /// (`coverCell` reads them again once idle). Home's covers start none while the viewer is not idle (the
-    /// user is stepping through photos): `coverQueue` is paused, after the thumbnails' own state is set.
+    /// (`coverCell` reads them again after it). Home's covers start none while the current photo needs I/O:
+    /// `coverQueue` is paused, after the thumbnails' own state is set.
     public func setViewerActivity(_ activity: CacheActivity) async {
         setActivity(activity)
-        await coverQueue.pause(activity != .idle)
+        await coverQueue.pause(activity == .current)
     }
+
+    /// Thumbnail reads in flight at most while the viewer's neighbours read: the user stepping through photos keeps
+    /// them reading most of the time, and the strip and Home's cards waited for a pause in it.
+    static let neighbourReads = 1
 
     private func setActivity(_ activity: CacheActivity) {
         self.activity = activity
         switch activity {
-        case .idle:
+        case .idle, .neighbours:
             if idleSince == nil { idleSince = .now }
             pump()
-        case .neighbours, .current:
+        case .current:
             idleSince = nil
             idleWake?.cancel()
             idleWake = nil
-            if activity == .current {
-                cancelReads()
-                cancelCoverReads()
-            }
+            cancelReads()
+            cancelCoverReads()
         }
     }
 

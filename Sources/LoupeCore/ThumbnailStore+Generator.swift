@@ -1,7 +1,7 @@
 import Foundation
 
-// The generator: up to `readLimit` reads in flight, new ones started only while the viewer cache has been idle
-// for `idleDelay` (spec §3.6). A job reads, tells the store its read is over and decodes in `DecodePool` while the
+// The generator: up to `readLimit` reads in flight (`neighbourReads` while the viewer's neighbours read), new ones
+// started only once the current photo's work has been over for `idleDelay` (spec §3.6). A job reads, tells the store its read is over and decodes in `DecodePool` while the
 // next job's read runs: on a share the reads are the limit, so the decode is hidden behind them. A job reports
 // back through `finish`; its slot stays taken until its task really ends, cancelled or not.
 
@@ -11,6 +11,9 @@ extension ThumbnailStore {
     var jobLimit: Int { max(readLimit, decodeLimit.slotCount) + 1 }
 
     var readsInFlight: Int { jobs.values.reduce(0) { $0 + ($1.reading ? 1 : 0) } }
+
+    /// The reads that may be in flight now: `readLimit`, `neighbourReads` while the viewer's neighbours read.
+    var readsNow: Int { activity == .neighbours ? min(readLimit, Self.neighbourReads) : readLimit }
 
     /// The queue is rebuilt lazily, when the generator next wants a file.
     func replan() {
@@ -24,8 +27,8 @@ extension ThumbnailStore {
     /// has been idle long enough.
     func pump() {
         resumeWaitingReads()
-        while readsInFlight < readLimit, jobs.count < jobLimit {
-            guard activity == .idle, let since = idleSince else { return }
+        while readsInFlight < readsNow, jobs.count < jobLimit {
+            guard activity != .current, let since = idleSince else { return }
             let waited = ContinuousClock.now - since
             guard waited >= idleDelay else {
                 if idleWake == nil {
@@ -132,7 +135,7 @@ extension ThumbnailStore {
     func readAgain(_ token: UInt64) async {
         guard let job = jobs[token], !job.cancelled else { return }
         guard activity != .current else { return cancel(token) }
-        if readsInFlight < readLimit {
+        if readsInFlight < readsNow {
             jobs[token]?.reading = true
             return
         }
@@ -140,7 +143,7 @@ extension ThumbnailStore {
     }
 
     func resumeWaitingReads() {
-        for token in readWaiters.keys.sorted() where readsInFlight < readLimit {
+        for token in readWaiters.keys.sorted() where readsInFlight < readsNow {
             jobs[token]?.reading = true
             readWaiters.removeValue(forKey: token)?.resume()
         }

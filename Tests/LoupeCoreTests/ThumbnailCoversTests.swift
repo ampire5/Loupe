@@ -403,10 +403,24 @@ private final class FakeListing: @unchecked Sendable {
         #expect(!resolved.isSet)
     }
 
-    /// Review fix: a running cover makes no thumbnail while the viewer is busy, and goes on once it is idle; the
-    /// store's queue starts no card meanwhile. `.current` is also what a two-page pair reports while its other page
-    /// reads (`ImageCache.isCurrent`).
-    @Test(arguments: [CacheActivity.neighbours, .current])
+    /// Review fix: a running cover makes no thumbnail while the viewer's current photo needs I/O, and goes on once it
+    /// is done; the store's queue starts no card meanwhile. `.current` is also what a two-page pair reports while its
+    /// other page reads (`ImageCache.isCurrent`). Neighbours reading do not hold covers (`goesOnWhileNeighboursRead`).
+    /// The viewer's neighbours reading (the user stepping through photos): covers go on, their cards fill.
+    @Test func goesOnWhileNeighboursRead() async {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        photos(reader, in: "/photos/f", ["1.jpg", "2.jpg"])
+        listing.set("/photos/f", files: ["1.jpg", "2.jpg"])
+        let store = store(reader, dir: dir)
+        await store.setCoverListing(listing.lister)
+        await store.setViewerActivity(.neighbours)
+        #expect(await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"),
+                                        maxPixel: 64)?.count == 2)
+    }
+
+    @Test(arguments: [CacheActivity.current])
     func waitsWhileViewerBusy(_ busy: CacheActivity) async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
