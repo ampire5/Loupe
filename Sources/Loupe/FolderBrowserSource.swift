@@ -49,6 +49,10 @@ extension Notification.Name {
     /// The aspects of the folder on screen's photos while its two pages are on with `spread-landscape = alone`: the
     /// pairs' chips follow them (photo-cards spec §3); nil otherwise.
     private var markAspects: StripAspects?
+    /// The photos of the listing on screen in its sort, with their stamps (standardized): made once per listing and
+    /// sort, as it costs ~44 ms for 10 000 photos in a debug build (a natural sort of URLs), and the marks are sent
+    /// again on every return from the viewer.
+    private var markOrder: (sort: BrowserSort, files: [URL], stamps: [URL: FileStamp])?
     private var stamps: [URL: FileStamp] = [:]
     private let watcher = FolderWatcher()
     /// The ancestors' probe after a failed relist of the open folder (`FolderRelistFailure`): one in flight at most.
@@ -573,6 +577,7 @@ extension Notification.Name {
     private func remember(_ entries: [BrowserEntry]) {
         shown = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         shownFiles = entries.filter { $0.kind == .file }.map(\.url)
+        markOrder = nil
         idByURL = Dictionary(entries.lazy.filter { $0.kind == .file }.map { ($0.url.standardizedFileURL, $0.id) },
                              uniquingKeysWith: { a, _ in a })
         stamps = [:]
@@ -953,14 +958,17 @@ extension Notification.Name {
     /// back from the viewer (the position may have moved) and when aspects arrive.
     private func sendPhotoMarks() {
         guard case .folder(let folder) = view?.location else { return dropMarkAspects() }
-        let images = shownFiles.filter { Playlist.imageExtensions.contains($0.pathExtension.lowercased()) }
-        guard let first = images.first else {
+        let sort = BrowserSort.forFolder(folder, settings: settings)
+        if markOrder?.sort != sort {
+            let images = shownFiles.filter { Playlist.imageExtensions.contains($0.pathExtension.lowercased()) }
+            let playlist = images.first.map { Playlist(files: images, current: $0, stamps: stamps).sorted(sort) }
+            markOrder = (sort, playlist?.files ?? [], playlist?.stamps ?? [:])
+        }
+        guard let markOrder, !markOrder.files.isEmpty else {
             dropMarkAspects()
             return view?.setPhotoMarks(unseen: [], paired: []) ?? ()
         }
-        let playlist = Playlist(files: images, current: first, stamps: stamps)
-            .sorted(BrowserSort.forFolder(folder, settings: settings))
-        let order = playlist.files, dates = playlist.stamps
+        let order = markOrder.files, dates = markOrder.stamps
         let config = FolderCardFacts.config(for: folder, base: Settings.shared.config, settings: settings)
         let rules = SpreadRules(config: config)
         var aspects: [Double?] = []
