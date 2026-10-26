@@ -419,4 +419,21 @@ import SQLite3
         #expect(!ThumbnailDatabase.isDamage(SQLiteError(code: SQLITE_FULL, message: "")))
         #expect(!ThumbnailDatabase.isDamage(CocoaError(.fileWriteOutOfSpace)))
     }
+
+    // MARK: Stored listings
+
+    /// A folder's listing is kept by volume and path, replaced by the next one, and the least recently written go once
+    /// there are more than the capacity.
+    @Test func listingsAreKeptAndBounded() throws {
+        let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: Clock().now, listingCapacity: 2)
+        try db.putListing(Data([1]), at: folderX)
+        try db.putListing(Data([2]), at: folderX)
+        #expect(try db.listing(at: folderX) == Data([2]))
+        #expect(try db.listing(at: folderY) == nil)
+        try db.putListing(Data([3]), at: folderY)
+        try db.putListing(Data([4]), at: folderZ)
+        #expect(try db.listing(at: folderX) == nil)
+        #expect(try db.listing(at: folderY) == Data([3]))
+        #expect(try db.listing(at: folderZ) == Data([4]))
+    }
 }

@@ -26,4 +26,22 @@ import Testing
         #expect(names)
         #expect(!older)
     }
+
+    /// The listing stored from an earlier run goes first while nothing of the share's has come; after it, the share's
+    /// names-only part adds nothing (it lacks the stored dates) and only its complete listing replaces it. One that
+    /// comes after the share's complete listing is dropped.
+    @Test func storedListingGoesBeforeTheShares() {
+        var gate = BrowserListingGate()
+        let token = gate.begin("/Volumes/S/a")
+        let stored = gate.admitsStored(token: token)
+        let names = gate.admits(complete: false, token: token)
+        let complete = gate.admits(complete: true, token: token)
+        let late = gate.admitsStored(token: token)
+        #expect(stored && complete)
+        #expect(!names && !late)
+        let next = gate.begin("/Volumes/S/b")
+        let namesFirst = gate.admits(complete: false, token: next)
+        let storedAfterNames = gate.admitsStored(token: next)
+        #expect(namesFirst && storedAfterNames)
+    }
 }

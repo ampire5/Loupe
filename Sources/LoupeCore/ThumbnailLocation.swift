@@ -44,8 +44,12 @@ public struct ThumbnailLocation: Hashable, Sendable {
     }
 
     /// Asks the system which volume holds `url`'s folder. Nil when the folder cannot be examined (gone, or
-    /// the share is unreachable): the caller then simply has no thumbnail to look up or store.
+    /// the share is unreachable): the caller then simply has no thumbnail to look up or store. On a share, the mount
+    /// table answers alone (`onShare`): `realpath` and `statfs` there ask the share for each component of the path,
+    /// up to seconds each on a cold one, and the catalog's thumbnails and listings waited for it
+    /// (docs/bench/2026-10-26-stored-listings.md).
     public static func resolve(_ url: URL) -> ThumbnailLocation? {
+        if let shared = onShare(url) { return shared }
         // statfs follows symlinks, but the path must be the real one to be comparable with the mount point.
         guard let real = realPath(url.deletingLastPathComponent().path) else { return nil }
         var fs = statfs()
@@ -58,6 +62,18 @@ public struct ThumbnailLocation: Hashable, Sendable {
             : nil
         return make(path: real + "/" + url.lastPathComponent, mountPoint: mountPoint,
                     mountFrom: mountFrom, isLocal: isLocal, volumeUUID: uuid)
+    }
+
+    /// The location of `url` when it is on a share, from the mount table (`getfsstat` with `MNT_NOWAIT`: no file system
+    /// asked): the path as written, under the longest mount point holding it. Nil on a local volume (whose key needs
+    /// `statfs`: a firmlinked `/Users/…` is on the Data volume) or when none matches.
+    public static func onShare(_ url: URL) -> ThumbnailLocation? {
+        onShare(path: url.standardizedFileURL.path, mounts: ThumbnailStore.mounts())
+    }
+
+    static func onShare(path: String, mounts: [ThumbnailStore.Mount]) -> ThumbnailLocation? {
+        guard let mount = ThumbnailStore.mount(of: path, in: mounts), !mount.local else { return nil }
+        return make(path: path, mountPoint: mount.point, mountFrom: mount.from, isLocal: false, volumeUUID: nil)
     }
 
     private static func realPath(_ path: String) -> String? {

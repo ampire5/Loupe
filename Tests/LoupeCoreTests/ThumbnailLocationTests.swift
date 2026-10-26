@@ -69,3 +69,17 @@ import Foundation
 @Test func resolveMissingFolderIsNil() {
     #expect(ThumbnailLocation.resolve(URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)/a.jpg")) == nil)
 }
+
+/// On a share the location comes from the mount table alone (a cold share answers each path component's lookup in
+/// seconds): the key `resolve` gives there, under the longest mount point; none on a local volume.
+@Test func shareLocationFromTheMountTable() {
+    let mounts = [ThumbnailStore.Mount(point: "/", from: "/dev/disk3s1", local: true),
+                  ThumbnailStore.Mount(point: "/Users/u/Volumes/S", from: "//me@nas/S", local: false),
+                  ThumbnailStore.Mount(point: "/Users/u/Volumes/S/inner", from: "//me@nas/T", local: false)]
+    let photo = "/Users/u/Volumes/S/Album/a.jpg"
+    #expect(ThumbnailLocation.onShare(path: photo, mounts: mounts)
+            == ThumbnailLocation.make(path: photo, mountPoint: "/Users/u/Volumes/S", mountFrom: "//me@nas/S",
+                                      isLocal: false, volumeUUID: nil))
+    #expect(ThumbnailLocation.onShare(path: "/Users/u/Volumes/S/inner/x/b.jpg", mounts: mounts)?.volume == "net://me@nas/T")
+    #expect(ThumbnailLocation.onShare(path: "/Users/u/Pictures/c.jpg", mounts: mounts) == nil)
+}

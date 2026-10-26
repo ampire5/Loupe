@@ -1039,6 +1039,7 @@ import UniformTypeIdentifiers
                                      hasStash: { StashLibrary.Source.current != nil })
         let view = HomeView(source: source)
         source.view = view.browser
+        folders.onFoldersChecked = { [weak view] entries, folder in view?.sidebarFoldersChanged(entries, in: folder) }
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
         let browser = view.browser

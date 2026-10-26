@@ -245,6 +245,12 @@ extension Notification.Name {
         let path = folder.standardizedFileURL.path
         if let kept = memory.last(where: { $0.path == path })?.listing { return kept.entries.filter(\.isContainer) }
         let archives = Settings.shared.config.archiveFolders
+        // The catalog's stored listing at once; the share is asked behind it and a change goes to the tree.
+        if let stored = await thumbnails.storedListing(folder) {
+            let containers = stored.filter(\.isContainer)
+            checkFolders(folder, against: containers, archives: archives)
+            return containers
+        }
         let task = Task.detached(priority: .userInitiated) {
             try BrowserListingSource.names(folder, archives: archives) { _ in !Task.isCancelled }
         }
@@ -254,6 +260,34 @@ extension Notification.Name {
             task.cancel()
         }
     }
+
+    /// The tree's subfolders of `folder` the share has now, after `folders(in:)` answered from the catalog: told
+    /// (`onFoldersChecked`) only when the names or kinds differ, with the counts the stored ones had.
+    private func checkFolders(_ folder: URL, against stored: [BrowserEntry], archives: Bool) {
+        Task { @MainActor [weak self] in
+            let task = Task.detached(priority: .utility) {
+                try BrowserListingSource.names(folder, archives: archives) { _ in !Task.isCancelled }
+            }
+            guard let names = try? await task.value, let self else { return }
+            let checked = names.filter(\.isContainer)
+            func key(_ e: BrowserEntry) -> String { "\(e.kind == .folder ? "d" : "a")/\(e.name)" }
+            guard Set(checked.map(key)) != Set(stored.map(key)) else { return }
+            let counts = Dictionary(stored.map { ($0.name, $0.count) }, uniquingKeysWith: { a, _ in a })
+            let merged = checked.map { e -> BrowserEntry in
+                var e = e
+                if e.count == nil, let count = counts[e.name] { e.count = count }
+                return e
+            }
+            DebugLog.log("folder tree checked: \(folder.lastPathComponent), \(stored.count) → \(merged.count) folders")
+            self.onFoldersChecked?(merged, folder)
+        }
+    }
+
+    /// The grid shows the catalog's stored listing of the folder on screen, not checked by the share yet.
+    private var showsUnchecked = false
+
+    /// The share's subfolders of a folder the tree had from the catalog, when they differ (`checkFolders`).
+    var onFoldersChecked: (([BrowserEntry], URL) -> Void)?
 
     func symbol(for entry: BrowserEntry) -> String {
         switch entry.kind {
@@ -319,6 +353,13 @@ extension Notification.Name {
             // The kept listing at once, in the move's turn: the browser draws it then (`lastListing`) and asks for its
             // pictures by id, which must find its entries here.
             if let remembered { deliver(remembered, token: token, to: continuation) }
+            // None kept in this run: the one the catalog kept from an earlier visit, while the share lists. A shown one
+            // is still checked (`BrowserListing.isProvisional`) until the share's complete listing replaces it.
+            let stored = remembered != nil || ArchivePath.isArchive(folder) ? nil : Task { @MainActor [weak self] in
+                guard let entries = await self?.thumbnails.storedListing(folder), !Task.isCancelled, let self,
+                      self.gate.isCurrent(token) else { return false }
+                return self.deliverStored(entries, token: token, to: continuation)
+            }
             let task = Task { @MainActor [weak self] in
                 /// Still the place on screen: else nothing of this listing reaches the source's state or the view.
                 @MainActor func wanted() -> Bool { !Task.isCancelled && self?.gate.isCurrent(token) == true }
@@ -331,6 +372,11 @@ extension Notification.Name {
                     for try await listing in BrowserListingSource.listings(folder, archives: archives) {
                         guard let self, wanted() else { return }
                         deliver(listing)
+                        if !listing.complete, !listing.more {
+                            // All the names: kept for the next opening (on a cold share the dates may take a minute).
+                            let thumbnails = self.thumbnails, entries = listing.entries
+                            Task.detached(priority: .utility) { await thumbnails.storeListing(entries, of: folder, namesOnly: true) }
+                        }
                         if listing.complete {
                             self.keep(listing, for: path)
                             self.keepSummary(of: folder, listing.entries)
@@ -387,14 +433,18 @@ extension Notification.Name {
                         self?.listingFailed = true
                         self?.progressMayHaveChanged()
                         // With a kept listing the grid stays and the failure is a toast: a retry would repeat that toast.
+                        // A stored one shown is retried as no listing is, and goes if the folder is gone.
                         if remembered == nil {
-                            self?.retryFirstListing(of: folder, token: token, error: error, took: ContinuousClock.now - started)
+                            let shownStored = await stored?.value == true
+                            self?.retryFirstListing(of: folder, token: token, error: error, took: ContinuousClock.now - started,
+                                                    leavesIfGone: shownStored)
                         }
                     }
                     continuation.finish(throwing: error)
                 }
             }
             continuation.onTermination = { _ in
+                stored?.cancel()
                 task.cancel()
                 Task { @MainActor [weak self] in
                     guard let self, self.gate.isCurrent(token) else { return }
@@ -406,6 +456,7 @@ extension Notification.Name {
 
     /// A new place for the browser (`gate`): a retry of the last one's failed listing goes too.
     private func begin(_ path: String?) -> Int {
+        showsUnchecked = false
         retryTask?.cancel()
         retryTask = nil
         retryWhenShown = false
@@ -416,11 +467,18 @@ extension Notification.Name {
     /// one): unless it is gone or refused (`FolderRelistFailure.retryFirstListing`), it is listed again one poll later
     /// by the browser's own reload, the message going once a listing comes. A tab hidden meanwhile tries when shown.
     /// Not a child of the listing's task: the stream's end cancels that.
-    private func retryFirstListing(of folder: URL, token: Int, error: Error, took: Duration) {
+    /// `leavesIfGone`: the grid shows the catalog's stored listing of a folder that is gone: the browser goes up to the
+    /// nearest folder still there, as a relist that finds it gone does.
+    private func retryFirstListing(of folder: URL, token: Int, error: Error, took: Duration, leavesIfGone: Bool = false) {
         retryTask?.cancel()
         retryTask = Task { [weak self] in
             guard let probe = self?.ancestorProbe else { return }
             let ancestors = await probe.run(folder, mountPoint: AncestorProbe.mountPoint(of: folder), timeout: .seconds(1)) ?? []
+            if leavesIfGone, FolderRelistFailure(error, ancestors: ancestors) == .gone {
+                guard let self, !Task.isCancelled, self.gate.isCurrent(token) else { return }
+                self.retryTask = nil
+                return await self.folderGone(folder)
+            }
             guard let delay = FolderRelistFailure.retryFirstListing(after: error, ancestors: ancestors,
                                                                     pollMilliseconds: Settings.shared.config.folderPollMilliseconds,
                                                                     took: took) else { return }
@@ -451,6 +509,8 @@ extension Notification.Name {
     private func deliver(_ listing: BrowserListing, token: Int,
                          to continuation: AsyncThrowingStream<BrowserListing, Error>.Continuation) {
         guard gate.admits(complete: listing.complete, token: token) else { return }
+        DebugLog.log("folder listing to the view: \(listing.entries.count) entries" + (listing.complete ? ", complete" : ""))
+        if listing.complete { showsUnchecked = false }
         remember(listing.entries)
         let wasDated = shownDated
         shownDated = listing.complete
@@ -467,6 +527,22 @@ extension Notification.Name {
     /// A listing of the folder on screen came (`complete`: with stamps), or a new one starts (`reset`): the clock of the
     /// names-only wait starts at its first part and stops at the complete one; when it runs out the progress is read
     /// again (no count changes meanwhile).
+    /// The catalog's stored listing of the folder on screen (`ThumbnailStore.storedListing`), while nothing of the
+    /// share's complete one has come: to the view as a complete listing still to be checked. Its photos have no stamps
+    /// here: their pictures come from the catalog by name, as for a names-only listing, and none is made from it (a
+    /// file it names may be gone). True when it went to the view.
+    @discardableResult
+    private func deliverStored(_ entries: [BrowserEntry], token: Int,
+                               to continuation: AsyncThrowingStream<BrowserListing, Error>.Continuation) -> Bool {
+        guard gate.admitsStored(token: token) else { return false }
+        remember(entries)
+        stamps = [:]
+        showsUnchecked = true
+        DebugLog.log("folder from the catalog: \(entries.count) entries, checking")
+        continuation.yield(BrowserListing(entries: entries, complete: true, isProvisional: true))
+        return true
+    }
+
     private func listingAnswered(_ complete: Bool, reset: Bool = false) {
         if complete || reset {
             namesOnlySince = nil
@@ -493,10 +569,15 @@ extension Notification.Name {
         }
     }
 
+    /// A complete listing of the folder at `path`: kept in memory for this run and in the catalog for the next one.
     private func keep(_ listing: BrowserListing, for path: String) {
         memory.removeAll { $0.path == path }
         memory.append((path, listing))
         if memory.count > Self.memoryLimit { memory.removeFirst() }
+        let thumbnails = self.thumbnails, entries = listing.entries
+        Task.detached(priority: .utility) {
+            await thumbnails.storeListing(entries, of: URL(fileURLWithPath: path, isDirectory: true))
+        }
     }
 
     private func forget(_ folder: URL) {
@@ -1129,7 +1210,26 @@ extension Notification.Name {
     }
 
     /// A photo opens on itself; a folder or a zip in the viewer on its remembered photo (`openFolder` recalls it).
+    /// From a stored listing not checked yet (`showsUnchecked`), one gone since says so in a toast instead: asked of the
+    /// share for a second at most, and opened as ever when it does not answer.
     private func open(_ entry: BrowserEntry, how: HomeClick) {
+        if showsUnchecked, entry.kind != .collection, entry.kind != .place {
+            let path = entry.url.path
+            Task { @MainActor [weak self] in
+                let found = await HomeGrid.availability(of: [path], timeout: .seconds(1))
+                guard let self else { return }
+                if found[path] == .some(false) {
+                    self.view?.showToast("“\(entry.name)” is not there any more")
+                } else {
+                    self.openNow(entry, how: how)
+                }
+            }
+            return
+        }
+        openNow(entry, how: how)
+    }
+
+    private func openNow(_ entry: BrowserEntry, how: HomeClick) {
         switch entry.kind {
         case .file, .archive: onOpen?(.file(entry.url), how)
         case .folder, .place: onOpen?(.folder(entry.url), how)

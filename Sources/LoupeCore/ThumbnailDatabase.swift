@@ -49,6 +49,7 @@ public final class ThumbnailDatabase {
     private let now: () -> Date
     private let summaryCapacity: Int
     private let summaryStampWindow: TimeInterval
+    private let listingCapacity: Int
     /// Rows read after their `last_used` went stale, waiting to be restamped with the next write (bounded by
     /// `pendingStampLimit`).
     private var pendingStamps: [SummaryKey: Double] = [:]
@@ -62,7 +63,9 @@ public final class ThumbnailDatabase {
     /// `now` stamps `last_access` (tests pass a clock).
     public init(directory: URL, thumbSize: Int, now: @escaping () -> Date = Date.init,
                 summaryCapacity: Int = ThumbnailDatabase.summaryCapacity,
-                summaryStampWindow: TimeInterval = ThumbnailDatabase.summaryStampWindow) throws {
+                summaryStampWindow: TimeInterval = ThumbnailDatabase.summaryStampWindow,
+                listingCapacity: Int = ThumbnailDatabase.listingCapacity) throws {
+        self.listingCapacity = listingCapacity
         self.directory = directory
         self.thumbSize = thumbSize
         self.now = now
@@ -500,6 +503,34 @@ public final class ThumbnailDatabase {
     }
 
     /// Rows in `folder_summaries`.
+    /// How many folders' listings are kept: a folder of 1 000 photos is about 80 KB encoded, so 2 000 of such size
+    /// would be 160 MB of `Catalog.db`; most folders are far smaller.
+    public static let listingCapacity = 2_000
+
+    /// Keeps `entries` (a `StoredListing`) as the listing of the folder of `location` (its `name` is ignored), and lets
+    /// the least recently written go past `listingCapacity`.
+    public func putListing(_ entries: Data, at location: ThumbnailLocation) throws {
+        try catalog.transaction {
+            try catalog.run("""
+                INSERT INTO folder_listings(volume, path, written, entries) VALUES(?, ?, ?, ?)
+                ON CONFLICT(volume, path) DO UPDATE SET written = excluded.written, entries = excluded.entries
+                """, [.text(location.volume), .text(location.folder), .double(now().timeIntervalSinceReferenceDate),
+                      .blob(entries)])
+            try catalog.run("""
+                DELETE FROM folder_listings WHERE rowid IN
+                (SELECT rowid FROM folder_listings ORDER BY written DESC LIMIT -1 OFFSET ?)
+                """, [.int(Int64(listingCapacity))])
+        }
+    }
+
+    /// The listing kept for the folder of `location`; nil when none is. Read only.
+    public func listing(at location: ThumbnailLocation) throws -> Data? {
+        var found: Data?
+        try catalog.query("SELECT entries FROM folder_listings WHERE volume = ? AND path = ?",
+                          [.text(location.volume), .text(location.folder)]) { found = $0.blob(0) }
+        return found
+    }
+
     public func summaryCount() throws -> Int {
         var count = 0
         try catalog.query("SELECT COUNT(*) FROM folder_summaries", []) { count = Int($0.int(0)) }
@@ -615,6 +646,14 @@ public final class ThumbnailDatabase {
             PRIMARY KEY(volume, path));
         CREATE INDEX IF NOT EXISTS folder_summaries_last_used ON folder_summaries(last_used);
         """
+    /// Folders' last complete listings (`StoredListing`), keyed like the summaries by the volume's text key and the
+    /// folder's path; `entries` is the encoded listing, `written` when it was put (the oldest go past
+    /// `listingCapacity`). Created with `IF NOT EXISTS` on every open, out of the format check, as the summaries.
+    private static let listingSchema = """
+        CREATE TABLE IF NOT EXISTS folder_listings(volume TEXT NOT NULL, path TEXT NOT NULL, written REAL NOT NULL,
+            entries BLOB NOT NULL, PRIMARY KEY(volume, path));
+        CREATE INDEX IF NOT EXISTS folder_listings_written ON folder_listings(written);
+        """
     private static let thumbsSchema = metaSchema
         + "CREATE TABLE IF NOT EXISTS thumbs(file_id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);"
 
@@ -634,6 +673,7 @@ public final class ThumbnailDatabase {
             }
             try db.execute(catalogSchema)
             try db.execute(summarySchema)
+            try db.execute(listingSchema)
             // A catalog without an id is a new one (or the remains of one): it gets a new id.
             catalogID = try readMeta(db)["catalog_id"] ?? UUID().uuidString
             try writeMeta(db, catalogID: catalogID, thumbSize: thumbSize)
