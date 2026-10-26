@@ -854,6 +854,13 @@ import UniformTypeIdentifiers
         _ = Settings.shared.saveAsDefault(["home-sidebar": homeView.isSidebarVisible ? "yes" : "no"])
     }
 
+    /// File › Hide Path Bar / Show Path Bar (⌥⌘P): kept as `home-path-bar`.
+    @objc func toggleHomePathBar(_ sender: Any?) {
+        guard let homeView, isShowingHome else { return }
+        homeView.browser.showsPathBar.toggle()
+        _ = Settings.shared.saveAsDefault(["home-path-bar": homeView.browser.showsPathBar ? "yes" : "no"])
+    }
+
     @objc func toggleSidebar(_ sender: Any?) {
         toggleHomeSidebar(sender)
     }
@@ -1118,18 +1125,32 @@ import UniformTypeIdentifiers
 
     /// File › Larger Cards / Smaller Cards / Default Card Size: Home's ⌘= / ⌘− / ⌘0 (the keys are Home's own, not the
     /// menu's: a menu key is taken even while its item is off).
-    @objc func largerCards(_ sender: Any?) { resizeBrowserCards(.larger) }
-    @objc func smallerCards(_ sender: Any?) { resizeBrowserCards(.smaller) }
+    @objc func largerCards(_ sender: Any?) { resizeBrowserCards(.largerSize) }
+    @objc func smallerCards(_ sender: Any?) { resizeBrowserCards(.smallerSize) }
     @objc func defaultCardSize(_ sender: Any?) { resizeBrowserCards(.reset) }
 
-    /// A column step on Home (⌘= one fewer, ⌘− one more), saved as `browser-card-size` (⌘0: the default).
+    /// A card size on Home, saved as `browser-card-size` (⌘0: the default): ⌘= / ⌘− and the toolbar's − + the next of
+    /// the four sizes, the wheel and a pinch a column, the toolbar's slider its own size (saved once the drag rests,
+    /// without a toast: the slider shows it).
     private func resizeBrowserCards(_ resize: HomeResize) {
         guard let view = homeView?.browser else { return }
         let size = view.cardSize(after: resize, range: 60...480).map { Int($0.rounded()) } ?? Config().browserCardSize
-        _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
         view.cardSize = CGFloat(size)
-        toast.show("Cards: \(size) pt")
+        cardSizeSave?.cancel()
+        if case .to = resize {
+            cardSizeSave = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
+            }
+            return
+        }
+        _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
+        let name = zip(HomeResize.sizes, ["Small", "Medium", "Large", "Huge"]).first { Int($0.0) == size }?.1
+        toast.show(name.map { "Cards: \($0)" } ?? "Cards: \(size) pt")
     }
+
+    private var cardSizeSave: Task<Void, Never>?
 
     // MARK: Folders (file browser spec §4)
 
@@ -1193,6 +1214,7 @@ import UniformTypeIdentifiers
         homeView.sidebarFoldersFirst = config.homeSidebarFoldersFirst
         homeView.sidebarRerootDepth = config.homeSidebarReroot
         if isShowingHome { homeView.isSidebarVisible = config.homeSidebar }
+        homeView.browser.showsPathBar = config.homePathBar
     }
 
     /// The last folder when it answers within a second, else Places with the reason; nothing if the user went
@@ -1812,6 +1834,9 @@ import UniformTypeIdentifiers
             return isShowingHome && !isShowingStash
         case #selector(toggleHomeSidebar(_:)):
             item.title = homeView?.isSidebarVisible == false ? "Show Sidebar" : "Hide Sidebar"
+            return isShowingHome
+        case #selector(toggleHomePathBar(_:)):
+            item.title = homeView?.browser.showsPathBar == false ? "Show Path Bar" : "Hide Path Bar"
             return isShowingHome
         case #selector(goBack(_:)):
             item.title = backTarget.map { "Back to \(Self.tabTitle($0))" } ?? "Back"

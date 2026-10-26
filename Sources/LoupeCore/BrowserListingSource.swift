@@ -110,11 +110,19 @@ public enum BrowserListingSource {
             .filter { !$0.path.hasPrefix("/System/Volumes") }
     }
 
-    /// Up from `folder`: its parent; from a volume's root (`/`, `/Volumes/X`) the places.
-    public static func parent(of folder: URL) -> BrowserLocation {
+    /// Up from `folder`: its parent; from a volume's root (`/`, `/Volumes/X`, a share mounted elsewhere, as
+    /// ~/Volumes/X) the places, so the path starts at the volume as Finder's does.
+    public static func parent(of folder: URL, volumeRoots: @autoclosure () -> Set<String> = mountPoints()) -> BrowserLocation {
         let path = folder.standardizedFileURL.path
         if path == "/" || folder.standardizedFileURL.deletingLastPathComponent().path == "/Volumes" { return .places }
+        if volumeRoots().contains(path) { return .places }
         return .folder(folder.standardizedFileURL.deletingLastPathComponent())
+    }
+
+    /// The mounted volumes' roots (one `getfsstat`, no read of the volumes themselves).
+    public static func mountPoints() -> Set<String> {
+        Set((FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? [])
+            .map(\.standardizedFileURL.path))
     }
 
     /// A folder whose extension names a package type (`.app`, `.bundle`, `.icon`): known from the type registry, no disk

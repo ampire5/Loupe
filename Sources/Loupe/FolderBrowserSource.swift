@@ -44,6 +44,18 @@ extension Notification.Name {
     /// The entries of the place on screen, by id.
     private var shown: [String: BrowserEntry] = [:]
     private var shownFiles: [URL] = []
+    /// The photos' ids by standardized URL: the marks (`PhotoMarks`) come back as URLs.
+    private var idByURL: [URL: String] = [:]
+    /// The aspects of the folder on screen's photos while its two pages are on with `spread-landscape = alone`: the
+    /// pairs' chips follow them (photo-cards spec §3); nil otherwise.
+    private var markAspects: StripAspects?
+    /// The photos of the listing on screen in its sort, with their stamps (standardized): made once per listing and
+    /// sort, off the main thread, as it costs ~44 ms for 10 000 photos in a debug build (a natural sort of URLs), and
+    /// the marks are sent again on every return from the viewer.
+    private var markOrder: (sort: BrowserSort, files: [URL], stamps: [URL: FileStamp])?
+    /// The order being made (`markOrder`), and the listing it is for: a new listing drops it.
+    private var markOrderTask: Task<Void, Never>?
+    private var markListing = 0
     private var stamps: [URL: FileStamp] = [:]
     private let watcher = FolderWatcher()
     /// The ancestors' probe after a failed relist of the open folder (`FolderRelistFailure`): one in flight at most.
@@ -147,7 +159,14 @@ extension Notification.Name {
             }
         })
         observers.append(center.addObserver(forName: .settingsChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.thumbsAheadMayHaveChanged() }
+            MainActor.assumeIsolated {
+                self?.thumbsAheadMayHaveChanged()
+                self?.sendPhotoMarks()   // `spread`, `spread-landscape`, `exif-orientation`
+            }
+        })
+        // A sort chosen in the browser, two pages turned on or off for the folder: the marks follow the order and keys.
+        observers.append(center.addObserver(forName: .folderSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sendPhotoMarks() }
         })
     }
 
@@ -165,6 +184,7 @@ extension Notification.Name {
     var isPaused = false {
         didSet {
             watcher.isPaused = isPaused
+            markAspects?.paused = isPaused   // the viewer in front: arrivals wait for the return
             guard isPaused else {
                 // A failed listing's turn came while hidden: no cards to ask for, the listing it starts asks anew.
                 if retryWhenShown {
@@ -173,6 +193,7 @@ extension Notification.Name {
                 }
                 // Back from the viewer: the visits and the two-page keys may have changed.
                 showSummaries()
+                sendPhotoMarks()
                 progressMayHaveChanged()
                 // The browser keeps its cards (the folder on screen shown again asks for nothing): its last ask goes
                 // again, so the request is no longer held and the pictures still missing are waited for anew.
@@ -198,6 +219,9 @@ extension Notification.Name {
 
     /// The browser went to one of Home's own sources: no listing, watch or thumbnails of the folder left.
     func leave() {
+        dropMarkAspects()
+        markOrderTask?.cancel()
+        markOrderTask = nil
         _ = begin(nil)
         stopWatching()
         showCovers(of: nil)
@@ -207,6 +231,9 @@ extension Notification.Name {
     }
 
     func stop() {
+        dropMarkAspects()
+        markOrderTask?.cancel()
+        markOrderTask = nil
         endOwnWalk()
         isStopped = true   // no held request: the window closes, its request goes
         isPaused = true
@@ -516,6 +543,7 @@ extension Notification.Name {
         shownDated = listing.complete
         listingAnswered(listing.complete)
         continuation.yield(listing)
+        if listing.complete { sendPhotoMarks() }
         guard listing.complete, !wasDated else { return }
         // The cards now have their folders' dates (a stored summary is fresh only at its folder's date): the summaries
         // waiting for them go to the cover queue, at once.
@@ -540,6 +568,7 @@ extension Notification.Name {
         showsUnchecked = true
         DebugLog.log("folder from the catalog: \(entries.count) entries, checking")
         continuation.yield(BrowserListing(entries: entries, complete: true, isProvisional: true))
+        sendPhotoMarks()
         return true
     }
 
@@ -563,6 +592,12 @@ extension Notification.Name {
     private func remember(_ entries: [BrowserEntry]) {
         shown = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         shownFiles = entries.filter { $0.kind == .file }.map(\.url)
+        markOrder = nil
+        markOrderTask?.cancel()
+        markOrderTask = nil
+        markListing += 1
+        idByURL = Dictionary(entries.lazy.filter { $0.kind == .file }.map { ($0.url.standardizedFileURL, $0.id) },
+                             uniquingKeysWith: { a, _ in a })
         stamps = [:]
         for e in entries where e.kind == .file {
             if let date = e.date, let size = e.size { stamps[e.url] = FileStamp(modified: date, size: Int(size)) }
@@ -673,6 +708,7 @@ extension Notification.Name {
                 if let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel) {
                     self.view?.setImage(image, for: entry.id)
                     self.pictured.insert(entry.url)
+                    self.markAspects?.cellPictureArrived(entry.url)
                 } else {
                     self.waiting[entry.url.standardizedFileURL] = entry.id
                 }
@@ -935,6 +971,69 @@ extension Notification.Name {
         view?.setSummary(facts.cardSummary(visit: visit(of: entry.url), config: config), for: id)
     }
 
+    /// The dots and chips of the photos of the folder on screen (photo-cards spec §3), from its remembered photo, its
+    /// visit, its two-page keys and the store's aspects: all in memory, O(n) in its photos. After a complete listing,
+    /// back from the viewer (the position may have moved), when a setting changes and when aspects arrive. Nothing while
+    /// the viewer is in front (unpausing sends them), nor from a names-only listing (its order may change with the
+    /// dates). The order is made off the main thread; the marks follow when it is done.
+    private func sendPhotoMarks() {
+        guard !isPaused else { return }
+        guard case .folder(let folder) = view?.location else { return dropMarkAspects() }
+        guard shownDated || showsUnchecked else { return }
+        let sort = BrowserSort.forFolder(folder, settings: settings)
+        if markOrder?.sort != sort {
+            guard markOrderTask == nil else { return }   // one at a time; it sends the marks when done
+            let files = shownFiles, stamps = stamps, listing = markListing
+            markOrderTask = Task { [weak self] in
+                let order = await Task.detached(priority: .userInitiated) { () -> ([URL], [URL: FileStamp]) in
+                    let images = files.filter { Playlist.imageExtensions.contains($0.pathExtension.lowercased()) }
+                    let playlist = images.first.map { Playlist(files: images, current: $0, stamps: stamps).sorted(sort) }
+                    return (playlist?.files ?? [], playlist?.stamps ?? [:])
+                }.value
+                guard let self, !Task.isCancelled, self.markListing == listing else { return }
+                self.markOrderTask = nil
+                self.markOrder = (sort, order.0, order.1)
+                self.sendPhotoMarks()
+            }
+            return
+        }
+        guard let markOrder, !markOrder.files.isEmpty else {
+            dropMarkAspects()
+            return view?.setPhotoMarks(unseen: [], paired: []) ?? ()
+        }
+        let order = markOrder.files, dates = markOrder.stamps
+        let config = FolderCardFacts.config(for: folder, base: Settings.shared.config, settings: settings)
+        let rules = SpreadRules(config: config)
+        var aspects: [Double?] = []
+        if rules.on, rules.options.landscapeAlone {
+            let known = markAspects ?? makeMarkAspects()
+            known.setAppliesOrientation(config.exifOrientation)
+            known.setPlaylist(order)
+            aspects = known.aspects
+        } else {
+            dropMarkAspects()
+        }
+        let pairs = PhotoMarks.pairs(order: order, rules: rules, aspects: aspects)
+        let remembered = positions.fileName(in: folder)
+        let partner = remembered.flatMap { name in order.first { $0.lastPathComponent == name } }.flatMap { pairs[$0] }
+        let unseen = PhotoMarks.unseen(order: order, remembered: remembered, visit: visit(of: folder),
+                                       modified: { dates[$0]?.modified }, partner: partner)
+        view?.setPhotoMarks(unseen: Set(unseen.compactMap { idByURL[$0] }), paired: Set(pairs.keys.compactMap { idByURL[$0] }))
+    }
+
+    private func makeMarkAspects() -> StripAspects {
+        let thumbnails = thumbnails
+        let known = StripAspects(fetch: { urls, applies in await thumbnails.aspects(urls, applyingOrientation: applies) })
+        known.onChange = { [weak self] in self?.sendPhotoMarks() }
+        markAspects = known
+        return known
+    }
+
+    private func dropMarkAspects() {
+        markAspects?.close()
+        markAspects = nil
+    }
+
     /// The folder's visit, else where Recent has it (`FolderCardFacts.visit`): both in memory.
     private func visit(of folder: URL) -> FolderVisit? {
         FolderCardFacts.visit(positions.visit(in: folder), recent: recent?.entry(for: folder))
@@ -1054,6 +1153,7 @@ extension Notification.Name {
     }
 
     private func thumbnailChanged(_ url: URL) {
+        markAspects?.thumbnailArrived(url)
         guard let id = waiting.removeValue(forKey: url.standardizedFileURL) else { return }
         let maxPixel = maxPixel
         Task { @MainActor [weak self] in
