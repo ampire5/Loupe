@@ -25,3 +25,12 @@ import Testing
     struct Other: Error {}
     #expect(LoadErrorText.message(name: "x.jpg", error: Other(), size: nil) == "x.jpg: can’t be displayed")
 }
+
+/// Only a file the decoders cannot read is broken; one too large, out of memory or not read at all may be shown later.
+@Test func onlyAnUnreadableImageIsABrokenFile() {
+    let size = PixelSize(width: 24000, height: 24000)
+    #expect(LoadErrorText.isBroken(LoadErrorText.message(name: "a.jpg", error: DecodeError.unreadable, size: nil)))
+    #expect(!LoadErrorText.isBroken(LoadErrorText.message(name: "a.jpg", error: DecodeError.outOfMemory, size: nil)))
+    #expect(!LoadErrorText.isBroken(LoadErrorText.message(name: "a.jpg", error: DecodeError.tooLarge, size: size)))
+    #expect(!LoadErrorText.isBroken(LoadErrorText.message(name: "a.jpg", error: CocoaError(.fileReadNoSuchFile), size: nil)))
+}

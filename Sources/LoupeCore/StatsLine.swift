@@ -1,43 +1,14 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// The text of the compact image status (spec §10), as a pure function so its position display is tested
-/// without AppKit.
+/// The pieces of the image status (spec §10) as pure functions, so they are tested without AppKit: the position, the
+/// format and zoom names, the folder's name, the progress, and the info panel's Diagnostics rows.
 public enum StatsLine {
-    /// `name   N / M   W×H   size MB   FORMAT[ progressive]   Mode NN %   decode NNNN ms`.
-    /// `decodeMs` is nil while unknown. Sizes are decimal megabytes (1 MB = 1 000 000 bytes). W×H is the size as
-    /// shown: oriented (M3b spec §2.1), stored when `applyingOrientation` is off (`exif-orientation=no`). `counted`
-    /// false: the folder is still being listed, so M is `…` rather than the interim playlist's count. `companion`
-    /// (the second page's index, spread) makes the position a range: `12–13 / 380`.
-    public static func loaded(name: String, index: Int, companion: Int? = nil, count: Int, counted: Bool = true,
-                              info: ImageInfo,
-                              applyingOrientation: Bool = true, transform: ViewTransform, decodeMs: Double?) -> String {
-        let size = info.displaySize(applying: applyingOrientation)
-        var parts = [
-            name,
-            position(index: index, companion: companion, count: count, counted: counted),
-            "\(size.width)×\(size.height)",
-            String(format: "%.1f MB", Double(info.fileSize) / 1_000_000),
-            formatName(info.typeIdentifier) + (info.isProgressive ? " progressive" : ""),
-            modeText(transform),
-        ]
-        if let decodeMs { parts.append("decode \(Int(decodeMs.rounded())) ms") }
-        return parts.joined(separator: "   ")
-    }
-
-    /// A pair's line gives the facts of one file (W×H, MB, format, decode): its first page in reading order, whichever
+    /// A pair's status gives the facts of one file (W×H, MB, format, decode): its first page in reading order, whichever
     /// page is current (spread spec, «Положение»). True when that is the companion (`first` ≠ `current`) and it is
     /// read; else the current photo's.
     public static func factsOfCompanion(current: Int, first: Int, companionRead: Bool) -> Bool {
         first != current && companionRead
-    }
-
-    /// `Loading name…   N / M`; the position is left out when the playlist is not known.
-    public static func loading(name: String, position: (index: Int, count: Int)? = nil, companion: Int? = nil,
-                               counted: Bool = true) -> String {
-        guard let position else { return "Loading \(name)…" }
-        return "Loading \(name)…   " + Self.position(index: position.index, companion: companion, count: position.count,
-                                                                  counted: counted)
     }
 
     public static func position(index: Int, companion: Int? = nil, count: Int, counted: Bool = true) -> String {
@@ -51,23 +22,11 @@ public enum StatsLine {
         return min(max(Double(index + 1) / Double(count), 0), 1)
     }
 
-    /// The name the bar shows for the open `folder` (`stats-folder-name`): its last path component, or the
+    /// The name the status shows for the open `folder` (`stats-folder-name`): its last path component, or the
     /// volume's name when the caller knows one for a volume's root ("/" would say nothing).
     public static func folderName(of folder: URL, volumeName: String?) -> String {
         if let volumeName, !volumeName.isEmpty { return volumeName }
         return folder.lastPathComponent
-    }
-
-    /// The width the centred folder name gets in a bar `barWidth` wide whose stats text ends at `textEnd`: as much
-    /// of `nameWidth` as fits symmetrically about the middle while staying `gap` clear of the text and `inset` inside
-    /// the bar's edges (the name truncates in the middle to it); nil when that is under `minimum`, or under the name's
-    /// own width for a shorter name (no room: hidden).
-    public static func folderNameWidth(barWidth: Double, textEnd: Double, nameWidth: Double, gap: Double,
-                                       inset: Double, minimum: Double) -> Double? {
-        let half = min(barWidth / 2 - textEnd - gap, barWidth / 2 - inset)
-        let width = min(nameWidth, 2 * half)
-        // A name shorter than `minimum` needs only its own width ("AI" must not count as "no room").
-        return nameWidth > 0 && width >= min(minimum, nameWidth) ? width : nil
     }
 
     /// The Diagnostics rows of the info panel (the old second line of the extended bar): `Decoder` (`libjpeg-turbo`),
