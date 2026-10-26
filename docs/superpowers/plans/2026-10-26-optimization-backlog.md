@@ -54,9 +54,11 @@ reads past half, close release, B, C, one activation per restore, the front wind
 - Names cut in the middle elsewhere: the stats bar's folder label, the viewer's toolbar title, the Stash bar
   (`byTruncatingMiddle`); the sidebar's now cut at the end.
 
-- **Photo thumbnail cards: done on `polish`** (spec docs/superpowers/specs/2026-10-26-photo-cards-design.md, bench
-  docs/bench/2026-10-26-photo-cards.md). Left: the Intel Mac's bench; the real-window bench (scrolling a folder of
-  thousands, first visit and return) on real data; HomeScreenKit 0.6.0 (`setPhotoMarks`) before the branch merges.
+- **Photo thumbnail cards: done, in `main`** (PR #24; spec docs/superpowers/specs/2026-10-26-photo-cards-design.md,
+  bench docs/bench/2026-10-26-photo-cards.md; HomeScreenKit 0.6.0 `setPhotoMarks`). Left: the Intel Mac's bench; the
+  real-window bench (scrolling a folder of thousands, first visit and return) on real data. Minors: the hover strip is
+  taller than a thin panorama; its size is formatted unlike the list row's; VoiceOver reaches the strip's labels; no
+  test that cards whose marks did not change stay untouched.
 
 ## Small
 
