@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/HomeScreenKit.git",
       "state" : {
-        "revision" : "aa61ffae1bb9b71513298a5f7110ae6fbbf088d0",
-        "version" : "0.5.0"
+        "revision" : "63bb49d74a402791c243d719ca7a3ec3305486c6",
+        "version" : "0.6.0"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/SettingsKit.git",
       "state" : {
-        "revision" : "5f8bdfd673cbd5f90b02c51aa9bd276f431d2c50",
-        "version" : "0.5.0"
+        "revision" : "45cfa78123342352fb75e3dce886cc03b32d3a99",
+        "version" : "0.6.0"
       }
     },
     {
