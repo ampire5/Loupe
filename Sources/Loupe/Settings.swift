@@ -251,6 +251,12 @@ extension Notification.Name {
         return choices
     }
 
+    /// One `app-icon` value's picture, for the settings row: its file only, without reading the folder and its packs
+    /// as `appIconChoices` does (~900 files: 20–25 ms of the main thread on an M4 Max).
+    static func appIconChoice(_ value: String) -> IconChoice {
+        IconChoice(word: value, file: iconFile(value))
+    }
+
     /// The picture file of an `app-icon` value: its file (`appIconURL`), or for `owl` the bundle's own icon. An Icon
     /// Composer package not compiled yet has none: it is compiled now, and shows the next time the grid reads it.
     private static func iconFile(_ value: String) -> URL? {

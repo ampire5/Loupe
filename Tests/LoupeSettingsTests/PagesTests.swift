@@ -253,9 +253,11 @@ struct PagesTests {
         }
     }
 
-    /// `app-icon` is an icon pop-up whose items come from the app (the context).
+    /// `app-icon` is an icon pop-up whose items come from the app (the context); the row's own picture comes from
+    /// the context's one-value lookup when it has one, else from the items.
     @Test func appIconAsksTheContext() {
-        guard case .icon(let choices, _) = row("app-icon")?.kind else {
+        guard let iconRow = row("app-icon"), case .icon(let choices, _) = iconRow.kind, let current = iconRow.iconLookup
+        else {
             Issue.record("app-icon is not an icon row")
             return
         }
@@ -265,8 +267,13 @@ struct PagesTests {
                                                      inputURL: URL(fileURLWithPath: "/tmp/input.conf"),
                                                      iconChoices: { [IconChoice(word: "owl"), IconChoice(word: "hat")] })
         #expect(choices().map(\.word) == ["owl", "hat"])
+        #expect(current("hat")?.word == "hat")
+        #expect(current("cap") == nil)
+        SettingsPanel.context?.iconChoice = { IconChoice(word: $0, section: "one") }
+        #expect(current("cap")?.section == "one")
         SettingsPanel.context = nil
         #expect(choices().isEmpty)
+        #expect(current("owl") == nil)
     }
 
     /// Every row's SF Symbol exists, and no two rows (or a row and a page) share one: a symbol tells them apart.

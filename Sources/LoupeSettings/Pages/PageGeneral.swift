@@ -43,6 +43,11 @@ extension SettingsPanel {
             ]),
             SettingsCard([
                 .icon("app-icon", "Dock icon", choices: { context?.iconChoices() ?? [] }, folder: context?.iconFolder,
+                      current: { value in
+                          guard let context else { return nil }
+                          if let one = context.iconChoice { return one(value) }
+                          return context.iconChoices().first { $0.word == value }
+                      },
                       symbol: "app.badge",
                       description: "While Loupe runs (Finder always shows the owl): a built-in picture, or one of "
                         + "yours from ~/.config/loupe/icons: loose pictures, or pictures in a folder pack (choose the "
