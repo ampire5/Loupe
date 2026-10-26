@@ -701,6 +701,9 @@ import UniformTypeIdentifiers
         // Retitled Show Sidebar while it is hidden; on Home only.
         file.addItem(withTitle: "Hide Sidebar", action: #selector(ViewerWindowController.toggleHomeSidebar(_:)),
                      keyEquivalent: "s").keyEquivalentModifierMask = [.control, .command]
+        // Retitled Show Path Bar while it is hidden; on Home only, Finder's key.
+        file.addItem(withTitle: "Hide Path Bar", action: #selector(ViewerWindowController.toggleHomePathBar(_:)),
+                     keyEquivalent: "p").keyEquivalentModifierMask = [.option, .command]
         // Retitled Back to Recent / Back to Stash (ViewerWindowController validates it); in Stash's page ⌘[ is the page's.
         file.addItem(withTitle: "Back", action: #selector(ViewerWindowController.goBack(_:)), keyEquivalent: "[")
         file.addItem(withTitle: "Clear Recent", action: #selector(clearRecent(_:)), keyEquivalent: "")

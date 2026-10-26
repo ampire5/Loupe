@@ -490,6 +490,8 @@ public struct Config: Equatable, Sendable {
     public var homeStart = HomeTab.recent
     /// `home-sidebar`: Home's sidebar shown (⌃⌘S hides it and writes it back).
     public var homeSidebar = true
+    /// `home-path-bar`: the path bar under a folder on Home, as Finder's (⌥⌘P writes it back).
+    public var homePathBar = true
     /// `home-sidebar-width`: Home's sidebar width in points, 180...1600, shown at most a third of the window (never
     /// held under 400); dragging its edge writes it back.
     public var homeSidebarWidth = 236
@@ -650,7 +652,7 @@ public struct Config: Equatable, Sendable {
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-path-bar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome",
                               "fullscreen-toolbar", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
@@ -804,6 +806,7 @@ public struct Config: Equatable, Sendable {
         case "home-tab": return homeTab.rawValue
         case "home-start": return homeStart.rawValue
         case "home-sidebar": return homeSidebar ? "yes" : "no"
+        case "home-path-bar": return homePathBar ? "yes" : "no"
         case "home-sidebar-width": return String(homeSidebarWidth)
         case "home-sidebar-compact": return homeSidebarCompact ? "yes" : "no"
         case "home-sidebar-indent": return homeSidebarIndent.rawValue
@@ -1112,6 +1115,8 @@ public struct Config: Equatable, Sendable {
             if let v = HomeTab(rawValue: value.lowercased()) { homeStart = v } else { return .badValue }
         case "home-sidebar":
             if let v = Self.bool(value) { homeSidebar = v } else { return .badValue }
+        case "home-path-bar":
+            if let v = Self.bool(value) { homePathBar = v } else { return .badValue }
         case "home-sidebar-width":
             if let v = Int(value), (180...1600).contains(v) { homeSidebarWidth = v } else { return .badValue }
         case "home-sidebar-compact":

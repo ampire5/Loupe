@@ -1170,7 +1170,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-path-bar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"), "keep-share": ("30", "81"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
@@ -1642,6 +1642,13 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config().text(forKey: "home-sidebar") == "yes")
     #expect(!Config.parse("home-sidebar=no").0.homeSidebar)
     #expect(Config.parse("home-sidebar=maybe").1 == ["loupe.conf:1: bad option 'home-sidebar=maybe'"])
+}
+
+@Test func homePathBarParsesAndDefaults() {
+    #expect(Config().homePathBar)
+    #expect(Config().text(forKey: "home-path-bar") == "yes")
+    #expect(!Config.parse("home-path-bar=no").0.homePathBar)
+    #expect(Config.parse("home-path-bar=maybe").1 == ["loupe.conf:1: bad option 'home-path-bar=maybe'"])
 }
 
 @Test func homeTabSessions() {

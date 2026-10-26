@@ -66,6 +66,9 @@ extension SettingsPanel {
                     + "Default Recent."),
                 .toggle("home-sidebar", "Sidebar", symbol: "sidebar.left",
                         description: "Home's sidebar of sources, places and folders. ⌃⌘S on Home. Default on."),
+                .toggle("home-path-bar", "Path bar", symbol: "chevron.right.2",
+                        description: "The folders from the places down to the one shown, under the grid; a click goes "
+                            + "to one. ⌥⌘P on Home. Default on."),
                 .number("home-sidebar-width", "Sidebar width", unit: "pt", step: 10, symbol: "rectangle.lefthalf.inset.filled",
                         description: "Dragging the sidebar's right edge sets it too. 180–1600 pt, shown at most a third of "
                             + "the window (400 pt in any window). Default 236."),

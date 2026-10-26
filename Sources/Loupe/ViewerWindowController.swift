@@ -854,6 +854,13 @@ import UniformTypeIdentifiers
         _ = Settings.shared.saveAsDefault(["home-sidebar": homeView.isSidebarVisible ? "yes" : "no"])
     }
 
+    /// File › Hide Path Bar / Show Path Bar (⌥⌘P): kept as `home-path-bar`.
+    @objc func toggleHomePathBar(_ sender: Any?) {
+        guard let homeView, isShowingHome else { return }
+        homeView.browser.showsPathBar.toggle()
+        _ = Settings.shared.saveAsDefault(["home-path-bar": homeView.browser.showsPathBar ? "yes" : "no"])
+    }
+
     @objc func toggleSidebar(_ sender: Any?) {
         toggleHomeSidebar(sender)
     }
@@ -1193,6 +1200,7 @@ import UniformTypeIdentifiers
         homeView.sidebarFoldersFirst = config.homeSidebarFoldersFirst
         homeView.sidebarRerootDepth = config.homeSidebarReroot
         if isShowingHome { homeView.isSidebarVisible = config.homeSidebar }
+        homeView.browser.showsPathBar = config.homePathBar
     }
 
     /// The last folder when it answers within a second, else Places with the reason; nothing if the user went
@@ -1812,6 +1820,9 @@ import UniformTypeIdentifiers
             return isShowingHome && !isShowingStash
         case #selector(toggleHomeSidebar(_:)):
             item.title = homeView?.isSidebarVisible == false ? "Show Sidebar" : "Hide Sidebar"
+            return isShowingHome
+        case #selector(toggleHomePathBar(_:)):
+            item.title = homeView?.browser.showsPathBar == false ? "Show Path Bar" : "Hide Path Bar"
             return isShowingHome
         case #selector(goBack(_:)):
             item.title = backTarget.map { "Back to \(Self.tabTitle($0))" } ?? "Back"
