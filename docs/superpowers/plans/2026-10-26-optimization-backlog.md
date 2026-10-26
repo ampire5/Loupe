@@ -11,7 +11,8 @@ reads past half, close release, B, C, one activation per restore, the front wind
 
 - **HomeScreenKit tag.** Loupe uses kit API newer than 0.4.0 (`HomeView.isParked`, `sidebarFoldersChanged`,
   `BrowserListing.isProvisional`): tag the kit (0.5.0), raise Loupe's `from:` and put the kit pins back in
-  `Package.resolved` (edit mode drops them), as in fdc7d7d.
+  `Package.resolved` (edit mode drops them), as in fdc7d7d. The photo cards add `HomeBrowserView.setPhotoMarks`:
+  0.6.0.
 
 ## Measurements still owed
 
@@ -53,23 +54,9 @@ reads past half, close release, B, C, one activation per restore, the front wind
 - Names cut in the middle elsewhere: the stats bar's folder label, the viewer's toolbar title, the Stash bar
   (`byTruncatingMiddle`); the sidebar's now cut at the end.
 
-- **Photo thumbnail cards are not laid out to the mockup** (owner's request of 2026-10-26; the folder cards were
-  redone, the photo ones were not: folder-cards spec, "Вне документа"). Mockup: board «Эскизы фото тем же языком» in
-  the canvas «Карточки папок» (https://claude.ai/artifact/Hgk6ZE7Ge8mbbWZjH4pmMb, `Main.dc.html`; the canvas is not in
-  the repository: export the three boards into `docs/` first). It shows a 104 pt square, radius 8, no text by default;
-  a blue dot (8 pt, 1.5 pt white ring) 6 pt in from the top right for a photo not yet viewed; a ⧉ chip (12 pt glyph on
-  `rgba(18,18,20,.58)`, radius 5) at the top left for a pair; on hover a strip along the bottom (`rgba(18,18,20,.6)`,
-  10.5 pt) with the format at the left and the size at the right; the selection a 2.5 pt `#0A84FF` ring outside the
-  picture. Today `PhotoCard` (HomeScreenKit) has radius 1 (Square) or 4 (Aspect), the ring inside, and the name, and
-  none of the dot, the chip or the strip. To decide: what Aspect mode does with the mockup (it shows only squares).
-  Needs: viewed marks (ROADMAP "Favorites and Viewed"; without them no dot), the pair flag from the folder's spread
-  keys, format from the extension and size from the listing's stat. New kit API needs a kit tag.
-  **Must not cost speed:** nothing read from files for a card (only the listing's name, size, stamp); the viewed set
-  is one in-memory lookup per visible cell, never a query per cell; the hover strip is made on first hover, not with
-  every cell, and the off states add no layers; setting a card's state on reuse is O(1) and changes nothing else in
-  the grid; the dot and the chip change a cell alone, not the whole grid. Bench before a build is handed over
-  (CLAUDE.md, "Interface responsiveness"): the real window, scrolling a folder of thousands, first visit and return,
-  main-thread CPU per action, on the Intel Mac.
+- **Photo thumbnail cards: done on `polish`** (spec docs/superpowers/specs/2026-10-26-photo-cards-design.md, bench
+  docs/bench/2026-10-26-photo-cards.md). Left: the Intel Mac's bench; the real-window bench (scrolling a folder of
+  thousands, first visit and return) on real data; HomeScreenKit 0.6.0 (`setPhotoMarks`) before the branch merges.
 
 ## Small
 
