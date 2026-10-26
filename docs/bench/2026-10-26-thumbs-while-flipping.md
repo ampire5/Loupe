@@ -21,6 +21,6 @@ each flip's photo from `navigate` to its preview and to `full on screen`. M4 Max
 
 The flips' own times do not change (the thumbnail reads take `FileReader`'s background threads, beyond the viewer's
 two); thumbnails made during the flips go from about 10 to about 40, and the folder is done by the end of them instead
-of needing the pause after. One read and not two: the viewer's neighbours and the thumbnails share the one share, and
-one read is what the measurement shows to leave the sharp times as they were. Not measured: a NAS over Wi-Fi (where
-the share is the limit), Intel, Home's covers on their own.
+of needing the pause after. One read was chosen as the cautious step (the viewer's neighbours and the thumbnails share
+the one share) and measured to leave the sharp times as they were; two were not measured. Not measured either: a NAS
+over Wi-Fi (where the share is the limit), Intel, Home's covers on their own.
