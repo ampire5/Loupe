@@ -48,3 +48,11 @@ Learned from the settings window, where switching categories took 0.2–2.5 s.
   the window out synchronously.
 - Building a screen cannot be cut into pieces, so it cannot be hidden in idle time: building pages ahead is allowed only
   when one piece fits the frame budget; otherwise a click lands in the block.
+
+## Kits and branches
+
+An app of this family builds on kits released by tag; kit work for the app's branch `X` goes on a branch `X` in the
+kit. A branch is closed kits first: kit `X` merged into the kit's `main`, the kit tagged, the app's Package.swift and
+Package.resolved moved to that tag (never committed from `swift package edit` mode), the app's CI green, only then the
+app's `X` merged; last, the `X` branches deleted and the kits' clones back on `main`. In Loupe the steps are in
+docs/kits.md and `scripts/kits-check.py` checks them.
