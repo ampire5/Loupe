@@ -1125,18 +1125,32 @@ import UniformTypeIdentifiers
 
     /// File › Larger Cards / Smaller Cards / Default Card Size: Home's ⌘= / ⌘− / ⌘0 (the keys are Home's own, not the
     /// menu's: a menu key is taken even while its item is off).
-    @objc func largerCards(_ sender: Any?) { resizeBrowserCards(.larger) }
-    @objc func smallerCards(_ sender: Any?) { resizeBrowserCards(.smaller) }
+    @objc func largerCards(_ sender: Any?) { resizeBrowserCards(.largerSize) }
+    @objc func smallerCards(_ sender: Any?) { resizeBrowserCards(.smallerSize) }
     @objc func defaultCardSize(_ sender: Any?) { resizeBrowserCards(.reset) }
 
-    /// A column step on Home (⌘= one fewer, ⌘− one more), saved as `browser-card-size` (⌘0: the default).
+    /// A card size on Home, saved as `browser-card-size` (⌘0: the default): ⌘= / ⌘− and the toolbar's − + the next of
+    /// the four sizes, the wheel and a pinch a column, the toolbar's slider its own size (saved once the drag rests,
+    /// without a toast: the slider shows it).
     private func resizeBrowserCards(_ resize: HomeResize) {
         guard let view = homeView?.browser else { return }
         let size = view.cardSize(after: resize, range: 60...480).map { Int($0.rounded()) } ?? Config().browserCardSize
-        _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
         view.cardSize = CGFloat(size)
-        toast.show("Cards: \(size) pt")
+        cardSizeSave?.cancel()
+        if case .to = resize {
+            cardSizeSave = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
+            }
+            return
+        }
+        _ = Settings.shared.saveAsDefault(["browser-card-size": String(size)])
+        let name = zip(HomeResize.sizes, ["Small", "Medium", "Large", "Huge"]).first { Int($0.0) == size }?.1
+        toast.show(name.map { "Cards: \($0)" } ?? "Cards: \(size) pt")
     }
+
+    private var cardSizeSave: Task<Void, Never>?
 
     // MARK: Folders (file browser spec §4)
 
