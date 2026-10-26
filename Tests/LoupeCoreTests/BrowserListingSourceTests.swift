@@ -102,6 +102,15 @@ import Testing
         #expect(BrowserListingSource.parent(of: URL(fileURLWithPath: "/Users")) == .folder(URL(fileURLWithPath: "/")))
     }
 
+    @Test func parentOfShareMountedOutsideVolumesIsPlaces() {
+        let roots: Set<String> = ["/", "/Users/u/Volumes/D$"]
+        #expect(BrowserListingSource.parent(of: URL(fileURLWithPath: "/Users/u/Volumes/D$"), volumeRoots: roots) == .places)
+        #expect(BrowserListingSource.parent(of: URL(fileURLWithPath: "/Users/u/Volumes/D$/x"), volumeRoots: roots)
+            == .folder(URL(fileURLWithPath: "/Users/u/Volumes/D$")))
+        #expect(BrowserListingSource.parent(of: URL(fileURLWithPath: "/Users/u/Volumes"), volumeRoots: roots)
+            == .folder(URL(fileURLWithPath: "/Users/u")))
+    }
+
     @Test func parentOfArchive() {
         #expect(BrowserListingSource.parent(of: URL(fileURLWithPath: "/Volumes/T/x/g.zip"))
             == .folder(URL(fileURLWithPath: "/Volumes/T/x")))
