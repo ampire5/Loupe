@@ -20,7 +20,7 @@ highway_version=1.4.0
 # renovate: datasource=github-tags depName=strukturag/libde265 extractVersion=^v(?<version>.+)$
 libde265_version=1.1.3
 # renovate: datasource=github-tags depName=strukturag/libheif extractVersion=^v(?<version>.+)$
-libheif_version=1.23.6
+libheif_version=1.23.7
 libjxl_commit=8b643990a3f30a55c220386329a3c59ccf189473   # branch loupe
 min=26.0
 arch=${DEPS_ARCH:-$(uname -m)}
