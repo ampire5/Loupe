@@ -6,29 +6,22 @@ extension SettingsPanel {
     /// has no keys: it remembers its size itself.
     static let interface = SettingsPage("interface", "Interface", symbol: "macwindow", sections: [
         SettingsSection("Stats Bar", rows: [
-            .choice("stats-bar-position", "Position", [
-                (word: "auto", title: "Automatic"), (word: "top", title: "Top"), (word: "bottom", title: "Bottom"),
-            ], symbol: "rectangle.topthird.inset.filled",
-                    description: "Automatic: the top in a window, the bottom in full screen. Default Automatic."),
             .toggle("stats-bar-with-toolbar", "Show with the toolbar", symbol: "menubar.rectangle",
                     description: "Off: the bar shows only when the toolbar is hidden, since the toolbar carries the "
                         + "same facts. Default on."),
-            .number("stats-bar-opacity", "Glass darkness", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
-                    description: "How dark the bar's glass is where the folder progress has not reached: the tint's "
-                        + "opacity, 0–1, default 0.34."),
-            .toggle("stats-bar-clear", "Clear glass", symbol: "drop",
-                    description: "The glass without the system's frosting: with a low darkness the photo shows "
-                        + "through. Default off."),
+            .number("stats-bar-opacity", "Darkness", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
+                    description: "How dark the strip is under the text. White text needs about 0.6 to read over a "
+                        + "bright photo, the coloured values 0.7. 0.3–1, default 0.7."),
             .toggle("stats-progress", "Folder progress", symbol: "rectangle.lefthalf.filled",
-                    description: "The bar's glass is darkened from the left up to the photo's place in the folder "
+                    description: "The strip is lightened from the left up to the photo's place in the folder "
                         + "(N/M). Default on.",
                     nested: [
-                        .number("stats-progress-opacity", "Darkness", step: 0.01,
-                                description: "How much darker the passed part is: black over the bar at this "
+                        .number("stats-progress-opacity", "Brightness", step: 0.01,
+                                description: "How much lighter the passed part is: white over the strip at this "
                                     + "opacity. 0.02–0.6, default 0.15."),
                     ]),
             .toggle("stats-modified", "Modification date", symbol: "calendar",
-                    description: "The file's modification date at the end of the line. Default on."),
+                    description: "The file's modification date, under the folder's name on the right. Default on."),
             .toggle("stats-bar-autohide", "Hide by itself", symbol: "eye.circle",
                     description: "The bar fades out after the delay and comes back with the next photo or when "
                         + "you switch it with I. Default off.",
@@ -37,12 +30,12 @@ extension SettingsPanel {
                                 description: "How long it stays after a photo came. 500–30000, default 3000."),
                     ]),
             .toggle("stats-icons", "Icons", symbol: "chart.bar.doc.horizontal",
-                    description: "A small symbol in front of each field: name, place, size, weight, format, zoom, "
+                    description: "A small symbol in front of each fact: place, size, weight, format, zoom, date, "
                         + "decode time. Default on."),
             .toggle("stats-monochrome", "Monochrome", symbol: "swatchpalette",
                     description: "White and grey only, without the yellow of the parameters. Default off."),
             .toggle("stats-folder-name", "Folder name", symbol: "folder",
-                    description: "The open folder's name in the middle of the bar. Default on."),
+                    description: "The open folder's name at the right end of the bar. Default on."),
         ]),
         SettingsSection("Full Screen", rows: [
             .choice("fullscreen-toolbar", "Toolbar", [
@@ -55,21 +48,6 @@ extension SettingsPanel {
         SettingsSection("Toasts", rows: [
             .choice("toast-position", "Position", Self.toastPositions, symbol: "align.horizontal.center",
                     description: "Where the one-line answer of a key sits. Default Bottom."),
-            .number("stats-toast-opacity", "Glass darkness", step: 0.01,
-                    symbol: "circle.lefthalf.striped.horizontal.inverse",
-                    description: "How dark the glass of the toasts is: the tint's opacity, 0–1, default 0.34."),
-            .toggle("stats-toast-clear", "Clear glass", symbol: "drop.circle",
-                    description: "The glass without the system's frosting. Default off."),
-            .toggle("stats-toast", "Progress toast in full screen", symbol: "gauge.with.dots.needle.33percent",
-                    description: "A short glass toast with the photo's name, place in the folder and a progress bar "
-                        + "when you move to another photo in full screen. It fades by itself after the message "
-                        + "duration and never shows while you stay on a photo. Default on.",
-                    nested: [
-                        .choice("stats-toast-position", "Position", Self.toastPositions,
-                                symbol: "rectangle.split.3x3",
-                                description: "Where it sits; in the place of the key toast it steps aside. "
-                                    + "Default Bottom."),
-                    ]),
         ]),
         SettingsSection("Two Pages", rows: [
             .toggle("spread", "Two pages", symbol: "book.pages",

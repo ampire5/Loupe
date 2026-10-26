@@ -27,11 +27,6 @@ import HomeChrome
 
     /// Shows `text` and starts its time.
     func show(_ text: String) {
-        // The kit keeps its glass to itself; it is among the toast's subviews (`stats-toast-opacity`, `stats-toast-clear`).
-        if let glass = toast.subviews.first(where: { $0 is ChromeGlass }) as? ChromeGlass {
-            glass.tintOpacity = Settings.shared.config.statsToastOpacity
-            glass.setClear(Settings.shared.config.statsToastClear)
-        }
         toast.show(text, for: TimeInterval(Settings.shared.config.toastDurationMilliseconds) / 1000)
     }
 
