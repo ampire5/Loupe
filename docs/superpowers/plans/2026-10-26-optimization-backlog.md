@@ -15,8 +15,9 @@ reads past half, close release, B, C, one activation per restore, the front wind
 
 ## Measurements still owed
 
-- Window-ownership plan task 9: `session-bench.py`, `switch-bench.py`, `close-bench.py`, `front-check.py`,
-  `browse-bench.py`, `stored-check.py`, `thumbs-bench.py` from the scratchpad into `scripts/`; `LoupeBench replay
+- Window-ownership plan task 9: the benches of this round (branch `spike/window-ownership-bench`,
+  `spikes/window-ownership/bench`; and `spikes/rust/bench/switch-bench.py` on branch `spike/rust`) into `scripts/`;
+  `LoupeBench replay
   --script close` (20 open/close cycles, footprint per cycle: the plateau after closes); the final
   `docs/bench/<date>-window-ownership.md` with spec §5's acceptance.
 - Intel (the ~100 ms budget is checked there): restore, viewer ↔ Folders, flips.
