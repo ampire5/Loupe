@@ -330,15 +330,16 @@ import LoupeCore
     @objc private func infoClicked() { actions.info() }
 }
 
-/// The photo's status in the middle of the toolbar, in the style of a camera's screen: a glass chip of one size, the name
-/// over the facts in slots of their own widths with hairlines between them (`FactsRowView`, so nothing jumps when the
-/// photo or the zoom changes). Long values are cut, not wrapped.
+/// The photo's status in the middle of the toolbar. Names use the available window width;
+/// the folder truncates independently from the photo, with the shared metadata row below.
 @MainActor private final class ViewerToolbarStatusView: NSView {
-    private static let width: CGFloat = 480
     private static let height: CGFloat = 46
+    private var preferredWidth: NSLayoutConstraint!
     private let glass = ChromeGlass(style: .overMedia(.light), cornerRadius: 16)
     private let title = NSTextField(labelWithString: "")
-    private let workflow = NSTextField(labelWithString: "")
+    private let folder = NSTextField(labelWithString: "")
+    private let separator = NSTextField(labelWithString: "·")
+    private let facts = FactsRowView(style: .init(options: .init(size: 11, icons: true), formatBadge: true))
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -352,28 +353,34 @@ import LoupeCore
         title.maximumNumberOfLines = 1
         title.alignment = .center
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        workflow.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        workflow.textColor = ProCameraStyle.primary
-        workflow.lineBreakMode = .byTruncatingMiddle
-        workflow.maximumNumberOfLines = 1
-        workflow.alignment = .center
-        workflow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        workflow.translatesAutoresizingMaskIntoConstraints = false
-        let column = NSStackView(views: [title, workflow])
+        facts.translatesAutoresizingMaskIntoConstraints = false
+        facts.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        folder.font = .systemFont(ofSize: 12.5, weight: .regular)
+        folder.textColor = ProCameraStyle.secondary
+        folder.lineBreakMode = .byTruncatingMiddle
+        folder.maximumNumberOfLines = 1
+        folder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        folder.translatesAutoresizingMaskIntoConstraints = false
+        separator.font = folder.font
+        separator.textColor = ProCameraStyle.secondary
+        let details = NSStackView(views: [title, separator, folder])
+        details.orientation = .horizontal
+        details.alignment = .centerY
+        details.spacing = 8
+        details.translatesAutoresizingMaskIntoConstraints = false
+        let column = NSStackView(views: [details, facts])
         column.orientation = .vertical
         column.alignment = .centerX
         column.spacing = 3
         column.translatesAutoresizingMaskIntoConstraints = false
         glass.contentView.addSubview(column)
 
-        // As wide as the row with every slot in it (the facts that do not fit are dropped, the format first), but never narrower
-        // than the chip was.
-        let preferred = widthAnchor.constraint(equalToConstant: 400)
-        preferred.priority = .defaultHigh
+        // A soft preference lets AppKit keep the surrounding toolbar controls visible.
+        preferredWidth = widthAnchor.constraint(equalToConstant: 400)
+        preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            preferred,
+            preferredWidth,
             widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-            widthAnchor.constraint(lessThanOrEqualToConstant: Self.width),
             heightAnchor.constraint(equalToConstant: Self.height),
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
             glass.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -383,27 +390,46 @@ import LoupeCore
             column.leadingAnchor.constraint(greaterThanOrEqualTo: glass.contentView.leadingAnchor, constant: 12),
             column.trailingAnchor.constraint(lessThanOrEqualTo: glass.contentView.trailingAnchor, constant: -12),
             column.centerXAnchor.constraint(equalTo: glass.contentView.centerXAnchor),
-            title.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
-            // The row keeps its natural width while there is room and gives slots up when there is not.
-            workflow.widthAnchor.constraint(equalTo: glass.contentView.widthAnchor, constant: -24),
+            details.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
+            title.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, multiplier: 0.5, constant: -24),
+            folder.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, multiplier: 0.5, constant: -24),
+            facts.widthAnchor.constraint(equalTo: glass.contentView.widthAnchor, constant: -24),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResizeNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(updatePreferredWidth),
+                                                   name: NSWindow.didResizeNotification, object: window)
+        }
+        updatePreferredWidth()
+    }
+
+    @objc private func updatePreferredWidth() {
+        // Keep the centred chip within the middle half of the window, leaving both control groups room.
+        // Only window resizing changes this preference; photo and folder names never resize the chip.
+        let width = max(220, floor((window?.frame.width ?? 800) / 2))
+        if preferredWidth.constant != width { preferredWidth.constant = width }
+    }
+
     func update(_ status: ImageStatus) {
-        // The news about the folder takes the name's place, in the same line: the chip does not change size.
-        let text = status.note ?? (status.title.isEmpty ? "Loupe" : [status.value(.position), status.title, status.value(.size),
-                                                                  status.folder.map(FolderLabel.name(of:))]
-            .compactMap { $0 }.joined(separator: " · "))
+        // Folder news takes the photo title's place; facts keep their fixed slots below.
+        let text = status.note ?? (status.title.isEmpty ? "Loupe" : status.title)
         if title.stringValue != text {
             title.stringValue = text
         }
         title.toolTip = status.note ?? [text, status.folder?.path].compactMap { $0 }.joined(separator: "\n")
         title.textColor = ProCameraStyle.color(status.note == nil ? status.titleTone : status.noteTone, monochrome: false)
-        let value = status.value(.zoom) ?? ""
-        if workflow.stringValue != value { workflow.stringValue = value; workflow.toolTip = value }
-        workflow.isHidden = value.isEmpty
+        facts.update(status.facts, stale: status.stale, pending: status.pending)
+        let folderName = status.folder.map(FolderLabel.name(of:)) ?? ""
+        if folder.stringValue != folderName { folder.stringValue = folderName }
+        folder.toolTip = status.folder?.path
+        folder.isHidden = folderName.isEmpty
+        separator.isHidden = folderName.isEmpty
     }
 }

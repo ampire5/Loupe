@@ -23,7 +23,8 @@ enum ProCameraStyle {
     static let red = NSColor(srgbRed: 1, green: 0.54, blue: 0.50, alpha: 1)
 
     static func font(_ size: CGFloat, _ weight: NSFont.Weight = .semibold) -> NSFont {
-        .monospacedSystemFont(ofSize: size, weight: weight)
+        // As in HomeChrome's counter styles: readable system letters, stable-width digits.
+        .monospacedDigitSystemFont(ofSize: size, weight: weight)
     }
 
     /// A soft shadow that keeps text readable on whatever the picture is.
@@ -76,10 +77,12 @@ enum ProCameraStyle {
     static func text(_ fact: ImageStatus.Fact, _ options: Options) -> NSAttributedString {
         let tint = color(fact.tone, monochrome: options.monochrome)
         let result = NSMutableAttributedString()
-        // The exposure's values each after its own glyph, in the value's colour.
-        if options.icons, fact.kind == .exposure, !fact.parts.isEmpty {
-            result.append(ExposureLine.text(fact.parts, font: font(options.size, .semibold), color: tint, glyphColor: tint,
-                                            shadow: options.shadow ? shadow : nil))
+        // EXIF already carries conventional labels (f/, ISO, mm, EV). Repeating a glyph for
+        // every value crowds the line; quiet separators make those values easier to scan.
+        if fact.kind == .exposure {
+            let value = fact.parts.isEmpty ? fact.value
+                : fact.parts.map(\.text).joined(separator: "  ·  ")
+            result.append(plain(value, options.size, .medium, tint, options))
             return result
         }
         if options.icons { result.append(icon(symbol(fact.kind), tint: tint, options)) }

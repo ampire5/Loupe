@@ -103,9 +103,10 @@ import UniformTypeIdentifiers
         info: { [weak self] in self?.toggleInfoPanel(nil) },
         smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() })
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
+    private let windowToolbarController = WindowToolbarController()
     private var isFullScreen = false
-    /// Full screen over a photo: the toolbar hides and the pointer touching the top edge brings it (`FullScreenToolbar`);
-    /// `⌥⌘T` takes it away or gives it back. Home keeps its toolbar on screen. The stats bar (`I`) is shown over the
+    /// Full screen: AppKit reveals the toolbar together with the menu bar and window controls;
+    /// `⌥⌘T` disables or enables the viewer's toolbar. Home uses the same native reveal. The stats bar (`I`) is shown over the
     /// picture on its own.
     private var fullScreenToolbarOverride: Bool?
     private var fullScreenToolbar: Bool {
@@ -301,9 +302,10 @@ import UniformTypeIdentifiers
             session.smartZoom = SmartZoomState(restoring: remembered)
             tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
         }
-        window.toolbar = viewerToolbar.nsToolbar
+        windowToolbarController.show(viewerToolbar.nsToolbar)
+        window.toolbar = windowToolbarController.toolbar
         toolbarWasWanted = windowToolbar
-        viewerToolbar.nsToolbar.isVisible = toolbarWasWanted
+        windowToolbarController.toolbar.isVisible = toolbarWasWanted
 
         session.onChange = { [weak self] in self?.sessionDidChange() }
         session.cellPicture = { [weak self] in self?.strip.cellPicture(for: $0) }
@@ -618,13 +620,12 @@ import UniformTypeIdentifiers
     /// The longest a launch holds the photo back for the full-screen animation (about 0.5–1 s on its own).
     private static let revealTimeout: TimeInterval = 3
 
-    /// The system's full screen as proposed: the toolbar pinned under the hidden menu bar. Not `autoHideToolbar`: the
-    /// options are read once, as the window enters full screen, and setting them later is ignored (tried 2026-10-27),
-    /// so Home could not keep its toolbar while the photo hides it; and the viewer's toolbar swapped with Home's under
-    /// it stopped coming back at all. The viewer hides and brings its toolbar itself (`fullScreenEdge`).
+    /// One native reveal for the toolbar, menu bar and window controls. Keep the same
+    /// presentation policy on Home and in the viewer; independently toggling isVisible
+    /// at the screen edge reveals the toolbar before AppKit reserves the controls' inset.
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        proposed.subtracting(.autoHideToolbar)
+        proposed.union(.autoHideToolbar)
     }
 
     /// A failed enter reverts the layout chosen at `willEnterFullScreen`. (There is no matching failure
@@ -960,10 +961,9 @@ import UniformTypeIdentifiers
         view.isHidden = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.toolbar = view.browser.nsToolbar
-        // The window's hidden state can follow the viewer's toolbar to the next one: Home's is always shown.
-        if !view.browser.nsToolbar.isVisible { view.browser.nsToolbar.isVisible = true }
-        fullScreenEdge.stop()   // Home's toolbar stays, in full screen too
+        windowToolbarController.show(view.browser.nsToolbar)
+        // Home's toolbar stays enabled; in full screen AppKit handles its auto-hide.
+        if !windowToolbarController.toolbar.isVisible { windowToolbarController.toolbar.isVisible = true }
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
         view.isParked = false
@@ -999,9 +999,9 @@ import UniformTypeIdentifiers
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
         homeView.isParked = true
-        window?.toolbar = viewerToolbar.nsToolbar
-        // The toolbar comes back as it was left (Home's own toolbar had the window meanwhile); in full screen it hides
-        // until the pointer asks for it.
+        windowToolbarController.show(viewerToolbar.nsToolbar)
+        // Restore whether the viewer's toolbar is enabled. In full screen it stays
+        // attached and AppKit reveals it with the native window controls.
         if isFullScreen {
             applyFullScreenToolbar()
         } else {
@@ -2074,8 +2074,7 @@ import UniformTypeIdentifiers
         if on {
             applyFullScreenToolbar()
         } else {
-            fullScreenEdge.stop()
-            if !isShowingHome, window?.toolbar === viewerToolbar.nsToolbar { viewerToolbar.nsToolbar.isVisible = windowToolbar }
+            if !isShowingHome { windowToolbarController.toolbar.isVisible = windowToolbar }
             toolbarWasWanted = windowToolbar
         }
         applyStatsLayout()
@@ -2283,31 +2282,22 @@ import UniformTypeIdentifiers
 
     /// The viewer's toolbar follows `⌥⌘T`. Left alone while it is wanted: the system slides it in and out with the menu
     /// bar in full screen, and setting it visible again pins it on screen. Only the viewer's own toolbar is touched, and
-    /// only while it is the window's: Home's stays shown, and `hideHome` puts the viewer's back as it was left.
+    /// only while it is the window's: Home's stays enabled, and `hideHome` puts the viewer's back as it was left.
     private func applyToolbarVisibility() {
-        guard !isClosed, !isShowingHome, window?.toolbar === viewerToolbar.nsToolbar else { return }
+        guard !isClosed, !isShowingHome else { return }
         if isFullScreen {
             if toolbarWanted != toolbarWasWanted { toolbarWasWanted = toolbarWanted; applyFullScreenToolbar() }
             return
         }
         guard toolbarWanted != toolbarWasWanted else { return }
         toolbarWasWanted = toolbarWanted
-        viewerToolbar.nsToolbar.isVisible = toolbarWanted
+        windowToolbarController.toolbar.isVisible = toolbarWanted
     }
 
-    /// Full screen: Home's toolbar stays on screen; over a photo the toolbar hides, and with `⌥⌘T` on the top edge
-    /// brings it back (Zen rules, `FullScreenToolbar`).
-    private lazy var fullScreenEdge = FullScreenToolbar(window: { [weak self] in self?.window })
-
     private func applyFullScreenToolbar() {
-        guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { fullScreenEdge.stop(); return }
-        if isShowingHome {
-            fullScreenEdge.stop()
-            if !toolbar.isVisible { toolbar.isVisible = true }
-            return
-        }
-        if toolbar.isVisible { toolbar.isVisible = false }
-        if fullScreenToolbar { fullScreenEdge.start() } else { fullScreenEdge.stop() }
+        guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { return }
+        let enabled = isShowingHome || fullScreenToolbar
+        if toolbar.isVisible != enabled { toolbar.isVisible = enabled }
     }
 
     /// The stats bar (`I`) floats over the picture and reserves no room, always at the top: windowed under the toolbar, in
