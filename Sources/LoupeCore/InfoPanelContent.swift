@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 // The panel's model (`InfoRow`, `InfoSection`, `PanelPlacement`, `PanelSize`) is InfoPanelKit's, for every target that
 // imports LoupeCore.
 @_exported import InfoPanelModel
@@ -109,7 +110,7 @@ public enum InfoPanelContent {
         return [
             row("Name", file.name),
             row("Folder", file.folder),
-            row("Size", file.fileSize.map { String(format: "%.1f MB", Double($0) / 1_000_000) }),
+            row("Size", file.fileSize.map(sizeText)),
             row("Modified", metadata?.modified.map(dateText)),
             row("Created", metadata?.created.map(dateText)),
             row("Format", format),
@@ -122,13 +123,32 @@ public enum InfoPanelContent {
         ]
     }
 
+    /// A camera's photo shows every capture field, `—` where the file has none (style guide E, «Отсутствующие
+    /// значения»); a picture without a camera (a render, a screenshot) shows only what it has.
     private static func captureRows(_ m: PhotoMetadata) -> [InfoRow?] {
-        [
-            row("Camera", m.camera), row("Lens", m.lens), row("Focal length", m.focalLength), row("Aperture", m.aperture),
-            row("Exposure", m.exposure), row("ISO", m.iso), row("Captured", m.captured), row("GPS", m.gps),
+        let camera = m.camera != nil
+        func field(_ label: String, _ value: String?) -> InfoRow? { row(label, value ?? (camera ? "\u{2014}" : nil)) }
+        return [
+            field("Camera", m.camera), field("Lens", m.lens), field("Focal length", m.focalLength),
+            field("Aperture", m.aperture), field("Exposure", m.exposure), field("ISO", m.iso),
+            row("Compensation", m.compensation), field("Captured", m.captured), field("GPS", m.gps),
             row("Software", m.software), row("Description", m.description), row("Generation", m.generation),
             row("ComfyUI", m.comfyWorkflowBytes.map { "workflow, " + ($0 < 1024 ? "<1" : "\(Int((Double($0) / 1024).rounded()))") + " KB" }),
         ]
+    }
+
+    /// `24.6 MB (24 612 908 B)`: the style guide's size and, from a kilobyte, the bytes grouped by thin spaces.
+    static func sizeText(_ bytes: Int) -> String {
+        let short = FileFactsText.size(Int64(bytes))
+        guard bytes >= 1000 else { return short }
+        var digits = String(bytes), grouped = ""
+        if digits.count >= 5 {
+            while digits.count > 3 {
+                grouped = "\u{202F}" + digits.suffix(3) + grouped
+                digits.removeLast(3)
+            }
+        }
+        return short + " (" + digits + grouped + "\u{00A0}B)"
     }
 
     /// `2024-05-01 12:34`, local time. One formatter for every call: making one costs more than the rest of the panel's

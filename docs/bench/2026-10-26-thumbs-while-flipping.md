@@ -9,7 +9,7 @@ the current photo's work.
 
 What: scratchpad `thumbs-bench.py`: a photo opened with an empty thumbnail cache (`LOUPE_CACHE_DIR`, debug), 5 s,
 40 flips right every 0.5 s, 10 s still; thumbnails made (`thumb …: read` lines) before, during and after the flips;
-each flip's photo from `navigate` to its preview and to `full on screen`. M4 Max, release builds; `L$/…/Pics_URAA_HQ/AI`
+each flip's photo from `navigate` to its preview and to `full on screen`. M4 Max, release builds; `photo-share/benchmark/images`
 (200 JPEG XL of 14000 px, PC share). Runs alternated.
 
 | Build | Thumbnails during the flips | after (10 s) | Preview p50 | Sharp p50 / p90 |

@@ -115,4 +115,5 @@ private func target(_ files: [String]) -> FolderTarget {
     #expect(first.current == b)
     let remembered = FolderRequest.playlist(for: target, sort: BrowserSort(text: "date-desc")!) { _, _ in a }
     #expect(remembered.current == a)
+    #expect(remembered.files == [b, a])   // the folder's sort kept on the remembered photo
 }

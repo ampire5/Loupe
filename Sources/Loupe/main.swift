@@ -8,6 +8,22 @@ if CommandLine.arguments.dropFirst().contains("--print-input-conf") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--smartzoom-bench") {
+    MainActor.assumeIsolated { SmartZoomBench.run() }
+}
+
+if CommandLine.arguments.contains("--folder-slots-bench") {
+    MainActor.assumeIsolated { FolderSlotsBench.run() }
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--zoom-carry-bench"), CommandLine.arguments.count > i + 1 {
+    let folder = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    MainActor.assumeIsolated {
+        Task { @MainActor in await ZoomCarryBench.run(folder: folder) }
+        NSApplication.shared.run()
+    }
+}
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()

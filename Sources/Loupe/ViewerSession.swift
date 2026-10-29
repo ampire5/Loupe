@@ -27,9 +27,6 @@ import LoupeRender
             if let left = oldValue?.current, left != playlist?.current { recordView(of: left) }
             // The pair the new position is in (no cache call here: the navigation that set the playlist makes them).
             updateSpread()
-            if playlist?.current.deletingLastPathComponent() != oldValue?.current.deletingLastPathComponent() {
-                brokenFiles = []
-            }
             // Entering another folder (open, folder switch) moves the watcher with it.
             guard !closed, let folder = playlist?.current.deletingLastPathComponent(),
                   folder != oldValue?.current.deletingLastPathComponent() else { return }
@@ -51,9 +48,6 @@ import LoupeRender
     /// The folder an open entered whose listing is not in yet: its interim one-file playlist says nothing of the count,
     /// so the stats bar gives `N / …` (`folderCounted`). Cleared by the quick names pass or the listing, whichever is first.
     private var uncountedFolder: URL?
-    /// Files of the open folder the decoders could not read: a step goes past them (`skipBroken`), without showing their
-    /// failure. Forgotten with the folder; a file that is mended meanwhile is read again when the folder is entered anew.
-    private var brokenFiles = Set<URL>()
     /// False while the current photo's folder is still being listed after an open.
     var folderCounted: Bool { uncountedFolder == nil || uncountedFolder != playlist?.current.deletingLastPathComponent() }
 
@@ -109,6 +103,24 @@ import LoupeRender
     var drawOrientation: ImageOrientation {
         guard let entry, let info = entry.info else { return .up }
         return info.drawOrientation(applying: appliesOrientation, seeded: entry.pyramidIsSeeded)
+    }
+
+    /// The photos next in the step direction whose pyramids have a resident level, with their draw orientations, for
+    /// `SubjectFinder` to look at ahead (`limit` of them); `body` on main.
+    func subjectNeighbours(limit: Int, _ body: @escaping @MainActor ([(URL, TiledImage, ImageOrientation)]) -> Void) {
+        guard let list = playlist, limit > 0 else { return }
+        let files = list.files, index = list.index, step = direction, applying = appliesOrientation, cache = self.cache
+        let urls = (1...limit).map { index + $0 * step }.filter { files.indices.contains($0) }.map { files[$0] }
+        Task.detached(priority: .utility) {
+            var found: [(URL, TiledImage, ImageOrientation)] = []
+            for url in urls {
+                guard let entry = await cache.entry(url), let image = entry.pyramid, !entry.pyramidIsSeeded,
+                      image.finestResidentLevel != nil, let info = entry.info else { continue }
+                found.append((url, image, info.drawOrientation(applying: applying, seeded: false)))
+            }
+            let ready = found
+            await MainActor.run { body(ready) }
+        }
     }
 
     /// How well the screen shows the current photo (`ShownQuality`), nil while it still shows another one (or
@@ -177,9 +189,64 @@ import LoupeRender
     /// controller sets it from that folder's settings over loupe.conf. Asked with the photo, so a folder step takes the
     /// new folder's rules.
     var zoomRules: (URL) -> ZoomRules = { _ in ZoomRules(config: Settings.shared.config) }
+    /// The subjects of a photo when they are known already (`SubjectFinder`'s memory; set by the window controller),
+    /// for `step-pan=subject`.
+    var subjectBoxes: (URL) -> SubjectBoxes? = { _ in nil }
+    /// Zoom to Subject is on (smart zoom spec §3): a step opens the next photo framed on its subject, or at Fit until
+    /// its subjects are in. Any other zoom command or a gesture turns it off (`ViewerView`).
+    var smartZoom = SmartZoomState()
+    var smartZoomRevision: UInt64 = 0
+    var manualZoomPhoto: URL?
+    func noteManualZoom() { manualZoomPhoto = entry?.url }
+    var subjectZoom = false {
+        didSet { if !subjectZoom { subjectStep = nil } }
+    }
+    /// The kind ⇧Z's step frames (`PhotoSwitchView.subjectSteps`), which later photos frame first; nil: the chain's.
+    var subjectStep: SubjectKind?
 
-    /// A window resize keeps the free zoom's scale rather than its framing (`keep-zoom-as=scale` in the photo's folder).
-    var resizeKeepsScale: Bool { playlist.map { zoomRules($0.current).carry == .scale } ?? false }
+    /// Framing while browsing (`step-zoom=subject`): how big each kind of subject was shown and the photo left
+    /// (`BrowseFraming`), so the next photo shows its subject as big, a burst its view as it was.
+    var browse = BrowseFraming()
+    /// The step `browse` was last told about, so a step planned again (a finer level, the cache asking) is not one more.
+    private var browseStep: (from: URL, to: URL)?
+
+    /// The photo `from`, shown at `view`, is left for `to`: `browse` measures it once per step.
+    private func leaveForBrowse(_ from: URL, to: URL, view: ViewTransform) {
+        guard browseStep.map({ $0 != (from, to) }) ?? true else { return }
+        browseStep = (from, to)
+        browse.useProfile(zoomRules(from).detector?.name ?? "vision")
+        browse.leave(from, view: view, boxes: subjectBoxes(from), chain: zoomRules(from).chain, options: zoomRules(from).composition, manualZoom: false)
+    }
+
+    /// Framing while browsing's view of `url` from `shown` (nil: nothing of the chain found), remembered as framed.
+    func browseFraming(_ url: URL, shown: ViewTransform, boxes: SubjectBoxes) -> ViewTransform? {
+        guard let framed = browse.frame(shown, boxes: boxes, rules: zoomRules(url)) else { return nil }
+        browse.framed = (url, framed)
+        return framed
+    }
+
+    func smartFraming(_ url: URL, shown: ViewTransform, boxes: SubjectBoxes) -> ViewTransform? {
+        guard smartZoom.mode != .off else { return nil }
+        let rules = zoomRules(url)
+        browse.useProfile(rules.detector?.name ?? "vision")
+        let chain = browse.chain(rules.chain)
+        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }),
+              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) else { return nil }
+        let framed = c.transform(shown, autoZoom: smartZoom.mode == .frame,
+                                 size: rules.subjectSize)
+        if smartZoom.mode == .frame { browse.framed = (url, framed); manualZoomPhoto = nil }
+        return framed
+    }
+
+    /// `url`'s rules for subject mode: the step's kind ahead of the chain.
+    func subjectRules(_ url: URL) -> ZoomRules {
+        var rules = zoomRules(url)
+        if let kind = subjectStep { rules.chain = [kind] + rules.chain.filter { $0 != kind } }
+        return rules
+    }
+
+    /// What a window resize keeps of a free zoom: `keep-zoom-as` in the photo's folder (its framing by default).
+    var resizeCarry: ZoomCarry { smartZoom.mode == .off ? (playlist.map { zoomRules($0.current).carry } ?? .share) : .share }
 
     /// Called on the main actor after any state change above.
     var onChange: (() -> Void)?
@@ -285,6 +352,9 @@ import LoupeRender
     /// The photo `open` brought (a launch, Finder's Open) until its first show lays it out: it opens in its folder's
     /// `default-zoom-mode` (M4b spec §4.2). Nil after any other navigation.
     private var freshOpen: URL?
+    /// The photo `open` brought, kept after it is shown (unlike `freshOpen`): a step did not bring it, so its subjects
+    /// do not move its view (`ViewerView.subjectsArrived`).
+    private(set) var openedPhoto: URL?
     /// The photo the transform is laid out for (the last one shown with its header): a later show of it (a finer
     /// level) keeps the view it has; any other photo gets the view `PhotoSwitchView` chooses.
     private var laidOut: URL?
@@ -459,6 +529,23 @@ import LoupeRender
         }
     }
 
+    /// A folder selected in the filmstrip has already been listed off main. Commit only if still wanted.
+    func openFolderStripTarget(_ target: FolderTarget, isWanted: @escaping @MainActor () -> Bool,
+                               completion: @escaping @MainActor (Bool) -> Void) {
+        guard !closed, !target.images.isEmpty, isWanted() else { completion(false); return }
+        cancelOpenFolder(); cancelFolderRequest()
+        let positions = self.positions
+        let sort = BrowserSort.forFolder(target.folder, settings: Settings.shared.folderSettings)
+        let list = FolderRequest.playlist(for: target, sort: sort) { positions.recall(in: $0, among: $1) }
+        guard isWanted() else { completion(false); return }
+        playlist = list
+        endScrubOnReplace()
+        navigated(direction: 1, from: nil, fresh: true)
+        if let label = target.label { onFolderLabel?(label) }
+        if target.listID != nil { onListFolder?(target.listID, target.folder) }
+        completion(true)
+    }
+
     /// A later open or folder step wins over a folder still listing.
     private func cancelOpenFolder() {
         openFolderToken &+= 1
@@ -495,7 +582,7 @@ import LoupeRender
         guard var list = playlist else { return false }
         let before = list.index
         guard let wanted = spread.target(from: before, by: step, count: list.files.count),
-              let target = folderSpread.on ? wanted : indexPastBroken(wanted, step: step, in: list.files),
+              let target = folderSpread.on ? wanted : indexPastBroken(wanted, step: step, in: list),
               list.move(by: target - before) else {
             stepAfterReread(step)
             return false
@@ -505,12 +592,10 @@ import LoupeRender
         return true
     }
 
-    /// `index`, or the first one beyond it in the direction of `step` that is not a known broken file; nil past the end.
-    private func indexPastBroken(_ index: Int, step: Int, in files: [URL]) -> Int? {
-        let direction = step < 0 ? -1 : 1
-        var i = index
-        while files.indices.contains(i), brokenFiles.contains(files[i]) { i += direction }
-        return files.indices.contains(i) ? i : nil
+    /// `index`, or the first one beyond it in the direction of `step` that is not a known broken file (`UnreadableFiles`:
+    /// found by the viewer, the strip or Home in this run, and not changed since); nil past the end.
+    private func indexPastBroken(_ index: Int, step: Int, in list: Playlist) -> Int? {
+        list.index(from: index, step: step) { UnreadableFiles.app.contains($0, stamp: list.stamps[$0]) }
     }
 
     /// A step onto a file the decoders cannot read goes on in its direction, to the next one that may be shown (the
@@ -518,12 +603,12 @@ import LoupeRender
     /// worth an error. The file the user opened, one the strip jumped to and a folder of two pages show it as ever. The
     /// photo before stays on screen until the next one is in, so the viewer does not flash.
     private func skipBroken(_ e: CacheEntryView<TiledImage>, failure: String) -> Bool {
-        guard LoadErrorText.isBroken(failure), !opened, !jumpedFromStrip, !folderSpread.on,
-              let list = playlist, list.current == e.url else { return false }
-        brokenFiles.insert(e.url)
+        guard LoadErrorText.isBroken(failure) else { return false }
+        UnreadableFiles.app.mark(e.url, stamp: playlist?.stamps[e.url])   // also when shown: Home and the strip learn it
+        guard !opened, !jumpedFromStrip, !folderSpread.on, let list = playlist, list.current == e.url else { return false }
         DebugLog.log("skip broken \(e.url.lastPathComponent)")
         for direction in [self.direction, -self.direction] {
-            guard let target = indexPastBroken(list.index + direction, step: direction, in: list.files) else { continue }
+            guard let target = indexPastBroken(list.index + direction, step: direction, in: list) else { continue }
             var moved = list
             guard moved.move(by: target - list.index) else { continue }
             playlist = moved
@@ -833,6 +918,7 @@ import LoupeRender
         dwelling = false
         self.opened = opened
         freshOpen = opened ? current : nil
+        openedPhoto = opened ? current : nil
         latest = nil
         lastNeedsFull = nil
         error = nil
@@ -1020,12 +1106,21 @@ import LoupeRender
     private func transform(showing url: URL, size: CGSize, over base: ViewTransform? = nil) -> ViewTransform {
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
-        if let saved = restored(url, size: size, over: current) { return saved }
-        if let collapsed = collapseView?.transform(for: url, size: size, over: current) { return collapsed }
+        if smartZoom.mode != .frame, let saved = restored(url, size: size, over: current) {
+            // Retained scale is a starting view; active SmartZoom still owns the point of interest.
+            guard url != laidOut else { return saved }
+            return subjectBoxes(url).flatMap { smartFraming(url, shown: saved, boxes: $0) } ?? saved
+        }
+        if smartZoom.mode != .frame, let collapsed = collapseView?.transform(for: url, size: size, over: current) { return collapsed }
         let arrival: PhotoSwitchView.Arrival = url == laidOut ? .laidOut : url == freshOpen ? .opened : .switched
         // The photo on screen keeps the transform it has (a frame of a zoom animation included), as before.
-        return PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
-                                     imageSize: size, rules: rules)
+        let shown = PhotoSwitchView.shown(arrival, current: arrival == .laidOut ? base ?? transform : current,
+                                          imageSize: size, rules: rules, subject: arrival == .switched ? subjectBoxes(url) : nil)
+        guard arrival != .laidOut else { return shown }
+        guard smartZoom.mode != .off else { return shown }
+        if smartZoom.mode == .frame, let from = entry?.url, from != url { leaveForBrowse(from, to: url, view: current) }
+        return subjectBoxes(url).flatMap { smartFraming(url, shown: shown, boxes: $0) }
+            ?? (smartZoom.mode == .frame ? shown.withMode(.fit) : shown)
     }
 
     /// The saved view `url` gets at `size` over `base` (`restore`), nil when none applies.
@@ -1124,8 +1219,10 @@ import LoupeRender
             show(e, atNavigation: atNavigation)
             return
         }
+        if e.pyramid != nil { UnreadableFiles.app.clear(e.url) }   // read after all (mended, or a wrong mark)
         let onScreen = ShowPolicy.refinesShown(e, shown: entry)
         var allowed = onScreen
+        var shownByStep = false
         var detail = "on screen"
         if !onScreen {
             if let info = e.info, let pyramid = e.pyramid {
@@ -1139,6 +1236,7 @@ import LoupeRender
                 let byStep = !allowed && ShowPolicy.shownByStep(stepWait, finestResident: finest,
                                                                 seededOnly: e.isSeededOnly)
                 allowed = allowed || byStep
+                shownByStep = byStep
                 detail = "finest \(finest.map(String.init) ?? "-") needed \(levels.needed) lfit \(levels.lfit)"
                     + (jumpPreview ? " jump preview" : "") + (byStep ? " step-wait \(stepWait?.rawValue ?? "")" : "")
             } else {
@@ -1148,6 +1246,7 @@ import LoupeRender
         let state = e.isSeededOnly ? "thumb" : e.state.map { "\($0)" } ?? "nil"
         DebugLog.log("entry \(name): \(state) \(detail) -> \(allowed ? "show" : "wait")"
                      + timingsText(e.timings))
+        if allowed, !onScreen, holdsForFraming(e, byStep: shownByStep, atNavigation: atNavigation) { return }
         if allowed {
             show(e, atNavigation: atNavigation)
         } else if entry?.url != e.url || entry?.failure != nil {
@@ -1156,6 +1255,43 @@ import LoupeRender
                 onChange?()
             }
         }
+    }
+
+    /// Asks the window for the subjects of a photo not shown yet (`FramingHold`), drawn from `image` at `orientation`;
+    /// `done` on main once they are in or could not be found. False when it cannot ask (analysis off, two pages).
+    var askSubjectsNow: ((URL, TiledImage, ImageOrientation, @escaping @MainActor () -> Void) -> Bool)?
+    /// The photo waiting for its subjects before it is shown (`FramingHold`), and whether the wait is over.
+    private var framingHold: (url: URL, ended: Bool, atNavigation: Bool)?
+
+    /// Whether `e`, allowed on screen, waits for its subjects first (`FramingHold`): asks for them and holds it until
+    /// they are in or `FramingHold.wait` passes, then considers it again.
+    private func holdsForFraming(_ e: CacheEntryView<TiledImage>, byStep: Bool, atNavigation: Bool) -> Bool {
+        let url = e.url
+        if let hold = framingHold, hold.url == url { return !hold.ended }
+        guard let info = e.info, let pyramid = e.pyramid,
+              FramingHold.holds(framing: smartZoom.mode == .frame,
+                                known: subjectBoxes(url) != nil, seeded: e.pyramidIsSeeded, byStep: byStep,
+                                opened: url == freshOpen || restore?.file == url || entry == nil) else { return false }
+        framingHold = (url, false, atNavigation)
+        let orientation = info.drawOrientation(applying: appliesOrientation, seeded: false)
+        guard askSubjectsNow?(url, pyramid, orientation, { [weak self] in self?.endFramingHold(url) }) == true else {
+            framingHold = nil
+            return false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + FramingHold.wait) { [weak self] in
+            MainActor.assumeIsolated { self?.endFramingHold(url) }
+        }
+        DebugLog.log("entry \(url.lastPathComponent): waits for its subjects")
+        return true
+    }
+
+    /// The wait for `url`'s subjects is over (they are in, or the time is up): the photo is considered again.
+    private func endFramingHold(_ url: URL) {
+        guard let hold = framingHold, hold.url == url, !hold.ended else { return }
+        framingHold?.ended = true
+        DebugLog.log("entry \(url.lastPathComponent): subjects \(subjectBoxes(url) == nil ? "not in, shown" : "in")")
+        guard isOpen(on: url), let latest, latest.url == url, entry?.url != url else { return }
+        consider(latest, atNavigation: hold.atNavigation)
     }
 
     /// Puts `e` on screen: the transform follows its header size as shown (`displaySize`, from probe, not the
@@ -1256,6 +1392,9 @@ import LoupeRender
     /// The page on screen beside `entry`, nil for one page or while its slot waits for it. It is what was read of the
     /// current companion while `entry` is the current photo; a previous photo still on screen keeps the page it had.
     private(set) var shownCompanion: CacheEntryView<TiledImage>?
+    /// Photos' EXIF for the status (megapixels, exposure), by file: the window asks for the photo on screen
+    /// (`ViewerWindowController.askPhotoFacts`); a few hundred at most, emptied past that.
+    var photoFacts: [URL: FileFacts] = [:]
     /// `shownCompanion` comes first in reading order.
     private(set) var companionFirst = false
     /// Where the pages on screen sit in the transform's (virtual) picture, nil for one page: the view draws by it and

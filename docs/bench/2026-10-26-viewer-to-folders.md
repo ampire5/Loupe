@@ -11,7 +11,7 @@ Core Animation commit included (`DebugLog.measureTurn`: `turn browse`, `turn ope
 per symbol, scratchpad `sample-*.py`).
 
 Machine: MacBook Pro M4 Max (10P + 4E), 36 GB, macOS 27.0.1, release builds (arm64); the window on the Kuycon G32P
-(6144 × 3456, a calibration ICC profile) unless said. Data: `L$/WIIF/ToUpscale/Pics_URAA_HQ/AI` (PC share, Ethernet),
+(6144 × 3456, a calibration ICC profile) unless said. Data: `photo-share/benchmark/images` (PC share, Ethernet),
 200 JPEG XL of 14000 px, thumbnails in the database.
 
 The first round makes Home (its first show) and is left out of the medians.

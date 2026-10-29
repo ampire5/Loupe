@@ -7,6 +7,18 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case toggleKeepZoom, saveKeepZoom
     /// `keep-zoom-as` for the folder (`share` ↔ `scale`), and as the loupe.conf default.
     case toggleZoomCarry, saveZoomCarry
+    case zoomSubject, cycleStepPan, saveStepPan, cycleZoomAnchor, saveZoomAnchor
+    case toggleZoomSet, screenShare, fillSubject, cycleSubjectTarget
+    /// The custom detector (docs/detector.md): `M` on, then its next mode, kept for the folder; `⇧M` the size framed
+    /// on screen into the mode's `size` in detector.conf; `N` the next target found on the photo.
+    case cycleDetectorMode, saveDetectorSize, nextTarget
+    /// Show Subjects: what Vision found over the photo (`SubjectOverlay`), for the window.
+    case toggleSubjects
+    /// `⌥L`: the tab's zoom choices (`ZoomKeys.layered`) written for the folder at once.
+    case rememberZoom
+    /// `⌥⇧G`: `step-zoom` for the tab, framing every next photo on its subject or not.
+    case toggleSmartZoom, manualZoom
+    case toggleStepZoom
     case toggleFullScreen, cycleStats, toggleStrip, toggleStripPlacement, cheatSheet, toggleInfoPanel
     case cyclePanIndicators, savePanIndicators
     /// Two pages: on/off for the folder, as the loupe.conf default, and the pairing shifted by one page.
@@ -163,6 +175,8 @@ public struct KeyMap: Sendable, Equatable {
     static let menuActions: Set<KeyAction> = [
         .fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .zoomIn, .zoomOut,
         .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
+        .zoomSubject, .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor,
+        .toggleZoomSet, .screenShare, .fillSubject, .cycleSubjectTarget, .cycleDetectorMode, .saveDetectorSize, .nextTarget, .toggleSubjects, .rememberZoom, .toggleStepZoom, .toggleSmartZoom, .manualZoom,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance,
         .toggleStrip, .toggleStripPlacement, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
         .toggleSpread, .saveSpread, .shiftSpread,
@@ -259,8 +273,25 @@ public struct KeyMap: Sendable, Equatable {
         .zoomOut: ("Zoom out", .zoom),
         .toggleKeepZoom: ("Keep zoom and position on/off (this folder)", .zoom),
         .saveKeepZoom: ("Save keep zoom as default", .zoom),
-        .toggleZoomCarry: ("Keep the share of the photo / the scale (this folder)", .zoom),
-        .saveZoomCarry: ("Save share / scale as default", .zoom),
+        .toggleZoomCarry: ("Keep the share of the photo / the scale / the share of the screen (this folder)", .zoom),
+        .saveZoomCarry: ("Save what the zoom keeps as default", .zoom),
+        .zoomSubject: ("Apply automatic crop using the selected SmartZoom profile", .zoom),
+        .cycleStepPan: ("After a step: the subject / the same place / the centre (this folder)", .zoom),
+        .saveStepPan: ("Save after a step as default", .zoom),
+        .cycleZoomAnchor: ("Gesture zoom towards the pointer / the centre / the subject (this folder)", .zoom),
+        .saveZoomAnchor: ("Save gesture zoom towards as default", .zoom),
+        .toggleZoomSet: ("Manual / SmartZoom; numeric zoom presets stay unchanged", .zoom),
+        .screenShare: ("Keep the share of the screen from here (this folder)", .zoom),
+        .fillSubject: ("Fill the window, centred on the subject", .zoom),
+        .cycleSubjectTarget: ("Zoom to: a face / a person / an object / where the eye goes (this folder)", .zoom),
+        .cycleDetectorMode: ("Custom detector: on, then its next mode; every step framed on what your model finds (this folder; 0 off)", .zoom),
+        .saveDetectorSize: ("Save the size on screen as the custom detector's mode's size (detector.conf)", .zoom),
+        .nextTarget: ("The next target found on the photo, framed on the next steps too", .zoom),
+        .toggleSubjects: ("Show or hide what Vision found: the subjects, the frame, its centre", .view),
+        .rememberZoom: ("Save settings of the active zoom workflow for this folder", .zoom),
+        .toggleSmartZoom: ("SmartZoom on/off, preserving the current view", .zoom),
+        .manualZoom: ("Manual zoom, preserving the current view and SmartZoom profile", .zoom),
+        .toggleStepZoom: ("Apply automatic SmartZoom crop (legacy alias)", .zoom),
         .panLeft: ("Pan left", .zoom),
         .panRight: ("Pan right", .zoom),
         .panUp: ("Pan up", .zoom),
@@ -343,24 +374,39 @@ public struct KeyMap: Sendable, Equatable {
         KeyBinding(keyCodes: [18, 83], character: "1", allowsRepeat: true, action: .actual100),
         KeyBinding(keyCodes: [19, 84], character: "2", allowsRepeat: true, action: .actual200),
         KeyBinding(keyCodes: [21, 86], character: "4", allowsRepeat: true, action: .actual400),
+        KeyBinding(keyCodes: [20, 85], character: "3", allowsRepeat: true, action: .fill),
         KeyBinding(character: "w", allowsRepeat: true, action: .fitWidth),
         KeyBinding(character: "h", allowsRepeat: true, action: .fitHeight),
         KeyBinding(character: "x", allowsRepeat: true, action: .fill),
+        KeyBinding(character: "z", modifiers: .shift, allowsRepeat: false, action: .zoomSubject),   // before plain z
         KeyBinding(character: "z", allowsRepeat: false, action: .toggleFitActual),
         // Zoom by key position (= on the top row, keypad +/−), so no layout needs Shift for +.
         KeyBinding(keyCodes: [24, 69], allowsRepeat: true, action: .zoomIn),
         KeyBinding(keyCodes: [27, 78], allowsRepeat: true, action: .zoomOut),
         // Keep zoom: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "l", modifiers: .shift, allowsRepeat: false, action: .saveKeepZoom),
+        KeyBinding(character: "l", modifiers: .option, allowsRepeat: false, action: .rememberZoom),   // before plain l
         KeyBinding(character: "l", allowsRepeat: false, action: .toggleKeepZoom),
         KeyBinding(character: "k", modifiers: .shift, allowsRepeat: false, action: .saveZoomCarry),
         KeyBinding(character: "k", allowsRepeat: false, action: .toggleZoomCarry),
+        KeyBinding(character: "g", modifiers: [.option, .shift], allowsRepeat: false, action: .toggleStepZoom),   // before ⇧G, ⌥G
+        KeyBinding(character: "g", modifiers: .shift, allowsRepeat: false, action: .toggleSubjects),   // before plain g
+        KeyBinding(character: "g", allowsRepeat: false, action: .toggleZoomSet),
+        KeyBinding(character: "g", modifiers: .option, allowsRepeat: false, action: .cycleSubjectTarget),
+        KeyBinding(character: "k", modifiers: .option, allowsRepeat: false, action: .cycleStepPan),
+        KeyBinding(character: "k", modifiers: [.option, .shift], allowsRepeat: false, action: .saveStepPan),
+        KeyBinding(character: "z", modifiers: .option, allowsRepeat: false, action: .cycleZoomAnchor),
+        KeyBinding(character: "z", modifiers: [.option, .shift], allowsRepeat: false, action: .saveZoomAnchor),
         // Scaling: ⇧ variants first, as plain letters ignore Shift.
+        KeyBinding(character: "s", modifiers: .option, allowsRepeat: false, action: .toggleSmartZoom),
         KeyBinding(character: "s", modifiers: .shift, allowsRepeat: false, action: .saveFilters),
         KeyBinding(character: "s", allowsRepeat: false, action: .cycleFilter),
         KeyBinding(character: "a", modifiers: .shift, allowsRepeat: false, action: .saveAntiring),
         KeyBinding(character: "a", allowsRepeat: false, action: .toggleAntiring),
         // Colour, the same way.
+        KeyBinding(character: "m", modifiers: .shift, allowsRepeat: false, action: .saveDetectorSize),
+        KeyBinding(character: "m", allowsRepeat: false, action: .cycleDetectorMode),
+        KeyBinding(character: "n", allowsRepeat: false, action: .nextTarget),
         KeyBinding(character: "c", modifiers: .shift, allowsRepeat: false, action: .saveAutoColor),
         KeyBinding(character: "c", allowsRepeat: false, action: .toggleAutoColor),
         KeyBinding(character: "v", modifiers: .shift, allowsRepeat: false, action: .saveVibrance),

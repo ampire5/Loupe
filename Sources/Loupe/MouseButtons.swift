@@ -69,6 +69,13 @@ import LoupeCore
         center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { MouseButtons.shared.cancelAll() }
         }
+        // MouseService turned a held back button into a swipe (Spaces, Mission Control, App Exposé): the press is the
+        // system's gesture, not ours. Its release would be a click otherwise, as the moves stop coming once Mission
+        // Control takes the pointer.
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("local.mouseservice.swipeBegan"),
+                                                            object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { MouseButtons.shared.cancelAll() }
+        }
         // Every mouse-moved event the app gets, wherever the pointer is (the picture, the info panel, the strip),
         // counts once towards a held button's travel (M4c spec §12.2): a Logitech button diverted or watched while a
         // utility has the button (Mac Mouse Fix's button + drag freezes the cursor, the deltas still come) brings

@@ -4,16 +4,15 @@ The owner's request of 2026-10-26 (backlog, "Interface"): the folder cards were 
 cards were not. Mockup: board «Эскизы фото тем же языком» in the canvas «Карточки папок»
 (https://claude.ai/artifact/Hgk6ZE7Ge8mbbWZjH4pmMb, `project/Main.dc.html`). Decided with the owner on 2026-10-26:
 the blue dot comes from the folder's position, Aspect gets the same language on the photo's outline, the grid keeps its
-2 pt gap and the ring goes inside.
+compact spacing and the selection ring goes inside (spacing refined on 2026-10-29).
 
 ## 1. The card (HomeScreenKit, `PhotoCard`)
 
 All of it is drawn on the picture's rect (`pictureRect`): the slot's square in Square, the fitted photo in Aspect.
 
-- **Picture:** corner radius 8 (`Chrome.Radius.photo`), at most half the rect's shorter side (a thin panorama in
-  Aspect).
+- **Picture:** restrained radius `min(6, shorterSide × 0.06)`, shared by the image, selection and last-opened outline.
 - **Selection:** a 2.5 pt ring in the accent colour inside the picture, on the same radius; the dark hairline (1 pt,
-  black .35) stays inside the ring so it reads on light photos. Both styles alike. The grid gap stays 2 pt.
+  black .35) stays inside the ring so it reads on light photos. Both styles alike. The compact grid gap is 8 pt, leaving room for the separate amber last-opened outline.
 - **Not yet viewed:** a dot 8 pt across in the accent colour (the mockup's `#0A84FF` is the default accent) with a
   1.5 pt white ring (white .85), 6 pt in from the picture's top right.
 - **A pair:** a chip 6 pt in from the top left: the ⧉ glyph (two 6 × 10 rounded rects of a 16-unit box, 1.5 stroke,
@@ -25,6 +24,8 @@ All of it is drawn on the picture's rect (`pictureRect`): the slot's square in S
 - **Small slots:** under `GridMetrics.minNamed` (90 pt) only the dot; no chip and no strip.
 - **Layers:** the dot, the chip and the strip are made the first time they show; a card that never needs one has
   none. Off is `isHidden`, never a removed layer.
+
+Refinement chosen by the owner on 2026-10-29: compact tiles with small gaps and restrained corners. Caption shading fades from clear to dark toward the bottom. The caption, hover strip and progress track are clipped to the image silhouette; an overlay never adds its own rounded top edge. The amber last-opened outline remains independent of the blue selection ring.
 
 ## 2. The kit API
 

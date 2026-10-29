@@ -15,6 +15,7 @@ import LoupeCore
         let stats: () -> Void
         let strip: () -> Void
         let info: () -> Void
+        let smartZoom: () -> Void
     }
 
     let nsToolbar: NSToolbar
@@ -24,7 +25,7 @@ import LoupeCore
     private var sliders: [String: NSSlider] = [:]
 
     private enum Item: String, CaseIterable {
-        case back, navigation, zoom, zoomModes, zoomMenu, status, autoColour, strength, vibranceSwitch, vibrance, info, strip, stats, scaling
+        case smartZoom, back, navigation, zoom, zoomSet, zoomModes, smartModes, zoomMenu, status, autoColour, strength, vibranceSwitch, vibrance, info, strip, stats, scaling
 
         var identifier: NSToolbarItem.Identifier { .init("viewer.\(rawValue)") }
         var priority: Int {
@@ -33,7 +34,8 @@ import LoupeCore
             case .back: 100
             case .navigation: 90
             case .zoom: 80
-            case .zoomModes: 70
+            case .zoomModes, .smartModes: 70
+            case .zoomSet, .smartZoom: 1100
             case .info: 60
             case .autoColour: 50
             case .vibranceSwitch: 49
@@ -56,15 +58,23 @@ import LoupeCore
         ("arrow.up.left.and.arrow.down.right", "Fill", .fill),
     ]
 
+    /// The smart zoom modes (spec §3.3), shown in the zoom block in place of the classic ones when the set is smart.
+    private static let smartModes: [(symbol: String, label: String, action: KeyAction)] = [
+        ("person.crop.rectangle", "Subject", .zoomSubject),
+        ("rectangle.dashed", "Screen Share", .screenShare),
+        ("viewfinder", "Fill on Subject", .fillSubject),
+    ]
+
     /// The colour switches, each in front of its slider; the `tag` of a switch's item is its index here.
     private static let colourSwitches: [(item: Item, symbol: String, label: String, action: KeyAction)] = [
         (.autoColour, "wand.and.stars", "Auto Colour", .toggleAutoColor),
         (.vibranceSwitch, "drop.halffull", "Vibrance", .toggleVibrance),
     ]
 
-    /// Left to right; the flexible spaces centre the status between the left group and the right one.
+    /// Left to right; the status is centred in the window (`centeredItemIdentifiers`), not between the groups, which differ
+    /// in width; the flexible spaces push the groups to the edges.
     private static let order: [NSToolbarItem.Identifier] = [
-        Item.back, .navigation, .zoom, .zoomModes, .zoomMenu,
+        Item.back, .navigation, .zoom, .zoomSet, .zoomModes, .smartZoom, .zoomMenu,
     ].map(\.identifier) + [.flexibleSpace, Item.status.identifier, .flexibleSpace] + [
         Item.autoColour, .strength, .vibranceSwitch, .vibrance, .info, .strip, .stats, .scaling,
     ].map(\.identifier)
@@ -77,6 +87,7 @@ import LoupeCore
         nsToolbar.displayMode = .iconOnly
         nsToolbar.allowsUserCustomization = false
         nsToolbar.autosavesConfiguration = false
+        nsToolbar.centeredItemIdentifiers = [Item.status.identifier]
         for item in Item.allCases {
             let toolbarItem = make(item)
             toolbarItem.visibilityPriority = .init(item.priority)
@@ -100,6 +111,22 @@ import LoupeCore
                               action: #selector(zoomModeClicked(_:)))
             modes.selectedIndex = -1
             return modes
+        case .zoomSet:
+            let itemView = NSToolbarItem(itemIdentifier: item.identifier)
+            let control = NSSegmentedControl(labels: ["Manual", "SmartZoom"], trackingMode: .selectOne,
+                                             target: self, action: #selector(workflowClicked(_:)))
+            control.appearance = NSAppearance(named: .darkAqua)
+            control.toolTip = "Manual preserves the current view · SmartZoom applies Auto using the selected profile (⇧Z)"
+            control.setAccessibilityLabel("Zoom workflow")
+            itemView.view = control; itemView.label = "Zoom workflow"
+            return itemView
+        case .smartModes:
+            let modes = group(item, Self.smartModes.map { ($0.symbol, $0.label, $0.label) }, mode: .selectOne,
+                              action: #selector(smartModeClicked(_:)))
+            modes.selectedIndex = -1
+            return modes
+        case .smartZoom:
+            return button(item, symbol: "viewfinder", label: "SmartZoom", tip: "SmartZoom panel", action: #selector(smartZoomClicked))
         case .zoomMenu:
             return menuItem(item, symbol: "ellipsis.circle", label: "Zoom Options", tip: "More zoom options",
                             menu: Settings.shared.makeZoomToolbarMenu())
@@ -142,8 +169,10 @@ import LoupeCore
         }
     }
 
+    @objc private func smartZoomClicked() { actions.smartZoom() }
+
     private func image(_ name: String, _ description: String) -> NSImage {
-        NSImage(systemSymbolName: name, accessibilityDescription: description) ?? NSImage()
+        Icons.symbol(name, pointSize: 14, description: description) ?? NSImage()
     }
 
     private func button(_ item: Item, symbol: String, label: String, tip: String, action: Selector) -> NSToolbarItem {
@@ -210,7 +239,24 @@ import LoupeCore
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.order }
 
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.order }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        Self.order + [Item.smartModes.identifier]
+    }
+
+    /// Shows the classic modes or the smart ones in the zoom block; the set's button shows which.
+    func setZoomSet(_ set: ZoomSet) {} // Compatibility: ordinary presets are always visible.
+
+    func updateWorkflow(_ mode: SmartZoomMode) {
+        guard let control = items[Item.zoomSet.identifier]?.view as? NSSegmentedControl else { return }
+        control.selectedSegment = mode == .off ? 0 : 1
+    }
+
+    /// The smart mode on screen lit: Zoom to Subject, a free zoom kept as the screen's share, Fill.
+    func updateSmartMode(subject: Bool, screen: Bool, fill: Bool) {
+        guard let group = items[Item.smartModes.identifier] as? NSToolbarItemGroup else { return }
+        let index = subject ? 0 : screen ? 1 : fill ? 2 : -1
+        if group.selectedIndex != index { group.selectedIndex = index }
+    }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -260,6 +306,13 @@ import LoupeCore
     @objc private func zoomClicked(_ sender: NSToolbarItemGroup) {
         actions.zoom(sender.selectedIndex == 0 ? .zoomOut : .zoomIn)
     }
+    @objc private func workflowClicked(_ sender: NSSegmentedControl) {
+        actions.zoom(sender.selectedSegment == 0 ? .manualZoom : .zoomSubject)
+    }
+    @objc private func smartModeClicked(_ sender: NSToolbarItemGroup) {
+        guard Self.smartModes.indices.contains(sender.selectedIndex) else { return }
+        actions.zoom(Self.smartModes[sender.selectedIndex].action)
+    }
     @objc private func zoomModeClicked(_ sender: NSToolbarItemGroup) {
         guard Self.zoomModes.indices.contains(sender.selectedIndex) else { return }
         actions.zoom(Self.zoomModes[sender.selectedIndex].action)
@@ -285,7 +338,7 @@ import LoupeCore
     private static let height: CGFloat = 46
     private let glass = ChromeGlass(style: .overMedia(.light), cornerRadius: 16)
     private let title = NSTextField(labelWithString: "")
-    private let facts = FactsRowView(style: .init(options: .init(size: 11), formatBadge: true))
+    private let workflow = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -299,8 +352,14 @@ import LoupeCore
         title.maximumNumberOfLines = 1
         title.alignment = .center
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        facts.translatesAutoresizingMaskIntoConstraints = false
-        let column = NSStackView(views: [title, facts])
+        workflow.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        workflow.textColor = ProCameraStyle.primary
+        workflow.lineBreakMode = .byTruncatingMiddle
+        workflow.maximumNumberOfLines = 1
+        workflow.alignment = .center
+        workflow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        workflow.translatesAutoresizingMaskIntoConstraints = false
+        let column = NSStackView(views: [title, workflow])
         column.orientation = .vertical
         column.alignment = .centerX
         column.spacing = 3
@@ -309,11 +368,12 @@ import LoupeCore
 
         // As wide as the row with every slot in it (the facts that do not fit are dropped, the format first), but never narrower
         // than the chip was.
-        let preferred = widthAnchor.constraint(equalToConstant: max(Self.width, facts.naturalWidth + 24))
+        let preferred = widthAnchor.constraint(equalToConstant: 400)
         preferred.priority = .defaultHigh
         NSLayoutConstraint.activate([
             preferred,
             widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            widthAnchor.constraint(lessThanOrEqualToConstant: Self.width),
             heightAnchor.constraint(equalToConstant: Self.height),
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
             glass.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -325,7 +385,7 @@ import LoupeCore
             column.centerXAnchor.constraint(equalTo: glass.contentView.centerXAnchor),
             title.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
             // The row keeps its natural width while there is room and gives slots up when there is not.
-            facts.widthAnchor.constraint(lessThanOrEqualTo: glass.contentView.widthAnchor, constant: -24),
+            workflow.widthAnchor.constraint(equalTo: glass.contentView.widthAnchor, constant: -24),
         ])
     }
 
@@ -334,13 +394,16 @@ import LoupeCore
 
     func update(_ status: ImageStatus) {
         // The news about the folder takes the name's place, in the same line: the chip does not change size.
-        let text = status.note ?? (status.title.isEmpty ? "Loupe" : status.title)
+        let text = status.note ?? (status.title.isEmpty ? "Loupe" : [status.value(.position), status.title, status.value(.size),
+                                                                  status.folder.map(FolderLabel.name(of:))]
+            .compactMap { $0 }.joined(separator: " · "))
         if title.stringValue != text {
             title.stringValue = text
-            title.toolTip = text
         }
+        title.toolTip = status.note ?? [text, status.folder?.path].compactMap { $0 }.joined(separator: "\n")
         title.textColor = ProCameraStyle.color(status.note == nil ? status.titleTone : status.noteTone, monochrome: false)
-        facts.update(status.facts)
-        facts.isHidden = status.facts.isEmpty
+        let value = status.value(.zoom) ?? ""
+        if workflow.stringValue != value { workflow.stringValue = value; workflow.toolTip = value }
+        workflow.isHidden = value.isEmpty
     }
 }

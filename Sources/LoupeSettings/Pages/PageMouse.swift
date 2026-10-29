@@ -1,3 +1,4 @@
+import AppKit
 import LogiHIDPP
 import SettingsKit
 
@@ -54,17 +55,18 @@ extension SettingsPanel {
                         .choice("haptic-end", "First or last photo", hapticChoices,
                                 description: "Stepping hit the folder's first or last photo (wheel, keys, button), "
                                     + "once per stop. Default Sharp collision, strong."),
-                        .number("haptic-strength", "Strength", step: 5,
-                                description: "The mouse's normal vibration strength. 0–100, or keep (default): "
-                                    + "never written."),
                         .number("haptic-strong-strength", "Strong strength", step: 5,
                                 description: "For the patterns marked strong. 0–100, default 80."),
                     ]),
         ]),
         SettingsSection("MX Master", rows: [
-            .number("mx-panel-force", "Panel force", step: 5, symbol: "hand.point.down",
-                    description: "How hard the haptic panel must be pressed: 0 the lightest the mouse takes, 100 the "
-                        + "stiffest, default the factory value; keep (default) leaves it alone."),
+            .button("MouseService", "Open", symbol: "arrow.up.forward.app",
+                    description: "Logitech buttons, the thumb wheel and haptics come from MouseService; without it the "
+                        + "mouse works as an ordinary one. Haptic strength and panel force are set there.") {
+                if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "local.mouseservice") {
+                    NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+                }
+            },
             .choice("mx-side-buttons", "Side buttons", [
                 (word: "watch", title: "Watch"), (word: "take", title: "Take"), (word: "system", title: "System"),
             ], symbol: "arrow.left.arrow.right.circle",
@@ -77,11 +79,11 @@ extension SettingsPanel {
                         + "scrolling. Default on.",
                     nested: [
                         .number("thumb-zoom-speed", "Speed", unit: "×", step: 0.25,
-                                description: "Doublings per turn of the wheel: 2 makes one turn ×4. 0.25–8, default 2."),
+                                description: "Doublings per turn of the wheel: 2 makes one turn ×4. 0.25–8, default 2.4."),
                         .choice("thumb-zoom-stops", "Zoom stops", [
                             (word: "tick", title: "Tick"), (word: "halt", title: "Halt"),
                         ], description: "Tick: the zoom goes through a stop and the mouse ticks (Zoom stop haptic); "
-                            + "Halt: one turn halts on each stop, as a pinch, the next turn goes on. Default Tick."),
+                            + "Halt: one turn halts on each stop, as a pinch, the next turn goes on. Default Halt."),
                         .toggle("thumb-zoom-invert", "Invert",
                                 description: "Left zooms in, right out. Default off."),
                     ]),

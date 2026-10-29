@@ -19,6 +19,10 @@ extension SettingsPanel {
                 ], symbol: "play.rectangle",
                 description: "When the photo appears at a launch back into full screen: once the window has settled, "
                     + "or during the animation. Default When settled."),
+                .choice("icon-set", "Icons", [(word: "lucide", title: "Lucide"), (word: "sf", title: "SF Symbols")],
+                        symbol: "star",
+                        description: "The set the line icons are drawn from. Takes effect at the next launch. "
+                            + "Default Lucide."),
                 .choice("open-in", "Open files in", [
                     (word: "tab", title: "Tab"), (word: "window", title: "Window"),
                     (word: "replace", title: "Current tab"),
@@ -76,7 +80,7 @@ extension SettingsPanel {
                             + "to one. ⌥⌘P on Home. Default on."),
                 .number("home-sidebar-width", "Sidebar width", unit: "pt", step: 10, symbol: "rectangle.lefthalf.inset.filled",
                         description: "Dragging the sidebar's right edge sets it too. 180–1600 pt, shown at most a third of "
-                            + "the window (400 pt in any window). Default 236."),
+                            + "the window (400 pt in any window). Default 384."),
                 .toggle("home-sidebar-compact", "Join single-folder chains", symbol: "arrow.right.to.line",
                         description: "A folder holding one folder only shows with it on one row, a › b › c, as in "
                             + "VS Code. Default on."),
@@ -95,17 +99,19 @@ extension SettingsPanel {
                 .number("browser-card-size", "Thumbnail size", unit: "pt", step: 20, symbol: "square.grid.3x3.square",
                         description: "The wanted thumbnail width on Home; the thumbnails grow to fill the width, "
                             + "folder and Recent cards are 1.6 times as wide. ⌘= / ⌘− there change the column count. "
-                            + "60–480 pt, default 220."),
+                            + "60–480 pt, default 387."),
                 .choice("grid-style", "Folders thumbnails", [
                     (word: "square", title: "Square"), (word: "aspect", title: "Aspect"),
                 ], symbol: "photo.on.rectangle",
                 description: "Square: each photo fills its square, cropped. Aspect: each photo whole inside its square. "
-                    + "⌥T in Folders. Default Aspect."),
+                    + "⌥T in Folders. Default Square."),
                 .choice("grid-names", "Folders names", [
-                    (word: "off", title: "Off"), (word: "photo", title: "On photo"), (word: "below", title: "Below"),
+                    (word: "auto", title: "By size"), (word: "off", title: "Off"), (word: "photo", title: "On photo"),
+                    (word: "below", title: "Below"),
                 ], symbol: "character.textbox",
-                description: "File names on the thumbnails, under them, or none (the selected one shows in the bar). "
-                    + "⌥N in Folders. Default Off."),
+                description: "By size: names and facts under thumbnails from 160 pt, on hover on smaller ones. Or names "
+                    + "on the thumbnails, under them, or none (the selected one shows in the bar). ⌥N in Folders. "
+                    + "Default By size."),
                 .choice("folder-cover", "Folder covers", [
                     (word: "grid", title: "Grid"), (word: "hero", title: "Hero"), (word: "stack", title: "Stack"),
                     (word: "single", title: "Single"),
@@ -159,7 +165,7 @@ extension SettingsPanel {
                             .choice("folder-scroll-direction", "Direction", [
                                 (word: "reversed", title: "Reversed"), (word: "natural", title: "Natural"),
                             ], description: "Reversed: fingers right or tilt left goes to the next folder; Natural: "
-                                + "the other way. Default Reversed."),
+                                + "the other way. Default Natural."),
                             .number("folder-scroll-threshold", "Distance", unit: "pt", step: 5,
                                     description: "Sideways scroll for one folder (a notched wheel: its first notch). "
                                         + "10–400 pt, default 40."),

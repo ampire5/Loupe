@@ -1,4 +1,7 @@
 import AppKit
+import HomeChrome
+import HomeScreenKit
+import HomeScreenModel
 import LoupeCore
 
 /// The look of a camera's information screen, the infographic of photo and video cameras: white for the numbers that
@@ -37,6 +40,8 @@ enum ProCameraStyle {
         switch kind {
         case .position: "square.stack"
         case .size: "arrow.up.left.and.arrow.down.right"
+        case .megapixels: "square.grid.3x3"
+        case .exposure: "camera.aperture"
         case .fileSize: "externaldrive"
         case .format: "doc.richtext"
         case .zoom: "magnifyingglass"
@@ -71,14 +76,22 @@ enum ProCameraStyle {
     static func text(_ fact: ImageStatus.Fact, _ options: Options) -> NSAttributedString {
         let tint = color(fact.tone, monochrome: options.monochrome)
         let result = NSMutableAttributedString()
+        // The exposure's values each after its own glyph, in the value's colour.
+        if options.icons, fact.kind == .exposure, !fact.parts.isEmpty {
+            result.append(ExposureLine.text(fact.parts, font: font(options.size, .semibold), color: tint, glyphColor: tint,
+                                            shadow: options.shadow ? shadow : nil))
+            return result
+        }
         if options.icons { result.append(icon(symbol(fact.kind), tint: tint, options)) }
         switch fact.kind {
         case .position:
             let parts = fact.value.components(separatedBy: " / ")
             result.append(plain(parts[0], options.size, .semibold, primary, options))
             if parts.count > 1 { result.append(plain(" / " + parts[1], options.size, .medium, secondary, options)) }
-        case .fileSize:
+        case .fileSize, .megapixels:
             result.append(plain(fact.value, options.size, .medium, tint, options))
+        case .exposure:
+            result.append(plain(fact.value, options.size, .semibold, tint, options))
         case .size, .format, .zoom:
             result.append(plain(fact.value, options.size, .semibold, tint, options))
         }
@@ -107,15 +120,11 @@ enum ProCameraStyle {
         return NSAttributedString(string: value, attributes: attributes)
     }
 
+    /// The symbol in the icon set picked, as a character of the line (Lucide) or an attachment (SF Symbols).
     private static func icon(_ symbol: String, tint: NSColor, _ options: Options) -> NSAttributedString {
-        let configuration = NSImage.SymbolConfiguration(pointSize: options.size, weight: .medium)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
-        guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(configuration) else { return NSAttributedString() }
-        let attachment = NSTextAttachment()
-        attachment.image = image
-        attachment.bounds = NSRect(x: 0, y: -options.size * 0.22, width: image.size.width, height: image.size.height)
-        let result = NSMutableAttributedString(attachment: attachment)
+        let result = NSMutableAttributedString(attributedString: Icons.inline(symbol, size: options.size, color: tint,
+                                                                              shadow: options.shadow ? shadow : nil,
+                                                                              space: ""))
         result.append(plain(" ", options.size, .regular, tint, options))
         return result
     }

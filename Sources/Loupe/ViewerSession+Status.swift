@@ -3,9 +3,9 @@ import LoupeCore
 
 extension ViewerSession {
     /// What the session says about the photo it is on, for the toolbar's status and the stats bar alike. A step never
-    /// takes the words away: the name and the place are the new photo's at once, and while it loads the facts of the photo
-    /// still on screen stay, grey (`entry` is that photo until the new one qualifies), so the bar changes its text and
-    /// nothing in it appears or goes. A news item about the folder stands in the place of the folder's name; the failure
+    /// takes the words away: the name and the place are the new photo's at once, and while it loads the facts and the
+    /// decode time of the photo still on screen stay, `stale` (`entry` is that photo until the new one qualifies), so the
+    /// bar changes its text and nothing in it appears or goes. A news item about the folder stands in the place of the folder's name; the failure
     /// of the photo in the place of its own.
     var imageStatus: ImageStatus {
         var status = ImageStatus()
@@ -31,19 +31,34 @@ extension ViewerSession {
         } else if let entry, let info = entry.info, entry.failure == nil {
             // The photo on screen: the current one once it qualified, the previous one until then.
             let current = entry.url == list.current && loadingName == nil
-            var shown = (info: info, timings: entry.timings)
+            var shown = (info: info, timings: entry.timings, url: entry.url)
             if current, shownLayout != nil, pages?.second != nil,
                let other = shownCompanion, let otherInfo = other.info,
                StatsLine.factsOfCompanion(current: list.index, first: index, companionRead: other.failure == nil) {
                 // The first page's facts in reading order, whichever page is current.
-                shown = (otherInfo, other.timings)
+                shown = (otherInfo, other.timings, other.url)
             }
             let facts = ImageStatus.facts(index: index, companion: pages?.second, count: list.files.count,
                                           counted: folderCounted, info: shown.info, applyingOrientation: appliesOrientation,
-                                          transform: zoomTarget ?? transform)   // a zoom animation's target
-            // The facts of the photo before are grey while the new one loads; the zoom is the viewer's own.
-            status.facts = facts.map { current || $0.kind == .position || $0.kind == .zoom ? $0 : ImageStatus.Fact($0.kind, $0.value, tone: .quiet) }
-            if current { status.decodeMilliseconds = (shown.timings.fullMs ?? shown.timings.previewMs).map { Int($0.rounded()) } }
+                                          transform: zoomTarget ?? transform,   // a zoom animation's target
+                                          photo: photoFacts[shown.url], carry: zoomRules(list.current).carry,
+                                          subject: subjectZoom, framing: browseIndicator(shown.url),
+                                          detectorMode: zoomRules(list.current).detector?.name)
+            // The facts of the photo before stay while the new one loads (the views grey them when the load is felt).
+            let rules = zoomRules(list.current)
+            let zoom = StatsLine.modeText(zoomTarget ?? transform, carry: rules.carry)
+            let boxes = subjectBoxes(shown.url)
+            let group = boxes.flatMap { boxes in
+                browse.chain(rules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
+            }
+            let modeText = smartZoom.mode == .off ? "Manual · \(zoom)"
+                : "SmartZoom · \(smartZoom.mode == .frame ? "Auto" : "Pan") · \(rules.detector?.name ?? "Vision") · \(group?.title ?? (boxes == nil ? "Looking for subjects…" : "No complete group")) · \(zoom)"
+            status.facts = facts.map { $0.kind == .zoom ? ImageStatus.Fact(.zoom, modeText, tone: $0.tone) : $0 }
+            status.stale = !current
+            // Its EXIF is asked when the step is made (for `status.photo`) and is in a moment after the pixels; the photo
+            // before was asked when it was the current one (a fast step leaves it on screen before its EXIF is in).
+            if shown.url == list.files[index] || !current, photoFacts[shown.url] == nil { status.pending = [.exposure] }
+            status.decodeMilliseconds = (shown.timings.fullMs ?? shown.timings.previewMs).map { Int($0.rounded()) }
         }
         status.photo = list.files[index]
         // An uncounted folder's interim `1 / 1` would fill the whole bar.
@@ -53,6 +68,21 @@ extension ViewerSession {
             status.navigationKey = "\(folder)|\(index)|\(pages?.second ?? -1)"
         }
         return status
+    }
+
+    /// The share of the window the framed target takes on screen (`⇧M`), nil when nothing is framed.
+    func framedSize(_ url: URL) -> Double? { browseIndicator(url)?.size }
+
+    /// Under framing while browsing the zoom is named by what it looks at and how big that is (`BrowseFraming.indicator`).
+    private func browseIndicator(_ url: URL) -> (name: String, size: Double)? {
+        let rules = zoomRules(url)
+        guard !subjectZoom, rules.stepZoom == .subject, let boxes = subjectBoxes(url) else { return nil }
+        for kind in browse.chain(rules.chain) {
+            if let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) {
+                return (kind.title, BrowseFraming.size(zoomTarget ?? transform, frame: c.frame))
+            }
+        }
+        return nil
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import SlotModel
 import HomeChrome
 import HomeScreenKit
 import InfoPanelKit
@@ -26,6 +27,10 @@ import UniformTypeIdentifiers
     private let keyToastBelowBar: NSLayoutConstraint
     private let keyToastAtTop: NSLayoutConstraint
     private let keyToastAboveStrip: NSLayoutConstraint
+    private var folderSlots: ViewerSlotsController?
+    private let viewerLeading: NSLayoutConstraint
+    private let viewerTrailing: NSLayoutConstraint
+    private var slotInsets = ViewerSlotLayout.Insets.zero
     private let strip: StripController
     private let loadingIndicator = LoadingIndicator()
     /// Over the viewer while the photo navigated to cannot be shown yet (`switch-preview`, `ViewerSession.standIn`).
@@ -66,6 +71,9 @@ import UniformTypeIdentifiers
     /// loupe.conf with the folder's values on top (folder settings spec §7): what this window scales with. Recomputed
     /// when the folder changes, on `.settingsChanged` and on `.folderSettingsChanged`.
     private(set) var effectiveConfig = Settings.shared.config
+    /// The tab's own zoom choices (the zoom keys, the zoom menu; owner, 2026-10-28): over the folder's values for any
+    /// folder the tab shows, until it closes; `⌥L` writes them for the folder (`rememberZoom`).
+    private var tabZoomValues: [String: String] = [:]
     /// The folder entries already reported as refused, so a recompute does not print them again.
     private static var reportedRejections: Set<String> = []
     /// The warnings the overlay last showed, so a settings push that changes nothing does not bring a dismissed box back.
@@ -92,11 +100,13 @@ import UniformTypeIdentifiers
         setValue: { [weak self] key, value in self?.setColourValue(key, value) },
         stats: { [weak self] in self?.toggleStats() },
         strip: { [weak self] in self?.strip.togglePin() },
-        info: { [weak self] in self?.toggleInfoPanel(nil) })
+        info: { [weak self] in self?.toggleInfoPanel(nil) },
+        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() })
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
     private var isFullScreen = false
-    /// Full screen: the toolbar is the system's (it slides in with the menu bar when the pointer reaches the top edge);
-    /// `⌥⌘T` takes it away or gives it back. The stats bar (`I`) is shown over the picture on its own.
+    /// Full screen over a photo: the toolbar hides and the pointer touching the top edge brings it (`FullScreenToolbar`);
+    /// `⌥⌘T` takes it away or gives it back. Home keeps its toolbar on screen. The stats bar (`I`) is shown over the
+    /// picture on its own.
     private var fullScreenToolbarOverride: Bool?
     private var fullScreenToolbar: Bool {
         get {
@@ -209,6 +219,7 @@ import UniformTypeIdentifiers
         window.minSize = NSSize(width: 320, height: 240)
         window.backgroundColor = NSColor(cgColor: Settings.shared.config.background.cgColor)
         window.isReleasedWhenClosed = false
+        window.autorecalculatesKeyViewLoop = true
 
         let container = ViewerContainerView()
         window.contentView = container
@@ -242,6 +253,8 @@ import UniformTypeIdentifiers
         let overlayWidth = warningsOverlay.widthAnchor.constraint(lessThanOrEqualToConstant: 640)
         let overlayFits = warningsOverlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32)
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
+        viewerLeading = viewerView.leadingAnchor.constraint(equalTo: container.leadingAnchor)
+        viewerTrailing = viewerView.trailingAnchor.constraint(equalTo: container.trailingAnchor)
         viewerAtTop = viewerView.topAnchor.constraint(equalTo: top)
         pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: top)
         viewerAboveStrip = viewerView.bottomAnchor.constraint(equalTo: strip.view.topAnchor)
@@ -256,8 +269,7 @@ import UniformTypeIdentifiers
         keyToastAtTop = toast.topAnchor.constraint(equalTo: top, constant: 12)
         keyToastAboveStrip = toast.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -12)
         NSLayoutConstraint.activate([
-            viewerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            viewerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            viewerLeading, viewerTrailing,
             viewerView.panIndicatorsView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             viewerView.panIndicatorsView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             viewerView.panIndicatorsView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -285,6 +297,10 @@ import UniformTypeIdentifiers
         window.initialFirstResponder = viewerView
         window.center()
         super.init(window: window)
+        if let remembered = Settings.detectorPreferences.dictionary(forKey: SmartZoomState.preferenceKey) as? [String: String] {
+            session.smartZoom = SmartZoomState(restoring: remembered)
+            tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
+        }
         window.toolbar = viewerToolbar.nsToolbar
         toolbarWasWanted = windowToolbar
         viewerToolbar.nsToolbar.isVisible = toolbarWasWanted
@@ -320,14 +336,40 @@ import UniformTypeIdentifiers
         viewerView.onPointerPageChanged = { [weak self] in self?.updateInfoPanel() }
         viewerView.onPanIndicatorKey = { [weak self] in self?.panIndicatorKey($0) ?? false }
         viewerView.onToggleInfoPanel = { [weak self] in self?.toggleInfoPanel(nil) }
+        viewerView.onToggleSubjects = { [weak self] in self?.toggleSubjects(nil) }
+        viewerView.subjectOverlayView.source = { [weak self] url in
+            self?.subjectOverlaySource(url) ?? .init(boxes: nil, chain: [], note: nil)
+        }
+        viewerView.subjectOverlayView.onSettled = { [weak self] url, transform in self?.lookAtCrop(url, transform) }
         viewerView.onTabAction = { [weak self] in self?.tabAction($0) }
         viewerView.onPointerMoved = { [weak self] in self?.pointerMoved() }
         viewerView.isCovered = { [weak self] in self?.isShowingHome ?? false }
         viewerView.onAdjust = { [weak self] key, step, steps in self?.adjust(key: key, step: step, steps: steps) }
+        viewerView.onToast = { [weak self] text in self?.toast.show(text) }
+        viewerView.onSmartZoomChanged = { [weak self] in self?.folderSlots?.refreshSmartZoom() }
+        viewerView.onSubjectZoom = { [weak self] url in self?.askSubjectZoom(url) }
         // The folder of the photo asked about, not the window's: a folder step takes the new folder's rules.
         session.zoomRules = { [weak self] url in
             let config = self?.folderConfig(url.deletingLastPathComponent()).config ?? Settings.shared.config
-            return ZoomRules(config: config)
+            var rules = ZoomRules(config: config)
+            switch self?.session.smartZoom.mode ?? config.smartZoomMode {
+            case .off: rules.pan = config.stepPan == .center ? .center : .keep; rules.stepZoom = .keep
+            case .pan: rules.pan = .subject; rules.stepZoom = .keep
+            case .frame: rules.pan = .subject; rules.stepZoom = .subject
+            }
+            return rules
+        }
+        session.subjectBoxes = { [weak self] url in
+            guard let self else { return nil }
+            // A pair's layout is both pages: one page's boxes would frame the wrong spot.
+            guard session.currentPages?.second == nil else { return nil }
+            return SubjectFinder.boxes(for: url, applied: session.appliesOrientation, setup: effectiveConfig.detectorSetup)
+        }
+        session.askSubjectsNow = { [weak self] url, image, orientation, done in
+            guard let self, subjectAnalysis != .off, session.currentPages?.second == nil else { return false }
+            subjects.request(url, image: image, orientation: orientation, applied: session.appliesOrientation,
+                             setup: effectiveConfig.detectorSetup, ahead: false, urgent: true) { _ in done() }
+            return true
         }
         session.spreadRules = { [weak self] url in
             SpreadRules(config: self?.folderConfig(url.deletingLastPathComponent()).config ?? Settings.shared.config)
@@ -336,6 +378,30 @@ import UniformTypeIdentifiers
         cheatSheet.onClose = { [weak self] in self?.setCheatSheet(open: false) }
         strip.attach(to: container)
         makeInfoPanel(in: container)
+        let folderSlots = ViewerSlotsController(container: container, above: standInView, session: session, store: thumbnails, positions: positions, makeSmartZoom: { [weak self] in self?.makeSmartZoomPanel() ?? SmartZoomPanel() })
+        self.folderSlots = folderSlots
+        folderSlots.preview.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(folderSlots.preview, positioned: .above, relativeTo: standInView)
+        NSLayoutConstraint.activate([
+            folderSlots.preview.leadingAnchor.constraint(equalTo: viewerView.leadingAnchor),
+            folderSlots.preview.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor),
+            folderSlots.preview.topAnchor.constraint(equalTo: viewerView.topAnchor),
+            folderSlots.preview.bottomAnchor.constraint(equalTo: viewerView.bottomAnchor),
+        ])
+        folderSlots.onInsets = { [weak self] insets in
+            guard let self else { return }; slotInsets = insets
+            viewerLeading.constant = insets.left; viewerTrailing.constant = -insets.right
+            applyStripLayout()
+        }
+        folderSlots.onGallerySelected = { [weak self] id, folder, index in
+            guard let self, let list = stashList, let library = stash else { return }
+            let context = StashGalleryListContext(variables: list.variables, index: index, count: list.count)
+            stashList = context; stashGallery = (id, folder.standardizedFileURL)
+            session.stashNavigator = StashGalleryNavigator.make(list: context, library: library, toast: toast)
+        }
+        folderSlots.onMessage = { [weak self] in self?.toast.show($0) }
+        folderSlots.onFocus = { [weak self] in guard let self else { return }; self.window?.makeFirstResponder(self.viewerView) }
+
         strip.onReservesSpaceChange = { [weak self] in
             self?.applyStripLayout()
         }
@@ -343,9 +409,10 @@ import UniformTypeIdentifiers
         strip.onShownChange = { [weak self] in
             self?.infoPanel.place()
             self?.updateBackButton()
+            self?.layoutFolderSlots()
         }
         // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
-        container.onLayout = { [weak self] in self?.infoPanel.place() }
+        container.onLayout = { [weak self] in self?.infoPanel.place(); self?.layoutFolderSlots() }
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
@@ -360,9 +427,9 @@ import UniformTypeIdentifiers
         observe(NSWindow.didExitFullScreenNotification) { $0.setFullScreen(false) }
         observe(NSWindow.didChangeScreenNotification) { $0.updateScreenSize() }
         // The panel's diagnostics refresh only while the window can be seen.
-        observe(NSWindow.didMiniaturizeNotification) { $0.updateDiagnosticsTimer() }
-        observe(NSWindow.didDeminiaturizeNotification) { $0.updateDiagnosticsTimer() }
-        observe(NSWindow.didChangeOcclusionStateNotification) { $0.updateDiagnosticsTimer() }
+        observe(NSWindow.didMiniaturizeNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
+        observe(NSWindow.didDeminiaturizeNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
+        observe(NSWindow.didChangeOcclusionStateNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
         observe(NSWindow.didBecomeKeyNotification) {
             $0.session.isKeyWindow = true
             $0.syncFullScreen()   // a tab moved into or out of a full-screen window
@@ -396,12 +463,22 @@ import UniformTypeIdentifiers
             }
         }
         windowObservers.append(settings)
+        let profiles = center.addObserver(forName: .detectorProfilesChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateEffectiveConfig(); self?.folderSlots?.refreshSmartZoom()
+                self?.viewerView.subjectOverlayView.refresh(); self?.updateStatus()
+            }
+        }
+        windowObservers.append(profiles)
         // `S` or `A` here or in another window, which may show this folder or one above it; ⌥T in another window on
-        // this folder with `grid-style-memory` per folder (cheap and idempotent elsewhere).
+        // this folder with `grid-style-memory` per folder (cheap and idempotent elsewhere); `K`, whose `keep-zoom-as`
+        // names the zoom in the status (`Screen 72 %`).
         let folders = center.addObserver(forName: .folderSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.updateEffectiveConfig()
                 self?.applyGridStyle()
+                self?.updateStatus()
+                self?.viewerView.subjectOverlayView.refresh()   // ⌥G: another chain
             }
         }
         windowObservers.append(folders)
@@ -459,6 +536,7 @@ import UniformTypeIdentifiers
         MouseButtons.shared.cancelAll()
         applyInfoPanel()   // closed: its reads stop
         stopDiagnosticsTimer()
+        folderSlots?.close()
         viewerView.teardown()
         strip.close()
         session.close()
@@ -540,12 +618,13 @@ import UniformTypeIdentifiers
     /// The longest a launch holds the photo back for the full-screen animation (about 0.5–1 s on its own).
     private static let revealTimeout: TimeInterval = 3
 
-    /// The system proposes full screen with the toolbar pinned under the hidden title bar; `autoHideToolbar` makes it
-    /// slide in with the menu bar when the pointer reaches the top edge, as the comment on `fullScreenToolbar` says.
-    /// The options are read once, as the window enters full screen.
+    /// The system's full screen as proposed: the toolbar pinned under the hidden menu bar. Not `autoHideToolbar`: the
+    /// options are read once, as the window enters full screen, and setting them later is ignored (tried 2026-10-27),
+    /// so Home could not keep its toolbar while the photo hides it; and the viewer's toolbar swapped with Home's under
+    /// it stopped coming back at all. The viewer hides and brings its toolbar itself (`fullScreenEdge`).
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        proposed.union(.autoHideToolbar)
+        proposed.subtracting(.autoHideToolbar)
     }
 
     /// A failed enter reverts the layout chosen at `willEnterFullScreen`. (There is no matching failure
@@ -869,7 +948,9 @@ import UniformTypeIdentifiers
     /// sessions are read afresh each time they are shown; Folders comes back where it was (`browseAt` and a restored
     /// tab's folder go first; the first time, the last folder of the last run).
     func showHome(tab: HomeTab? = nil) {
+        folderSlots?.setActive(false)
         guard let window else { return }
+        let returningFromViewer = !isShowingHome
         let config = Settings.shared.config
         let wanted = tab ?? config.homeTab
         let shown: HomeTab = wanted == .stash && StashLibrary.Source.current == nil ? .recent : wanted
@@ -882,6 +963,7 @@ import UniformTypeIdentifiers
         window.toolbar = view.browser.nsToolbar
         // The window's hidden state can follow the viewer's toolbar to the next one: Home's is always shown.
         if !view.browser.nsToolbar.isVisible { view.browser.nsToolbar.isVisible = true }
+        fullScreenEdge.stop()   // Home's toolbar stays, in full screen too
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
         view.isParked = false
@@ -889,9 +971,9 @@ import UniformTypeIdentifiers
         applyBrowserSettings()
         returnsTo = nil
         let browser = view.browser
-        movingForApp = true
         if shown == .folders {
-            if let start = browseAt {
+            if let start = browseAt ?? (returningFromViewer ? session.playlist.map { BrowseTarget.location(for: $0.current) } : nil) {
+                browser.lastOpenedID = start.select
                 browser.show(start.location, selecting: start.select)
             } else if let restore = restoreBrowserAt {
                 restoreBrowserAt = nil
@@ -905,7 +987,6 @@ import UniformTypeIdentifiers
         } else if let location = HomeCollections.location(of: shown) {
             if browser.location == location, hasShownHome { browser.reload() } else { browser.show(location, selecting: nil) }
         }
-        movingForApp = false
         hasShownHome = true
         if shown != .stash { window.makeFirstResponder(browser) }
         DebugLog.log("home shown: \(shown)")
@@ -914,12 +995,18 @@ import UniformTypeIdentifiers
     }
 
     func hideHome() {
+        folderSlots?.setActive(session.playlist != nil)
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
         homeView.isParked = true
         window?.toolbar = viewerToolbar.nsToolbar
-        // The toolbar comes back as it was left (Home's own toolbar had the window meanwhile).
-        if !isFullScreen || !toolbarWanted { window?.toolbar?.isVisible = toolbarWanted }
+        // The toolbar comes back as it was left (Home's own toolbar had the window meanwhile); in full screen it hides
+        // until the pointer asks for it.
+        if isFullScreen {
+            applyFullScreenToolbar()
+        } else {
+            window?.toolbar?.isVisible = toolbarWanted
+        }
         toolbarWasWanted = toolbarWanted
         window?.titlebarAppearsTransparent = true
         if let titleVisibilityBeforeHome {
@@ -985,9 +1072,6 @@ import UniformTypeIdentifiers
     /// A place or a folder was shown: Folders goes back to it, not to the last run's folder.
     private var hasBrowsed = false
     private var hasShownHome = false
-    /// Set while the window moves the browser itself (`showHome`): only the user's own moves change `home-tab`.
-    private var movingForApp = false
-    private var tabMemory = HomeTabMemory()
     private var homeObservers: [NSObjectProtocol] = []
 
     /// The browser's last folder goes to Loupe.db here (`BrowserPlaces.lastFolder`): one write after another, never on
@@ -1008,6 +1092,9 @@ import UniformTypeIdentifiers
                                      hasStash: { StashLibrary.Source.current != nil })
         let view = HomeView(source: source)
         source.view = view.browser
+        view.browser.unreadable = .app
+        // A photo's exposure (else its pixels and size) under its name when names are below (file-cards spec).
+        view.browser.files.factsLine = true
         folders.onFoldersChecked = { [weak view] entries, folder in view?.sidebarFoldersChanged(entries, in: folder) }
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
@@ -1023,10 +1110,6 @@ import UniformTypeIdentifiers
             if case .folder(let url) = location { Self.placesWriter.async { places.lastFolder = url } }
             let tab = HomeCollections.tab(of: location)
             if tab == .folders { self.hasBrowsed = true }
-            // A source chosen in the sidebar (or Back to it) is the one a new tab opens on.
-            if let saved = self.tabMemory.moved(to: tab, byUser: !self.movingForApp, saved: Settings.shared.config.homeTab) {
-                _ = Settings.shared.saveAsDefault(["home-tab": saved.rawValue])
-            }
             if tab == .stash { self.stash?.page.focusPage() }
             // `grid-style-memory=folder`: each folder its own Square / Aspect, before its cards are laid out.
             self.applyGridStyle()
@@ -1221,11 +1304,7 @@ import UniformTypeIdentifiers
     /// somewhere meanwhile (the sidebar is there at once).
     private func startBrowser(_ view: HomeBrowserView, last: URL?) {
         let before = view.location
-        let show = { [weak self] (location: BrowserLocation) in
-            self?.movingForApp = true
-            view.show(location, selecting: nil)
-            self?.movingForApp = false
-        }
+        let show = { (location: BrowserLocation) in view.show(location, selecting: nil) }
         guard let last else { show(.places); return }
         Task { [weak view] in
             let found = await HomeGrid.availability(of: [last.path], timeout: .seconds(1))
@@ -1511,6 +1590,9 @@ import UniformTypeIdentifiers
                                 clearsGallery: false)
         guard let library = stash else { return }
         session.stashNavigator = list.map { StashGalleryNavigator.make(list: $0, library: library, toast: toast) }
+        if let list {
+            folderSlots?.useGalleries(StashFolderStripSource(context: list, library: library, tidy: tidy), id: id, folder: url)
+        }
         let config = Settings.shared.config
         guard config.folderToast else { return }
         let title = StashGalleryTitle.display(title: gallery.title, path: gallery.path, tidy: config.stashTitleTidy)
@@ -1575,18 +1657,287 @@ import UniformTypeIdentifiers
     /// The one status of the photo on screen, to the stats bar and the toolbar's chip. A move to another photo brings back a
     /// stats bar that hides by itself.
     private func updateStatus() {
+        folderSlots?.refreshSmartZoom()
         let status = session.imageStatus
+        askPhotoFacts(status.photo)
         statsBar.update(status)
-        viewerToolbar.updateStatus(status, zoomMode: (session.zoomTarget ?? session.transform).mode)
+        let shown = session.zoomTarget ?? session.transform
+        viewerToolbar.updateStatus(status, zoomMode: shown.mode)
+        viewerToolbar.updateWorkflow(session.smartZoom.mode)
+        viewerToolbar.updateSmartMode(subject: session.smartZoom.mode == .frame,
+                                      screen: effectiveConfig.keepZoomAs == .screen && { if case .free = shown.mode { true } else { false } }(),
+                                      fill: shown.mode == .fill)
         if !status.navigationKey.isEmpty, status.navigationKey != lastNavigationKey {
             lastNavigationKey = status.navigationKey
             statsBar.reveal()
         }
     }
 
+    /// The photo's EXIF for the status chip and the stats bar: its thumbnail's facts (memory or the catalog), else its
+    /// header (ImageIO reads only that; the viewer is reading the file anyway). Once per photo.
+    private func askPhotoFacts(_ url: URL?) {
+        guard let url, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
+        if factsAsked.count > 300 { factsAsked = []; session.photoFacts = [:] }
+        factsAsked.insert(url)
+        let store = thumbnails
+        Task { @MainActor [weak self] in
+            var facts = await store.facts([url])[url]
+            if facts == nil, url.isFileURL, ArchivePath.split(url) == nil {
+                facts = await Task.detached(priority: .utility) { PhotoFacts.read(url: url) }.value
+            }
+            // A photo without EXIF is read too (empty facts): its exposure is no longer awaited.
+            guard let self else { return }
+            self.session.photoFacts[url] = facts ?? FileFacts()
+            self.updateStatus()
+        }
+    }
+
+    private var factsAsked: Set<URL> = []
+
+    /// The subjects of the photo on screen and, with `subject-analysis=ahead`, of the next ones (smart zoom spec §5),
+    /// while `step-pan=subject` needs them. A new photo on screen first drops what the step left behind; nothing starts
+    /// while it is not sharp yet (`ShownQuality`); then it is asked for once, and its neighbours. Runs on every session
+    /// change (a pan too), so the photo asked for already returns before anything else is read.
+    private var subjectAnalysis: SubjectAnalysis { session.smartZoom.analysis(Settings.shared.config.subjectAnalysis) }
+
+    private func askSubjects() {
+        guard let current = session.playlist?.current else { return }
+        if current != subjectsCurrent {
+            subjectsCurrent = current
+            subjects.keepOnly([current])
+        }
+        guard subjectAnalysis != .off else { subjects.keepOnly([]); subjectsAsked = nil; return }
+        let busy = (session.shownQuality ?? .thumb) < .sharp
+        subjects.setForegroundBusy(busy)
+        let entry = session.entry
+        guard !busy, entry?.url == current, entry?.pyramidIsSeeded == false, let image = session.image else { return }
+        let rules = session.zoomRules(current)
+        // Asked once per photo: every kind is looked for, so another `subject-target` needs no second look.
+        let asked = current.path
+        guard asked != subjectsAsked else { return }
+        let analysis = subjectAnalysis
+        // Whatever needs the subjects now: the step's pan, subject mode, gesture zoom towards the subject.
+        let needed = session.smartZoom.mode != .off || rules.pan == .subject || session.subjectZoom || rules.anchor == .subject || rules.stepZoom == .subject
+            || viewerView.subjectOverlayView.isOn
+        guard needed, analysis != .off, session.currentPages?.second == nil else { subjects.keepOnly([]); return }
+        subjectsAsked = asked
+        let applied = session.appliesOrientation
+        let analysisID = effectiveConfig.detectorSetup.analysisID
+        subjects.request(current, image: image, orientation: session.drawOrientation, applied: applied,
+                         setup: effectiveConfig.detectorSetup, ahead: false) { [weak self] boxes in
+            guard let self, effectiveConfig.detectorSetup.analysisID == analysisID else { return }
+            self.viewerView.subjectZoomArrived(for: current, boxes: boxes)
+            self.viewerView.subjectsArrived(for: current, boxes: boxes)
+            self.viewerView.subjectOverlayView.refresh()
+        }
+        // Under the custom detector the next photos are looked at ahead too: each comes framed, with no Fit first.
+        guard analysis == .ahead else { return }
+        session.subjectNeighbours(limit: SubjectFinder.aheadLimit) { [weak self] neighbours in
+            // A callback that comes after another step belongs to a photo no longer on screen.
+            guard let self, subjectAnalysis == .ahead, effectiveConfig.detectorSetup.analysisID == analysisID, session.playlist?.current == current else { return }
+            subjects.keepOnly(Set([current] + neighbours.map(\.0)))
+            for (url, image, orientation) in neighbours {
+                subjects.request(url, image: image, orientation: orientation, applied: applied,
+                                 setup: effectiveConfig.detectorSetup, ahead: true) { _ in }
+            }
+        }
+    }
+
+    /// Show Subjects (`⇧G`, View › Show Subjects) for this window: on, it asks for the subjects of the photo on screen
+    /// as smart zoom would.
+    @objc func toggleSubjects(_ sender: Any?) {
+        let overlay = viewerView.subjectOverlayView
+        overlay.isOn.toggle()
+        toast.show(overlay.isOn ? "Show subjects: on" : "Show subjects: off")
+        if overlay.isOn {
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            subjectsAsked = nil; askSubjects()
+        }
+    }
+
+    /// The crop check (`SubjectCrop`): Vision on the visible part of the photo on screen, once the view rested; a
+    /// view that is (most of) the whole photo clears it.
+    private func lookAtCrop(_ url: URL, _ transform: ViewTransform) {
+        let overlay = viewerView.subjectOverlayView
+        let chain = session.zoomRules(url).chain
+        guard Settings.shared.config.subjectRecheck, session.entry?.url == url, let image = session.image,
+              session.currentPages?.second == nil,
+              subjectAnalysis != .off, let region = SubjectCrop.region(transform) else {
+            overlay.setCrop(url, boxes: nil, chain: chain)
+            return
+        }
+        let analysisID = effectiveConfig.detectorSetup.analysisID
+        subjects.requestCrop(image: image, orientation: session.drawOrientation, region: region, setup: effectiveConfig.detectorSetup) { [weak self, weak overlay] boxes in
+            guard self?.effectiveConfig.detectorSetup.analysisID == analysisID else { return }
+            overlay?.setCrop(url, boxes: boxes, chain: chain)
+        }
+    }
+
+    /// What Show Subjects draws for `url`: the boxes known for it with the folder's chain, or why there are none.
+    private func subjectOverlaySource(_ url: URL) -> SubjectOverlayView.Source {
+        let rules = session.zoomRules(url)
+        // Framing while browsing frames the kind ⇧Z follows first, and may guess a head on a person.
+        let chain = session.browse.chain(rules.chain)
+        if session.currentPages?.second != nil { return .init(boxes: nil, chain: chain, note: "Subjects: not in two-page view") }
+        if subjectAnalysis == .off, SubjectFinder.boxes(for: url, applied: session.appliesOrientation, setup: effectiveConfig.detectorSetup) == nil { return .init(boxes: nil, chain: chain, note: "SmartZoom is off · choose Pan only or Auto framing to analyse subjects") }
+        let applied = session.appliesOrientation
+        // Every kind is looked for (`SubjectFinder.searched`): another chain (⌥G, the menu) frames the same boxes anew.
+        let boxes = SubjectFinder.boxes(for: url, applied: applied, setup: effectiveConfig.detectorSetup)
+        return .init(boxes: boxes, chain: chain, note: boxes == nil ? "Looking for subjects…" : nil,
+                     mode: rules.detector?.name,
+                     composition: boxes.flatMap { b in
+                         chain.lazy.compactMap { SubjectFraming.composition(b, kind: $0, options: rules.composition) }.first
+                     })
+    }
+
+    /// The zoom menu's smart zoom items (`SmartZoomMenu`): a folder key for the main window's folder, a global one
+    /// (`subject-analysis`) into loupe.conf.
+    @objc func chooseSmartZoom(_ sender: NSMenuItem) {
+        guard let id = sender.identifier?.rawValue, id.hasPrefix("smart-zoom|") else { return }
+        let parts = id.split(separator: "|", maxSplits: 2).map(String.init)
+        let key = parts[1], value = parts[2]
+        if key == "smart-zoom", let mode = SmartZoomMode(rawValue: value) { setSmartZoomMode(mode); return }
+        if Config.zoomFolderKeys.contains(key) {
+            setTabZoom(key, value)
+            toast.show("\(sender.title) · tab")
+        } else if Config.folderKeys.contains(key), let folder {
+            folderSettings.set(key, value, for: folder)
+            toast.show("\(sender.title) · folder")
+        } else if Settings.shared.saveAsDefault([key: value]) {
+            toast.show(sender.title)
+        }
+    }
+
+    /// Zoom › Custom Detector › a mode: the detector on for the folder in that mode, at the mode's size (chosen again: its
+    /// size back).
+    @objc func chooseDetectorMode(_ sender: NSMenuItem) {
+        guard let id = sender.identifier?.rawValue, id.hasPrefix("detector-mode|") else { return }
+        setDetector(String(id.dropFirst("detector-mode|".count)))
+    }
+
+    /// Zoom › Custom Detector › Off, as `0`.
+    @objc func turnDetectorOff(_ sender: Any?) {
+        setDetector(nil)
+    }
+
+    /// The custom detector on in `mode` for the folder, or off (nil), remembered at once (owner, 2026-10-28: "чтобы
+    /// все было на автомате"): the folder's values, the tab's own dropped. The sizes carried start again from the mode's,
+    /// and the photo on screen is framed now.
+    private func setDetector(_ mode: String?, activate: Bool = true) {
+        session.browse.followed = nil
+        let selection = ZoomKeys.profileSelection(mode)
+        var values = selection
+        if activate && session.smartZoom.mode == .off { values["smart-zoom"] = session.smartZoom.lastEnabled.rawValue }
+        setTabZoom(values)
+        Settings.detectorPreferences.set(selection, forKey: ZoomKeys.lastProfileKey)
+        if let folder { for (key, value) in selection { folderSettings.set(key, value, for: folder) } }
+        session.browse.useProfile(ZoomRules(config: effectiveConfig).detector?.name ?? "vision")
+        toast.show("Profile: \(mode ?? "Vision")")
+        viewerView.frameSubjectNow()
+    }
+
+    /// `⇧M`: `size` of `mode` in detector.conf set to `size`, the share of the window the target framed takes; the
+    /// settings read again, so every window frames at it.
+    private func saveDetectorSize(_ size: Double, of mode: String) {
+        writeProfileValues(["size": "\(min(max(size, 0.2), 1) * 100)%"], name: mode)
+    }
+
+    /// A zoom choice for this tab (`tabZoomValues`): the window follows at once, as for a folder's change.
+    private func setTabZoom(_ key: String, _ value: String) {
+        setTabZoom([key: value])
+    }
+
+    private func setTabZoom(_ values: [String: String]) {
+        var values = values
+        let targetChanged = values[ZoomKeys.targetKey] != nil
+        if targetChanged && session.smartZoom.mode == .off && values["smart-zoom"] == nil { values["smart-zoom"] = session.smartZoom.lastEnabled.rawValue }
+        tabZoomValues.merge(values) { $1 }
+        updateEffectiveConfig()
+        if values["smart-zoom"] != nil {
+            Settings.detectorPreferences.set(session.smartZoom.rememberedValues, forKey: SmartZoomState.preferenceKey)
+        }
+        updateStatus()
+        viewerView.subjectOverlayView.refresh()
+        askSubjects()   // another chain or a pan that needs the subjects
+        if targetChanged { session.browse.followed = nil; viewerView.frameSubjectNow() }
+    }
+
+    private func zoomSaveValues(smart: Bool) -> [String: String] {
+        let keys = smart ? ZoomKeys.smartSaveKeys : ZoomKeys.manualSaveKeys
+        var values = Dictionary(uniqueKeysWithValues: keys.compactMap { key in effectiveConfig.text(forKey: key).map { (key, $0) } })
+        if smart && session.smartZoom.mode == .off { values["smart-zoom"] = session.smartZoom.lastEnabled.rawValue }
+        return values
+    }
+
+    private func saveZoomFolder(smart: Bool) {
+        guard let folder else { return }
+        let wasManual = session.smartZoom.mode == .off
+        let values = zoomSaveValues(smart: smart)
+        if smart && wasManual { tabZoomValues["smart-zoom"] = "off" }
+        for (key, value) in values { folderSettings.set(key, value, for: folder) }
+        for (key, value) in values where tabZoomValues[key] == value { tabZoomValues[key] = nil }
+        // Saving the inactive Smart preference must not enable it in the current tab.
+        if smart && wasManual { tabZoomValues["smart-zoom"] = "off" }
+        updateEffectiveConfig()
+        toast.show(smart ? "SmartZoom settings saved for folder" : "Manual zoom settings saved for folder")
+    }
+
+    @objc func saveManualZoomFolder(_ sender: Any?) { saveZoomFolder(smart: false) }
+    @objc func saveSmartZoomFolder(_ sender: Any?) { saveZoomFolder(smart: true) }
+    @objc func saveManualZoomDefaults(_ sender: Any?) { saveZoomDefaults(smart: false) }
+    @objc func saveSmartZoomDefaults(_ sender: Any?) { saveZoomDefaults(smart: true) }
+    private var zoomDefaultsSaveInFlight = false
+    private func saveZoomDefaults(smart: Bool) {
+        guard !zoomDefaultsSaveInFlight else { return }
+        let values = zoomSaveValues(smart: smart), url = Settings.shared.fileURL
+        zoomDefaultsSaveInFlight = true
+        if smart && session.smartZoom.mode == .off { tabZoomValues["smart-zoom"] = "off" }
+        Task { [weak self] in
+            let saved = await Task.detached(priority: .utility) {
+                do {
+                    var config = Config.load(from: url).0
+                    for (key, value) in values { _ = config.set(key, value) }
+                    try config.write(keys: Array(values.keys), to: url)
+                    return true
+                } catch { return false }
+            }.value
+            guard let self else { return }
+            zoomDefaultsSaveInFlight = false
+            if saved { Settings.shared.reload() }
+            toast.show(saved ? (smart ? "SmartZoom defaults saved" : "Manual zoom defaults saved") : "Zoom defaults could not be saved")
+        }
+    }
+
+    /// `⇧Z`: the subjects of the photo on screen at once (`.userInitiated`), whatever `step-pan` and `subject-analysis`
+    /// say; the view zooms when they are in.
+    private func askSubjectZoom(_ url: URL) {
+        guard session.smartZoom.mode != .off, let image = session.image, session.entry?.url == url else { return }
+        let analysisID = effectiveConfig.detectorSetup.analysisID
+        subjects.request(url, image: image, orientation: session.drawOrientation, applied: session.appliesOrientation,
+                         setup: effectiveConfig.detectorSetup, ahead: false, urgent: true) { [weak self] boxes in
+            guard let self, effectiveConfig.detectorSetup.analysisID == analysisID else { return }
+            self.viewerView.subjectZoomArrived(for: url, boxes: boxes)
+        }
+    }
+
+    /// The finder of this window's photos' subjects, over the catalog.
+    private lazy var subjects: SubjectFinder = {
+        let store = thumbnails
+        return SubjectFinder(stored: { url in await store.subjects([url])[url] },
+                             keep: { url, boxes in await store.keepSubjects([url: boxes]) })
+    }()
+    /// The photo on screen the finder's queue was last cut for.
+    private var subjectsCurrent: URL?
+
+    /// The photo and chain whose subjects were asked for last.
+    private var subjectsAsked: String?
+
     private func sessionDidChange() {
+        folderSlots?.synchronize(folder: session.playlist?.current.deletingLastPathComponent())
+        folderSlots?.setActive(!isShowingHome && session.playlist != nil)
         updateFolder()
         viewerView.sessionDidChange()
+        askSubjects()
         updateStatus()
         strip.sessionDidChange()
         updateInfoPanel()
@@ -1648,19 +1999,28 @@ import UniformTypeIdentifiers
                 if DebugLog.isEnabled { DebugLog.log(line) } else { FileHandle.standardError.write(Data("loupe: \(line)\n".utf8)) }
             }
         }
+        let modelChanged = effectiveConfig.detectorSetup.analysisID != config.detectorSetup.analysisID
         effectiveConfig = config
+        if modelChanged {
+            viewerView.holdSmartZoomView(); subjectsAsked = nil; subjects.keepOnly([])
+            viewerView.subjectOverlayView.analysisChanged()
+        }
+        let smartZoomEffect = session.smartZoom.select(config.smartZoomMode)
+        if smartZoomEffect != .none { viewerView.holdSmartZoomView() }
+        if session.smartZoom.mode == .off { subjects.keepOnly([]); subjectsAsked = nil }
         viewerToolbar.updateColour(config)
         applyResampling()
         session.setColor(ColorSettings(config: config), reach: config.cachePreviews)
         session.updateSpreadRules()   // `D`, `⌥D` here or in another window, a reload: the pair follows at once
         // The panel names the filter and the colour (and ` · folder`): at once, not on the next tick.
         if changed { updateInfoPanel() }
+        if smartZoomEffect == .reframe || modelChanged && session.smartZoom.mode != .off { viewerView.frameSubjectNow() }
     }
 
     /// loupe.conf with `folder`'s values on top (folder settings spec §7), the values and the entries `Config.applying`
     /// refused: this window's `effectiveConfig`, and for any other folder the session's zoom rules.
     private func folderConfig(_ folder: URL?) -> (config: Config, values: [String: String], rejected: [String]) {
-        let values = folder.map { folderSettings.values(for: $0) } ?? [:]
+        let values = ZoomKeys.layered(folder: folder.map { folderSettings.values(for: $0) } ?? [:], tab: tabZoomValues)
         let (config, rejected) = Settings.shared.config.applying(values)
         return (config, values, rejected)
     }
@@ -1711,6 +2071,13 @@ import UniformTypeIdentifiers
     private func setFullScreen(_ on: Bool) {
         isFullScreen = on
         if on { fullScreenToolbarOverride = nil }   // `fullscreen-toolbar` decides at each entry
+        if on {
+            applyFullScreenToolbar()
+        } else {
+            fullScreenEdge.stop()
+            if !isShowingHome, window?.toolbar === viewerToolbar.nsToolbar { viewerToolbar.nsToolbar.isVisible = windowToolbar }
+            toolbarWasWanted = windowToolbar
+        }
         applyStatsLayout()
         strip.setFullScreen(on)
     }
@@ -1719,6 +2086,7 @@ import UniformTypeIdentifiers
     /// or with nothing focused (`KeyMap.windowLookup`). A text field (Home's filter, a rename, a selected info panel
     /// value) and Stash's page keep every key, so F types there; the viewer takes its own keys (`ViewerView`).
     private func windowKey(_ event: NSEvent) -> Bool {
+        if folderSlots?.key(event) == true { return true }
         guard let window, window.isKeyWindow, !cheatSheet.isOpen else { return false }
         let responder = window.firstResponder
         guard responder !== viewerView, !(responder is NSTextInputClient) else { return false }
@@ -1823,6 +2191,8 @@ import UniformTypeIdentifiers
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(toggleLeftSlot(_:)), #selector(toggleRightSlot(_:)), #selector(toggleBottomSlot(_:)):
+            return !isShowingHome && session.playlist != nil
         case #selector(chooseCardStyle(_:)):
             let browser = isShowingHome ? homeView?.browser : nil
             item.state = browser?.canChooseCardStyle == true && CardStyle.allCases.indices.contains(item.tag)
@@ -1863,6 +2233,12 @@ import UniformTypeIdentifiers
         case #selector(toggleLandscapeAlone(_:)):
             item.state = effectiveConfig.spreadLandscapeAlone ? .on : .off
             return folder != nil
+        case #selector(toggleSubjects(_:)):
+            item.state = viewerView.subjectOverlayView.isOn ? .on : .off
+        case #selector(chooseDetectorMode(_:)):
+            return folder != nil && !isShowingHome && effectiveConfig.detectorSetup.detects
+        case #selector(turnDetectorOff(_:)):
+            return folder != nil && ZoomRules(config: effectiveConfig).detector != nil
         case #selector(toggleInfoPanel(_:)):
             item.title = infoPanel.isVisible ? "Hide Info" : "Show Info"
         case #selector(pickColourMethod(_:)):
@@ -1880,7 +2256,21 @@ import UniformTypeIdentifiers
     }
 
     /// The viewer ends at the strip's top while the strip is a bar of its own, at the window's bottom otherwise.
+    private func layoutFolderSlots() {
+        guard let container = window?.contentView else { return }
+        folderSlots?.setActive(!isShowingHome && session.playlist != nil && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
+        folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - viewerView.frame.maxY),
+                            bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
+    }
+    @objc func toggleLeftSlot(_ sender: Any?) { folderSlots?.toggle(.left) }
+    @objc func toggleRightSlot(_ sender: Any?) { folderSlots?.toggle(.right) }
+    @objc func toggleBottomSlot(_ sender: Any?) { folderSlots?.toggle(.bottom) }
+
     private func applyStripLayout() {
+        folderSlots?.applySettings(Settings.shared.config)
+        viewerAtBottom.constant = slotInsets.bottom
+        viewerAboveStrip.constant = max(0, slotInsets.bottom - strip.bandHeight)
+
         // Deactivate first: both bottom constraints are required and must never be active together.
         if strip.reservesSpace {
             viewerAtBottom.isActive = false
@@ -1896,9 +2286,28 @@ import UniformTypeIdentifiers
     /// only while it is the window's: Home's stays shown, and `hideHome` puts the viewer's back as it was left.
     private func applyToolbarVisibility() {
         guard !isClosed, !isShowingHome, window?.toolbar === viewerToolbar.nsToolbar else { return }
+        if isFullScreen {
+            if toolbarWanted != toolbarWasWanted { toolbarWasWanted = toolbarWanted; applyFullScreenToolbar() }
+            return
+        }
         guard toolbarWanted != toolbarWasWanted else { return }
         toolbarWasWanted = toolbarWanted
         viewerToolbar.nsToolbar.isVisible = toolbarWanted
+    }
+
+    /// Full screen: Home's toolbar stays on screen; over a photo the toolbar hides, and with `⌥⌘T` on the top edge
+    /// brings it back (Zen rules, `FullScreenToolbar`).
+    private lazy var fullScreenEdge = FullScreenToolbar(window: { [weak self] in self?.window })
+
+    private func applyFullScreenToolbar() {
+        guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { fullScreenEdge.stop(); return }
+        if isShowingHome {
+            fullScreenEdge.stop()
+            if !toolbar.isVisible { toolbar.isVisible = true }
+            return
+        }
+        if toolbar.isVisible { toolbar.isVisible = false }
+        if fullScreenToolbar { fullScreenEdge.start() } else { fullScreenEdge.stop() }
     }
 
     /// The stats bar (`I`) floats over the picture and reserves no room, always at the top: windowed under the toolbar, in
@@ -2342,22 +2751,265 @@ import UniformTypeIdentifiers
     private func zoomKey(_ action: KeyAction) -> Bool {
         guard let folder else { return false }
         switch action {
+        case .rememberZoom:
+            saveZoomFolder(smart: session.smartZoom.mode != .off)
         case .toggleKeepZoom:
             let value = ZoomKeys.toggled(effectiveConfig)
-            folderSettings.set(ZoomKeys.keepKey, value, for: folder)
+            setTabZoom(ZoomKeys.keepKey, value)
             toast.show(ZoomKeys.toast(keep: value == "yes"))
         case .saveKeepZoom:
             saveAsDefault([ZoomKeys.keepKey], from: folder, toast: ZoomKeys.keepSaved)
         case .toggleZoomCarry:
             let carry = ZoomKeys.toggledCarry(effectiveConfig)
-            folderSettings.set(ZoomKeys.carryKey, carry.rawValue, for: folder)
+            setTabZoom(ZoomKeys.carryKey, carry.rawValue)
             toast.show(ZoomKeys.toast(carry: carry))
         case .saveZoomCarry:
             saveAsDefault([ZoomKeys.carryKey], from: folder, toast: ZoomKeys.carrySaved)
+        case .cycleStepPan:
+            let pan = ZoomKeys.toggledPan(effectiveConfig)
+            setTabZoom(ZoomKeys.panKey, pan.rawValue)
+            toast.show(ZoomKeys.toast(pan: pan))
+        case .saveStepPan:
+            saveAsDefault([ZoomKeys.panKey], from: folder, toast: ZoomKeys.panSaved)
+        case .cycleZoomAnchor:
+            let anchor = ZoomKeys.toggledAnchor(effectiveConfig)
+            setTabZoom(ZoomKeys.anchorKey, anchor.rawValue)
+            toast.show(ZoomKeys.toast(anchor: anchor))
+        case .saveZoomAnchor:
+            saveAsDefault([ZoomKeys.anchorKey], from: folder, toast: ZoomKeys.anchorSaved)
+        case .screenShare:
+            setTabZoom(ZoomKeys.carryKey, ZoomCarry.screen.rawValue)
+            toast.show(ZoomKeys.toast(carry: .screen))
+        case .nextTarget:
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            viewerView.applySmartZoom(cycleGroup: true)
+        case .cycleDetectorMode:
+            guard let mode = ZoomKeys.modeAfterM(effectiveConfig) else {
+                toast.show("Detector: no model, classes or modes (detector.conf)")
+                return true
+            }
+            setDetector(mode)
+        case .fit:
+            setSmartZoomMode(.off)
+        case .saveDetectorSize:
+            guard let mode = ZoomRules(config: effectiveConfig).detector, let url = session.entry?.url,
+                  let size = session.framedSize(url) else {
+                toast.show("Detector: nothing framed to measure")
+                return true
+            }
+            saveDetectorSize(size, of: mode.name)
+        case .cycleSubjectTarget:
+            let target = ZoomKeys.toggledTarget(effectiveConfig)
+            setTabZoom(ZoomKeys.targetKey, target)
+            toast.show(ZoomKeys.toast(target: target))
+        case .toggleSmartZoom:
+            var state = session.smartZoom; state.togglePower()
+            setSmartZoomMode(state.mode)
+        case .toggleStepZoom, .zoomSubject:
+            session.browse.followed = nil
+            session.browse.forgetSizes()
+            setSmartZoomMode(.frame)
+        case .manualZoom:
+            setSmartZoomMode(.off)
+        case .toggleZoomSet:
+            var state = session.smartZoom; state.togglePower()
+            setSmartZoomMode(state.mode)
         default:
             break
         }
         return true
+    }
+
+    private func setSmartZoomMode(_ mode: SmartZoomMode) {
+        let same = session.smartZoom.mode == mode
+        setTabZoom("smart-zoom", mode.rawValue)
+        if same {
+            viewerView.holdSmartZoomView()
+            if mode != .off { viewerView.frameSubjectNow() }
+        }
+        toast.show(mode == .off ? "Manual zoom · SmartZoom profile retained" : "SmartZoom · \(mode.title) · \(ZoomRules(config: effectiveConfig).detector?.name ?? "Vision")")
+    }
+
+    private var detectorModels: [DetectorModelEntry] = []
+    private var detectorCatalogLoading = false
+    private var detectorModelLoading = false
+    private var detectorModelNote = ""
+
+    private func refreshDetectorModels() {
+        guard !detectorCatalogLoading else { return }
+        detectorCatalogLoading = true
+        folderSlots?.refreshSmartZoom()
+        let selected = effectiveConfig.detectorSetup.model
+        Task { [weak self] in
+            let entries = await Task.detached(priority: .utility) {
+                let configured = DetectorSetup.load().0.model
+                return DetectorModelCatalog.scan(selected: selected, configured: configured)
+            }.value
+            guard let self else { return }
+            detectorCatalogLoading = false
+            guard effectiveConfig.detectorSetup.model == selected else { refreshDetectorModels(); return }
+            detectorModels = entries
+            folderSlots?.refreshSmartZoom()
+        }
+    }
+
+    private func chooseDetectorModel(_ path: String?) {
+        guard !detectorModelLoading else { return }
+        guard let path else {
+            let picker = NSOpenPanel()
+            picker.title = "Choose a compiled Core ML detector (.mlmodelc)"
+            picker.canChooseFiles = true; picker.canChooseDirectories = true; picker.allowsMultipleSelection = false
+            picker.directoryURL = DetectorModelCatalog.directory
+            guard let window else { return }
+            picker.beginSheetModal(for: window) { [weak self] response in
+                if response == .OK, let url = picker.url { self?.chooseDetectorModel(url.path) }
+            }
+            return
+        }
+        detectorModelLoading = true; detectorModelNote = "Loading model…"
+        folderSlots?.refreshSmartZoom()
+        Task { [weak self] in
+            let ready = await Task.detached(priority: .utility) {
+                DetectorModelCatalog.installed(URL(fileURLWithPath: path)) && ModelDetector.prepare(path)
+            }.value
+            guard let self else { return }
+            detectorModelLoading = false
+            if ready {
+                Settings.detectorPreferences.set(path, forKey: DetectorModelCatalog.selectionKey)
+                detectorModelNote = ""
+                Settings.shared.reload(applyingIcon: false)
+                refreshDetectorModels()
+                toast.show("Detection model: " + URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+            } else {
+                detectorModelNote = "Could not load this compiled model. Previous model remains selected."
+            }
+            folderSlots?.refreshSmartZoom()
+        }
+    }
+
+    private func makeSmartZoomPanel() -> SmartZoomPanel {
+        let panel = SmartZoomPanel()
+        panel.source = { [weak self] in
+            guard let self else { return .init(mode: .off, profile: "Vision", profiles: [], groups: [], selected: nil,
+                kinds: [], options: .init(), size: 0.6, note: "No photo", showsBoxes: false) }
+            let rules = ZoomRules(config: effectiveConfig)
+            let boxes = session.entry.flatMap { self.session.subjectBoxes($0.url) }
+            let groups = boxes.map { b in rules.chain.filter { SubjectFraming.composition(b, kind: $0, options: rules.composition) != nil } } ?? []
+            let selected = session.browse.chain(rules.chain).first { groups.contains($0) }
+            var note = boxes == nil ? (session.smartZoom.mode == .off ? "Choose Pan only or Auto framing to analyse subjects" : "Looking for subjects…") : selected.map { "Group: \($0.title)" } ?? "No complete group found"
+            if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition) {
+                let t = c.transform(session.transform, autoZoom: true, size: rules.subjectSize)
+                if t.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
+            }
+            if let preferred = session.browse.followed, !groups.contains(preferred) {
+                note += "\nPreferred: \(preferred.title) (not found); temporary fallback: \(selected?.title ?? "none")"
+            }
+            if let boxes, let first = rules.chain.first, !groups.contains(first) {
+                let missing = first.parts.filter { boxes.boxes($0).compactMap(SubjectFraming.validRect).isEmpty }
+                if !missing.isEmpty { note += "\nFirst priority missing: " + missing.map(\.title).joined(separator: ", ") }
+            }
+            let kinds = Array(Set(rules.chain.flatMap(\.parts))).sorted { $0.rawValue < $1.rawValue }
+            return .init(mode: session.smartZoom.mode, profile: rules.detector?.name ?? "Vision",
+                profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name), groups: groups, selected: selected,
+                kinds: kinds, options: rules.composition, size: rules.subjectSize, note: note,
+                showsBoxes: viewerView.subjectOverlayView.isOn, modelPath: effectiveConfig.detectorSetup.model,
+                models: detectorModels, modelLoading: detectorModelLoading || detectorCatalogLoading, modelNote: detectorModelNote, canEditProfile: rules.detector != nil)
+        }
+        panel.modelsRequested = { [weak self] in self?.refreshDetectorModels() }
+        panel.chooseModel = { [weak self] in self?.chooseDetectorModel($0) }
+        panel.newProfile = { [weak self] in self?.openProfileEditor(creating: true) }
+        panel.editProfile = { [weak self] in self?.openProfileEditor(creating: false) }
+        panel.chooseMode = { [weak self] in self?.setSmartZoomMode($0) }
+        panel.chooseProfile = { [weak self] in self?.setDetector($0 == "Vision" ? nil : $0) }
+        panel.chooseGroup = { [weak self] kind in
+            guard let self else { return }; session.browse.followed = kind
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            viewerView.frameSubjectNow()
+            folderSlots?.refreshSmartZoom()
+        }
+        panel.edit = { [weak self] key, value in
+            guard let self else { return }
+            let rules = ZoomRules(config: effectiveConfig)
+            var profiles = effectiveConfig.smartZoomOptions
+            let name = rules.detector?.name ?? "vision"
+            var values = profiles[name] ?? [:]; values[key] = value; profiles[name] = values
+            setTabZoom("smart-zoom-options", Config.smartZoomOptionsText(profiles))
+            session.browse.forgetSizes()
+            viewerView.frameSubjectNow()
+        }
+        panel.toggleBoxes = { [weak self] in self?.toggleSubjects(nil); self?.folderSlots?.refreshSmartZoom() }
+        panel.saveFolder = { [weak self] in self?.saveZoomFolder(smart: true) }
+        panel.saveProfile = { [weak self] in self?.saveSmartZoomProfile() }
+        return panel
+    }
+
+    private var smartZoomSaveInFlight = false
+
+    private func saveSmartZoomProfile() {
+        let rules = ZoomRules(config: effectiveConfig)
+        guard let mode = rules.detector else { toast.show("Choose a detector profile to save"); return }
+        var values = rules.composition.values; values["size"] = "\(rules.subjectSize * 100)%"
+        writeProfileValues(values, name: mode.name)
+    }
+
+    private func writeProfileValues(_ values: [String: String], name: String) {
+        guard !smartZoomSaveInFlight else { return }; smartZoomSaveInFlight = true
+        Task { [weak self] in
+            do {
+                let setup = try await DetectorProfileFiles.edit(DetectorSetup.fileURL) { text in
+                    guard let edited = DetectorSetup.settingValues(values, of: name, in: text) else { throw DetectorProfileDraft.Invalid.missing }
+                    return edited
+                }
+                guard let self else { return }
+                smartZoomSaveInFlight = false; session.browse.forgetSizes(); Settings.shared.adoptDetectorProfiles(setup)
+                toast.show("SmartZoom profile saved")
+            } catch {
+                self?.smartZoomSaveInFlight = false; self?.toast.show(error.localizedDescription)
+            }
+        }
+    }
+
+    private var profileEditor: DetectorProfileEditor?
+    private func openProfileEditor(creating: Bool) {
+        if let editor = profileEditor { editor.window?.makeKeyAndOrderFront(nil); return }
+        let rules = ZoomRules(config: effectiveConfig)
+        guard creating || rules.detector != nil, let window else { return }
+        let setup = effectiveConfig.detectorSetup
+        var name = rules.detector?.name ?? "custom"
+        if creating {
+            name = "custom"; var suffix = 2
+            while setup.modes.contains(where: { $0.name == name }) { name = "custom-\(suffix)"; suffix += 1 }
+        }
+        var draft = DetectorProfileDraft(name: name, chain: creating ? [] : rules.chain)
+        draft.size = rules.subjectSize; draft.composition = rules.composition
+        var categories = [SubjectKind]()
+        for kind in setup.kinds + SubjectKind.vision where !categories.contains(kind) { categories.append(kind) }
+        let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating)
+        profileEditor = editor
+        folderSlots?.setSmartZoomEditing(true)
+        editor.didClose = { [weak self] in self?.profileEditor = nil; self?.folderSlots?.setSmartZoomEditing(false) }
+        editor.save = { [weak self] draft, completion in
+            guard let self, !smartZoomSaveInFlight else { completion(.failure(CocoaError(.userCancelled))); return }
+            smartZoomSaveInFlight = true
+            Task { [weak self] in
+                do {
+                    let setup = try await DetectorProfileFiles.edit(DetectorSetup.fileURL) { try draft.writing(in: $0, creating: creating) }
+                    guard let self else { completion(.failure(CocoaError(.userCancelled))); return }
+                    smartZoomSaveInFlight = false
+                    Settings.shared.adoptDetectorProfiles(setup)
+                    var options = effectiveConfig.smartZoomOptions
+                    if options.removeValue(forKey: draft.normalizedName) != nil {
+                        let filtered = Config.smartZoomOptionsText(options)
+                        if let folder { folderSettings.set("smart-zoom-options", filtered, for: folder) }
+                        setTabZoom("smart-zoom-options", filtered)
+                    }
+                    session.browse.forgetSizes()
+                    setDetector(draft.normalizedName, activate: false)
+                    completion(.success(()))
+                } catch { self?.smartZoomSaveInFlight = false; completion(.failure(error)) }
+            }
+        }
+        if let sheet = editor.window { window.beginSheet(sheet) }
     }
 
     // MARK: Two-page keys (spread spec 2026-10-23)
@@ -2443,6 +3095,11 @@ import UniformTypeIdentifiers
         let clear = ScalingKeys.keysToClear(saved: values, own: folderSettings.ownValues(for: folder),
                                             inheritedWithoutOwn: folderSettings.inheritedValues(for: folder))
         if !clear.isEmpty { folderSettings.clear(clear, for: folder) }
+        // The tab follows the default it just saved.
+        if keys.contains(where: { tabZoomValues[$0] != nil }) {
+            for key in keys { tabZoomValues[key] = nil }
+            updateEffectiveConfig()
+        }
         toast.show(message ?? ScalingKeys.toast(savedAsDefault: keys))
     }
 

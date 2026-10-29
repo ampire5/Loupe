@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import HomeScreenModel
 
 /// What the strip should draw for a file.
 public enum ThumbnailStatus: Sendable, Equatable {
@@ -155,6 +156,9 @@ public actor ThumbnailStore {
     var accessClock: UInt64 = 0
     let memoryCap: Int
     var unavailable: Set<URL> = []
+    /// Of `unavailable`, the files the decoders could not read (`DecodeError.unreadable`), not those whose read failed:
+    /// a broken file, for the app's `UnreadableFiles`. Forgotten with `unavailable`.
+    var broken: Set<URL> = []
     /// Thumbnails the size limit evicted from files still listed: made again at the next opening of their
     /// folder, not now, or a folder bigger than the limit would be read in circles.
     var evicted: Set<URL> = []
@@ -257,7 +261,8 @@ public actor ThumbnailStore {
 
     enum Outcome: Sendable {
         case made(jpeg: Data, info: ImageInfo, stamp: FileStamp)
-        case failed
+        /// `broken`: the decoders cannot read the file (not a read that failed).
+        case failed(broken: Bool)
         case cancelled
     }
 
@@ -483,9 +488,52 @@ public actor ThumbnailStore {
         return result
     }
 
+    /// The facts (pixels, EXIF) of those `urls` whose thumbnail was made with them: memory, then the catalog (one
+    /// query for the rest). Nothing is read from the files.
+    public func facts(_ urls: [URL]) -> [URL: FileFacts] {
+        var result: [URL: FileFacts] = [:]
+        var byID: [Int64: URL] = [:]
+        for url in urls {
+            if let facts = made[url]?.info.facts {
+                result[url] = facts
+            } else if let id = ids[url] {
+                byID[id] = url
+            }
+        }
+        if !byID.isEmpty, let found = perform("facts", { try $0.facts(Array(byID.keys)) }) {
+            for (id, facts) in found { if let url = byID[id] { result[url] = facts } }
+        }
+        return result
+    }
+
+    /// Facts read from a file's header for a thumbnail made before they were kept: into the catalog beside it.
+    public func keepFacts(_ facts: [URL: FileFacts]) {
+        let items = facts.compactMap { url, f in ids[url].map { (id: $0, facts: f) } }
+        _ = perform("facts", { try $0.putFacts(items) })
+    }
+
+    /// The subjects of those `urls` the catalog keeps (`SubjectBoxes`): one query. Nothing is read from the files.
+    public func subjects(_ urls: [URL]) -> [URL: SubjectBoxes] {
+        var byID: [Int64: URL] = [:]
+        for url in urls { if let id = ids[url] { byID[id] = url } }
+        guard !byID.isEmpty, let found = perform("subjects", { try $0.subjects(Array(byID.keys)) }) else { return [:] }
+        var result: [URL: SubjectBoxes] = [:]
+        for (id, boxes) in found { if let url = byID[id] { result[url] = boxes } }
+        return result
+    }
+
+    /// Subjects found for photos of the catalog, into it (a photo it does not know keeps them in memory only).
+    public func keepSubjects(_ boxes: [URL: SubjectBoxes]) {
+        let items = boxes.compactMap { url, b in ids[url].map { (id: $0, boxes: b) } }
+        _ = perform("subjects", { try $0.putSubjects(items) })
+    }
+
     private static func aspect(_ size: PixelSize) -> Double? {
         size.width > 0 && size.height > 0 ? Double(size.width) / Double(size.height) : nil
     }
+
+    /// The thumbnail could not be made because the decoders cannot read the file (`unavailable`, and not a failed read).
+    public func isBroken(_ url: URL) -> Bool { broken.contains(url) }
 
     public func status(_ url: URL) -> ThumbnailStatus {
         if made[url] != nil || stored.contains(url) { return .ready }
@@ -511,6 +559,7 @@ public actor ThumbnailStore {
             removeAllMade()
             uncommitted = []
             unavailable = []
+            broken = []
             evicted = []
             forgetCells()
         }
@@ -561,6 +610,7 @@ public actor ThumbnailStore {
         removeAllMade()
         stored = []
         unavailable = []
+        broken = []
         evicted = []
         forgetCells()
     }
@@ -618,6 +668,7 @@ public actor ThumbnailStore {
         for file in listing {
             listed[file.url] = file.stamp
             unavailable.remove(file.url)
+            broken.remove(file.url)
             evicted.remove(file.url)
             if let thumbnail = made[file.url], thumbnail.stamp != file.stamp { forget(file.url) }
         }
@@ -673,6 +724,7 @@ public actor ThumbnailStore {
             ids[url] = nil
             stored.remove(url)
             unavailable.remove(url)
+            broken.remove(url)
             evicted.remove(url)
             missed.remove(url)
             uncommitted.remove(url)

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import HomeScreenModel
 import Testing
 @testable import LoupeCore
 
@@ -15,9 +16,13 @@ import Testing
     }
 
     @Test func aLoadedPhotoHasOneFactOfEachKindInOrder() {
-        let facts = ImageStatus.facts(index: 2, count: 150, info: info(), transform: fit())
+        let exif = FileFacts(exposure: 1.0 / 250, aperture: 2.8, iso: 400, focalLength: 35)
+        let facts = ImageStatus.facts(index: 2, count: 150, info: info(), transform: fit(), photo: exif)
         #expect(facts.map(\.kind) == ImageStatus.Kind.allCases)
-        #expect(facts.map(\.value) == ["3 / 150", "10502×14000", "52.3 MB", "JPEG", "Fit 10 %"])
+        #expect(facts.map(\.value) == ["3 / 150", "10502×14000", "147\u{00A0}MP", "1/250  f/2.8  ISO\u{00A0}400  35\u{00A0}mm", "52.3\u{00A0}MB",
+                                       "JPEG", "Fit 10 %"])
+        // Without the photo's EXIF there is no exposure; the megapixels come from the size.
+        #expect(!ImageStatus.facts(index: 2, count: 150, info: info(), transform: fit()).contains { $0.kind == .exposure })
     }
 
     /// The size is the photo's as shown: an EXIF 6 photo stored 4000×3000 is 3000×4000 (spec M3b §2.1); as stored with
@@ -56,10 +61,10 @@ import Testing
     }
 
     @Test func fileSizesAreDecimalAndLocaleFree() {
-        #expect(ImageStatus.fileSizeText(52_340_000) == "52.3 MB")
-        #expect(ImageStatus.fileSizeText(1_300_000_000) == "1.3 GB")
-        #expect(ImageStatus.fileSizeText(850_400) == "850 KB")
-        #expect(ImageStatus.fileSizeText(512) == "512 bytes")
+        #expect(ImageStatus.fileSizeText(52_340_000) == "52.3\u{00A0}MB")
+        #expect(ImageStatus.fileSizeText(1_300_000_000) == "1.3\u{00A0}GB")
+        #expect(ImageStatus.fileSizeText(850_400) == "850\u{00A0}KB")
+        #expect(ImageStatus.fileSizeText(512) == "512\u{00A0}B")
     }
 }
 

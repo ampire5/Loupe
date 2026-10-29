@@ -151,17 +151,3 @@ public final class RecentReachability: Sendable {
     public func cancel() { task.cancel() }
 }
 
-/// When Home's source is worth writing back as `home-tab`: on the user's own move to another tab than the window last
-/// showed, not on the window's own shows, reloads, a remount or a folder gone.
-public struct HomeTabMemory: Sendable {
-    private var last: HomeTab?
-
-    public init() {}
-
-    /// The tab to save, if any; `saved` is `home-tab` as it is now.
-    public mutating func moved(to tab: HomeTab, byUser: Bool, saved: HomeTab) -> HomeTab? {
-        defer { last = tab }
-        return byUser && tab != last && tab != saved ? tab : nil
-    }
-}
-

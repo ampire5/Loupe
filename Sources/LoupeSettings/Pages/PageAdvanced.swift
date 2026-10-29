@@ -17,6 +17,22 @@ extension SettingsPanel {
                     description: "~/.config/loupe (or $LOUPE_CONFIG_DIR): loupe.conf, input.conf, and icons/ for your "
                         + "own Dock icons.") { revealSettingsFolder() },
         ]),
+        SettingsSection("Panel state", rows: [
+            .text("step-pan", "Legacy step position", symbol: "viewfinder",
+                  description: "Normal step position with SmartZoom Off: keep or center. SmartZoom uses its own composition."),
+            .text("step-zoom", "Legacy step zoom", symbol: "person.crop.rectangle.stack",
+                  description: "Compatibility value. Use SmartZoom’s Off / Pan only / Auto framing control."),
+            .text("subject-pull", "Legacy subject pull", symbol: "smallcircle.filled.circle",
+                  description: "Compatibility value. SmartZoom uses the type weights in its Slot panel."),
+            .text("smart-zoom-options", "SmartZoom profile overrides", symbol: "camera.metering.multispot",
+                  description: "Saved composition values by profile. Normally use the SmartZoom panel in a Slot."),
+            .text("slot-left", "Left panel", symbol: "rectangle.leftthird.inset.filled",
+                  description: "Saved panel configuration. Normally use View › Slots and the panel’s capsule."),
+            .text("slot-right", "Right panel", symbol: "rectangle.rightthird.inset.filled",
+                  description: "Saved panel configuration. The folder filmstrip starts here."),
+            .text("slot-bottom", "Bottom panel", symbol: "rectangle.bottomhalf.inset.filled",
+                  description: "Saved panel configuration. The bottom panel stays above the photo strip."),
+        ]),
     ])
 
     /// Writes `contents` to `url` (making its folder) unless the file is there already.

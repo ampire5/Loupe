@@ -67,7 +67,7 @@ Measured on a MacBook Pro with M4 Max (36 GB), macOS 27, on the public images cr
 
 Lossy JPEG XL: 194 ms vs ImageIO's 580 ms. The 20 ms preview comes from `JxlDecoderGetDCImage`, a small addition to libjxl that Loupe ships with: you see the whole photo almost at once, and the full resolution replaces it a moment later.
 
-While you look, the toolbar's centre shows the file, its place in the folder, size, format and zoom, and the stats bar (`i`) is a dark strip along the window's top edge, as wide as the window and square, in the style of a camera's information screen: the facts in the first row (place, size, weight, format, zoom on the left; the file's date and the decode time at the right end), the file's name and the folder's below. Nothing in it moves or flickers when you step to another photo or folder: the facts of the photo before stay, grey, until the new one is in, and the news about the folder (`Loading folder…`) stands where its name is. White is what the photo is, grey the quiet facts, yellow a zoom you set, and the decode time goes green, amber and red as it gets slower. The strip is lightened from the left up to the photo's place in the folder. Its darkness (`stats-bar-opacity`), the progress (`stats-progress`, `stats-progress-opacity`), icons and monochrome look (`stats-icons`, `stats-monochrome`) and whether it shows beside the toolbar (`stats-bar-with-toolbar`) are settings. In full screen the toolbar is the system's (it slides in with the menu bar; `⌥⌘T` takes it away) and the stats bar floats over the picture; the key answers' place is `toast-position`. The info panel's Diagnostics (`⌘I`) adds the decoder, its timings, cache, memory and GPU frame times.
+While you look, the toolbar's centre shows the file, its place in the folder, size, format and zoom, and the stats bar (`i`) is a dark strip along the window's top edge, as wide as the window and square, in the style of a camera's information screen, in one row: the facts on the left (place, size, weight, format, zoom), the file's name and the folder's in the middle, the file's date and the decode time at the right end (`stats-bar-rows=2` puts the names in a second row under the facts). Nothing in it moves or flickers when you step to another photo or folder: the facts of the photo before stay, grey, until the new one is in, and the news about the folder (`Loading folder…`) stands where its name is. White is what the photo is, grey the quiet facts, yellow a zoom you set, and the decode time goes green, amber and red as it gets slower. The strip is lightened from the left up to the photo's place in the folder. Its darkness (`stats-bar-opacity`), the progress (`stats-progress`, `stats-progress-opacity`), icons and monochrome look (`stats-icons`, `stats-monochrome`) and whether it shows beside the toolbar (`stats-bar-with-toolbar`) are settings. In full screen the toolbar is the system's (it slides in with the menu bar; `⌥⌘T` takes it away) and the stats bar floats over the picture; the key answers' place is `toast-position`. The info panel's Diagnostics (`⌘I`) adds the decoder, its timings, cache, memory and GPU frame times.
 
 <p align="center"><img src="docs/images/stats-bar.webp" alt="The stats bar over a Hubble galaxy: file name, 1 / 9, 11477×7965, 39.7 MB, JPEG, Fit 24 %, decode 359 ms"></p>
 
@@ -114,6 +114,16 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 <td><b>Everything is a key.</b> <code>?</code> shows every binding of your current layout, gestures included.</td>
 </tr>
 </table>
+
+### SmartZoom
+
+SmartZoom frames detected subjects using Vision or a compatible local Core ML model you supply. Use the toolbar panel to choose a model, create or edit composition profiles, and switch between Manual, Pan and Auto. Profile and model choices survive relaunch. Loupe includes no model weights; see [Custom detector](docs/detector.md) for controls and neutral configuration examples.
+
+### Folder panels
+
+While viewing a photo, bring the pointer to the right edge or press ⌃⌘→ for the neighbouring folders. The wheel, trackpad and visible scrollbar only browse folders; click or Return opens the selected folder. The open photo stays unchanged while browsing. Escape returns the selection to the open folder. The capsule pins the panel beside the photo or lets it float over it. Left and bottom slots use ⌃⌘← and ⌃⌘↓.
+
+The folder filmstrip stays out of File View, Recent and Stash browsing; it accompanies the open photo. Entering File View cancels an unfinished folder choice.
 
 ### Formats
 

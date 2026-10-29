@@ -13,7 +13,7 @@ keystrokes). Counted from the `LOUPE_DEBUG` log: `activate N` lines during the r
 lines (a listing done) during the restore and during the 6 returns.
 
 **PC share** (`L$`, SMB over Ethernet, a listing 15–120 ms): one 147 MP JPEG XL in each of
-`L$/WIIF/ToUpscale/PIR_HQ/PIR020_s0{1..5}_fullres`. Screen unlocked (2026-10-26):
+`photo-share/benchmark/session-{1..5}`. Screen unlocked (2026-10-26):
 
 | Run | Build | Main CPU, all / longest turn | `activate` in restore | Re-reads in restore | Re-reads on 6 returns |
 |---|---|---|---|---|---|
@@ -29,7 +29,7 @@ re-reads nothing on any side): before 264–280 / 264–280 ms, 9–18 re-reads 
 231–237 / 231–237 ms; B + C 263–271 / 70–71 ms, 5 re-reads on the returns (afterBC2, unlocked).
 
 **NAS** (`nas2`, SMB over Wi-Fi, a listing 45 ms–3.2 s): the first JPEG in each of five folders of
-`20TB-23.04/WIIF/Upscaled/…` (23–56 files). Run 2 of each (run 1 of before and B logged 13 pauses/resumes — an
+`photo-share/benchmark/upscaled/…` (23–56 files). Run 2 of each (run 1 of before and B logged 13 pauses/resumes — an
 occlusion from outside the bench — and is left out):
 
 | Run | Build | Main CPU, all / longest turn | `activate` in restore | Re-reads in restore | Re-reads on 6 returns |

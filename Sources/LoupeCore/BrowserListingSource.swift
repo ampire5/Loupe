@@ -146,15 +146,19 @@ public enum BrowserListingSource {
                                 canRename: true, canTrash: true)
         }
         guard Playlist.imageExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-        return BrowserEntry(url: url, name: name, kind: .file, date: stamp?.modified, size: stamp.map { Int64($0.size) },
-                            canRename: true, canTrash: true)
+        return fileEntry(url, stamp: stamp)
+    }
+
+    /// A photo's card: inside a zip named by its inner path (read-only), its date and size from its stamp. The viewer's
+    /// playlist is made of the same entries (`Playlist`), so its steps follow the grid's order exactly.
+    public static func fileEntry(_ url: URL, stamp: FileStamp?) -> BrowserEntry {
+        let inner = ArchivePath.split(url)?.entry
+        return BrowserEntry(url: url, name: inner ?? url.lastPathComponent, kind: .file, date: stamp?.modified,
+                            size: stamp.map { Int64($0.size) }, canRename: inner == nil, canTrash: inner == nil)
     }
 
     /// A zip's photos, by their inner paths; the archive's date for each, its own size.
     private static func archiveEntries(_ archive: URL) throws -> [BrowserEntry] {
-        try ArchiveReader.shared.entries(of: archive).map { item in
-            BrowserEntry(url: item.url, name: ArchivePath.split(item.url)?.entry ?? item.url.lastPathComponent, kind: .file,
-                         date: item.stamp.modified, size: Int64(item.stamp.size))
-        }
+        try ArchiveReader.shared.entries(of: archive).map { fileEntry($0.url, stamp: $0.stamp) }
     }
 }

@@ -9,7 +9,7 @@ extension SettingsPanel {
             .toggle("stats-bar-with-toolbar", "Show with the toolbar", symbol: "menubar.rectangle",
                     description: "Off: in a window the bar shows only when the toolbar is hidden (⌥⌘T), since the "
                         + "toolbar carries the same facts; in full screen, where the toolbar only slides in on "
-                        + "demand, it shows as I says. Default on."),
+                        + "demand, it shows as I says. Default off."),
             .number("stats-bar-opacity", "Darkness", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
                     description: "How dark the strip is under the text. White text needs about 0.6 to read over a "
                         + "bright photo, the coloured values 0.7. 0.3–1, default 0.7."),
@@ -17,7 +17,7 @@ extension SettingsPanel {
                     symbol: "rectangle.split.1x2",
                     description: "Two: the facts in the first row, the file's name and the folder's in the second. One: "
                         + "everything in one row, the file's name and the folder's in the middle, between the facts and "
-                        + "the date. Default Two."),
+                        + "the date. Default One."),
             .toggle("stats-progress", "Folder progress", symbol: "rectangle.lefthalf.filled",
                     description: "The strip is lightened from the left up to the photo's place in the folder "
                         + "(N/M). Default on.",

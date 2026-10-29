@@ -193,8 +193,12 @@ public enum StatsLine {
 
     /// "Fit 23 %", "100 %" (actual size names itself), "Zoom 310 %". The percentage is view pixels per
     /// image pixel (physical pixels, so 100 % is 1:1 even on a Retina display). A free zoom resting on fit width,
-    /// fit height or 100 % (where a gesture halts, `ZoomStop`) is named by it.
-    public static func modeText(_ transform: ViewTransform) -> String {
+    /// fit height or 100 % (where a gesture halts, `ZoomStop`) is named by it. Under `keep-zoom-as=screen` (`carry`) a
+    /// free zoom is named by the share of the view it covers, which is what a step keeps: "Screen 72 %".
+    /// Under Zoom to Subject (`subject`) a free zoom reads "Subject 140 %"; under framing while browsing (`framing`,
+    /// `BrowseFraming.indicator`) by what it looks at and how big that is on screen, what a step keeps: "Face 60 %".
+    public static func modeText(_ transform: ViewTransform, carry: ZoomCarry = .share, subject: Bool = false,
+                                framing: (name: String, size: Double)? = nil) -> String {
         let percent = percentText(transform.scale * 100)
         switch transform.mode {
         case .fit: return "Fit \(percent) %"
@@ -203,6 +207,9 @@ public enum StatsLine {
         case .fill: return "Fill \(percent) %"
         case .actual: return "\(percent) %"
         case .free:
+            if subject { return "Subject \(percent) %" }
+            if let framing { return "\(framing.name) \(percentText(framing.size * 100)) %" }
+            if carry == .screen { return "Screen \(percentText(transform.screenShare * 100)) %" }
             let s = transform.scale
             func on(_ mode: ZoomMode) -> Bool { abs(transform.withMode(mode).scale - s) <= s * 1e-9 }
             if on(.actual(1)) { return "\(percent) %" }

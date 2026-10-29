@@ -19,14 +19,15 @@ extension SettingsPanel {
             SettingsCard([
                 .choice("upscale", "Upscale filter", filters + upscaleOnly, symbol: "arrow.down.left.and.arrow.up.right",
                         description: "Zooming in past 100 %, in linear light. Lanczos-3 is the sharpest, with a faint "
-                            + "halo; MetalFX and EWA Lanczos cost more GPU. S cycles it for the folder. Default Lanczos-3."),
+                            + "halo; MetalFX and EWA Lanczos cost more GPU. S cycles it for the folder. Default MetalFX "
+                            + "(Lanczos-3 on a GPU without it)."),
                 .choice("upscale-high", "Strong upscale filter", filters + upscaleOnly,
                         symbol: "arrow.down.left.and.arrow.up.right.square",
                         description: "Takes over from Strong upscale from: at ×3 and more a softer kernel often looks "
-                            + "better. Default Mitchell."),
+                            + "better. Default MetalFX (Lanczos-3 on a GPU without it)."),
                 .number("upscale-high-from", "Strong upscale from", unit: "%", step: 50, symbol: "arrow.up.to.line",
                         description: "Magnification of the drawn level. 100–6400 %, 0 = never (Upscale everywhere); "
-                            + "default 300."),
+                            + "default 200."),
                 .choice("downscale", "Downscale filter", filters, symbol: "minus.magnifyingglass",
                         description: "Fit of large photos and zoom below 100 %. Lanczos-3 removes moiré and jaggies; "
                             + "Bilinear is the cheapest. Default Lanczos-3."),
@@ -37,7 +38,7 @@ extension SettingsPanel {
             SettingsCard([
                 .number("pixel-art", "Square pixels from", unit: "%", step: 100, symbol: "square.grid.3x3",
                         description: "Zoom from which pixels are drawn as squares, without smoothing (at full "
-                            + "resolution only). 100–6400 %, 0 = never; default 400."),
+                            + "resolution only). 100–6400 %, 0 = never; default 800."),
                 .choice("pyramid-filter", "Pyramid filter", [
                     (word: "lanczos3", title: "Lanczos-3"), (word: "box", title: "Box"),
                 ], symbol: "square.stack.3d.down.right",

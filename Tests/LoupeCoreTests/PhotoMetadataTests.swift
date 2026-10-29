@@ -19,11 +19,11 @@ private func exposure(_ t: Double) -> String? {
     #expect(exposure(1.0 / 250) == "1/250 s")
     #expect(exposure(0.004) == "1/250 s")
     #expect(exposure(0.0333) == "1/30 s")
-    #expect(exposure(0.5) == "1/2 s")
-    #expect(exposure(1) == "1 s")
-    #expect(exposure(2) == "2 s")
-    #expect(exposure(2.5) == "2.5 s")
-    #expect(exposure(30) == "30 s")
+    #expect(exposure(0.5) == "0.5\u{00A0}s")
+    #expect(exposure(1) == "1\u{2033}")
+    #expect(exposure(2) == "2\u{2033}")
+    #expect(exposure(2.5) == "2.5\u{00A0}s")
+    #expect(exposure(30) == "30\u{2033}")
     #expect(exposure(0) == nil)
 }
 

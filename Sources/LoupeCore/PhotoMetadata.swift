@@ -1,10 +1,13 @@
 import Foundation
+import HomeScreenModel
 import ImageIO
 
 /// What the info panel says about a photo beyond the decoder's own facts: capture settings from ImageIO's properties,
 /// the generation text of AI pictures, the file's dates. Every field is the finished string, nil when the file has none.
 public struct PhotoMetadata: Equatable, Sendable {
     public var camera, lens, focalLength, aperture, exposure, iso, captured, gps, software, description: String?
+    /// Exposure compensation: `−0.3 EV`, `+1 EV` (nil at zero).
+    public var compensation: String?
     /// A1111 `parameters` text (PNG) or the EXIF UserComment (JPEG / WebP).
     public var generation: String?
     /// Size of the ComfyUI `workflow` (or `prompt`) chunk text, for "ComfyUI workflow, N KB"; the JSON is not parsed.
@@ -54,7 +57,11 @@ public struct PhotoMetadata: Equatable, Sendable {
         }
         if let a = Self.sane(exif[kCGImagePropertyExifFNumber as String]) { aperture = "f/\(Self.number(a))" }
         if let t = Self.sane(exif[kCGImagePropertyExifExposureTime as String], atLeast: 1e-9) {
-            exposure = t < 1 ? "1/\(Int((1 / t).rounded())) s" : "\(Self.number(t)) s"
+            // The style guide's shutter (D): `1/250 s`, `0.5 s`, `2″`.
+            exposure = t < 0.4 ? "1/\(Int((1 / t).rounded())) s" : FileFactsText.shutter(t)
+        }
+        if let ev = Self.double(exif[kCGImagePropertyExifExposureBiasValue as String]), ev.isFinite, abs(ev) >= 0.05 {
+            compensation = FileFactsText.bias(ev)
         }
         let speed = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [Any])?.first
         if let iso = Self.sane(speed) { self.iso = "ISO \(Int(iso.rounded()))" }

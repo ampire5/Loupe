@@ -1,4 +1,5 @@
 import AppKit
+import HomeScreenModel
 import LoupeCore
 
 /// The photo's facts in a row of slots, one per kind, each as wide as the longest value of its kind, so a new photo or a
@@ -16,10 +17,20 @@ import LoupeCore
     }
 
     /// The longest value of each kind, for the width of its slot.
-    private static func sample(_ kind: ImageStatus.Kind) -> String {
+    private static func sample(_ kind: ImageStatus.Kind) -> ImageStatus.Fact {
+        if kind == .exposure, let fact = ImageStatus.exposureFact(FileFacts(exposure: 1.0 / 8000, aperture: 22, iso: 25600,
+                                                                            focalLength: 600, exposureBias: -0.3)) {
+            return fact
+        }
+        return ImageStatus.Fact(kind, sampleText(kind))
+    }
+
+    private static func sampleText(_ kind: ImageStatus.Kind) -> String {
         switch kind {
         case .position: "999–999 / 9999"
         case .size: "99999×99999"
+        case .megapixels: "999 MP"
+        case .exposure: "1/8000  f/22  ISO 25600  600 mm  −0.3 EV"
         case .fileSize: "999.9 MB"
         case .format: "AVIF "
         case .zoom: "Fit height 100 %"
@@ -27,7 +38,7 @@ import LoupeCore
     }
 
     /// Which slots stay when there is no room for all: first the position, then the zoom, the size, the weight, the format.
-    private static let priority: [ImageStatus.Kind] = [.position, .zoom, .size, .fileSize, .format]
+    private static let priority: [ImageStatus.Kind] = [.position, .zoom, .exposure, .size, .megapixels, .fileSize, .format]
     private static let slotPadding: CGFloat = 12
     /// What a text field's cell takes round its text (4 points a side): a field narrower than its text and this cuts the
     /// text short ("JP…" for "JPEG"), so every width here is the text's and this.
@@ -41,7 +52,9 @@ import LoupeCore
         let badge = NSView()
     }
 
-    private let slots: [Slot] = ImageStatus.Kind.allCases.map { Slot(kind: $0) }
+    /// The kinds this row shows, in their order (every kind, or one side's of the stats bar).
+    private let kinds: [ImageStatus.Kind]
+    private let slots: [Slot]
     private var shown: [ImageStatus.Kind: ImageStatus.Fact] = [:]
     private var widths: [ImageStatus.Kind: CGFloat] = [:]
     /// What the value on show needs, for a value wider than the longest the kind's sample stands for (a format named by
@@ -59,8 +72,10 @@ import LoupeCore
         }
     }
 
-    init(style: Style) {
+    init(style: Style, kinds: [ImageStatus.Kind] = ImageStatus.Kind.allCases) {
         self.style = style
+        self.kinds = kinds
+        slots = kinds.map { Slot(kind: $0) }
         super.init(frame: .zero)
         for slot in slots {
             slot.label.lineBreakMode = .byTruncatingTail
@@ -83,25 +98,64 @@ import LoupeCore
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// The facts to show; a kind that is not among them leaves its slot empty.
-    func update(_ facts: [ImageStatus.Fact]) {
+    /// How long a load must last before the facts of the photo before turn grey: a photo that comes sooner changes the
+    /// text only, without a grey frame in between.
+    static let staleDelay: TimeInterval = 0.15
+
+    /// The facts are greyed (`ImageStatus.stale` for longer than `staleDelay`); the owner greys what it shows beside them.
+    private(set) var greyed = false {
+        didSet { if greyed != oldValue { onGreyedChange?() } }
+    }
+    var onGreyedChange: (() -> Void)?
+    private var stale = false
+    private var staleTimer: Timer?
+
+    /// The facts to show; a kind that is not among them leaves its slot empty, unless it is `pending` (still being read),
+    /// which keeps the value on show until it is in. `stale` facts are the photo's before: grey once the load is felt.
+    func update(_ facts: [ImageStatus.Fact], stale: Bool = false, pending: Set<ImageStatus.Kind> = []) {
         var changed = false
         for slot in slots {
             let fact = facts.first { $0.kind == slot.kind }
+            if fact == nil, pending.contains(slot.kind) { continue }
             guard shown[slot.kind] != fact else { continue }
             shown[slot.kind] = fact
             slot.label.toolTip = fact == nil ? nil : slot.kind.tip
             render(slot)
             changed = true
         }
+        setStale(stale)
         if changed { needsLayout = true }
     }
 
+    private func setStale(_ new: Bool) {
+        guard new != stale else { return }
+        stale = new
+        staleTimer?.invalidate()
+        staleTimer = nil
+        if new {
+            staleTimer = Timer.scheduledTimer(withTimeInterval: Self.staleDelay, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setGreyed(true) }
+            }
+        } else {
+            setGreyed(false)
+        }
+    }
+
+    private func setGreyed(_ new: Bool) {
+        guard new != greyed else { return }
+        greyed = new
+        for slot in slots where shown[slot.kind] != nil { render(slot) }
+    }
+
     private func render(_ slot: Slot) {
-        guard let fact = shown[slot.kind] else {
+        guard var fact = shown[slot.kind] else {
             slot.label.isHidden = true
             valueWidths[slot.kind] = nil
             return
+        }
+        // The place and the zoom are the viewer's own, never the photo's before.
+        if greyed, slot.kind != .position, slot.kind != .zoom {
+            fact = ImageStatus.Fact(fact.kind, fact.value, tone: .quiet, parts: fact.parts)
         }
         // The alignment is the text's own paragraph style: a field takes it from there, not from `alignment`.
         let text = NSMutableAttributedString(attributedString: ProCameraStyle.text(fact, style.options))
@@ -126,7 +180,7 @@ import LoupeCore
         if let width = widths[kind] {
             sample = width
         } else {
-            sample = ceil(ProCameraStyle.text(.init(kind, Self.sample(kind)), style.options).size().width)
+            sample = ceil(ProCameraStyle.text(Self.sample(kind), style.options).size().width)
                 + Self.cellInset + Self.slotPadding
             widths[kind] = sample
         }
@@ -134,7 +188,7 @@ import LoupeCore
     }
 
     /// The row's width with every slot in it.
-    var naturalWidth: CGFloat { width(for: ImageStatus.Kind.allCases) }
+    var naturalWidth: CGFloat { width(for: kinds) }
 
     private func width(for kinds: [ImageStatus.Kind]) -> CGFloat {
         kinds.reduce(0) { $0 + width(of: $1) } + CGFloat(max(0, kinds.count - 1)) * Self.hairlineSpace
@@ -148,8 +202,8 @@ import LoupeCore
         super.layout()
         // The slots that fit, taken in order of priority, are laid out in their own order.
         var kept: [ImageStatus.Kind] = []
-        for kind in Self.priority {
-            let candidate = ImageStatus.Kind.allCases.filter { kept.contains($0) || $0 == kind }
+        for kind in Self.priority where kinds.contains(kind) {
+            let candidate = kinds.filter { kept.contains($0) || $0 == kind }
             guard width(for: candidate) <= bounds.width + 0.5 else { break }
             kept = candidate
         }

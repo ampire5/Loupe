@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import SQLite3
+import HomeScreenModel
 @testable import LoupeCore
 
 @Suite struct ThumbnailDatabaseTests {
@@ -125,6 +126,47 @@ import SQLite3
         #expect(try db.thumbnail(a)?.jpeg == jpeg(9))
         #expect(try db.thumbnail(a)?.info == info(3))
         #expect(try db.hasThumbnail([]) == [])
+    }
+
+    /// A photo's facts travel with its thumbnail, can come later on their own, and go when the file changes.
+    @Test func factsBesideTheThumbnail() throws {
+        let db = try open(tempDir())
+        let ids = try db.sync(folder: folderX, files: listing(["a.jpg", "b.jpg"]))
+        let a = ids["a.jpg"]!, b = ids["b.jpg"]!
+        var withFacts = info(1)
+        withFacts.facts = FileFacts(width: 6001, height: 4001, camera: "SONY ILCE-7M4", iso: 400)
+        try db.put([(id: a, stamp: stamp(of: "a.jpg"), jpeg: jpeg(7), info: withFacts),
+                    (id: b, stamp: stamp(of: "b.jpg"), jpeg: jpeg(8), info: info(2))])
+        #expect(try db.thumbnail(a)?.info.facts == withFacts.facts)
+        #expect(try db.thumbnail(b)?.info.facts == nil)
+        try db.putFacts([(id: b, facts: FileFacts(iso: 100))])
+        #expect(try db.facts([a, b]) == [a: withFacts.facts!, b: FileFacts(iso: 100)])
+        // a.jpg changed: its facts go with its thumbnail
+        _ = try db.sync(folder: folderX, files: [(name: "a.jpg", stamp: stamp(99)), (name: "b.jpg", stamp: stamp(of: "b.jpg"))])
+        #expect(try db.facts([a]).isEmpty)
+    }
+
+    /// A photo's subjects (smart zoom spec §5) are kept by file, read back as written, and go when the file changes.
+    @Test func subjectsRoundTripAndGoWhenTheFileChanges() throws {
+        let db = try open(tempDir())
+        let ids = try db.sync(folder: folderX, files: listing(["a.jpg", "b.jpg"]))
+        let a = ids["a.jpg"]!, b = ids["b.jpg"]!
+        let boxes = SubjectBoxes(faces: [CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)], people: [], objects: [],
+                                 saliency: [])
+        try db.putSubjects([(id: a, boxes: boxes), (id: b, boxes: boxes)])
+        #expect(try db.subjects([a, b]) == [a: boxes, b: boxes])
+        _ = try db.sync(folder: folderX, files: [(name: "a.jpg", stamp: stamp(99)), (name: "b.jpg", stamp: stamp(of: "b.jpg"))])
+        #expect(try db.subjects([a, b]) == [b: boxes])
+    }
+
+    /// Boxes found by another version of the detection are not served.
+    @Test func subjectsOfAnotherVersionAreIgnored() throws {
+        let db = try open(tempDir())
+        let a = try db.sync(folder: folderX, files: listing(["a.jpg"]))["a.jpg"]!
+        var old = SubjectBoxes(faces: [], people: [], objects: [], saliency: [CGRect(x: 0, y: 0, width: 1, height: 1)])
+        old.version = 0
+        try db.putSubjects([(id: a, boxes: old)])
+        #expect(try db.subjects([a]).isEmpty)
     }
 
     /// The orientation travels with the header (a seed's transform and its pyramid layout come from it), and the

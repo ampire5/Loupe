@@ -24,7 +24,7 @@ in system memory) against `cache-memory`. SettingsKit gets a per-row machine not
   with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and
   `Claude-Session: https://claude.ai/code/session_01UHEgCsxN5juXdhYFYdkB1N`. Stage files by name.
 - Public project: no home path, user name, volume or share names, personal folder or file names in code, comments,
-  tests, docs or messages; `git diff --cached | grep -n "vselin\|/Users/"` prints nothing before every commit.
+  tests, docs or messages; `git diff --cached | rg -n "/Users/[^/]+/"` prints nothing before every commit.
 - Performance rules: background never takes every core; background work at `.utility`; the main thread never blocks;
   memory and queues bounded; limits measured and recorded next to the constant (what, which machine, result).
 - Policy (user's choice «1»): harmful values take effect clamped, with «Effective …» at the row and one line in the

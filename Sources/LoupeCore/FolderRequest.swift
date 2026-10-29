@@ -64,9 +64,13 @@ public struct FolderRequest: Sendable {
     /// the first.
     public static func playlist(for target: FolderTarget, sort: BrowserSort = .standard,
                                 remembered: (URL, [URL]) -> URL?) -> Playlist {
-        var list = Playlist(files: target.images, current: target.images[0], stamps: target.stamps).sorted(sort)
+        // Built once, in `sort`'s order; the remembered photo is moved to, not built again (that sorted by name,
+        // owner, 2026-10-28).
+        var list = Playlist(files: target.images, current: target.images[0], stamps: target.stamps, sort: sort)
         list.moveToFirst()
-        if let file = remembered(target.folder, list.files) { list = Playlist(files: list.files, current: file, stamps: list.stamps) }
+        if let file = remembered(target.folder, list.files), !list.move(to: file) {
+            list = Playlist(files: list.files, current: file, stamps: list.stamps, sort: sort)
+        }
         return list
     }
 

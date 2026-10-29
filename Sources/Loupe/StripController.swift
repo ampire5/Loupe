@@ -2,6 +2,7 @@ import AppKit
 import Filmstrip
 import FilmstripModel
 import HomeChrome
+import HomeScreenModel
 import LoupeCore
 
 extension Notification.Name {
@@ -16,11 +17,11 @@ extension Notification.Name {
 /// in step with the session's playlist and position, moves the strip under its fixed centre and fills its cells from
 /// the `ThumbnailStore`.
 ///
-/// Showing follows `StripPlacement` (filmstrip spec §2). With `strip-window=beside` (the default) the strip is a band
-/// of its own under the picture (the window controller anchors the viewer to its top), shown until `T` hides it
+/// Showing follows `StripPlacement` (filmstrip spec §2). With `strip-window=beside` the strip is a band of its own
+/// under the picture (the window controller anchors the viewer to its top), shown until `T` hides it
 /// (`stripBarHidden`); hidden, a glass nub (`FilmstripRevealView`) 6 pt above the window's bottom edge shows while
-/// the mouse is within 24 pt of that edge and brings it back. In full screen, and in a window with `over`, it floats
-/// over the bottom of the picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the
+/// the mouse is within 24 pt of that edge and brings it back. In full screen, and in a window with `over` (the
+/// default), it floats over the bottom of the picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the
 /// mouse is within the strip's whole height of the window's bottom edge or over the strip or its capsule, while its
 /// top edge is being dragged, while it moves, or while the cursor is over a cell (`revealedByEdge`); it hides
 /// `strip-hide-delay` ms after none of these holds. While the `?` cheat sheet is open (`staysShown`) a strip on screen
@@ -140,6 +141,7 @@ extension Notification.Name {
 
     /// The playlist the layout was made for, and each file's index in it.
     private var files: [URL] = []
+    private var unreadableObservation: UnreadableFiles.Observation?
     private var indices: [URL: Int] = [:]
     /// The picture each file's cell holds for good, with the pixel size it was asked for at: asked for again while
     /// the file differs or the size is off. Pictures in flight, and when each visible file came into view.
@@ -175,6 +177,13 @@ extension Notification.Name {
         self.store = store
         aspects = session.stripAspects
         super.init()
+        // A file the viewer or Home found broken: its cell shows so at once, as one whose thumbnail failed.
+        unreadableObservation = UnreadableFiles.app.observe { [weak self] urls in
+            guard let self else { return }
+            for url in urls where self.pictures[url] == nil && UnreadableFiles.app.contains(url, date: nil, size: nil) {
+                if let item = self.indices[url] { self.view.setUnavailable(forItem: item) }
+            }
+        }
         session.onStripAspectsChange = { [weak self] in self?.aspectsArrived() }
         hoverState.onRest = { [weak self] in self?.rested() }
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -673,6 +682,8 @@ extension Notification.Name {
     /// new places (a listing that arrives in parts, `FolderWatcher`); a motion whose centre file is still there goes
     /// on from it, anything else (another folder) ends with the old list and the strip rests on the current file.
     private func playlistChanged(_ list: [URL]) {
+        labelFacts = [:]
+        labelled = nil
         let map = FilmstripItems.indexMap(from: files, to: list)
         let centre = scroll.offset.flatMap(view.layout.item(atBase:)).flatMap { map[$0] }
         let keepsMotion = isMoving && centre != nil
@@ -704,12 +715,14 @@ extension Notification.Name {
         if !keepsMotion, let pages = sessionPages { rest(on: pages, animated: false) }
     }
 
-    /// The strip at rest on `pages`: in the middle, expanded.
+    /// The strip at rest on `pages`: in the middle, expanded. A step (animated) shows the new file's label a moment.
     private func rest(on pages: StripPages, animated: Bool) {
         guard pages.items.lowerBound >= 0, pages.items.upperBound <= files.count else { return }
+        let moved = shownPages?.items != pages.items
         shownPages = pages
         view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: animated)
         view.refreshHover()
+        if animated, moved { showStepLabel(pages.items.lowerBound) }
     }
 
     /// The strip moving: at the offset of the motion, every cell narrow; `animated` for the first move, so the
@@ -838,6 +851,7 @@ extension Notification.Name {
                 self.aspects.cellPictureArrived(url)
             } else if status == .unavailable {
                 self.view.setUnavailable(forItem: file)
+                if await store.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.session.playlist?.stamps[url]) }
             } else {
                 self.view.setImage(nil, forItem: file)
             }
@@ -1039,23 +1053,68 @@ extension Notification.Name {
         let labelled = hoverState.restedFile != nil
         guard hoverState.set(file) else { return }
         // Once a label is up it follows the cursor at once; the first waits for the rest.
-        if labelled { view.showLabel(item: file, text: label(file)) }
+        if labelled { showLabel(file) }
         update()
     }
 
-    /// "N / M · name" of the file under the cursor.
+    /// "N / M · name", and the photo's exposure and megapixels when its thumbnail brought them (board «Эскизы файлов»
+    /// 4): "12 / 248 · DSC_0123.ARW · 1/250 · f/2.8 · ISO 400 · 24 MP".
     private func label(_ file: Int) -> String {
-        "\(file + 1) / \(view.layout.itemCount) · \(ArchivePath.shortName(files[file]))"
+        var parts = ["\(file + 1) / \(view.layout.itemCount)", ArchivePath.shortName(files[file])]
+        if let facts = labelFacts[files[file]] {
+            parts += [FileFactsText.exposureLine(facts), FileFactsText.megapixels(facts)].compactMap { $0 }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The file's label up; its facts, asked of the store (memory or the catalog, no read of the photo) the first
+    /// time, come into it when they are known and the label still shows that file.
+    private func showLabel(_ file: Int) {
+        labelled = file
+        view.showLabel(item: file, text: label(file))
+        let url = files[file]
+        guard labelFacts[url] == nil else { return }
+        let store = store
+        Task { @MainActor [weak self] in
+            guard let facts = await store.facts([url])[url], let self else { return }
+            if self.labelFacts.count > 500 { self.labelFacts = [:] }
+            self.labelFacts[url] = facts
+            if self.labelled == file, self.files.indices.contains(file), self.files[file] == url {
+                self.view.showLabel(item: file, text: self.label(file))
+            }
+        }
+    }
+
+    /// The file whose label is up (hover or step), nil once it went.
+    private var labelled: Int?
+    /// Facts of files the label showed, by file (`showLabel`); emptied past 500 and with another playlist.
+    private var labelFacts: [URL: FileFacts] = [:]
+    private var stepLabelHide: DispatchWorkItem?
+
+    /// A step with the strip on screen and no hover: the new file's label for a moment (1.5 s), as a hover's.
+    private func showStepLabel(_ file: Int) {
+        guard isShown, hoverState.restedFile == nil, files.indices.contains(file) else { return }
+        showLabel(file)
+        stepLabelHide?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.hoverState.restedFile == nil else { return }
+            self.labelled = nil
+            self.view.endHover()
+        }
+        stepLabelHide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
     private func dropHover() {
         hoverState.drop()
+        labelled = nil
         view.endHover()
     }
 
     /// The cursor stayed on one file: its label goes up.
     private func rested() {
         guard let file = hoverState.restedFile, files.indices.contains(file), isShown else { return }
-        view.showLabel(item: file, text: label(file))
+        stepLabelHide?.cancel()
+        showLabel(file)
     }
 }

@@ -532,3 +532,16 @@ private func pairFocus(current: Int = 10, companion: Int? = 11, step: Int = 2, d
     // Its file stays planned.
     #expect(plan(focus(needsFull: true), tiers, failed).contains { $0.index == 101 && $0.goal == .bytes })
 }
+
+@Test func estimateLooksNearTheCurrentPhoto() {
+    // Far away, another camera; near, the shoot's own size.
+    let near = PixelSize(width: 4000, height: 3000), far = PixelSize(width: 9000, height: 6000)
+    let count = 5000, current = 2500
+    let f: (Int) -> EntryFacts = { i in
+        if i == current + 1 { return EntryFacts() }
+        if abs(i - current) <= 10 { return EntryFacts(pixelSize: near) }
+        return abs(i - current) > CachePlan.estimateReach ? EntryFacts(pixelSize: far) : EntryFacts()
+    }
+    let items = plan(focus(count: count, current: current), CacheLimits.at3G, f)
+    #expect(items.first { $0.index == current + 1 && $0.goal == .preview }?.cost == Costs(near).preview)
+}

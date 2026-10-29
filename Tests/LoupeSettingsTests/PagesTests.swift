@@ -23,7 +23,7 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 144)
+        #expect(Config.keys.count == 158)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -37,7 +37,7 @@ struct PagesTests {
         #expect(sections["mouse"] == ["Buttons", "Wheel", "Haptics", "MX Master"])
         #expect(sections["performance"] == ["Cache", "Catalog", "JPEG XL", "Navigation"])
         #expect(sections["key-bindings"] == ["Keyboard", "Mouse"])
-        #expect(sections["advanced"] == ["Files"])
+        #expect(sections["advanced"] == ["Files", "Panel state"])
         #expect(sections["stash"] == ["Library"])
     }
 
@@ -211,8 +211,7 @@ struct PagesTests {
         func nested(_ key: String) -> [String] { row(key)?.nested.compactMap(\.key) ?? [] }
         #expect(nested("pan-indicators") == ["pan-indicators-hide", "pan-indicators-fade", "pan-indicators-on-switch"])
         #expect(nested("mouse-haptics") == ["haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle",
-                                            "haptic-long-armed", "haptic-detent", "haptic-end", "haptic-strength",
-                                            "haptic-strong-strength"])
+                                            "haptic-long-armed", "haptic-detent", "haptic-end", "haptic-strong-strength"])
         #expect(nested("stats-progress") == ["stats-progress-opacity"])
         #expect(nested("vibrance") == ["vibrance-amount"])
         #expect(nested("auto-color") == ["auto-color-method", "auto-color-strength", "auto-color-filters",
