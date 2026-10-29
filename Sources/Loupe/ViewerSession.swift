@@ -505,15 +505,18 @@ import LoupeRender
         let token = openFolderToken, navigator = self.navigator, name = folder.lastPathComponent
         folderMessage = FolderRequest.loadingText
         onChange?()
-        openFolderTask = Task { [weak self] in
+        openFolderTask = Task(priority: .userInitiated) { [weak self] in
             let result: Result<FolderTarget?, Error>
             do { result = .success(try await navigator.contents(of: folder)) } catch { result = .failure(error) }
-            guard let self, token == self.openFolderToken, isWanted?() ?? true else { return }
+            guard !Task.isCancelled, let self, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
             switch result {
             case .success(let target?):
                 let positions = self.positions
                 let sort = BrowserSort.forFolder(target.folder, settings: Settings.shared.folderSettings)
-                self.playlist = FolderRequest.playlist(for: target, sort: sort) { positions.recall(in: $0, among: $1) }
+                guard let list = try? await FolderPlaylistPreparation.shared.prepare(target, sort: sort, remembered: {
+                    positions.recall(in: $0, among: $1)
+                }), !Task.isCancelled, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
+                self.playlist = list
                 self.endScrubOnReplace()
                 self.navigated(direction: 1, from: nil, fresh: true)   // clears the message
                 completion?(true)
@@ -529,24 +532,44 @@ import LoupeRender
         }
     }
 
-    /// A folder selected in the filmstrip has already been listed off main. Commit only if still wanted.
+    /// A folder selected in the filmstrip has already been listed off main. Prepare it there too;
+    /// commit and call completion only if still wanted (a superseded request must not cancel a newer interaction).
     func openFolderStripTarget(_ target: FolderTarget, isWanted: @escaping @MainActor () -> Bool,
                                completion: @escaping @MainActor (Bool) -> Void) {
         guard !closed, !target.images.isEmpty, isWanted() else { completion(false); return }
         cancelOpenFolder(); cancelFolderRequest()
         let positions = self.positions
         let sort = BrowserSort.forFolder(target.folder, settings: Settings.shared.folderSettings)
-        let list = FolderRequest.playlist(for: target, sort: sort) { positions.recall(in: $0, among: $1) }
-        guard isWanted() else { completion(false); return }
-        playlist = list
-        endScrubOnReplace()
-        navigated(direction: 1, from: nil, fresh: true)
-        if let label = target.label { onFolderLabel?(label) }
-        if target.listID != nil { onListFolder?(target.listID, target.folder) }
-        completion(true)
+        let token = openFolderToken
+        folderMessage = FolderRequest.loadingText
+        onChange?()
+        openFolderTask = Task(priority: .userInitiated) { [weak self] in
+            let list = try? await FolderPlaylistPreparation.shared.prepare(target, sort: sort, remembered: {
+                positions.recall(in: $0, among: $1)
+            })
+            guard let self, !Task.isCancelled, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
+            guard let list else { completion(false); return }
+            self.playlist = list
+            self.endScrubOnReplace()
+            self.navigated(direction: 1, from: nil, fresh: true)
+            if let label = target.label { self.onFolderLabel?(label) }
+            if target.listID != nil { self.onListFolder?(target.listID, target.folder) }
+            completion(true)
+        }
     }
 
-    /// A later open or folder step wins over a folder still listing.
+    /// Only the current request may clear its message when an external selection is cancelled.
+    private func wantsOpenFolder(_ token: Int, isWanted: (@MainActor () -> Bool)?) -> Bool {
+        guard !closed, token == openFolderToken else { return false }
+        guard isWanted?() ?? true else {
+            folderMessage = nil
+            onChange?()
+            return false
+        }
+        return true
+    }
+
+    /// A later navigation wins over a folder still listing or preparing.
     private func cancelOpenFolder() {
         openFolderToken &+= 1
         openFolderTask?.cancel()
@@ -739,7 +762,7 @@ import LoupeRender
         // Siblings in the order Home shows their parent in.
         let siblingSort = BrowserSort.forFolder(folder.standardizedFileURL.deletingLastPathComponent(),
                                                 settings: Settings.shared.folderSettings)
-        folderTask = Task { [weak self] in
+        folderTask = Task(priority: .userInitiated) { [weak self] in
             let result: Result<FolderTarget?, Error>
             do {
                 // A gallery opened from a Stash list steps through that list (Stash spec §2.3); any other folder by disk.
@@ -749,15 +772,23 @@ import LoupeRender
             } catch {
                 result = .failure(error)
             }
-            guard let self else { return }
+            guard !Task.isCancelled, let self, !self.closed else { return }
             let found = (try? result.get()) ?? nil
             let label = found?.label
-            let positions = self.positions
-            let settings = Settings.shared.folderSettings
-            let outcome = self.folderRequest.finish(token, result: result, current: self.playlist?.current,
-                                                    sort: { BrowserSort.forFolder($0, settings: settings) }) {
-                positions.recall(in: $0, among: $1)
+            let prepared: Result<Playlist?, Error>
+            if let found {
+                let positions = self.positions
+                let sort = BrowserSort.forFolder(found.folder, settings: Settings.shared.folderSettings)
+                do {
+                    prepared = .success(try await FolderPlaylistPreparation.shared.prepare(found, sort: sort, remembered: {
+                        positions.recall(in: $0, among: $1)
+                    }))
+                } catch { return }   // cancelled while preparing; navigation owns the new state
+            } else {
+                prepared = result.map { _ in nil }
             }
+            guard !Task.isCancelled, !self.closed else { return }
+            let outcome = self.folderRequest.finish(token, prepared: prepared, current: self.playlist?.current)
             switch outcome {
             case .drop:
                 return
@@ -907,6 +938,7 @@ import LoupeRender
         guard let current = playlist?.current else { return }
         settleZoom()            // the new photo inherits the mode a zoom key asked for, not a frame on the way
         if collapseView?.page != current { collapseView = nil }
+        cancelOpenFolder()
         cancelFolderRequest()   // any navigation outranks a folder switch still being resolved
         jumpedFromStrip = fromStrip
         stepWait = wait
@@ -1787,6 +1819,7 @@ import LoupeRender
         watcher.stop()
         stripAspects.close()
         rereads.reset()   // a listing in flight is dropped
+        cancelOpenFolder()
         cancelFolderRequest()
         dwellTask?.cancel()
         if let thumbnailObserver { NotificationCenter.default.removeObserver(thumbnailObserver) }
