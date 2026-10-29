@@ -18,8 +18,7 @@ final class BackButton: NSView {
         super.init(frame: .zero)
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         addSubview(backdrop)
-        chevron.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 16, weight: .semibold))
+        chevron.image = Icons.symbol("chevron.left", pointSize: 16, weight: .semibold)
         chevron.contentTintColor = Chrome.Palette.overMedia.text
         label.font = Chrome.Text.font(.heading)
         label.textColor = Chrome.Palette.overMedia.text

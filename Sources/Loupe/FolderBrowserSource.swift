@@ -1,5 +1,6 @@
 import AppKit
 import HomeScreenKit
+import HomeScreenModel
 import LoupeCore
 
 extension Notification.Name {
@@ -43,7 +44,12 @@ extension Notification.Name {
     private static let memoryLimit = 8
     /// The entries of the place on screen, by id.
     private var shown: [String: BrowserEntry] = [:]
-    private var shownFiles: [URL] = []
+    /// How many of `shown` are folder or archive cards (a rename keeps the kind).
+    private var shownCards = 0
+    private var shownFiles: [URL] = [] { didSet { shownIndex = nil } }
+    /// `shownFiles`' positions, made at the first request after they change (owner, 2026-10-28: made again for every
+    /// visible-range request, ~5 ms on the main thread for 50 000 photos).
+    private var shownIndex: [URL: Int]?
     /// The photos' ids by standardized URL: the marks (`PhotoMarks`) come back as URLs.
     private var idByURL: [URL: String] = [:]
     /// The aspects of the folder on screen's photos while its two pages are on with `spread-landscape = alone`: the
@@ -591,6 +597,7 @@ extension Notification.Name {
     /// The entries on screen: what `wantImages` and the menus look up by id.
     private func remember(_ entries: [BrowserEntry]) {
         shown = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        shownCards = shown.values.reduce(0) { $0 + ($1.kind == .folder || $1.kind == .archive ? 1 : 0) }
         shownFiles = entries.filter { $0.kind == .file }.map(\.url)
         markOrder = nil
         markOrderTask?.cancel()
@@ -685,8 +692,7 @@ extension Notification.Name {
         // Another card size or screen: the mosaics kept and those being made are the wrong size.
         if let size = coverSize, size.width != coverWidth || size.scale != scale { dropCovers() }
         coverSize = (coverWidth, scale)
-        let liveCards = shown.values.reduce(0) { $0 + ($1.kind == .folder || $1.kind == .archive ? 1 : 0) }
-        cards.setLimit(CoverCards.limit(cards: liveCards, pixels: Int((coverWidth * scale).rounded())))
+        cards.setLimit(CoverCards.limit(cards: shownCards, pixels: Int((coverWidth * scale).rounded())))
         let ask = cards.ask(cardIDs, visible: cardIDs.filter(inView.contains).count)
         lastAsked = cardIDs
         lastInView = Set(cardIDs.filter(inView.contains))
@@ -703,17 +709,47 @@ extension Notification.Name {
         pictureTask?.cancel()
         let maxPixel = maxPixel
         pictureTask = Task { @MainActor [weak self] in
+            var withPicture: [BrowserEntry] = []
             for entry in files {
                 guard let self, !Task.isCancelled else { return }
                 if let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel) {
                     self.view?.setImage(image, for: entry.id)
                     self.pictured.insert(entry.url)
                     self.markAspects?.cellPictureArrived(entry.url)
+                    withPicture.append(entry)
                 } else {
                     self.waiting[entry.url.standardizedFileURL] = entry.id
                 }
             }
+            await self?.sendFacts(withPicture, inView: inView)
         }
+    }
+
+    /// Photos' facts on their cards (pixels, EXIF; file-cards spec): those kept with the thumbnails, at once; then,
+    /// for the cards in view whose thumbnail was made before facts were kept, the file's header (ImageIO reads only
+    /// what the properties need), one file at a time at `.utility`, kept in the catalog. A file whose header gives
+    /// nothing (JPEG XL) is not asked again while its folder is shown.
+    private func sendFacts(_ entries: [BrowserEntry], inView: Set<String>) async {
+        guard !entries.isEmpty else { return }
+        let found = await thumbnails.facts(entries.map(\.url))
+        guard !Task.isCancelled else { return }
+        var byID: [String: FileFacts] = [:]
+        for entry in entries { if let f = found[entry.url] { byID[entry.id] = f } }
+        view?.setFacts(byID)
+        let missing = entries.filter { inView.contains($0.id) && found[$0.url] == nil && !noFacts.contains($0.url) }
+        guard !missing.isEmpty else { return }
+        var read: [URL: FileFacts] = [:]
+        for entry in missing {
+            guard !Task.isCancelled else { break }
+            let url = entry.url
+            if let facts = await Task.detached(priority: .utility, operation: { PhotoFacts.read(url: url) }).value {
+                read[url] = facts
+                view?.setFacts([entry.id: facts])
+            } else {
+                noFacts.insert(url)
+            }
+        }
+        if !read.isEmpty { await thumbnails.keepFacts(read) }
     }
 
     // MARK: Covers
@@ -737,6 +773,7 @@ extension Notification.Name {
         for task in insideRefresh.values { task.cancel() }
         insideRefresh = [:]
         noCover = []
+        noFacts = []
         lastWant = nil
         lastProgress = nil
         shownDated = false   // the new folder's entries are dated once its own complete listing comes
@@ -1123,7 +1160,8 @@ extension Notification.Name {
     private func sendRequest(_ files: [URL]) {
         guard !isPaused, !shownFiles.isEmpty else { return }
         requestedVisible = files
-        let index = Dictionary(shownFiles.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        let index = shownIndex ?? Dictionary(shownFiles.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        shownIndex = index
         let shownIndices = files.compactMap { index[$0] }
         let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
                                        visible: shownIndices,
@@ -1160,12 +1198,13 @@ extension Notification.Name {
             guard let self else { return }
             if let image = await self.thumbnails.cell(url, maxPixel: maxPixel) {
                 self.view?.setImage(image, for: id)
-                self.view?.setUnavailable(false, for: id)
+                UnreadableFiles.app.clear(url)
                 self.pictured.insert(url)
+                if let facts = await self.thumbnails.facts([url])[url] { self.view?.setFacts([id: facts]) }
             } else if await self.thumbnails.status(url) == .unavailable {
-                // A file the decoders cannot read: its card is faint and the arrow keys go past it. Waited for still, so
-                // a picture that comes later (a share that was away) lifts the mark.
-                self.view?.setUnavailable(true, for: id)
+                // A file the decoders cannot read is marked for the app (its card faint, the arrow keys and the viewer's
+                // steps go past it); a read that failed is not. Waited for still, so a picture that comes later lifts it.
+                if await self.thumbnails.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.stamps[url]) }
                 self.waiting[url.standardizedFileURL] = id
             }
         }
@@ -1439,6 +1478,8 @@ extension Notification.Name {
     private var requestedVisible: [URL] = []
     /// Photos of the folder on screen whose picture was given (from the catalog too, before their stamps): one in view
     /// without a stamp but with its picture does not wait for the share.
+    /// Photos of the folder on screen whose header gave no facts (`sendFacts`).
+    private var noFacts: Set<URL> = []
     private var pictured: Set<URL> = []
     /// Since when the folder on screen has only its names-only listing (nil: complete, or none yet), and whether its
     /// listing failed: the photos in view without stamps then wait for the share, not counted as work.

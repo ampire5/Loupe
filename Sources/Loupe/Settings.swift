@@ -1,4 +1,5 @@
 import AppKit
+import SlotModel
 import LoupeCore
 import LoupeRender
 import LoupeSettings
@@ -7,6 +8,7 @@ import SettingsKit
 extension Notification.Name {
     /// Posted on the main thread after every config push (a reload, a menu toggle, a strip resize), for window state
     /// that follows a key outside the strip (`strip-loading-indicator`).
+    static let detectorProfilesChanged = Notification.Name("local.loupe.detectorProfilesChanged")
     static let settingsChanged = Notification.Name("local.loupe.settingsChanged")
     /// Posted on the main thread after a folder's saved values changed (`S`, `A`, a save as default), for every window:
     /// another one may show the same folder or one below it.
@@ -22,6 +24,12 @@ extension Notification.Name {
 /// with `config-warnings`, into every window (`ConfigWarningsOverlay`).
 @MainActor final class Settings: NSObject, NSMenuItemValidation, NSMenuDelegate {
     static let shared = Settings()
+    /// Benchmarks isolate remembered detector choices from the user's application preferences.
+    static let detectorPreferences: UserDefaults = {
+        if let suite = ProcessInfo.processInfo.environment["LOUPE_DETECTOR_PREFERENCES_SUITE"],
+           let preferences = UserDefaults(suiteName: suite) { return preferences }
+        return .standard
+    }()
 
     private(set) var config = Config()
     /// The settings window's store, told which keys a reload changed; nil until the window is first opened.
@@ -78,10 +86,38 @@ extension Notification.Name {
     /// The checkbox stops, by menu item tag.
     private static let menuStops: [ZoomStop] = [.fitWidth, .fitHeight, .percent(100)]
 
+    /// The file worker has already read/resolved this setup. Updating profiles needs no synchronous file I/O.
+    func adoptDetectorProfiles(_ setup: DetectorSetup) {
+        let previous = config
+        var updated = setup
+        updated.model = config.detectorSetup.model
+        updated.installed = config.detectorSetup.installed
+        config.detectorSetup = updated
+        SubjectFraming.detector = DetectorFraming(updated)
+        settingsStore?.configDidReload(from: previous)
+        NotificationCenter.default.post(name: .detectorProfilesChanged, object: nil)
+    }
+
     /// `pushToStrips: false` is for a caller that is about to change the config and pushes the result itself;
     /// `applyingIcon: false` (the launch) leaves the Dock icon to a later `applyAppIcon`.
     func reload(pushToStrips: Bool = true, applyingIcon: Bool = true) {
-        let (loaded, configWarnings) = Config.load(from: fileURL)
+        var (detector, detectorWarnings) = DetectorSetup.load(from: DetectorSetup.fileURL)
+        if let selected = Self.detectorPreferences.string(forKey: DetectorModelCatalog.selectionKey) {
+            let url = URL(fileURLWithPath: selected)
+            if DetectorModelCatalog.installed(url) { detector.model = selected; detector.installed = true }
+            else { detectorWarnings.append("Selected detector model is unavailable; using configured model") }
+        }
+        var defaults = Config()
+        defaults.detectorSetup = detector
+        defaults.detector = detector.on
+        defaults.detectorMode = detector.mode
+        let lastProfile = Self.detectorPreferences.dictionary(forKey: ZoomKeys.lastProfileKey) as? [String: String]
+        for (key, value) in ZoomKeys.recalledProfile(lastProfile, setup: detector) { _ = defaults.set(key, value) }
+        // Explicit saved Smart defaults in loupe.conf override detector.conf's starting profile.
+        let (loaded, fileWarnings) = Config.load(from: fileURL, defaults: defaults)
+        var configWarnings = fileWarnings
+        configWarnings += detectorWarnings
+        SubjectFraming.detector = DetectorFraming(detector)
         let previous = config
         config = loaded
         let (lines, inputWarnings) = Self.loadInput(from: inputFileURL)
@@ -297,16 +333,51 @@ extension Notification.Name {
         let keys: [(String, KeyAction)] = includeToolbarActions ? [
             ("Fit", .fit), ("Actual Size", .actual100), ("200 %", .actual200), ("400 %", .actual400),
             ("Fit Width", .fitWidth), ("Fit Height", .fitHeight), ("Fill", .fill), ("Fit ↔ 100 %", .toggleFitActual),
-            ("Zoom In", .zoomIn), ("Zoom Out", .zoomOut),
+            ("Zoom In", .zoomIn), ("Zoom Out", .zoomOut), ("Apply SmartZoom Auto", .zoomSubject),
+            ("Fill on Subject", .fillSubject),
         ] : [
             ("200 %", .actual200), ("400 %", .actual400), ("Fit ↔ 100 %", .toggleFitActual),
         ]
         for (title, action) in keys { menu.addItem(.viewerKey(title, action)) }
         menu.addItem(.separator())
-        menu.addItem(.viewerKey("Keep Zoom and Position", .toggleKeepZoom))
-        menu.addItem(.viewerKey("Save Keep Zoom as Default", .saveKeepZoom))
-        menu.addItem(.viewerKey("Keep Scale Instead of Share", .toggleZoomCarry))
-        menu.addItem(.viewerKey("Save Share or Scale as Default", .saveZoomCarry))
+        menu.addItem(.viewerKey("Keep Manual Zoom and Position", .toggleKeepZoom))
+        menu.addItem(.viewerKey("Save Manual Zoom Keeping as Default", .saveKeepZoom))
+        menu.addItem(.viewerKey("Manual Zoom Carry (Share, Scale, Screen)", .toggleZoomCarry))
+        menu.addItem(.viewerKey("Save Zoom Keeping as Default", .saveZoomCarry))
+        // Smart zoom (spec §3.2): each group a folder value, ticked in `menuNeedsUpdate`; the main window writes it.
+        for group in SmartZoomMenu.groups {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: group.title))
+            for choice in group.choices {
+                let item = NSMenuItem(title: choice.title, action: #selector(ViewerWindowController.chooseSmartZoom(_:)),
+                                      keyEquivalent: "")
+                item.identifier = NSUserInterfaceItemIdentifier("smart-zoom|\(group.key)|\(choice.value)")
+                menu.addItem(item)
+            }
+        }
+        // The custom detector (docs/detector.md): on or off, and detector.conf's modes, put in by `menuNeedsUpdate`
+        // after the switch (the file is read again with the settings); its header says why it cannot be used.
+        menu.addItem(.separator())
+        let detector = NSMenuItem.sectionHeader(title: "Custom Detector")
+        detector.tag = Self.detectorHeaderTag
+        menu.addItem(detector)
+        menu.addItem(.viewerKey("Detector On / Next Mode", .cycleDetectorMode))
+        // The modes go here.
+        let off = NSMenuItem(title: "Detector Off", action: #selector(ViewerWindowController.turnDetectorOff(_:)),
+                             keyEquivalent: "")
+        menu.addItem(off)
+        menu.addItem(.viewerKey("Save Size for This Mode", .saveDetectorSize))
+        menu.addItem(.viewerKey("Next Target", .nextTarget))
+        // The keys and these choices are the tab's (`ViewerWindowController.tabZoomValues`): ⌥L keeps them for the
+        // folder, the item below for every folder.
+        menu.addItem(.viewerKey("Save Active Zoom Settings for This Folder", .rememberZoom))
+        for (title, selector) in [
+            ("Save Manual Zoom for This Folder", #selector(ViewerWindowController.saveManualZoomFolder(_:))),
+            ("Save SmartZoom for This Folder", #selector(ViewerWindowController.saveSmartZoomFolder(_:))),
+            ("Save Manual Zoom as Default", #selector(ViewerWindowController.saveManualZoomDefaults(_:))),
+            ("Save SmartZoom as Default", #selector(ViewerWindowController.saveSmartZoomDefaults(_:)))
+        ] { menu.addItem(NSMenuItem(title: title, action: selector, keyEquivalent: "")) }
+        menu.addItem(.separator())
         let upscale = menu.addItem(withTitle: "Upscale Small Images in Fit", action: #selector(toggleFitUpscale(_:)),
                                    keyEquivalent: "")
         upscale.target = self
@@ -329,6 +400,30 @@ extension Notification.Name {
     func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
                               action: UnsafeMutablePointer<Selector?>) -> Bool {
         false
+    }
+
+    /// The tags of the Zoom menu's Custom Detector header and of its mode items, made again each time it opens.
+    private static let detectorHeaderTag = 2, detectorModeTag = 3
+
+    /// The Custom Detector section: its header (`DetectorMenu.header`), a radio per mode of detector.conf after the `M`
+    /// item with the window's mode ticked while the detector frames; the modes are disabled while it cannot frame.
+    private func updateDetectorItems(_ menu: NSMenu, _ effective: Config) {
+        for item in menu.items where item.tag == Self.detectorModeTag { menu.removeItem(item) }
+        menu.items.first { $0.tag == Self.detectorHeaderTag }?.title = DetectorMenu.header(effective.detectorSetup)
+        guard let toggle = menu.items.firstIndex(where: { ($0.representedObject as? String) == KeyAction.cycleDetectorMode.rawValue })
+        else { return }
+        let active = ZoomRules(config: effective).detector
+        for (i, mode) in effective.detectorSetup.modes.enumerated() {
+            let item = NSMenuItem(title: mode.name, action: #selector(ViewerWindowController.chooseDetectorMode(_:)),
+                                  keyEquivalent: "")
+            // An identifier, not `representedObject`: a mode named as a key action would read as one (`refreshShownKeys`).
+            item.identifier = NSUserInterfaceItemIdentifier("detector-mode|\(mode.name)")
+            item.tag = Self.detectorModeTag
+            item.indentationLevel = 1
+            item.toolTip = DetectorMenu.tip(mode)
+            item.state = active?.name == mode.name ? .on : .off
+            menu.insertItem(item, at: toggle + 1 + i)
+        }
     }
 
     /// The Scaling menu itself, whose radio sections are made again each time it opens.
@@ -423,10 +518,14 @@ extension Notification.Name {
             for item in menu.items {
                 switch item.representedObject as? String {
                 case KeyAction.toggleKeepZoom.rawValue: item.state = effective.keepZoomPosition ? .on : .off
-                case KeyAction.toggleZoomCarry.rawValue: item.state = effective.keepZoomAs == .scale ? .on : .off
                 default: break
                 }
+                if let id = item.identifier?.rawValue, id.hasPrefix("smart-zoom|") {
+                    let parts = id.split(separator: "|", maxSplits: 2).map(String.init)
+                    item.state = effective.text(forKey: parts[1]) == parts[2] ? .on : .off
+                }
             }
+            updateDetectorItems(menu, effective)
             return
         }
         if menu is ColourTopMenu {
@@ -564,6 +663,10 @@ extension Notification.Name {
 
     /// The strip was resized by dragging its top edge: writes `strip-height` (and only it) and tells every
     /// strip, the dragged one included (it already has this height).
+    func setSlot(_ edge: SlotEdge, _ setting: SlotConfiguration) {
+        change(edge.key) { $0.slots[edge] = setting }
+    }
+
     func setStripHeight(_ pt: Int) {
         change("strip-height") { $0.stripHeight = Config.clampedStripHeight(Double(pt)) }
     }

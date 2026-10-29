@@ -11,9 +11,9 @@ extension SettingsPanel {
                 ], symbol: "rectangle.bottomthird.inset.filled",
                 description: "Beside: a band under the photo; Over: appears with the mouse at the bottom edge and hides "
                     + "itself; Hidden: no strip. ⇧T switches Beside and Over, T hides or pins. Full screen always has it "
-                    + "over. Default Beside."),
+                    + "over. Default Over."),
                 .number("strip-height", "Height", unit: "pt", step: 4, symbol: "arrow.up.and.down",
-                        description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 68."),
+                        description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 105."),
                 .slider("strip-cell-max", "Widest thumbnail", range: Config.stripCellMaxRange, marks: [
                     (value: 0.5625, title: "9:16"), (value: 0.75, title: "3:4"), (value: 1, title: "1:1"),
                     (value: 4.0 / 3, title: "4:3"), (value: 1.5, title: "3:2"),
@@ -21,19 +21,19 @@ extension SettingsPanel {
                 description: "How wide a thumbnail may grow when the strip has room: 9:16 keeps every one narrow, "
                     + "3:2 lets a landscape show nearly whole. Never wider than the photo. Default 3:2."),
                 .number("strip-corner-radius", "Corner radius", unit: "pt", step: 1, symbol: "app",
-                        description: "0–16 pt, 0 = square corners; default 3."),
+                        description: "0–16 pt, 0 = square corners; default 8."),
             ]),
             SettingsCard([
                 .choice("strip-scroll-direction", "Scrub direction", [
                     (word: "natural", title: "Natural"), (word: "reversed", title: "Reversed"),
                 ], symbol: "arrow.left.and.right",
                 description: "A two-finger sideways swipe over the strip scrubs through thumbnails, sharp once you "
-                    + "stop. Natural: fingers left go to the next photos, as the three-finger swipe. Default Natural."),
+                    + "stop. Natural: fingers left go to the next photos, as the three-finger swipe. Default Reversed."),
             ]),
             SettingsCard([
                 .number("strip-hide-delay", "Hide after", unit: "ms", step: 50, symbol: "hourglass",
                         description: "How long the overlay stays after the mouse leaves it. 0–10000 ms, 0 = at once; "
-                            + "default 500."),
+                            + "default 250."),
                 .number("strip-fade-in", "Fade in", unit: "ms", step: 25, symbol: "eye",
                         description: "0–2000 ms, 0 = no animation; default 150."),
                 .number("strip-fade-out", "Fade out", unit: "ms", step: 25, symbol: "eye.slash",
@@ -44,7 +44,7 @@ extension SettingsPanel {
                         description: "A jump along the strip shows the stretched thumbnail at once, then the sharp "
                             + "photo; off: the usual switch, as Show before sharp says. Default on."),
                 .toggle("strip-loading-indicator", "Loading spinner", symbol: "progress.indicator",
-                        description: "A spinner in the corner while only the thumbnail is on screen. Default off."),
+                        description: "A spinner in the corner while only the thumbnail is on screen. Default on."),
             ]),
         ]),
         SettingsSection("Thumbnails", rows: [

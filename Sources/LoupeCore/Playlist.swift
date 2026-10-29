@@ -1,15 +1,20 @@
 import Foundation
+import HomeScreenModel
 
-/// The images in the current file's folder, sorted like Finder, and the position within them.
-/// The current file is always part of it, even if its extension is unknown or the folder
-/// could not be listed.
+/// The images in the current file's folder in the folder's `BrowserSort` order, the order Home's grid shows them in
+/// (`FolderPlaylist`), and the position within them. The current file is always part of it, even if its extension is
+/// unknown or the folder could not be listed.
 public struct Playlist: Equatable, Sendable {
     public static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "jpe", "heic", "heif", "avif", "jxl", "webp", "png", "gif", "tif", "tiff", "bmp",
     ]
 
+    /// The order and the position: the grid's own sort over the same entries the grid has (`BrowserListingSource.fileEntry`).
+    private var model: FolderPlaylist
+    /// `model`'s URLs, kept: the cache and the strip read them on every step.
     public private(set) var files: [URL]
-    public private(set) var index: Int
+    public var index: Int { model.index }
+    public var sort: BrowserSort { model.sort }
     /// Size and mtime of the files, as the folder listing reported them (empty when the playlist was
     /// built without a listing). The thumbnail cache validates against these, so it needs no `stat` per
     /// file, which is slow over SMB. Only files in `files` have an entry.
@@ -21,35 +26,27 @@ public struct Playlist: Equatable, Sendable {
     }
 
     /// Pure: filters `files` to image extensions (case-insensitive), adds `current` and `keeping` (files the
-    /// filter would drop that stay anyway: opened directly) if missing and sorts naturally ("img2" before
-    /// "img10"). URLs are compared standardized so a `current` spelled differently from the listing still finds
-    /// its entry. `stamps` is kept for the files that stay in the list.
-    public init(files: [URL], current: URL, stamps: [URL: FileStamp], keeping: [URL] = []) {
+    /// filter would drop that stay anyway: opened directly) if missing and orders them by `sort` (by name: "img2"
+    /// before "img10"). URLs are compared standardized so a `current` spelled differently from the listing still finds
+    /// its entry. `stamps` is kept for the files that stay in the list; they give the dates and sizes the sort uses.
+    public init(files: [URL], current: URL, stamps: [URL: FileStamp], keeping: [URL] = [], sort: BrowserSort = .standard) {
         let me = current.standardizedFileURL
-        var images = files.map(\.standardizedFileURL)
+        var images = files.map(\.quicklyStandardized)
             .filter { Self.imageExtensions.contains($0.pathExtension.lowercased()) }
         images += keeping.map(\.standardizedFileURL)
-        if !images.contains(me) { images.append(me) }
-        images.sort(by: Self.naturalLess)
-        // Drop duplicates (same file listed twice); adjacent after sorting.
-        var unique: [URL] = []
-        for url in images where unique.last != url { unique.append(url) }
-        self.files = unique
-        self.index = unique.firstIndex(of: me) ?? 0
-        let kept = Set(unique)
+        // Drop duplicates (same file listed twice).
+        var seen = Set<URL>()
+        images = images.filter { seen.insert($0).inserted }
+        let kept = seen.union([me])
         self.stamps = stamps.reduce(into: [:]) { result, entry in
-            let url = entry.key.standardizedFileURL
+            let url = entry.key.quicklyStandardized
             if kept.contains(url) { result[url] = entry.value }
         }
-    }
-
-    /// Finder order on the last path component ("img2" before "img10"); the full path breaks ties.
-    public static func naturalLess(_ a: URL, _ b: URL) -> Bool {
-        switch a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) {
-        case .orderedAscending: true
-        case .orderedDescending: false
-        case .orderedSame: a.path < b.path
-        }
+        let stamps = self.stamps
+        model = FolderPlaylist(folder: me.deletingLastPathComponent(),
+                               entries: images.map { BrowserListingSource.fileEntry($0, stamp: stamps[$0]) },
+                               sort: sort, current: me)
+        self.files = model.urls
     }
 
     /// Lists `current`'s folder off the caller's thread (it is often an SMB share, where listing can take a
@@ -141,30 +138,36 @@ public struct Playlist: Equatable, Sendable {
     /// reached while the folder was listing.
     public func replacing(with listed: Playlist) -> Playlist {
         var result = listed
-        result.index = listed.files.firstIndex(of: current) ?? min(index, listed.files.count - 1)
+        if !result.model.move(to: current) {
+            _ = result.model.move(by: min(index, listed.files.count - 1) - listed.index)
+        }
         return result
     }
 
     public var current: URL { files[index] }
 
-    /// The same files and stamps in `order` (a permutation of `files`), on the same photo.
-    func reordered(_ order: [URL]) -> Playlist {
+    /// The same files and stamps in `sort`'s order, on the same photo.
+    public func sorted(_ sort: BrowserSort) -> Playlist {
+        guard sort != self.sort else { return self }
         var result = self
-        let me = current
-        result.files = order
-        result.index = order.firstIndex(of: me) ?? 0
+        result.model.resort(sort)
+        result.files = result.model.urls
         return result
+    }
+
+    /// `from`, or the first index beyond it in the direction of `step` whose file `skipping` does not refuse; nil past
+    /// either end (`FolderPlaylist.index(from:step:skipping:)`).
+    public func index(from: Int, step: Int, skipping: (URL) -> Bool) -> Int? {
+        model.index(from: from, step: step) { skipping($0.url) }
     }
 
     /// Moves by `step` entries. Returns `false` and changes nothing if that would leave the
     /// list: navigation stops at the ends rather than wrapping.
-    public mutating func move(by step: Int) -> Bool {
-        let (target, overflow) = index.addingReportingOverflow(step)
-        guard !overflow, files.indices.contains(target) else { return false }
-        index = target
-        return true
-    }
+    public mutating func move(by step: Int) -> Bool { model.move(by: step) }
 
-    public mutating func moveToFirst() { index = 0 }
-    public mutating func moveToLast() { index = files.count - 1 }
+    /// Moves to `url` (standardized); false and nothing changed when it is not in the list.
+    public mutating func move(to url: URL) -> Bool { model.move(to: url) }
+
+    public mutating func moveToFirst() { _ = model.move(by: -index) }
+    public mutating func moveToLast() { _ = model.move(by: files.count - 1 - index) }
 }

@@ -5,6 +5,11 @@ extension SettingsPanel {
     static let zoomPan = SettingsPage("zoom-pan", "Zoom & Pan", symbol: "plus.magnifyingglass", sections: [
         SettingsSection("Zoom", [
             SettingsCard([
+                .choice("smart-zoom", "SmartZoom", [(word: "off", title: "Manual"), (word: "pan", title: "Pan only"),
+                    (word: "frame", title: "Auto framing")], symbol: "camera.metering.center.weighted",
+                    description: "⇧Z always applies Auto. ⌥S switches Manual / SmartZoom without changing the view. N selects the next complete group; M changes profile."),
+                .toggle("smart-zoom-gesture", "Double tap applies auto framing", symbol: "hand.tap.fill",
+                    description: "Two-finger Smart Zoom tap applies Auto when enabled in macOS. Off restores Fit / 100%."),
                 .text("zoom-stops", "Zoom stops", placeholder: "fit-width,fit-height,100%", symbol: "scope",
                       description: "Where pinch and right-button zoom pause: fit-width, fit-height and percentages, "
                         + "comma-separated; none for no stops. Default fit-width,fit-height,100%."),
@@ -19,16 +24,45 @@ extension SettingsPanel {
                 ], symbol: "arrow.up.left.and.down.right.magnifyingglass",
                 description: "How a photo opens when its zoom is not kept: at launch, from Finder, with Keep zoom off. "
                     + "Any percentage in loupe.conf works too. Default Fit."),
-                .toggle("keep-zoom-position", "Keep zoom and position", symbol: "lock",
-                        description: "The next photo keeps the zoom and place; off: it opens in Default zoom, centred. "
+                .toggle("keep-zoom-position", "Keep Manual zoom and position", symbol: "lock",
+                        description: "The next photo starts with the retained zoom and place. Enabled SmartZoom then centres the selected group, reducing zoom only if the group does not fit and Zoom out is selected. Off: Default zoom. "
                             + "L switches it for the folder. Default on."),
-                .choice("keep-zoom-as", "A kept zoom keeps", [
+                .choice("keep-zoom-as", "Manual zoom keeps", [
                     (word: "share", title: "Share of the photo"), (word: "scale", title: "Scale"),
+                    (word: "screen", title: "Share of the screen"),
                 ], symbol: "arrow.left.and.right.square",
                 description: "For a pinch or wheel zoom. Share: the next photo shows as much of itself, and a photo "
                     + "turned the other way keeps the scale; a resize keeps the framing. Scale: 80 % stays 80 % on "
-                    + "every photo, after a resize and in the folder's saved view. K switches it for the folder. "
+                    + "every photo, after a resize and in the folder's saved view. Screen: the next photo covers as "
+                    + "much of the window, cut where its shape needs. K cycles them for the folder. "
                     + "Default Share."),
+                .text("subject-target", "Subject", placeholder: "face,person,object,saliency", symbol: "person.crop.rectangle",
+                      description: "Where a subject is looked for, the first one found wins: face, person, object "
+                          + "(animals and things in front), saliency (where the eye goes). Default all four in that order."),
+                .toggle("subject-recheck", "Look again in the crop", symbol: "rectangle.dashed.badge.record",
+                        description: "With Show Subjects (⇧G): once a zoomed view rests, the visible part alone is looked "
+                            + "at again and what is found there is drawn in orange, as the subject may change with the "
+                            + "crop. Nothing moves the view by it. Default off."),
+                .choice("subject-analysis", "Subject analysis scheduling", [
+                    (word: "ahead", title: "Ahead"), (word: "on-demand", title: "When asked"), (word: "off", title: "SmartZoom requests only"),
+                ], symbol: "sparkle.magnifyingglass",
+                description: "Ahead: the photo on screen and the next few are looked at in the background. When asked: "
+                    + "only the photo on screen, only while it is needed. SmartZoom requests only: no pre-analysis. "
+                    + "SmartZoom Off pauses all subject analysis in every case. Default Ahead."),
+                .choice("zoom-anchor", "Gesture zoom towards", [
+                    (word: "pointer", title: "The pointer"), (word: "center", title: "The centre"),
+                    (word: "subject", title: "The subject"),
+                ], symbol: "dot.viewfinder",
+                description: "The point a pinch, wheel or right-button zoom keeps in place: the spot under the pointer, "
+                    + "the window's centre, or the photo's subject (the pointer until it is found). ⌥Z cycles it for the "
+                    + "folder. Default The pointer."),
+                .toggle("zoom-anchor-center", "Bring the subject to the centre", symbol: "target",
+                        description: "With Gesture zoom towards The subject: zooming in moves the subject to the middle "
+                            + "of the window, there at Subject size (within one doubling when already closer); zooming "
+                            + "out leaves it where it was. Off: it stays where it is on screen. Default on."),
+                .number("subject-size", "Subject size", unit: "%", step: 5, symbol: "viewfinder.rectangular",
+                        description: "How much of the window the subject takes under Zoom to Subject (⇧Z): 20–100 %; "
+                            + "default 60."),
                 .toggle("fit-upscale", "Upscale small photos in Fit", symbol: "arrow.up.left.and.arrow.down.right",
                         description: "Off: a photo smaller than the window shows at 100 %, centred. Also Zoom › Upscale "
                             + "Small Images in Fit. Default on."),

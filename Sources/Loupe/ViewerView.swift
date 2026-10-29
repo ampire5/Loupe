@@ -23,6 +23,8 @@ import QuartzCore
     /// The pan position pills, drawn over the window's content rather than in this view's frames: the window controller
     /// puts the view in its container (`PanIndicatorsView`); this view hands it what it hands the render loop.
     let panIndicatorsView = PanIndicatorsView()
+    /// Show Subjects (`⇧G`): over the picture, in this view's frame; the window controller turns it on and feeds it.
+    let subjectOverlayView = SubjectOverlayView()
     /// What was last handed to the render loop, so session changes that do not affect the picture
     /// (a load starting, the playlist arriving) do not wake the display link for an identical frame.
     private var shownImage: TiledImage?
@@ -73,6 +75,8 @@ import QuartzCore
     var onPanIndicatorKey: ((KeyAction) -> Bool)?
     /// `toggle-info-panel` (an input.conf key or a mouse button); the window controller owns the info panel (⌘I).
     var onToggleInfoPanel: (() -> Void)?
+    /// `⇧G`: Show Subjects on or off (the window controller).
+    var onToggleSubjects: (() -> Void)?
     /// `new-tab`, `new-window`, `close-tab`, `next-tab`, `previous-tab` (an input.conf key or a mouse button); the window
     /// controller does what its menu items do.
     var onTabAction: ((KeyAction) -> Void)?
@@ -112,7 +116,11 @@ import QuartzCore
     private var pinch: Pinch?
     /// The thumb wheel's zoom gesture (`thumbWheelZoom`) and the transform it last showed.
     private var thumbZoom: (zoom: ThumbZoom, last: ViewTransform)?
-    private struct Pinch { var stops: ZoomStopGesture; var proposed: Double; var last: ViewTransform }
+    private struct Pinch { var stops: ZoomStopGesture; var proposed: Double; var last: ViewTransform; var centring: Centring? }
+    /// A gesture zooming in towards the subject brings it to the centre (`zoom-anchor-center`, `SubjectCentring`): its
+    /// image point, where it was on screen and the scale at the gesture's start, the framing's scale.
+    private struct Centring { var image: CGPoint; var start: CGPoint; var startScale: Double; var target: Double }
+    private var rmbCentring: Centring?
     /// Three-finger swipe recogniser, fed from raw touches (see "Three-finger swipe" below).
     private var threeFingerSwipe = ThreeFingerSwipe()
     /// Fingers on the trackpad right now (from the touch events), and the scroll filter that uses it: it
@@ -178,6 +186,8 @@ import QuartzCore
         // Centred and unscaled matches how the transform anchors the image (view centre), instead of
         // stretching it. AppKit derives the layer's contentsGravity from this placement.
         layerContentsPlacement = .center
+        subjectOverlayView.frame = bounds
+        addSubview(subjectOverlayView)
         renderLoop = RenderLoop(layer: metalLayer)
         setBackground(Settings.shared.config.background)
         setResampling(resampling)
@@ -215,6 +225,10 @@ import QuartzCore
     /// levels (`revision`), the orientation or the transform changed; called on every session change.
     func sessionDidChange() {
         stepGatesPhotoShown()
+        if let url = session.entry?.url, url == session.playlist?.current, smartZoomArrival.observe(url) {
+            session.manualZoomPhoto = nil
+            subjectGlide = (url, CACurrentMediaTime(), session.zoomTarget ?? session.transform)
+        }
         let image = session.image, revision = image?.revision, orientation = session.drawOrientation
         // The cube of the photo whose pyramid this is (`entry`, which still is the previous photo's until the next one
         // qualifies), so image and cube are always one photo's. A cube arriving or changing later, or a running fade,
@@ -267,11 +281,13 @@ import QuartzCore
                 let pages = RenderPages(first: left, second: right)
                 renderLoop.update(pages: pages, transform: transform)
                 panIndicatorsView.show(pages, transform: transform)
+                subjectOverlayView.show(session.entry?.url, transform: transform)   // two pages: the source says so
             } else {
                 // One page, the whole of the transform's image: drawn as a single photo always was.
                 let pages = RenderPages(first: page)
                 renderLoop.update(pages: pages, transform: transform)
                 panIndicatorsView.show(pages, transform: transform)
+                subjectOverlayView.show(image == nil ? nil : session.entry?.url, transform: transform)
             }
         }
         // After `update`: the first image clears the expected space only once the loop has the image, so no frame in
@@ -325,6 +341,7 @@ import QuartzCore
     /// First of all, a mouse button held with a `+WHEEL` binding (and the tail of its scroll) takes the wheel
     /// (`MouseButtons`): nothing then pans, zooms or steps.
     override func scrollWheel(with event: NSEvent) {
+        invalidateSmartZoomRequest()
         if MouseButtons.shared.wheel(event) {
             if dragPoint == nil { releaseRubber() }   // a stretch of the fingers' gesture goes back, as for a folder step
             return
@@ -425,8 +442,9 @@ import QuartzCore
 
     // Trackpad: a physical click held with one finger while two others swipe sideways; mouse: the right button
     // held while the tilt or side wheel scrolls (⇧+wheel arrives as horizontal too). Direction by
-    // `folder-scroll-direction` (default: fingers right, whatever "natural scrolling" says, and tilt left / ⇧+wheel
-    // up = next; `natural` the other way, as the three-finger swipe and the vertical wheel) (tilt right or ⇧+wheel down = next). While a button is held, precise scroll only feeds the
+    // `folder-scroll-direction` (`reversed`: fingers right, whatever "natural scrolling" says, and tilt left / ⇧+wheel
+    // up = next; `natural`, the default, the other way, as the three-finger swipe and the vertical wheel: tilt right or
+    // ⇧+wheel down = next). While a button is held, precise scroll only feeds the
     // gesture and never pans, so the folder step does not drag the picture first; it also skips the touch-count
     // guard, because the clicking finger may make the swipe look like three fingers. Which buttons count, the
     // momentum rule, the repeats while the button stays held and the press latch are `FolderScrollGesture`'s; this side reads the buttons, turns
@@ -613,21 +631,24 @@ import QuartzCore
     /// With `zoom-rubber-band` a pinch past a zoom limit stretches about the fingers (`ZoomStopGesture.stretch`), and
     /// lifting them springs back to the limit (M4b spec §3).
     override func magnify(with event: NSEvent) {
+        session.noteManualZoom()
+        invalidateSmartZoomRequest()
         stopInertia()
         let t = session.transform
         let config = Settings.shared.config
         if event.phase.contains(.began) || pinch?.last != t {
             pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: config.zoomStops, rubber: config.zoomRubberBand),
-                          proposed: t.scale, last: t)
+                          proposed: t.scale, last: t, centring: subjectCentring(t))
         }
         guard var p = pinch else { return }
         p.proposed *= max(0.01, 1 + event.magnification)
         let r = p.stops.constrain(p.proposed)
-        let anchor = viewPoint(event)
+        let anchor = gestureAnchor(viewPoint(event))
         DebugLog.log("magnify \(event.magnification) -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (p.stops.stretch == 1 ? "" : " stretch \(p.stops.stretch)"))
-        session.transform = t.zoomed(toScale: r.scale, anchor: anchor)
-            .withStretch(Self.zoomStretch(p.stops.stretch, anchor: anchor))
+        let zoomed = p.centring.map { centred($0, t, scale: r.scale) }
+            ?? t.zoomed(toScale: r.scale, anchor: anchor)
+        session.transform = zoomed.withStretch(Self.zoomStretch(p.stops.stretch, anchor: anchor))
         zoomStopFeedback(justHit: p.stops.justHit)
         p.last = session.transform
         guard event.phase.contains(.ended) || event.phase.contains(.cancelled) else {
@@ -641,7 +662,12 @@ import QuartzCore
     /// Smart zoom, a two-finger double tap (when the system's "Smart zoom" is on; M4a spec §2.3): `z` at the fingers,
     /// Fit ↔ 100 %, without zoom stops or haptics, like the `0` / `1` keys, and animated like them.
     override func smartMagnify(with event: NSEvent) {
+        if Settings.shared.config.smartZoomGesture { _ = onZoomKey?(.toggleStepZoom); return }
+        invalidateSmartZoomRequest()
+        session.noteManualZoom()
         DebugLog.log("smart zoom")
+        session.subjectZoom = false   // a gesture: leaves Zoom to Subject
+        subjectZoomPress = nil
         animateZoom(to: zoomBase.toggledFitActual(anchor: viewPoint(event)))
     }
 
@@ -772,6 +798,7 @@ import QuartzCore
     private var pressPoint: CGPoint?
 
     override func mouseDown(with event: NSEvent) {
+        invalidateSmartZoomRequest()
         stopInertia(catching: true)
         window?.makeFirstResponder(self)
         cursorAutohide.activity()
@@ -972,6 +999,36 @@ import QuartzCore
     /// frame on screen (`session.transform`: a running animation's last tick, its offset and stretch included, so it
     /// goes on from where it is), and stops the other motions (a pan glide, the right-button coast, a pan spring)
     /// without settling.
+    /// The photo on screen whose view late subjects may still move (smart zoom spec §5): when it came, and the view it
+    /// came with (any zoom, pan or command since changes it, whatever the input).
+    private var smartZoomArrival = SmartZoomArrival()
+    private var subjectGlide: (url: URL, shownAt: CFTimeInterval, cameWith: ViewTransform)?
+
+    /// The subjects of `url` are in: with `step-pan=subject`, a photo a step brought glides to them if it came within
+    /// `SubjectGlide.window` and its view is still the one it came with (`SubjectGlide`); otherwise the view stays.
+    func subjectsArrived(for url: URL, boxes: SubjectBoxes?) {
+        // A ⇧Z or 3 waiting for these boxes answers itself (`subjectZoomArrived`): no glide under it.
+        guard subjectZoomPress?.url != url, framePress?.photo != url, session.smartZoom.mode != .off else { return }
+        // Both active modes own the point of interest, including slow results, until manual input cancels it.
+        guard let boxes, let glide = subjectGlide,
+              SubjectGlide.shouldGlide(shownAt: glide.shownAt, now: glide.shownAt,
+                                       cameWith: glide.cameWith, now: session.zoomTarget ?? session.transform,
+                                       samePhoto: glide.url == url && session.entry?.url == url) else { return }
+        let rules = session.zoomRules(url)
+        var target = session.zoomTarget ?? session.transform
+        let framed = session.smartFraming(url, shown: target, boxes: boxes)
+        if let framed {
+            subjectGlide = nil
+            if framed != target { animateZoom(to: framed) }
+            return
+        }
+        let centre = PhotoSwitchView.subjectCentre(boxes, rules: rules, imageSize: target.imageSize, viewSize: target.viewSize)
+        target.center = centre
+        guard target.clamped.center != (session.zoomTarget ?? session.transform).clamped.center else { return }
+        subjectGlide = nil   // once
+        animateZoom(to: target)
+    }
+
     func animateZoom(to target: ViewTransform) {
         let now = CACurrentMediaTime()
         let from = session.transform
@@ -1196,6 +1253,7 @@ import QuartzCore
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     override func rightMouseDown(with event: NSEvent) {
+        invalidateSmartZoomRequest()
         DebugLog.log("mouse button 1 down")
         MouseButtons.shared.press(.right, at: event.timestamp)   // the first button of a chord (`MBTN_RIGHT+…`)
         // A left drag in progress holds a stretch; an ignored right press must not drop it. A press that starts the
@@ -1208,7 +1266,10 @@ import QuartzCore
         if dragPoint != nil, !heldButtons.contains(.left) { dragPoint = nil }
         let mayAct = folderScroll.press(.right, held: heldButtons)
         guard dragPoint == nil, mayAct else { return }
-        let p = viewPoint(event)
+        // The travel is measured from the pointer; only the zoom's anchor follows `zoom-anchor` (the subject or the
+        // centre may be far from the pointer, and measuring from there jumped the zoom on the first move).
+        let pointer = viewPoint(event)
+        let p = gestureAnchor(pointer, leaving: false)   // a click or a chord is no zoom: it leaves on the drag
         let config = Settings.shared.config
         rmbZoom = RMBZoom(anchor: p, transform: session.transform,
                           pointsPerDoubling: RMBZoom.pointsPerDoubling(speed: config.rmbZoomSpeed),
@@ -1216,7 +1277,8 @@ import QuartzCore
         rmbVelocity.reset()
         rmbDy = 0
         rmbStops = ZoomStopGesture(transform: session.transform, stops: config.zoomStops, rubber: config.zoomRubberBand)
-        rmbPress = p
+        rmbPress = pointer
+        rmbCentring = subjectCentring(session.transform)
         rmbDragging = false
         rmbBumps = ZoomBumps()
     }
@@ -1249,6 +1311,7 @@ import QuartzCore
             // Below the slop it is still a click: do nothing, so a shaky click never changes the zoom.
             guard hypot(p.x - press.x, p.y - press.y) / k >= RMBZoom.clickSlopPoints else { return }
             rmbDragging = true
+            session.subjectZoom = false
         }
         let dy = (p.y - press.y) / k
         let doublings = zoom.doublings(dyPoints: dy)
@@ -1259,8 +1322,9 @@ import QuartzCore
         DebugLog.log("rmb zoom dy \(dy) pt -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (stops.stretch == 1 ? "" : " stretch \(stops.stretch)"))
         // Past a zoom limit (`zoom-rubber-band`) the stretch is about the press anchor, where `RMBZoom` pins the image.
-        session.transform = zoom.transform(toScale: r.scale)
-            .withStretch(Self.zoomStretch(stops.stretch, anchor: zoom.anchor))
+        let zoomed = rmbCentring.map { centred($0, zoom.start, scale: r.scale) } ?? zoom.transform(toScale: r.scale)
+        session.noteManualZoom()
+        session.transform = zoomed.withStretch(Self.zoomStretch(stops.stretch, anchor: zoom.anchor))
         zoomStopFeedback(justHit: stops.justHit)
         rmbZoomFeedback(scale: r.scale, stretch: stops.stretch, limits: zoom.start.scaleLimits, justHit: stops.justHit)
     }
@@ -1331,6 +1395,7 @@ import QuartzCore
 
     private func endRMBZoom() {
         rmbZoom = nil
+        rmbCentring = nil
         rmbStops = nil
         rmbPress = nil
         rmbDragging = false
@@ -1416,7 +1481,9 @@ import QuartzCore
     /// auto-repeat (for `haptic-end`, `EndBump`).
     func perform(_ input: InputAction, at timestamp: TimeInterval, fresh: Bool) {
         switch input {
-        case .action(let action):
+        case .action(let bound):
+            // Bindings have one meaning in both workflows.
+            let action = bound
             if perform(action, at: timestamp, fresh: fresh), InputConf.isToggle(action) { MouseHaptics.shared.toggle() }
         case .add(let key, let step): onAdjust?(key, step, 1)
         case .zoomStep: zoomStep(1)
@@ -1487,8 +1554,9 @@ import QuartzCore
     /// steps in one event play one of them, the limit first.
     private func zoomStep(_ steps: Int) {
         guard steps != 0 else { return }
+        invalidateSmartZoomRequest(); session.noteManualZoom()
         let start = zoomBase
-        let anchor = cursorOrCentre()
+        let anchor = gestureAnchor(cursorOrCentre())
         let stops = Settings.shared.config.zoomStops
         var t = start
         var bumps: Set<ZoomStepBump> = []
@@ -1511,6 +1579,8 @@ import QuartzCore
     /// `thumb-zoom-invert`, by `thumb-zoom-speed` doublings per turn, at once (no animation, as a pinch). A turn of the wheel (`began`) is a new gesture, as is one after something else changed the transform;
     /// `thumb-zoom-stops` says whether a stop halts the turn or only ticks. The mouse answers as for `zoom-step`.
     func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool) {
+        session.noteManualZoom()
+        invalidateSmartZoomRequest()
         guard !isCheatSheetOpen() else { return }
         let config = Settings.shared.config
         let doublings = ThumbZoom.doublings(delta: config.thumbZoomInvert ? delta : -delta,
@@ -1523,7 +1593,7 @@ import QuartzCore
         }
         guard var z = thumbZoom?.zoom else { return }
         let r = z.turn(doublings: doublings)
-        let shown = t.zoomed(toScale: r.scale, anchor: cursorOrCentre())
+        let shown = t.zoomed(toScale: r.scale, anchor: gestureAnchor(cursorOrCentre()))
         DebugLog.log("thumb zoom \(delta)/\(stepsPerRevolution): \(t.scale) -> \(r.scale)"
                      + (r.stop.map { " stop \($0)" } ?? "") + (r.bump.map { " \($0)" } ?? ""))
         if shown != t { session.transform = shown }
@@ -1542,7 +1612,33 @@ import QuartzCore
     @discardableResult
     private func perform(_ action: KeyAction, at timestamp: TimeInterval, fresh: Bool? = nil) -> Bool {
         let t = zoomBase
+        let manualPresets: Set<KeyAction> = [.fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .screenShare]
+        if manualPresets.contains(action) { _ = onZoomKey?(.manualZoom) }
+        if Self.zoomCommands.contains(action) { session.noteManualZoom(); invalidateSmartZoomRequest(); session.subjectZoom = false; subjectZoomPress = nil }
         switch action {
+        case .zoomSubject, .toggleStepZoom, .toggleSmartZoom, .manualZoom: return onZoomKey?(action) ?? false
+        case .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor, .toggleZoomSet, .cycleSubjectTarget,
+             .cycleDetectorMode, .saveDetectorSize:
+            return onZoomKey?(action) ?? false
+        case .nextTarget: return onZoomKey?(action) ?? false
+        case .screenShare:
+            // The zoom on screen becomes a free one, whose share of the screen the folder now keeps.
+            session.subjectZoom = false
+            stopInertiaAtZoomTarget()
+            session.transform = t.withMode(.free(t.scale / t.fitScale))
+            return onZoomKey?(action) ?? false
+        case .fillSubject:
+            guard let url = session.entry?.url else { return false }
+            let rules = session.zoomRules(url)
+            let boxes = session.subjectBoxes(url)
+            var filled = t.withMode(.fill)
+            filled.center = PhotoSwitchView.subjectCentre(boxes, rules: rules, imageSize: t.imageSize, viewSize: t.viewSize)
+            animateZoom(to: filled)
+            if boxes == nil, session.currentPages?.second == nil {
+                // Not known yet: asked at once; the view moves onto the subject when they come, if untouched.
+                subjectZoomPress = (url, filled, true)
+                onSubjectZoom?(url)
+            }
         case .panLeft: panByKey(dx: -Self.keyPanFraction, dy: 0)
         case .panRight: panByKey(dx: Self.keyPanFraction, dy: 0)
         case .panDown: panByKey(dx: 0, dy: Self.keyPanFraction)
@@ -1556,14 +1652,18 @@ import QuartzCore
         case .exitFullScreen:                                           // Esc leaves full screen, nothing else
             guard let window, window.styleMask.contains(.fullScreen) else { return false }
             window.toggleFullScreen(nil)
-        case .fit: animateZoom(to: t.withMode(.fit))
+        case .fit:
+            _ = onZoomKey?(.fit)
+            animateZoom(to: t.withMode(.fit))
         case .actual100: animateZoom(to: t.withMode(.actual(1)))
         case .actual200: animateZoom(to: t.withMode(.actual(2)))
         case .actual400: animateZoom(to: t.withMode(.actual(4)))
         case .fitWidth: animateZoom(to: t.withMode(.fitWidth))
         case .fitHeight: animateZoom(to: t.withMode(.fitHeight))
         case .fill: animateZoom(to: t.withMode(.fill))
-        case .toggleFitActual: animateZoom(to: t.toggledFitActual(anchor: cursorOrCentre()))
+        case .toggleFitActual:                                          // a key, not a gesture: at the view centre
+            let size = t.viewSize
+            animateZoom(to: t.toggledFitActual(anchor: CGPoint(x: size.width / 2, y: size.height / 2)))
         case .zoomIn: animateZoom(to: t.zoomedStep(1))
         case .zoomOut: animateZoom(to: t.zoomedStep(-1))
         case .toggleFullScreen: window?.toggleFullScreen(nil)
@@ -1572,9 +1672,11 @@ import QuartzCore
         case .toggleStripPlacement: onToggleStripPlacement?()
         case .cheatSheet: onToggleCheatSheet?()
         case .toggleInfoPanel: onToggleInfoPanel?()
+        case .toggleSubjects: onToggleSubjects?()
         case .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring: return onScalingKey?(action) ?? false
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
-        case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry: return onZoomKey?(action) ?? false
+        case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry, .rememberZoom:
+            return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false
         case .toggleSpread, .saveSpread, .shiftSpread: return onSpreadKey?(action) ?? false
         case .newTab, .newWindow, .closeTab, .nextTab, .previousTab, .openInNewTab, .openInNewWindow, .home, .back,
@@ -1589,12 +1691,189 @@ import QuartzCore
 
     /// Like a zoom key, it goes on from the target of a running zoom animation.
     private func panByKey(dx: Double, dy: Double) {
+        invalidateSmartZoomRequest()
         stopInertiaAtZoomTarget()
         session.transform = session.transform.pannedByViewFraction(dx: dx, dy: dy)
     }
 
     /// The mouse pointer in the transform's space (physical pixels, origin top-left); the view centre when
     /// the pointer is outside the view.
+    /// The point a gesture zoom keeps in place (`zoom-anchor`, smart zoom spec §3.1): the pointer, the view's centre, or
+    /// the centre of the subject's frame on screen (the pointer until the photo's subjects are in). A gesture zooms
+    /// freely, so it also leaves Zoom to Subject.
+    private func gestureAnchor(_ pointer: CGPoint, leaving: Bool = true) -> CGPoint {
+        if leaving { session.subjectZoom = false }
+        guard let url = session.entry?.url else { return pointer }
+        let rules = session.zoomRules(url)
+        let t = session.transform
+        switch rules.anchor {
+        case .pointer: return pointer
+        case .center: return CGPoint(x: t.viewSize.width / 2, y: t.viewSize.height / 2)
+        case .subject:
+            guard let boxes = session.subjectBoxes(url), let frame = SubjectFraming.frame(boxes, chain: rules.chain) else { return pointer }
+            return t.viewPoint(forImage: CGPoint(x: frame.midX * t.imageSize.width, y: frame.midY * t.imageSize.height))
+        }
+    }
+
+    /// `zoom-anchor-center` with `zoom-anchor=subject` and the subject known: what a gesture from `t` needs to bring it
+    /// to the centre; nil otherwise (the gesture keeps its anchor in place).
+    private func subjectCentring(_ t: ViewTransform) -> Centring? {
+        guard Settings.shared.config.zoomAnchorCenter, let url = session.entry?.url else { return nil }
+        let rules = session.zoomRules(url)
+        guard rules.anchor == .subject, let boxes = session.subjectBoxes(url),
+              let frame = SubjectFraming.frame(boxes, chain: rules.chain),
+              let framed = PhotoSwitchView.subjectTransform(t, boxes: boxes, rules: rules) else { return nil }
+        let image = CGPoint(x: frame.midX * t.imageSize.width, y: frame.midY * t.imageSize.height)
+        return Centring(image: image, start: t.viewPoint(forImage: image), startScale: t.scale, target: framed.scale)
+    }
+
+    /// `t` zoomed to `scale` with the subject where `SubjectCentring` puts it at that scale.
+    private func centred(_ c: Centring, _ t: ViewTransform, scale: Double) -> ViewTransform {
+        let centre = CGPoint(x: t.viewSize.width / 2, y: t.viewSize.height / 2)
+        let at = SubjectCentring.point(start: c.start, centre: centre, scale: scale, startScale: c.startScale, targetScale: c.target)
+        return t.zoomed(toScale: scale, placing: c.image, at: at)
+    }
+
+    /// The zoom commands other than Zoom to Subject: each leaves it.
+    private static let zoomCommands: Set<KeyAction> = [.fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight,
+                                                       .fill, .toggleFitActual, .zoomIn, .zoomOut, .fillSubject]
+
+    /// `⇧Z` (smart zoom spec §3): on, the photo on screen zooms to its subject's frame once its subjects are known (the
+    /// window asks for them at once, `onSubjectZoom`), and later photos open framed; off, back to the view before.
+    /// Each press goes to the next of the photo's steps (`PhotoSwitchView.subjectSteps`), the first press to the one
+    /// `subject-target` chooses; after the last, back to the view before the first press.
+    /// Under framing while browsing (`step-zoom=subject`) there is no mode to turn on: each press follows the next kind
+    /// found (`BrowseFraming.followNext`), round.
+    private func toggleSubjectZoom() {
+        guard let url = session.entry?.url, url == session.playlist?.current else { return }
+        guard session.currentPages?.second == nil else { onToast?("Zoom to Subject: not in two-page view"); return }
+        if !session.subjectZoom { subjectZoomBefore = zoomBase }
+        subjectZoomPress = (url, zoomBase, false)
+        onSubjectZoom?(url)
+    }
+
+    /// Subject mode off, back to the view before the first ⇧Z.
+    private func leaveSubjectZoom() {
+        session.subjectZoom = false
+        var back = zoomBase.withMode(subjectZoomBefore?.mode ?? .fit)
+        if let before = subjectZoomBefore { back.center = before.center }
+        animateZoom(to: back)
+        subjectZoomBefore = nil
+        onToast?("Subject: off")
+    }
+
+    /// A step's name in its toast: Vision's kinds in words, the custom detector's by detector.conf's names ("dog+ball").
+    private static func stepName(_ kind: SubjectKind) -> String {
+        let names: [SubjectKind: String] = [.face: "face", .person: "person", .object: "object", .saliency: "where the eye goes"]
+        return names[kind] ?? kind.rawValue
+    }
+
+    /// The photo on screen framed now as a step would frame it (the custom detector turned on or in another mode):
+    /// at once when its subjects are known, else when they come; Fit when the chain finds nothing on it.
+    func holdSmartZoomView() { stopZoomAnimation(); invalidateSmartZoomRequest() }
+
+    func invalidateSmartZoomRequest() {
+        session.smartZoomRevision &+= 1
+        framePress = nil
+        subjectGlide = nil
+        subjectZoomPress = nil
+    }
+
+    func frameSubjectNow() { applySmartZoom(cycleGroup: false) }
+
+    /// Explicit commands re-arm composition; an Off command never changes the view.
+    func applySmartZoom(cycleGroup: Bool = false) {
+        invalidateSmartZoomRequest()
+        guard session.smartZoom.mode != .off, let url = session.entry?.url, url == session.playlist?.current,
+              session.currentPages?.second == nil else { return }
+        if let boxes = session.subjectBoxes(url) {
+            frameNow(url, boxes: boxes, cycleGroup: cycleGroup)
+        } else {
+            framePress = SmartZoomRequest(photo: url, revision: session.smartZoomRevision)
+            frameCycle = cycleGroup
+            onSubjectZoom?(url)
+        }
+    }
+
+    private func frameNow(_ url: URL, boxes: SubjectBoxes, cycleGroup: Bool = false) {
+        let now = zoomBase
+        if cycleGroup {
+            let rules = session.zoomRules(url)
+            let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
+            if !kinds.isEmpty {
+                let current = session.browse.chain(rules.chain).first { kinds.contains($0) }
+                let index = current.flatMap { kinds.firstIndex(of: $0) }.map { ($0 + 1) % kinds.count } ?? 0
+                session.browse.followed = kinds[index]
+                onToast?("Group: \(kinds[index].title) \(index + 1)/\(kinds.count)")
+            }
+        }
+        let framed = session.smartFraming(url, shown: now, boxes: boxes)
+            ?? (session.smartZoom.mode == .frame ? now.withMode(.fit) : now)
+        if framed != now { animateZoom(to: framed) }
+        onSmartZoomChanged?()
+    }
+
+    private var framePress: SmartZoomRequest?
+    private var frameCycle = false
+    var onSmartZoomChanged: (() -> Void)?
+
+    /// The subjects asked for by `⇧Z` are in: the zoom, if the photo and its view are still the ones of the press.
+    func subjectZoomArrived(for url: URL, boxes: SubjectBoxes?) {
+        if let request = framePress, request.photo == url {
+            framePress = nil
+            if request.matches(photo: session.entry?.url, revision: session.smartZoomRevision,
+                               enabled: session.smartZoom.mode != .off), let boxes {
+                frameNow(url, boxes: boxes, cycleGroup: frameCycle)
+            }
+            return
+        }
+        guard let press = subjectZoomPress, press.url == url, session.entry?.url == url else { return }
+        subjectZoomPress = nil
+        let now = zoomBase
+        guard now.mode == press.view.mode, now.center == press.view.center else { return }
+        guard let boxes else { onToast?("Subjects could not be found"); return }
+        let rules = session.zoomRules(url)
+        if press.fill {
+            var filled = now
+            filled.center = PhotoSwitchView.subjectCentre(boxes, rules: rules, imageSize: now.imageSize, viewSize: now.viewSize)
+            if filled.center != now.center { animateZoom(to: filled) }
+            return
+        }
+        // Framing while browsing: ⇧Z chooses what it follows, this photo and the next ones.
+        if !session.subjectZoom, rules.stepZoom == .subject {
+            guard let step = session.browse.followNext(now, boxes: boxes, rules: rules) else { onToast?("No subject"); return }
+            onToast?("Following: \(Self.stepName(step.kind)) \(step.index + 1)/\(step.count)")
+            if let framed = session.browseFraming(url, shown: now, boxes: boxes), framed != now { animateZoom(to: framed) }
+            return
+        }
+        // The steps from the one the chain chooses, round to the ones before it.
+        var steps = PhotoSwitchView.subjectSteps(now, boxes: boxes, rules: rules)
+        let chosen = rules.chain.first { !boxes.boxes($0).isEmpty }
+        if let i = steps.firstIndex(where: { $0.kind == chosen }) { steps = Array(steps[i...] + steps[..<i]) }
+        guard !steps.isEmpty else {
+            if session.subjectZoom { leaveSubjectZoom() } else { onToast?("No subject") }
+            return
+        }
+        var next = 0
+        // On a step: the next one, or back after the last; a step's kind this photo lacks starts again.
+        if session.subjectZoom, let i = steps.firstIndex(where: { $0.kind == session.subjectStep ?? chosen }) {
+            guard i + 1 < steps.count else { leaveSubjectZoom(); return }
+            next = i + 1
+        }
+        session.subjectZoom = true
+        session.subjectStep = steps[next].kind
+        onToast?("Subject: \(Self.stepName(steps[next].kind)) \(next + 1)/\(steps.count)")
+        animateZoom(to: steps[next].transform)
+    }
+
+    /// The view before `⇧Z`, which the second press goes back to; the press waiting for subjects.
+    private var subjectZoomBefore: ViewTransform?
+    private var subjectZoomPress: (url: URL, view: ViewTransform, fill: Bool)?
+    /// `⇧Z` wants the subjects of the photo on screen now; a short message to show.
+    var onSubjectZoom: ((URL) -> Void)?
+    /// The zoom block's set, which the number keys follow.
+    var onToast: ((String) -> Void)?
+
     private func cursorOrCentre() -> CGPoint {
         let size = session.transform.viewSize
         let centre = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -1683,7 +1962,7 @@ import QuartzCore
         if session.transform.viewSize != size {
             session.settleZoom()   // a resize starts from the target of a zoom animation (M4b spec §2.3)
             rubber.reset()   // the new size zeroes the offset; a spring would only find it gone
-            session.transform = session.transform.withViewSize(size, keepingScale: session.resizeKeepsScale)   // notifies -> sessionDidChange
+            session.transform = session.transform.withViewSize(size, carry: session.resizeCarry)   // notifies -> sessionDidChange
         }
     }
 }

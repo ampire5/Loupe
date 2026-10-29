@@ -122,19 +122,6 @@ import Testing
     }
 }
 
-/// `home-tab` follows the user's own moves between Home's tabs, not the window's reloads (review finding 4).
-@Suite struct HomeTabMemoryTests {
-    @Test func savesOnlyAUserMoveToAnotherTab() {
-        var memory = HomeTabMemory()
-        #expect(memory.moved(to: .recent, byUser: false, saved: .folders) == nil)   // the window's own show
-        #expect(memory.moved(to: .folders, byUser: true, saved: .folders) == nil)   // already saved
-        #expect(memory.moved(to: .sessions, byUser: true, saved: .folders) == .sessions)
-        #expect(memory.moved(to: .sessions, byUser: true, saved: .recent) == nil)   // a reload: same tab
-        #expect(memory.moved(to: .folders, byUser: true, saved: .recent) == .folders)
-        #expect(memory.moved(to: .folders, byUser: true, saved: .recent) == nil)    // another folder, a remount
-    }
-}
-
 @Suite struct PlacesFreeSpaceTests {
     /// External disks and shares give 0 for "important usage": the plain capacity is taken, and 0 is no answer.
     @Test func freeSpaceFallsBackToPlainCapacity() {

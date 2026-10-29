@@ -93,7 +93,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
     let toggles = KeyAction.allCases.filter(InputConf.isToggle)
     #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .cycleStats, .toggleStrip, .toggleStripPlacement,
                              .toggleInfoPanel, .cyclePanIndicators, .cycleFilter, .toggleAntiring, .toggleAutoColor,
-                             .toggleVibrance, .toggleSpread])
+                             .toggleVibrance, .toggleSpread, .cycleStepPan, .cycleZoomAnchor, .toggleZoomSet, .cycleSubjectTarget, .cycleDetectorMode, .toggleSubjects, .toggleStepZoom, .toggleSmartZoom])
 }
 
 @Test func parsesAddWithTrailingComment() {

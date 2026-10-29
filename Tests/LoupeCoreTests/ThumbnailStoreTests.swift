@@ -821,6 +821,22 @@ final class Locked<T>: @unchecked Sendable {
         #expect(reader.readCount(files[1]) == 1)   // not retried in this session
     }
 
+    @Test func onlyADecoderFailureIsBroken() async throws {   // a share that went away is not a broken file
+        let reader = ThumbReader()
+        let files = photos(3, in: reader)
+        reader.fail(files[1])
+        reader.add(files[2], Data("not an image".utf8))
+        let store = store(reader, dir: tempDir())
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually {
+            let read = await store.status(files[1]), decoded = await store.status(files[2])
+            return read == .unavailable && decoded == .unavailable
+        })
+        #expect(await !store.isBroken(files[1]))
+        #expect(await store.isBroken(files[2]))
+        #expect(await !store.isBroken(files[0]))
+    }
+
     @Test func failuresNotPersisted() async throws {
         let dir = tempDir()
         let reader = ThumbReader()

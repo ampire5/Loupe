@@ -348,3 +348,118 @@ private let img = CGSize(width: 10502, height: 14000), view = CGSize(width: 6144
     #expect(o.offset == .zero)
     #expect(base.withOffset(CGVector(dx: 4, dy: 7)).withStretch(nil).offset == .zero)
 }
+
+// Owner, 2026-10-28: a zoom at the pointer keeps the normal centring. A portrait photo in a landscape view, side bars
+// at Fit: grown but still narrower than the view, it stays in the middle across; the tall axis keeps the pointer's spot.
+@Test func zoomAtPointerKeepsNarrowAxisCentred() {
+    let t = ViewTransform(imageSize: CGSize(width: 2000, height: 3000), viewSize: CGSize(width: 3000, height: 1500))
+    let anchor = CGPoint(x: 1200, y: 400), before = t.imagePoint(forView: anchor)
+    let z = t.zoomed(toScale: t.fitScale * 1.4, anchor: anchor)   // 1400 wide: still narrower
+    #expect(abs(z.visibleRect.midX - 1000) < 1e-6)
+    #expect(abs(z.imagePoint(forView: anchor).y - before.y) < 1e-6)
+}
+
+// Smart zoom spec §1: the share of the view the picture covers, by area, and carrying it (`keep-zoom-as=screen`).
+
+@Test func screenShareIsTheClippedAreaOverTheView() {
+    let fit = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: CGSize(width: 2000, height: 1000))
+    #expect(abs(fit.screenShare - 0.5) < 1e-9)                         // a square at Fit: half the view
+    #expect(abs(fit.withMode(.fill).screenShare - 1) < 1e-9)
+    #expect(abs(fit.withMode(.free(0.5)).screenShare - 0.125) < 1e-9)   // half the side: a quarter of the area
+}
+
+@Test func screenCarryKeepsTheShareAcrossShapes() {
+    let view = CGSize(width: 2000, height: 1000)
+    let landscape = ViewTransform(imageSize: CGSize(width: 3000, height: 1500), viewSize: view, mode: .free(0.8))
+    let portrait = ViewTransform(imageSize: CGSize(width: 1000, height: 1500), viewSize: view, mode: .free(1))
+    let carried = portrait.carryingZoom(from: landscape, .screen)
+    #expect(abs(landscape.screenShare - 0.64) < 1e-9)
+    #expect(abs(carried.screenShare - 0.64) < 1e-9)                    // the portrait is cut to cover as much
+}
+
+@Test func screenCarryCutsAndFillsAtAFullShare() {
+    let view = CGSize(width: 2000, height: 1000)
+    let full = ViewTransform(imageSize: CGSize(width: 3000, height: 1500), viewSize: view, mode: .free(1))   // fills
+    let portrait = ViewTransform(imageSize: CGSize(width: 1000, height: 1500), viewSize: view, mode: .free(1))
+    let carried = portrait.carryingZoom(from: full, .screen)
+    #expect(abs(carried.scale - portrait.withMode(.fill).scale) < 1e-9)
+}
+
+@Test func screenCarryKeepsAZoomOutSmall() {
+    let view = CGSize(width: 2000, height: 1000)
+    let small = ViewTransform(imageSize: CGSize(width: 2000, height: 1000), viewSize: view, mode: .free(0.5))   // 25 %
+    let next = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: view, mode: .free(1))
+    #expect(abs(next.carryingZoom(from: small, .screen).screenShare - 0.25) < 1e-9)
+}
+
+@Test func screenCarryStaysWithinTheZoomLimitsAndNamedModesStay() {
+    let view = CGSize(width: 2000, height: 1000)
+    let full = ViewTransform(imageSize: CGSize(width: 2000, height: 1000), viewSize: view, mode: .free(1))
+    let tiny = ViewTransform(imageSize: CGSize(width: 10, height: 1000), viewSize: view, mode: .free(1))
+    #expect(tiny.carryingZoom(from: full, .screen).scale <= tiny.scaleLimits.upperBound)
+    let empty = ViewTransform(imageSize: .zero, viewSize: view, mode: .free(1)).carryingZoom(from: full, .screen)
+    #expect(empty.scale.isFinite)
+    let fitted = ViewTransform(imageSize: CGSize(width: 1000, height: 1500), viewSize: view)   // .fit
+    #expect(fitted.carryingZoom(from: full, .screen).mode == .fit)
+}
+
+@Test func resizeUnderScreenKeepsTheShareAndTheCentre() {
+    var t = ViewTransform(imageSize: CGSize(width: 1000, height: 1500), viewSize: CGSize(width: 2000, height: 1000),
+                          mode: .free(1.6), center: CGPoint(x: 0.5, y: 0.3))
+    let share = t.screenShare
+    t = t.withViewSize(CGSize(width: 1200, height: 1000), carry: .screen)
+    #expect(abs(t.screenShare - share) < 1e-9)
+    #expect(t.center == CGPoint(x: 0.5, y: 0.3))
+}
+
+// Owner, 2026-10-28: a view framed past the photo's edge (a subject near it) stands where the normal centring lets it:
+// half a view from the edge, not exactly on the subject.
+@Test func framingNearTheEdgeKeepsTheNormalCentring() {
+    let t = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: CGSize(width: 1000, height: 1000),
+                          mode: .free(4), center: CGPoint(x: 0.5, y: 0.05))
+    #expect(abs(t.clamped.center.y - 0.125) < 1e-9)
+    let out = t.panned(by: CGVector(dx: 0, dy: 400))   // dragging down past the top edge: refused
+    #expect(abs(out.center.y - 0.125) < 1e-9)
+}
+
+// Owner's report: after Zoom to Subject near the photo's edge, a right-button zoom out jerked. Zooming out from a view
+// at the photo's corner moves the picture smoothly, the press's way (each frame from the press) and a pinch's (each
+// from the last), and ends centred at Fit.
+@Test func zoomOutFromTheCornerStaysSmoothToFit() {
+    let start = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: CGSize(width: 2000, height: 1000),
+                              mode: .free(4), center: CGPoint(x: 0.05, y: 0.05))
+    let anchor = CGPoint(x: 1000, y: 500), middle = CGPoint(x: 500, y: 500)
+    for incremental in [false, true] {
+        var t = start, last = start.viewPoint(forImage: middle)
+        for i in 1...120 {
+            let s = 4 - 3 * Double(i) / 120   // 4 → 1 (Fit)
+            t = (incremental ? t : start).zoomed(toScale: s, anchor: anchor)
+            let p = t.viewPoint(forImage: middle)
+            #expect(hypot(p.x - last.x, p.y - last.y) < 100, "\(incremental ? "pinch" : "press") step \(i): \(last) → \(p)")
+            last = p
+        }
+        let p = t.viewPoint(forImage: middle)
+        #expect(abs(p.x - 1000) < 1e-6 && abs(p.y - 500) < 1e-6, "\(incremental ? "pinch" : "press") at Fit: \(p)")
+    }
+}
+
+// Owner's report: with keep-zoom-as=screen every zoom past Fill showed `Screen 100 %` and the next photo opened at
+// Fill. Past Fill the share goes on growing with the picture's area from Fill's, so it shows and carries the zoom.
+@Test func screenShareGrowsPastFill() {
+    let t = ViewTransform(imageSize: CGSize(width: 2000, height: 1000), viewSize: CGSize(width: 1000, height: 1000))
+    // Fill: scale 1 (the height fits); twice that scale is four times the area.
+    var fill = t
+    fill.mode = .free(1 / t.fitScale)
+    #expect(abs(fill.screenShare - 1) < 1e-9)
+    var twice = t
+    twice.mode = .free(2 / t.fitScale)
+    #expect(abs(twice.screenShare - 4) < 1e-9)
+    #expect(abs(t.scaleCovering(screenShare: 4) - 2) < 1e-9)
+    #expect(abs(t.scaleCovering(screenShare: 1) - 1) < 1e-9)
+    // Below Fill as before: the covered part of the view.
+    #expect(abs(t.scaleCovering(screenShare: 0.5) - 0.5) < 1e-9)
+    // The next photo, of another shape, keeps the zoom past its own Fill.
+    let next = ViewTransform(imageSize: CGSize(width: 1000, height: 2000), viewSize: CGSize(width: 1000, height: 1000),
+                             mode: .free(1)).carryingZoom(from: twice, .screen)
+    #expect(abs(next.screenShare - 4) < 1e-9)
+}

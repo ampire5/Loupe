@@ -28,7 +28,10 @@ import Foundation
 }
 
 @Test func colorSettingsFromConfig() {
-    #expect(ColorSettings(config: Config()) == .off)
+    // The defaults draw the picture as it is (their strength, gain and amount only count once a key is turned on).
+    let defaults = ColorSettings(config: Config())
+    #expect(!defaults.autoColor && !defaults.vibrance)
+    #expect(defaults.strength == 0.8 && defaults.vibranceGain == 1.5 && defaults.vibranceAmount == 0.65)
     #expect(ColorSettings.off.autoColor == false && ColorSettings.off.vibrance == false)
 
     var c = Config()
@@ -64,11 +67,11 @@ import Foundation
                 "auto-color-vibrance-gain", "auto-color-threshold", "auto-color-full", "auto-color-fade",
                 "vibrance", "vibrance-amount"]
     let c = Config()
-    #expect(!c.autoColor && c.autoColorMethod == .apple && c.autoColorStrength == 1)
-    #expect(c.autoColorFilters == [.curve, .shadows, .vibrance] && c.autoColorVibranceGain == 1)
+    #expect(!c.autoColor && c.autoColorMethod == .apple && c.autoColorStrength == 0.8)
+    #expect(c.autoColorFilters == [.curve, .shadows, .vibrance] && c.autoColorVibranceGain == 1.5)
     #expect(c.autoColorThreshold == 6 && c.autoColorFull == 12 && c.autoColorFadeMilliseconds == 150)
-    #expect(!c.vibrance && c.vibranceAmount == 0.5)
-    let defaults = ["no", "apple", "1", "curve,shadows,vibrance", "1", "6", "12", "150", "no", "0.5"]
+    #expect(!c.vibrance && c.vibranceAmount == 0.65)
+    let defaults = ["no", "apple", "0.8", "curve,shadows,vibrance", "1.5", "6", "12", "150", "no", "0.65"]
     #expect(keys.map { c.text(forKey: $0) } == defaults)
 
     let (p, w) = Config.parse("""

@@ -9,13 +9,15 @@ public struct DirectoryEntry: Equatable, Sendable {
     public let url: URL
     public let isDirectory: Bool
     public let isPackage: Bool
+    public let isSymbolicLink: Bool
     public let stamp: FileStamp?
     public let modified: Date?
 
-    public init(url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp? = nil, modified: Date? = nil) {
+    public init(url: URL, isDirectory: Bool, isPackage: Bool, stamp: FileStamp? = nil, modified: Date? = nil, isSymbolicLink: Bool = false) {
         self.url = url
         self.isDirectory = isDirectory
         self.isPackage = isPackage
+        self.isSymbolicLink = isSymbolicLink
         self.stamp = stamp
         self.modified = modified ?? stamp?.modified
     }
@@ -81,7 +83,7 @@ public struct FolderSiblings: Equatable, Sendable {
                 DirectoryEntry(url: $0.url, isDirectory: false, isPackage: false, stamp: $0.stamp)
             }
         }
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey] + FileStamp.listingKeys
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey] + FileStamp.listingKeys
         let urls = try FileManager.default.contentsOfDirectory(
             at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         return urls.map { item in
@@ -89,7 +91,7 @@ public struct FolderSiblings: Equatable, Sendable {
             let isDirectory = values?.isDirectory ?? false
             let stamp = isDirectory ? nil : values.flatMap { FileStamp($0) }
             return DirectoryEntry(url: item, isDirectory: isDirectory, isPackage: values?.isPackage ?? false,
-                                  stamp: stamp, modified: values?.contentModificationDate)
+                                  stamp: stamp, modified: values?.contentModificationDate, isSymbolicLink: values?.isSymbolicLink ?? false)
         }
     }
 }
@@ -103,14 +105,16 @@ public struct FolderTarget: Equatable, Sendable {
     /// Said in a toast once the folder is entered (a Stash gallery: its title and place in the list); nil on disk.
     public var label: String?
     /// The id of the list item it was stepped to (a Stash gallery's); nil on disk.
+    public var listIndex: Int?
     public var listID: String?
 
-    public init(folder: URL, images: [URL], stamps: [URL: FileStamp] = [:], label: String? = nil, listID: String? = nil) {
+    public init(folder: URL, images: [URL], stamps: [URL: FileStamp] = [:], label: String? = nil, listID: String? = nil, listIndex: Int? = nil) {
         self.folder = folder
         self.images = images
         self.stamps = stamps
         self.label = label
         self.listID = listID
+        self.listIndex = listIndex
     }
 }
 

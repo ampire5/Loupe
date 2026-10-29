@@ -136,9 +136,16 @@ public enum CachePlan {
         }
     }
 
-    /// Median (by pixel count) of the known sizes, else the default: the best guess for an unprobed photo.
-    private static func estimatedSize(count: Int, facts: (Int) -> EntryFacts) -> PixelSize {
-        let known = (0..<count).compactMap { facts($0).pixelSize }.filter { $0.width > 0 && $0.height > 0 }
+    /// The known sizes `estimatedSize` takes, each side of the current photo: the neighbours are probed first and come
+    /// from the same shoot; the whole folder was looked up on every plan (owner, 2026-10-28: ~6 ms for 50 000 photos,
+    /// several plans a step on the cache's actor, ahead of the step's own work).
+    public static let estimateReach = 500
+
+    /// Median (by pixel count) of the known sizes within `estimateReach` of the current photo, else the default: the
+    /// best guess for an unprobed photo.
+    private static func estimatedSize(focus: CacheFocus, facts: (Int) -> EntryFacts) -> PixelSize {
+        let near = max(0, focus.current - estimateReach)...min(focus.count - 1, focus.current + estimateReach)
+        let known = near.compactMap { facts($0).pixelSize }.filter { $0.width > 0 && $0.height > 0 }
         guard !known.isEmpty else { return defaultPixelSize }
         return known.sorted { $0.width * $0.height < $1.width * $1.height }[known.count / 2]
     }
@@ -171,7 +178,7 @@ public enum CachePlan {
             self.focus = focus
             self.limits = limits
             self.facts = facts
-            estimate = CachePlan.estimatedSize(count: focus.count, facts: facts)
+            estimate = CachePlan.estimatedSize(focus: focus, facts: facts)
             direction = focus.direction < 0 ? -1 : 1
         }
 

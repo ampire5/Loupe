@@ -4,15 +4,18 @@ import LoupeCore
 
 /// The stats bar (spec §10): the photo's status over the picture, shown or hidden. A strip along the window's top or
 /// bottom edge, as wide as the window, in the dark of the over-media palette (`stats-bar-opacity`): square, without blur,
-/// so the white text reads on any photo. Two rows. The first is the facts, which carry the most text: on the left each fact in a slot of its
-/// own (`FactsRowView`), at the right end, aligned to it, the file's date and the decode time. The second is the names:
-/// the file's on the left, the folder's at the right end, where the news about the folder (`Loading folder…`) also
-/// stands. With `stats-bar-rows` 1 it is one row: the facts at the left, the file's name, a dot and the folder's name in the
-/// middle (where the room is), the date and the decode time at the right end. It is a separate view from the Metal surface, so a text change never wakes the render loop.
+/// so the white text reads on any photo. The facts are split between the two ends so that both weigh about the same:
+/// the photo's own (its place, size, megapixels, exposure) on the left, each in a slot of its own (`FactsRowView`); the
+/// zoom, the file's size and format, its date and the decode time on the right, aligned to the right edge. Two rows: the
+/// facts above, the names below (the file's on the left, the folder's at the right end, where the news about the folder,
+/// `Loading folder…`, also stands). With `stats-bar-rows` 1 it is one row: the file's name, a dot and the folder's name in
+/// the middle of the bar between the two ends. It is a separate view from the Metal surface, so a text change never wakes
+/// the render loop.
 ///
 /// Nothing in it changes size or appears and goes with a status: the two columns have widths of their own that depend
-/// on the bar alone, every slot is as wide as its longest value, and a step only changes texts (`ImageStatus` keeps the
-/// facts through a load). The darkness is `stats-bar-opacity`; the strip is lightened, up to the photo's place in the
+/// on the bar alone, every slot (the date's and the decode time's too) is as wide as its longest value, and a step only
+/// changes texts: `ImageStatus` keeps the facts and the decode time through a load, the exposure while the EXIF is
+/// read, and the date stays until the new photo's is in. The photo before's are greyed only when the load is felt. The darkness is `stats-bar-opacity`; the strip is lightened, up to the photo's place in the
 /// folder, by `stats-progress-opacity` of white (`stats-progress`). Laid out by frames, not constraints, and only what
 /// changed.
 @MainActor final class StatsBar: NSView {
@@ -20,18 +23,26 @@ import LoupeCore
     static func height(rows: Int) -> CGFloat { rows == 1 ? 26 : 42 }
     private static let inset: CGFloat = 14
     private static let columnGap: CGFloat = 20
-    /// The right column's share of the bar and its limits: fixed by the bar's width, never by what it says.
-    private static let rightShare: CGFloat = 0.32
-    private static let rightWidths: ClosedRange<CGFloat> = 150...360
-    /// A bar narrower than this has the left column only.
+    /// The room the names keep in the middle of one row before the ends give up slots.
+    private static let namesRoom: CGFloat = 240
+    /// A bar narrower than this has the left end only.
     private static let narrowest: CGFloat = 520
+    /// The kinds at each end.
+    private static let leftKinds: [ImageStatus.Kind] = [.position, .size, .megapixels, .exposure]
+    private static let rightKinds: [ImageStatus.Kind] = [.zoom, .fileSize, .format]
     private static let rowHeights: (top: CGFloat, bottom: CGFloat) = (16, 17)
 
     /// The strip itself (the tint) and the progress fill on it. The text is not in it.
     private let tint = NSView()
     private let fill = NSView()
+    /// The facts at the left end and at the right one (`factsRow` also tells when the facts are greyed).
     private let factsRow: FactsRowView
-    private let detailLabel = NSTextField(labelWithString: "")
+    private let rightFactsRow: FactsRowView
+    private let dateLabel = NSTextField(labelWithString: "")
+    private let decodeLabel = NSTextField(labelWithString: "")
+    /// The date's and the decode time's slots, as wide as their longest values (with the options they were measured for).
+    private var detailWidths: (date: CGFloat, decode: CGFloat, options: ProCameraStyle.Options)?
+    private static let detailGap: CGFloat = 16
     private let titleLabel = NSTextField(labelWithString: "")
     private let folderLabel = NSTextField(labelWithString: "")
 
@@ -61,7 +72,9 @@ import LoupeCore
     override init(frame: NSRect) {
         let config = Config()
         options = ProCameraStyle.Options(size: 11.5, icons: config.statsIcons, monochrome: config.statsMonochrome, shadow: true)
-        factsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .left))
+        factsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .left), kinds: Self.leftKinds)
+        rightFactsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .right),
+                                     kinds: Self.rightKinds)
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
@@ -71,14 +84,14 @@ import LoupeCore
         tint.addSubview(fill)
         titleLabel.lineBreakMode = .byTruncatingMiddle
         folderLabel.lineBreakMode = .byTruncatingMiddle
-        detailLabel.lineBreakMode = .byTruncatingTail
-        for label in [titleLabel, folderLabel, detailLabel] {
+        for label in [dateLabel, decodeLabel] { label.lineBreakMode = .byTruncatingTail }
+        for label in [titleLabel, folderLabel, dateLabel, decodeLabel] {
             label.maximumNumberOfLines = 1
             addSubview(label)
         }
-        folderLabel.alignment = .right
-        detailLabel.alignment = .right
         addSubview(factsRow)
+        addSubview(rightFactsRow)
+        factsRow.onGreyedChange = { [weak self] in self?.refreshDetail() }
         heightConstraint = heightAnchor.constraint(equalToConstant: Self.height(rows: rows))
         heightConstraint.isActive = true
         applyBackground()
@@ -115,6 +128,7 @@ import LoupeCore
             options.icons = config.statsIcons
             options.monochrome = config.statsMonochrome
             factsRow.style.options = options
+            rightFactsRow.style.options = options
             refreshNames()
             refreshDetail()
         }
@@ -143,7 +157,8 @@ import LoupeCore
         let old = status
         status = new
         if new.title != old.title || new.titleTone != old.titleTone { refreshNames() }
-        factsRow.update(new.facts)
+        factsRow.update(new.facts, stale: new.stale, pending: new.pending)
+        rightFactsRow.update(new.facts, stale: new.stale, pending: new.pending)
         if new.progress != old.progress { needsLayout = true }
         if new.folder != old.folder || new.note != old.note || new.noteTone != old.noteTone { refreshNames() }
         if new.photo != old.photo { loadModified() }
@@ -184,30 +199,62 @@ import LoupeCore
             titleLabel.attributedStringValue = ProCameraStyle.name(status.title, size: 12, weight: .semibold, color: titleColor)
             titleLabel.toolTip = status.title
             folderLabel.attributedStringValue = folder.text.isEmpty ? NSAttributedString()
-                : ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color)
+                : Self.aligned(ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color), .right,
+                               .byTruncatingMiddle)
             folderLabel.toolTip = status.note ?? status.folder?.path
         }
         needsLayout = true
     }
 
-    /// The first row's right end: the date, then the decode time.
+    /// The first row's right end: the date, then the decode time, each right-aligned in its own slot. The decode time
+    /// is the photo before's while the new one loads, grey with its facts.
     private func refreshDetail() {
-        let detail = NSMutableAttributedString()
-        func add(_ piece: NSAttributedString) {
-            if detail.length > 0 { detail.append(ProCameraStyle.plain("   ", options.size, .regular, ProCameraStyle.secondary, options)) }
-            detail.append(piece)
-        }
-        if showsModified, let modified, modifiedURL == status.photo {
-            add(ProCameraStyle.detail(ProCameraStyle.dateSymbol, InfoPanelContent.dateText(modified), tone: .quiet, options))
+        if showsModified, let modified {
+            dateLabel.attributedStringValue = Self.aligned(ProCameraStyle.detail(
+                ProCameraStyle.dateSymbol, InfoPanelContent.dateText(modified), tone: .quiet, options), .right)
+        } else {
+            dateLabel.attributedStringValue = NSAttributedString()
         }
         if let ms = status.decodeMilliseconds {
-            add(ProCameraStyle.detail(ProCameraStyle.decodeSymbol, "decode \(ms) ms",
-                                      tone: ImageStatus.decodeTone(milliseconds: ms), options))
+            let tone = factsRow.greyed ? .quiet : ImageStatus.decodeTone(milliseconds: ms)
+            decodeLabel.attributedStringValue = Self.aligned(ProCameraStyle.detail(
+                ProCameraStyle.decodeSymbol, Self.decodeText(ms), tone: tone, options), .right)
+        } else {
+            decodeLabel.attributedStringValue = NSAttributedString()
         }
-        detailLabel.attributedStringValue = detail
     }
 
-    /// The date of the photo on screen is read in the background; the row gets it when it is in.
+    private static func decodeText(_ ms: Int) -> String { "decode \(ms) ms" }
+
+    /// A text with its own paragraph style: a label takes the alignment from there, not from `alignment`.
+    private static func aligned(_ text: NSAttributedString, _ alignment: NSTextAlignment,
+                                _ lineBreak: NSLineBreakMode = .byTruncatingTail) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: text)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineBreakMode = lineBreak
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    /// The date's and the decode time's slots, from their longest values.
+    private var detailSlots: (date: CGFloat, decode: CGFloat) {
+        if let widths = detailWidths, widths.options == options { return (widths.date, widths.decode) }
+        let cellInset: CGFloat = 8
+        let date = ceil(ProCameraStyle.detail(ProCameraStyle.dateSymbol, InfoPanelContent.dateText(Self.sampleDate),
+                                              tone: .quiet, options).size().width) + cellInset
+        let decode = ceil(ProCameraStyle.detail(ProCameraStyle.decodeSymbol, Self.decodeText(99_999), tone: .quiet,
+                                                options).size().width) + cellInset
+        detailWidths = (date, decode, options)
+        return (date, decode)
+    }
+
+    /// A date with every field at two digits, for the slot's width.
+    private static let sampleDate = DateComponents(calendar: .current, year: 2028, month: 12, day: 28, hour: 23, minute: 58).date
+        ?? Date()
+
+    /// The date of the photo is read in the background; the date before stays until it is in, so the slot never empties
+    /// for a step.
     private func loadModified() {
         guard showsModified, let url = status.photo else {
             modified = nil
@@ -217,13 +264,11 @@ import LoupeCore
         }
         guard modifiedURL != url else { return }
         modifiedURL = url
-        modified = nil
-        refreshDetail()
         Task { [weak self] in
             let date = await Task.detached(priority: .utility) {
                 (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             }.value
-            guard let self, self.modifiedURL == url, let date else { return }
+            guard let self, self.modifiedURL == url else { return }
             self.modified = date
             self.refreshDetail()
         }
@@ -249,38 +294,54 @@ import LoupeCore
         let rowHeight: CGFloat = 16
         let available = max(0, bounds.width - 2 * Self.inset)
         let showsRight = bounds.width >= Self.narrowest
-        let right = showsRight ? min(max(available * Self.rightShare, Self.rightWidths.lowerBound), Self.rightWidths.upperBound) : 0
-        let gap = showsRight ? Self.columnGap : 0
-        detailLabel.isHidden = !showsRight
-        if rows == 1 {
-            // One row: the facts, then the names in what is left between them and the date, the date at the end.
-            let y = (Self.height(rows: 1) - rowHeight) / 2
-            let facts = min(factsRow.naturalWidth - 12, max(0, available - right - gap))
-            factsRow.frame = backingAlignedRect(NSRect(x: Self.inset - 6, y: y, width: facts + 12, height: rowHeight),
-                                                options: .alignAllEdgesNearest)
-            let middleStart = Self.inset + facts + Self.columnGap
-            let middleEnd = bounds.width - Self.inset - right - gap
-            let room = middleEnd - middleStart
-            titleLabel.isHidden = room < 80
-            folderLabel.isHidden = true
-            place(titleLabel, x: middleStart, y: y, width: max(0, room), height: rowHeight)
-            place(detailLabel, x: bounds.width - Self.inset - right, y: y, width: right, height: rowHeight)
-            return
-        }
-        // Two rows: the facts above, the names below.
+        let slots = detailSlots
+        let detail = showsRight ? slots.date + Self.detailGap + slots.decode : 0
+        dateLabel.isHidden = !showsRight
+        decodeLabel.isHidden = !showsRight
+        rightFactsRow.isHidden = !showsRight
+        // Each end gets at most half of what the names leave (one row) or of the bar (two rows); a row that does not fit
+        // gives up slots by its priority. The slots carry their own padding (6 a side), which the edges give back.
+        let side = max(0, (available - (rows == 1 ? Self.namesRoom : Self.columnGap)) / 2)
+        let left = min(factsRow.naturalWidth - 12, showsRight ? side : available)
+        let rightFacts = showsRight ? min(rightFactsRow.naturalWidth - 12, max(0, side - detail - Self.columnGap)) : 0
+        let rightEnd = showsRight ? detail + (rightFacts > 0 ? Self.columnGap + rightFacts : 0) : 0
         let heights = Self.rowHeights
         let padding = (Self.height(rows: 2) - heights.top - heights.bottom) / 2
-        let topRowY = padding + heights.bottom
-        let bottomRowY = padding
-        let left = max(0, available - right - gap)
-        // The slots carry their own padding, which the text's left edge gives back.
-        factsRow.frame = backingAlignedRect(NSRect(x: Self.inset - 6, y: topRowY, width: left + 12, height: heights.top),
+        let y = rows == 1 ? (Self.height(rows: 1) - rowHeight) / 2 : padding + heights.bottom
+        let height = rows == 1 ? rowHeight : heights.top
+        factsRow.frame = backingAlignedRect(NSRect(x: Self.inset - 6, y: y, width: left + 12, height: height),
                                             options: .alignAllEdgesNearest)
+        rightFactsRow.frame = backingAlignedRect(NSRect(x: bounds.width - Self.inset - rightEnd - 6, y: y,
+                                                        width: rightFacts + 12, height: height),
+                                                 options: .alignAllEdgesNearest)
+        placeDetail(y: y, height: height)
+        if rows == 1 {
+            // The names in the middle of the bar, as wide as the room on its narrower side allows (in what is left
+            // between the ends when that is too little).
+            let middleStart = Self.inset + left + Self.columnGap
+            let middleEnd = bounds.width - Self.inset - rightEnd - (showsRight ? Self.columnGap : 0)
+            let half = min(bounds.midX - middleStart, middleEnd - bounds.midX)
+            let (start, room) = half * 2 >= Self.namesRoom ? (bounds.midX - half, half * 2)
+                : (middleStart, middleEnd - middleStart)
+            titleLabel.isHidden = room < 80
+            folderLabel.isHidden = true
+            place(titleLabel, x: start, y: y, width: max(0, room), height: rowHeight)
+            return
+        }
+        // Two rows: the names below, the file's on the left half, the folder's on the right one.
+        let half = max(0, (available - Self.columnGap) / 2)
         titleLabel.isHidden = false
-        place(titleLabel, x: Self.inset, y: bottomRowY, width: left, height: heights.bottom)
+        place(titleLabel, x: Self.inset, y: padding, width: showsRight ? half : available, height: heights.bottom)
         folderLabel.isHidden = !showsRight
-        place(detailLabel, x: bounds.width - Self.inset - right, y: topRowY, width: right, height: heights.top)
-        place(folderLabel, x: bounds.width - Self.inset - right, y: bottomRowY, width: right, height: heights.bottom)
+        place(folderLabel, x: bounds.width - Self.inset - half, y: padding, width: half, height: heights.bottom)
+    }
+
+    /// The decode time at the right end, the date before it; a cell's inset is given back at the edge.
+    private func placeDetail(y: CGFloat, height: CGFloat) {
+        let slots = detailSlots
+        let end = bounds.width - Self.inset + 4
+        place(decodeLabel, x: end - slots.decode, y: y, width: slots.decode, height: height)
+        place(dateLabel, x: end - slots.decode - Self.detailGap - slots.date, y: y, width: slots.date, height: height)
     }
 
     private func place(_ label: NSTextField, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {

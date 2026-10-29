@@ -347,3 +347,27 @@ private func stamped(_ names: [(String, Double, Int)]) -> (files: [URL], stamps:
     s.set(BrowserSort.settingKey, "sideways", for: URL(fileURLWithPath: "/a", isDirectory: true))
     #expect(BrowserSort.forFolder(URL(fileURLWithPath: "/a", isDirectory: true), settings: s) == .standard)
 }
+
+@Test func gridAndViewerOrderMatch() {   // the viewer steps where the grid's next card is, in every sort
+    let (files, stamps) = stamped([("img10.jpg", 5, 3), ("img2.jpg", 9, 3), ("Img1.jpg", 5, 7), ("b.jpg", 5, 3),
+                                   ("a.jpg", 5, 3)])
+    let unstamped = URL(fileURLWithPath: "/x/n.jpg")
+    for text in ["name", "name-desc", "date", "date-desc", "size", "size-desc"] {
+        let sort = BrowserSort(text: text)!
+        let grid = sort.order((files + [unstamped]).map { BrowserListingSource.fileEntry($0, stamp: stamps[$0]) })
+        let p = Playlist(files: files + [unstamped], current: files[4], stamps: stamps, sort: sort)
+        #expect(p.files == grid.map(\.url), "\(text)")
+        #expect(p.current == files[4])
+    }
+}
+
+@Test func archivePagesOrderLikeTheGrid() throws {   // pages in a zip's subfolders go by their inner paths, as cards do
+    let zip = URL(fileURLWithPath: "/x/g.zip")
+    let pages = try ["caps/2.png", "caps/10.png", "caps-x.png", "capsule.png", "a/z.png"].map {
+        try #require(ArchivePath.url(archive: zip, entry: $0))
+    }
+    for sort in [BrowserSort.standard, BrowserSort(text: "name-desc")!] {
+        let grid = sort.order(pages.map { BrowserListingSource.fileEntry($0, stamp: nil) })
+        #expect(Playlist(files: pages, current: pages[0], stamps: [:], sort: sort).files == grid.map(\.url))
+    }
+}

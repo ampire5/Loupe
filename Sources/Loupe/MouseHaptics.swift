@@ -3,7 +3,8 @@ import LoupeCore
 import LogiHIDPP
 
 /// Plays a haptic pattern on the mouse by its LogiHIDPP `HapticPattern`, at `strength` (0…100) or, nil, the mouse's normal
-/// strength. The app's player is `LogiMouse` (`AppDelegate`); without one (a secondary launch) nothing vibrates.
+/// strength. The app's player goes through MouseService (`AppDelegate`); without one (a secondary launch) nothing
+/// vibrates.
 @MainActor protocol HapticPlaying: AnyObject {
     func play(_ pattern: HapticPattern, strength: UInt8?)
 }
@@ -11,9 +12,9 @@ import LogiHIDPP
 /// The mouse's haptic answers (M4c spec §5, §11): which pattern each event plays comes from loupe.conf
 /// (`haptic-zoom-stop`, `haptic-limit`, `haptic-step`, `haptic-detent`, `haptic-long-armed`, `haptic-toggle`,
 /// `haptic-end`), read at each call so a reload applies at once; `none` or `mouse-haptics=no` plays nothing. A value that ends in `strong` plays at `haptic-strong-strength`, the rest at
-/// the mouse's normal strength (`haptic-strength`, set by `AppDelegate`). Only events a mouse or a key started call
-/// these: a trackpad gesture keeps its own trackpad tick. The package itself stays silent in the background and with
-/// haptics off in the mouse, and a newer pattern replaces one not yet sent, so fast steps do not queue up.
+/// the mouse's normal strength (MouseService's setting). Only events a mouse or a key started call these: a trackpad
+/// gesture keeps its own trackpad tick. MouseService plays nothing while Loupe is not in front, and LogiHIDPP behind it
+/// lets a newer pattern replace one not yet sent, so fast steps do not queue up.
 @MainActor final class MouseHaptics {
     static let shared = MouseHaptics()
 

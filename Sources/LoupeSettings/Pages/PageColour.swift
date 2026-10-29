@@ -16,14 +16,14 @@ extension SettingsPanel {
                             + "and shadows on brightness alone, hues and saturation kept (better on dark saturated "
                             + "photos, where Apple turns skin orange). Default Apple."),
                         .number("auto-color-strength", "Strength", step: 0.05,
-                                description: "Blend with the original in linear light. 0–1, default 1."),
+                                description: "Blend with the original in linear light. 0–1, default 0.8."),
                         .flags("auto-color-filters", "Parts", [
                             (word: "curve", title: "Curve"), (word: "shadows", title: "Shadows"),
                             (word: "vibrance", title: "Vibrance"),
                         ], description: "Which parts of Apple's correction apply, at least one. Default all three."),
                         .number("auto-color-vibrance-gain", "Vibrance gain", unit: "×", step: 0.1,
                                 description: "Multiplies the vibrance Apple picked (the result stays at most 1). "
-                                    + "0–4, default 1."),
+                                    + "0–4, default 1.5."),
                         .number("auto-color-threshold", "Threshold", step: 1,
                                 description: "Δ, how much Apple's full correction changes the photo (0–255): below "
                                     + "it the photo is left alone; 0 corrects everything. Default 6."),
@@ -41,7 +41,7 @@ extension SettingsPanel {
                         + "it here. Default off.",
                     nested: [
                         .number("vibrance-amount", "Amount", step: 0.05,
-                                description: "0–1, default 0.5."),
+                                description: "0–1, default 0.65."),
                     ], off: []),
         ]),
     ])

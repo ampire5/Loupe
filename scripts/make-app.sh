@@ -115,7 +115,15 @@ if xcrun --find actool >/dev/null 2>&1; then
 else
     echo "warning: actool not found (needs Xcode); Loupe.app gets the generic icon" >&2
 fi
-codesign --force --sign - "$app"
+# Signed with the local identity "Local Code Signing" (login keychain) when present: the designated requirement is then
+# the bundle ID and the certificate, the same for every build, so TCC grants (network volumes, Accessibility) survive
+# rebuilds; ad hoc it is the build's own hash, and every new build must be allowed again.
+if security find-identity -p codesigning | grep -q '"Local Code Signing"'; then
+    codesign --force --sign "Local Code Signing" "$app"
+else
+    echo "warning: no \"Local Code Signing\" identity: signed ad hoc, TCC grants must be given again" >&2
+    codesign --force --sign - "$app"
+fi
 codesign --verify --deep --strict "$app"
 echo "Built $app"
 if [[ $install == 1 ]]; then

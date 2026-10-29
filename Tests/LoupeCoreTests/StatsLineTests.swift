@@ -267,3 +267,20 @@ import Testing
     #expect(StatsLine.factsOfCompanion(current: 13, first: 12, companionRead: true))    // companion is first
     #expect(!StatsLine.factsOfCompanion(current: 13, first: 12, companionRead: false))  // not read: the current's
 }
+
+// Smart zoom spec §1: a free zoom carried as the screen's share is named by it.
+@Test func modeTextNamesTheScreenShare() {
+    // 1000×1000 in 2000×1000 at .free(1.2): scale 1.2, 1200×1000 on screen after clipping, 60 % of the view.
+    let t = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: CGSize(width: 2000, height: 1000),
+                          mode: .free(1.2))
+    #expect(StatsLine.modeText(t, carry: .screen) == "Screen 60 %")
+    #expect(StatsLine.modeText(t) == "Zoom 120 %")
+    #expect(StatsLine.modeText(t.withMode(.fit), carry: .screen) == "Fit 100 %")
+}
+
+@Test func modeTextNamesSubjectZoom() {
+    let t = ViewTransform(imageSize: CGSize(width: 1000, height: 1000), viewSize: CGSize(width: 2000, height: 1000),
+                          mode: .free(3))
+    #expect(StatsLine.modeText(t, subject: true) == "Subject 300 %")
+    #expect(StatsLine.modeText(t.withMode(.fit), subject: true) == "Fit 100 %")
+}

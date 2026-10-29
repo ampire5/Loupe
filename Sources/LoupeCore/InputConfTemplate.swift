@@ -67,6 +67,17 @@ public enum InputConfTemplate {
     # 2 actual-200                                  # 200 %
     # KP2 actual-200                                # 200 %
     # 4 actual-400                                  # 400 %
+    # 3 fill                                        # ordinary Fill, Manual zoom
+    # KP3 fill                                      # ordinary Fill, Manual zoom
+    # g toggle-zoom-set                             # Manual / SmartZoom (ordinary numeric presets stay fixed)
+    # Alt+g cycle-subject-target                    # zoom to a face / a person / an object / where the eye goes
+    # m cycle-detector-mode                         # next SmartZoom profile
+    # Alt+s toggle-smart-zoom                       # Manual / SmartZoom; preserves view and profile
+    # M save-detector-size                          # the size on screen as the mode's size (detector.conf)
+    # n next-target                                 # the next target found on the photo
+    # G toggle-subjects                             # show what Vision found: the subjects, the frame, its centre
+    # Alt+Shift+g toggle-step-zoom                  # apply Auto (legacy mouse/key alias)
+    # Alt+l remember-zoom                           # the tab's zoom choices for the folder (keys and menu choose for the tab)
     # KP4 actual-400                                # 400 %
     # w fit-width                                   # fit width
     # h fit-height                                  # fit height
@@ -80,6 +91,11 @@ public enum InputConfTemplate {
     # L save-keep-zoom                              # keep zoom as the default for all folders
     # k toggle-zoom-carry                           # a kept zoom keeps the share of the photo / the scale, this folder
     # K save-zoom-carry                             # share / scale as the default for all folders
+    # Z zoom-subject                                # apply Auto using the selected SmartZoom profile (Shift+z)
+    # Alt+k cycle-step-pan                          # after a step: the subject / the same place / the centre, this folder
+    # Alt+K save-step-pan                           # after a step as the default for all folders
+    # Alt+z cycle-zoom-anchor                       # gesture zoom towards the pointer / the centre / the subject
+    # Alt+Z save-zoom-anchor                        # gesture zoom towards as the default for all folders
     # Shift+LEFT pan-left                           # pan left by a tenth of the window
     # Shift+RIGHT pan-right                         # pan right
     # Shift+UP pan-up                               # pan up

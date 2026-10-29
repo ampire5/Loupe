@@ -12,7 +12,8 @@ private func action(_ code: UInt16, _ character: String? = nil, _ modifiers: Key
 /// The tab and window actions have no key or button at all (⌘T, ⌘N, ⌘W, ⌘⇧] / ⌘⇧[ are the menu's): input.conf only.
 private let mouseOnlyByDefault: Set<KeyAction> = [.toggleInfoPanel, .newTab, .newWindow, .closeTab, .nextTab, .previousTab,
                                                        .openInNewTab, .openInNewWindow, .home,
-                                                       .back, .reopenTab, .closeWindow]
+                                                       .back, .reopenTab, .closeWindow,
+                                                       .screenShare, .manualZoom, .fillSubject]   // Explicit commands available to the toolbar and input.conf.
 
 /// The browser's ⌘[, ⇧⌘T and ⇧⌘W as input.conf actions.
 @Test func browserTabActionNames() {
@@ -41,9 +42,9 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     36: (nil, nil), 76: (nil, nil), 123: (nil, nil), 124: (nil, nil), 125: (nil, nil), 126: (nil, nil), 51: (nil, nil), 53: (nil, nil),
     115: (nil, nil), 119: (nil, nil), 116: (nil, nil), 121: (nil, nil), 49: (" ", " "),
     30: ("]", "}"), 33: ("[", "{"), 44: ("/", "?"),
-    29: ("0", ")"), 18: ("1", "!"), 19: ("2", "@"), 21: ("4", "$"), 82: ("0", "0"), 83: ("1", "1"), 84: ("2", "2"),
+    29: ("0", ")"), 18: ("1", "!"), 19: ("2", "@"), 20: ("3", "#"), 21: ("4", "$"), 82: ("0", "0"), 83: ("1", "1"), 84: ("2", "2"), 85: ("3", "3"),
     86: ("4", "4"), 24: ("=", "+"), 27: ("-", "_"), 69: ("+", "+"), 78: ("-", "-"),
-    2: ("d", "D"), 13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
+    2: ("d", "D"), 13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 5: ("g", "G"), 46: ("m", "M"), 45: ("n", "N"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
     1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 40: ("k", "K"), 35: ("p", "P"),
 ]
 
@@ -90,13 +91,15 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     let expected: [KeyAction: String] = [
         .previous: "←  ⌫  PgUp", .next: "→  Space  PgDn", .previousFolder: "[  ⌥←", .nextFolder: "]  ⌥→",
         .first: "Home", .last: "End", .browse: "Return  Enter", .exitFullScreen: "Esc", .fit: "0", .actual100: "1", .actual200: "2",
-        .actual400: "4", .fitWidth: "W", .fitHeight: "H", .fill: "X", .toggleFitActual: "Z", .zoomIn: "=  +",
+        .actual400: "4", .fitWidth: "W", .fitHeight: "H", .fill: "3  X", .toggleFitActual: "Z", .zoomIn: "=  +",
         .zoomOut: "-", .panLeft: "⇧←", .panRight: "⇧→", .panUp: "⇧↑", .panDown: "⇧↓", .toggleFullScreen: "F",
         .cycleStats: "I", .toggleStrip: "T", .toggleStripPlacement: "⇧T", .cheatSheet: "?",
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
         .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
         .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
         .toggleSpread: "D", .saveSpread: "⇧D", .shiftSpread: "⌥D",
+        .toggleZoomSet: "G", .cycleSubjectTarget: "⌥G", .cycleDetectorMode: "M", .saveDetectorSize: "⇧M", .nextTarget: "N", .toggleSubjects: "⇧G", .rememberZoom: "⌥L", .toggleStepZoom: "⌥⇧G", .toggleSmartZoom: "⌥S",
+        .zoomSubject: "⇧Z", .cycleStepPan: "⌥K", .saveStepPan: "⌥⇧K", .cycleZoomAnchor: "⌥Z", .saveZoomAnchor: "⌥⇧Z",
     ]
     for a in KeyAction.allCases {
         #expect(map.label(a).keys == (mouseOnlyByDefault.contains(a) ? "" : expected[a]), "\(a): \(map.label(a).keys)")
@@ -151,7 +154,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     #expect(action(0, "q") == nil)
     #expect(action(44) == nil)                        // "/" without Shift
     #expect(action(123, nil, [.option, .shift]) == nil)
-    #expect(action(200, "z", .option) == nil)         // ⌥ belongs to the menus
+    #expect(action(200, "q", .option) == nil)         // an unbound ⌥ letter belongs to the menus
     #expect(action(29, nil, .option) == nil)
 }
 
@@ -289,7 +292,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
 @Test func menuKeyForActions() {
     let expected: [KeyAction: (String, KeyModifiers)] = [
         .fit: ("0", []), .actual100: ("1", []), .actual200: ("2", []), .actual400: ("4", []),
-        .fitWidth: ("w", []), .fitHeight: ("h", []), .fill: ("x", []), .toggleFitActual: ("z", []),
+        .fitWidth: ("w", []), .fitHeight: ("h", []), .fill: ("3", []), .toggleFitActual: ("z", []),
         .zoomIn: ("+", []), .zoomOut: ("-", []),
         .cycleFilter: ("s", []), .saveFilters: ("s", .shift), .toggleAntiring: ("a", []), .saveAntiring: ("a", .shift),
         .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
@@ -298,6 +301,9 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .toggleZoomCarry: ("k", []), .saveZoomCarry: ("k", .shift),
         .cyclePanIndicators: ("p", []), .savePanIndicators: ("p", .shift),
         .toggleSpread: ("d", []), .saveSpread: ("d", .shift), .shiftSpread: ("d", .option),
+        .toggleZoomSet: ("g", []), .cycleSubjectTarget: ("g", .option), .cycleDetectorMode: ("m", []), .saveDetectorSize: ("m", .shift), .nextTarget: ("n", []), .toggleSubjects: ("g", .shift), .rememberZoom: ("l", .option), .toggleStepZoom: ("g", [.option, .shift]), .toggleSmartZoom: ("s", .option),
+        .zoomSubject: ("z", .shift), .cycleStepPan: ("k", .option), .saveStepPan: ("k", [.option, .shift]),
+        .cycleZoomAnchor: ("z", .option), .saveZoomAnchor: ("z", [.option, .shift]),
     ]
     for a in KeyAction.allCases {
         let got = map.menuKey(a)

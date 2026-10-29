@@ -23,6 +23,9 @@ import LoupeCore
     /// `LOUPE_AUTOPAN_PANEL_TOGGLE=<seconds>`: the info panel is toggled (⌘I) that often during the run.
     private let panelToggle = ProcessInfo.processInfo.environment["LOUPE_AUTOPAN_PANEL_TOGGLE"].flatMap(Double.init)
     private var toggles = 0
+    /// `LOUPE_AUTOPAN_SUBJECTS=1`: Show Subjects (⇧G) on for the run, from the start (owner, 2026-10-28: its cost per
+    /// frame of a pan or a zoom).
+    private let showSubjects = ProcessInfo.processInfo.environment["LOUPE_AUTOPAN_SUBJECTS"] == "1"
     /// `step` mode: when the next photo step is due, its direction, and an LCG for the delays (the same run each time).
     private var nextStep = 0.5
     private var stepDirection = 1
@@ -92,6 +95,7 @@ import LoupeCore
             }
             self.path = AutoPanPath(viewSize: session.transform.viewSize)
             self.start = now
+            if showSubjects, !controller.viewerView.subjectOverlayView.isOn { controller.toggleSubjects(nil) }
             DebugLog.log("autopan start \(seconds) s \(mode)\(mode == .zoom ? " fit…" : " at ")×\(scale), view \(session.transform.viewSize)")
             return
         }

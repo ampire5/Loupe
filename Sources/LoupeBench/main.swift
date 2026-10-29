@@ -9,6 +9,8 @@ import LoupeCore
 // LoupeBench pyramid … (see PyramidBench.swift)
 // LoupeBench crops … (see CropsBench.swift)
 // LoupeBench autocolour … (see AutoColourBench.swift)
+// LoupeBench subjects … (see SubjectsBench.swift)
+// LoupeBench detector … (see DetectorBench.swift)
 // LoupeBench browser … (see BrowserBench.swift)
 // LoupeBench marks … (see MarksBench.swift)
 // LoupeBench strip … (see StripBench.swift)
@@ -56,6 +58,15 @@ if CommandLine.arguments.dropFirst().first == "pyramid" {
 }
 if CommandLine.arguments.dropFirst().first == "crops" {
     CropsBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "detector" {
+    DetectorBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "hotpaths" {
+    HotPathsBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "subjects" {
+    SubjectsBench.main(Array(CommandLine.arguments.dropFirst(2)))
 }
 if CommandLine.arguments.dropFirst().first == "autocolour" {
     AutoColourBench.main(Array(CommandLine.arguments.dropFirst(2)))

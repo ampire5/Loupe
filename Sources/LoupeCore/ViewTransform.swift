@@ -93,7 +93,9 @@ public struct ViewTransform: Equatable, Sendable {
     }
 
     /// The same transform with the centre pulled inside the image (spec §7): an axis on which
-    /// the image fits in the view is centred, otherwise the view edge may not pass the image edge.
+    /// the image fits in the view is centred, otherwise the view edge may not pass the image edge. Every way of moving
+    /// the view keeps to it, a zoom at the pointer and a framing of the subject too (owner, 2026-10-28: past it the
+    /// picture stood in an unnatural place off the middle).
     public var clamped: ViewTransform {
         var t = self
         let s = scale
@@ -177,30 +179,36 @@ public struct ViewTransform: Equatable, Sendable {
                        y: (p.y - vh / 2 - offset.dy) / s + c.y * imageSize.height)
     }
 
-    /// Zooms to an absolute scale while the image point under `anchor` (view pixels) stays
-    /// under it, so pinch and scroll-wheel zoom feel pinned to the cursor. The result is a
-    /// `.free` mode relative to fit, which keeps it meaningful after a window resize.
-    public func zoomed(toScale s: Double, anchor: CGPoint) -> ViewTransform {
+    /// Zooms to `s` with the image point `image` (image pixels) at `view` (view pixels), as near as `clamped` lets it:
+    /// a gesture bringing the subject to the centre (`SubjectCentring`).
+    public func zoomed(toScale s: Double, placing image: CGPoint, at view: CGPoint) -> ViewTransform {
         let newScale = clampScale(s)
-        let pinned = imagePoint(forView: anchor)
         var t = self
         t.offset = .zero
         t.stretch = nil
         t.mode = .free(newScale / fitScale)
-        t.center = CGPoint(x: relative(pinned.x - (anchor.x - vw / 2) / newScale, of: imageSize.width),
-                           y: relative(pinned.y - (anchor.y - vh / 2) / newScale, of: imageSize.height))
+        t.center = CGPoint(x: relative(image.x - (view.x - vw / 2) / newScale, of: imageSize.width),
+                           y: relative(image.y - (view.y - vh / 2) / newScale, of: imageSize.height))
         return t.clamped
     }
 
+    /// Zooms to an absolute scale while the image point under `anchor` (view pixels) stays
+    /// under it, so pinch and scroll-wheel zoom feel pinned to the cursor. The result is a
+    /// `.free` mode relative to fit, which keeps it meaningful after a window resize. An axis on which the image is
+    /// smaller than the view stays centred (`clamped`).
+    public func zoomed(toScale s: Double, anchor: CGPoint) -> ViewTransform {
+        zoomed(toScale: s, placing: imagePoint(forView: anchor), at: anchor)
+    }
+
     /// Moves the image content by `delta` view pixels (it follows the finger: +dx moves the
-    /// image right, so the visible rect moves left).
+    /// image right, so the visible rect moves left). An axis on which the image fits does not move.
     public func panned(by delta: CGVector) -> ViewTransform {
-        let c = clamped.center, s = scale
+        let c = clamped.center, s = scale, axes = pannableAxes
         var t = self
         t.offset = .zero
         t.stretch = nil
-        t.center = CGPoint(x: relative(c.x * imageSize.width - delta.dx / s, of: imageSize.width),
-                           y: relative(c.y * imageSize.height - delta.dy / s, of: imageSize.height))
+        t.center = CGPoint(x: axes.x ? relative(c.x * imageSize.width - delta.dx / s, of: imageSize.width) : c.x,
+                           y: axes.y ? relative(c.y * imageSize.height - delta.dy / s, of: imageSize.height) : c.y)
         return t.clamped
     }
 
@@ -270,27 +278,58 @@ public struct ViewTransform: Equatable, Sendable {
         return t
     }
 
-    /// Window resize: keeps mode and stored centre (clamping is applied when reading geometry). A free zoom keeps its
-    /// ratio to Fit, so the framing stays, or with `keepingScale` (`keep-zoom-as=scale`) the scale it draws at; a view
-    /// not laid out yet (a zero side) has no scale to keep.
-    public func withViewSize(_ s: CGSize, keepingScale: Bool = false) -> ViewTransform {
+    /// Window resize: keeps mode and stored centre (clamping is applied when reading geometry). A free zoom keeps what
+    /// `carry` (`keep-zoom-as`) says: `.share` its ratio to Fit, so the framing stays; `.scale` the scale it draws at;
+    /// `.screen` the share of the view it covers. A view not laid out yet (a zero side) has nothing to keep.
+    public func withViewSize(_ s: CGSize, carry: ZoomCarry = .share) -> ViewTransform {
         var t = self
         t.offset = .zero
         t.stretch = nil
         t.viewSize = s
-        guard keepingScale, viewSize.width > 0, viewSize.height > 0 else { return t }
-        return t.carryingZoom(from: self, .scale)
+        guard carry != .share, viewSize.width > 0, viewSize.height > 0 else { return t }
+        return t.carryingZoom(from: self, carry)
+    }
+
+    /// The share of the view the picture covers (0…1, smart zoom spec §1): its on-screen rect clipped to the view, by
+    /// area, at `scale` (the transient offset and stretch aside).
+    /// Past Fill the picture covers the whole view, and the share goes on as its area over Fill's (owner's report: it
+    /// stopped at 100 %, so every zoom past Fill showed `Screen 100 %` and the next photo opened at Fill).
+    public var screenShare: Double {
+        let s = scale, fill = fillScale
+        guard s <= fill else { return (s / fill) * (s / fill) }
+        return min(imageSize.width * s, vw) * min(imageSize.height * s, vh) / (vw * vh)
+    }
+
+    /// The scale at which the picture covers the view, both sides at least the view's.
+    private var fillScale: Double {
+        guard imageSize.width > 0, imageSize.height > 0 else { return 1 }
+        return max(vw / imageSize.width, vh / imageSize.height)
+    }
+
+    /// The scale at which this transform's image covers `share` of the view, before the zoom limits. The covered area
+    /// grows with the scale until Fill, so it is inverted piece by piece: both sides inside the view, then the side that
+    /// fits first full and the other growing, then past Fill by the area (`screenShare`).
+    public func scaleCovering(screenShare share: Double) -> Double {
+        let w = Double(imageSize.width), h = Double(imageSize.height)
+        guard w > 0, h > 0 else { return 1 }
+        guard share < 1 else { return max(vw / w, vh / h) * share.squareRoot() }   // past Fill: by the area
+        let both = (max(share, 0) * vw * vh / (w * h)).squareRoot()
+        if both <= min(vw / w, vh / h) { return both }
+        return vw / w <= vh / h ? share * vh / h : share * vw / w
     }
 
     /// This transform with a free zoom carried over from `old` (the previous photo, or this one at another view size)
     /// by `carry`: `.scale` keeps the scale `old` drew at; `.share` keeps the share of the picture's area in view, so
     /// a photo of the same pixel count keeps the scale whichever way it is turned (its ratio to Fit would change with
-    /// the orientation), and one of four times the pixels takes twice the scale. Only a free zoom moves: Fit, the
-    /// fit-family and `actual` are named modes and stay as they are.
+    /// the orientation), and one of four times the pixels takes twice the scale; `.screen` keeps the share of the view
+    /// the picture covers (`screenShare`), so the empty space stays, cutting a photo of another shape where needed.
+    /// Only a free zoom moves: Fit, the fit-family and `actual` are named modes and stay as they are.
     public func carryingZoom(from old: ViewTransform, _ carry: ZoomCarry) -> ViewTransform {
         guard case .free = old.mode, case .free = mode else { return self }
         var target = old.scale
-        if carry == .share {
+        if carry == .screen {
+            target = scaleCovering(screenShare: old.screenShare)
+        } else if carry == .share {
             let before = Double(old.imageSize.width * old.imageSize.height)
             let after = Double(imageSize.width * imageSize.height)
             if before > 0, after > 0 { target *= (before / after).squareRoot() }

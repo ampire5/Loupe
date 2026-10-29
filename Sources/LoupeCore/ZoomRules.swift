@@ -19,21 +19,58 @@ public enum PanIndicatorMode: String, CaseIterable, Sendable {
 /// What a photo switch does with the view (M4b spec §4): `keep-zoom-position`, `default-zoom-mode` (both folder keys)
 /// and `fit-upscale`, read from the effective config.
 public struct ZoomRules: Equatable, Sendable {
-    /// `keep-zoom-position`: a switch keeps the current zoom mode and centre.
+    /// `keep-zoom-position`: a switch keeps the current zoom mode (where the view lands is `pan`'s).
     public var keep: Bool
     /// `keep-zoom-as`: what a kept free zoom keeps.
     public var carry: ZoomCarry
+    /// `step-pan`: where the view lands after a step.
+    public var pan: StepPan
+    /// `step-zoom`: whether a step frames the next photo on its subject.
+    public var stepZoom: StepZoom
+    /// `subject-pull` as a share (0…1).
+    public var subjectPull: Double
+    /// `subject-target`: where `pan`'s subject is looked for.
+    public var chain: [SubjectKind]
+    /// `zoom-anchor`: where a gesture zoom is anchored.
+    public var anchor: ZoomAnchor
+    /// `subject-size` as a share (0.2…1): how much of the view the subject's frame takes under Zoom to Subject.
+    public var subjectSize: Double
     /// `default-zoom-mode`: the mode a photo opens in when the view is not kept.
     public var defaultMode: ZoomMode
     /// `fit-upscale`: Fit magnifies a photo smaller than the window (`no`: at most 100 %).
     public var fitUpscale: Bool
+    /// The custom detector's mode when it is on and its model is there (`detector`, detector.conf): its chain and size
+    /// are `chain` and `subjectSize`.
+    public var detector: DetectorSetup.Mode?
+    public var composition = CompositionOptions()
 
     public init(config: Config) {
         keep = config.keepZoomPosition
         carry = config.keepZoomAs
+        pan = config.stepPan
+        stepZoom = config.stepZoom
+        subjectPull = Double(config.subjectPull) / 100
+        chain = config.subjectTarget
+        anchor = config.zoomAnchor
+        subjectSize = Double(config.subjectSize) / 100
         defaultMode = config.defaultZoomMode
         fitUpscale = config.fitUpscale
+        if config.detector, config.detectorSetup.detects, let mode = config.detectorSetup.mode(config.detectorMode) {
+            detector = mode
+            chain = mode.chain
+            subjectSize = mode.size
+            composition = mode.composition
+        }
+        if let values = config.smartZoomOptions[detector?.name ?? "vision"] {
+            for (key, value) in values {
+                if key == "size", let v = DetectorSetup.share(value) { subjectSize = v }
+                else { _ = composition.set(key, value) }
+            }
+        }
     }
+
+    /// The kinds ⇧Z steps through: the custom detector's chain, else every one of Vision's.
+    public var stepKinds: [SubjectKind] { detector?.chain ?? SubjectKind.vision }
 
     /// `fit`, `fit-width`, `fit-height`, `fill` or `<k>%` (`k` finite and above 0; `100%`, `12.5%`) → the mode, else
     /// nil. Either case, spaces around the number allowed.

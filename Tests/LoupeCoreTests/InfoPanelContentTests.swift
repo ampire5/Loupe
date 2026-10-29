@@ -48,7 +48,7 @@ import Testing
         #expect(rows(s, "File") == [
             InfoRow(label: "Name", value: "a.jpg"),
             InfoRow(label: "Folder", value: "/Photos/Trip"),
-            InfoRow(label: "Size", value: "12.3 MB"),
+            InfoRow(label: "Size", value: "12.3\u{00A0}MB (12\u{202F}345\u{202F}678\u{00A0}B)"),
             InfoRow(label: "Modified", value: "2025-01-31 23:59"),
             InfoRow(label: "Created", value: "2024-05-01 09:07"),
             InfoRow(label: "Format", value: "JPEG progressive"),
@@ -162,7 +162,7 @@ import Testing
     }
 
     @Test func sizeIsDecimalMegabytes() {
-        #expect(rows(sections(file: file(fileSize: 52_340_000)), "File")?.first { $0.label == "Size" }?.value == "52.3 MB")
-        #expect(rows(sections(file: file(fileSize: 0)), "File")?.first { $0.label == "Size" }?.value == "0.0 MB")
+        #expect(rows(sections(file: file(fileSize: 52_340_000)), "File")?.first { $0.label == "Size" }?.value == "52.3\u{00A0}MB (52\u{202F}340\u{202F}000\u{00A0}B)")
+        #expect(rows(sections(file: file(fileSize: 0)), "File")?.first { $0.label == "Size" }?.value == "0\u{00A0}B")
     }
 }

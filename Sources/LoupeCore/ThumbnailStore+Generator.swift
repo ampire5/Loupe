@@ -179,9 +179,10 @@ extension ThumbnailStore {
             if recipe.maxSide == thumbSize, !relisted { add(url, Made(jpeg: jpeg, info: info, stamp: stamp)) }
             log?("thumb \(url.lastPathComponent): read \(Self.ms(timing.read)) ms (\(timing.source)), "
                  + "decode \(Self.ms(timing.decode)) ms")
-        case .failed:
+        case .failed(let isBroken):
             if !job.cancelled {
                 unavailable.insert(url)
+                if isBroken { broken.insert(url) }
                 walkFileDone(url)
                 onThumbnail?(url)
             }
@@ -199,6 +200,7 @@ extension ThumbnailStore {
         setMade(url, thumbnail)
         cells.remove(url)
         unavailable.remove(url)
+        broken.remove(url)
         missed.remove(url)
         // A file that changed after its listing (the read saw another stamp) stays in memory only: the
         // catalog row still has the listing's stamp, and `put` would skip it.
@@ -242,7 +244,7 @@ extension ThumbnailStore {
         do {
             if let data = await r.cachedBytes(r.url, r.listedStamp) {
                 await r.readEnded()
-                let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
+                let (jpeg, info) = try await decode(r, &t) { try Self.made(from: data, r) }
                 return .made(jpeg: jpeg, info: info, stamp: r.listedStamp)
             }
             if let outcome = try await fromFirstRead(r, &t) { return outcome }
@@ -254,10 +256,11 @@ extension ThumbnailStore {
             t.source = "prefix+full"
             await r.readEnded()
             let data = bytes.data
-            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
+            let (jpeg, info) = try await decode(r, &t) { try Self.made(from: data, r) }
             return .made(jpeg: jpeg, info: info, stamp: bytes.stamp)
         } catch {
-            return Task.isCancelled || error is CancellationError ? .cancelled : .failed
+            return Task.isCancelled || error is CancellationError ? .cancelled
+                : .failed(broken: error as? DecodeError == .unreadable)
         }
     }
 
@@ -272,7 +275,7 @@ extension ThumbnailStore {
         let data = bytes.data, stamp = bytes.stamp
         if data.count >= stamp.size {
             t.source = "full"
-            let (jpeg, info) = try await decode(r, &t) { try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide) }
+            let (jpeg, info) = try await decode(r, &t) { try Self.made(from: data, r) }
             return .made(jpeg: jpeg, info: info, stamp: stamp)
         }
         t.source = "prefix"
@@ -286,9 +289,18 @@ extension ThumbnailStore {
                 ? try? ThumbnailMaker.makeFromJXLPrefix(data, fullSize: info, maxSide: r.maxSide)
                 : try? ThumbnailMaker.makeFromPrefix(data, fullSize: info, maxSide: r.maxSide)
             guard let jpeg else { return nil }
-            return (jpeg, info)
+            var withFacts = info
+            withFacts.facts = PhotoFacts.read(data)
+            return (jpeg, withFacts)
         }
         return made.map { .made(jpeg: $0.0, info: $0.1, stamp: stamp) }
+    }
+
+    /// The thumbnail and the photo's info, with its facts read from the same bytes (no other read).
+    static func made(from data: Data, _ r: Recipe) throws -> (Data, ImageInfo) {
+        var (jpeg, info) = try ThumbnailMaker.make(from: data, decoder: r.decoder(data).forRole(.thumbnail), maxSide: r.maxSide)
+        info.facts = PhotoFacts.read(data)
+        return (jpeg, info)
     }
 
     /// In the store's own decode pool, apart from the viewer's.

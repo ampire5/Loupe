@@ -1,4 +1,5 @@
 import CoreGraphics
+import HomeScreenModel
 
 /// What a file header says about an image, cheap enough to read before committing to a decode.
 public struct ImageInfo: Equatable, Sendable {
@@ -19,6 +20,9 @@ public struct ImageInfo: Equatable, Sendable {
     /// The colour space the decoder will hand the pixels in, when the header tells it (nil: not known before
     /// decoding). The viewer tags its layer with it ahead of the pixels when nothing else is on screen.
     public let colorSpace: CGColorSpace?
+    /// The photo's facts for its card (pixels, EXIF: `PhotoFacts`), read with the thumbnail and kept in the catalog
+    /// beside it; nil when not read (the viewer's own decodes do not).
+    public var facts: FileFacts?
 
     public init(pixelSize: PixelSize, typeIdentifier: String, isProgressive: Bool, fileSize: Int, colorSpaceName: String?,
                 orientation: ImageOrientation = .up, colorSpace: CGColorSpace? = nil) {

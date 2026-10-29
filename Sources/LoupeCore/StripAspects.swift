@@ -38,11 +38,13 @@ import Foundation
     private let sleep: @MainActor (Duration) async -> Void
 
     private var files: [URL] = []
-    private var fileSet: Set<URL> = []
+    /// Each playlist file's index, so an arrival changes its own place in `aspects` (owner, 2026-10-28: making all of
+    /// them again on every fetch was ~5 ms on the main thread for 50 000 photos, every 250 ms of a generation pass).
+    private var positions: [URL: Int] = [:]
     /// What the store said, for the playlist's files only.
     private var known: [URL: Double] = [:]
-    /// `known` changed since `aspects` was made.
-    private var stale = false
+    /// Arrived, not in `aspects` yet: by index.
+    private var arrived: [Int: Double] = [:]
     /// Asked for at the next fetch: these files, and every unknown one when `askAll`.
     private var wanted: Set<URL> = []
     private var askAll = false
@@ -76,8 +78,8 @@ import Foundation
     public func setPlaylist(_ files: [URL]) {
         guard files != self.files else { return }
         self.files = files
-        fileSet = Set(files)
-        known = known.filter { fileSet.contains($0.key) }
+        positions = Dictionary(files.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        known = known.filter { positions[$0.key] != nil }
         askedAllAfterFirstCell = false
         makeAspects()
         ask(all: true)
@@ -106,13 +108,13 @@ import Foundation
     // MARK: -
 
     private func makeAspects() {
-        stale = false
+        arrived = [:]
         aspects = files.map { known[$0] }
     }
 
     private func ask(_ urls: [URL] = [], all: Bool = false) {
         guard !closed else { return }
-        wanted.formUnion(urls.lazy.filter { self.fileSet.contains($0) })
+        wanted.formUnion(urls.lazy.filter { self.positions[$0] != nil })
         askAll = askAll || all
         guard !wanted.isEmpty || askAll else { return }
         schedule()
@@ -135,9 +137,10 @@ import Foundation
             self.task = nil
             // A playlist or `exif-orientation` that changed meanwhile asked for its own.
             if self.files == playlist, self.appliesOrientation == applies {
-                for (url, aspect) in found where self.fileSet.contains(url) && self.known[url] != aspect {
+                for (url, aspect) in found where self.known[url] != aspect {
+                    guard let index = self.positions[url] else { continue }
                     self.known[url] = aspect
-                    self.stale = true
+                    self.arrived[index] = aspect
                 }
                 self.apply()
             }
@@ -146,8 +149,9 @@ import Foundation
     }
 
     private func apply() {
-        guard stale, !paused, !closed else { return }
-        makeAspects()
+        guard !arrived.isEmpty, !paused, !closed else { return }
+        for (index, aspect) in arrived { aspects[index] = aspect }
+        arrived = [:]
         lastChange = now()
         onChange?()
     }

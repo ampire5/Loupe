@@ -442,7 +442,7 @@ import Foundation
 }
 
 @Test func stripWindowWords() {
-    #expect(Config().stripWindow == .beside && Config().text(forKey: "strip-window") == "beside")
+    #expect(Config().stripWindow == .over && Config().text(forKey: "strip-window") == "over")
     for (word, mode) in [("over", StripWindowMode.over), ("beside", .beside), ("hidden", .hidden)] {
         let (c, w) = Config.parse("strip-window=\(word)")
         #expect(c.stripWindow == mode && w.isEmpty)
@@ -494,9 +494,9 @@ import Foundation
 
 @Test func stripAndThumbDefaults() {
     let c = Config()
-    #expect(c.stripWindow == .beside && c.stripHeight == 68 && c.stripHideDelayMilliseconds == 200)
-    #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 3 && c.stripScrollDirection == .natural)
-    #expect(c.stripJumpPreview && !c.stripLoadingIndicator)
+    #expect(c.stripWindow == .over && c.stripHeight == 105 && c.stripHideDelayMilliseconds == 250)
+    #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 8 && c.stripScrollDirection == .reversed)
+    #expect(c.stripJumpPreview && c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
 }
 
@@ -519,10 +519,10 @@ import Foundation
 }
 
 @Test func stripHidesQuicklyByDefault() {
-    #expect(Config().stripHideDelayMilliseconds == 200)
-    #expect(Config().text(forKey: "strip-hide-delay") == "200")
-    #expect(Config().stripFadeOutMilliseconds == 150)
-    #expect(Config().text(forKey: "strip-fade-out") == "150")
+    #expect(Config().stripHideDelayMilliseconds == 250)
+    #expect(Config().text(forKey: "strip-hide-delay") == "250")
+    #expect(Config().stripFadeOutMilliseconds == 250)
+    #expect(Config().text(forKey: "strip-fade-out") == "250")
 }
 
 @Test func stripHideDelayAcceptsZero() {
@@ -533,7 +533,7 @@ import Foundation
 
 @Test func stripFadeKeysParseAndRoundTrip() throws {
     let defaults = Config()
-    #expect(defaults.stripFadeInMilliseconds == 150 && defaults.stripFadeOutMilliseconds == 150)
+    #expect(defaults.stripFadeInMilliseconds == 150 && defaults.stripFadeOutMilliseconds == 250)
     let (c, w) = Config.parse("strip-fade-in=0\nstrip-fade-out=2000")
     #expect(c.stripFadeInMilliseconds == 0 && c.stripFadeOutMilliseconds == 2000 && w.isEmpty)
     #expect(c.text(forKey: "strip-fade-in") == "0" && c.text(forKey: "strip-fade-out") == "2000")
@@ -612,14 +612,14 @@ import Foundation
     #expect(c == Config())
     #expect(Config.retiredKeys == ["strip-aspect", "strip-magnify", "strip-magnify-reach", "strip-magnify-limit",
                                    "stats-toast", "stats-toast-position", "stats-toast-opacity", "stats-toast-clear",
-                                   "stats-bar-clear", "stats-bar-position"])
+                                   "stats-bar-clear", "stats-bar-position", "zoom-at-pointer"])
     for key in Config.retiredKeys { #expect(!Config.keys.contains(key), "\(key)") }
 }
 
 @Test func stripDefaults() {
-    #expect(Config().stripWindow == .beside)
-    #expect(Config().stripHeight == 68)
-    #expect(Config().stripCornerRadius == 3)
+    #expect(Config().stripWindow == .over)
+    #expect(Config().stripHeight == 105)
+    #expect(Config().stripCornerRadius == 8)
 }
 
 @Test func dragHeightIsRoundedAndClampedToTheStripRange() {
@@ -636,8 +636,8 @@ import Foundation
     let defaults = Config()
     #expect(defaults.statsProgress && defaults.statsFolderName && defaults.statsModified)
     #expect(defaults.text(forKey: "stats-progress") == "yes" && defaults.text(forKey: "stats-folder-name") == "yes")
-    #expect(defaults.statsBarOpacity == 0.7 && defaults.statsBarRows == 2 && defaults.text(forKey: "stats-bar-rows") == "2")
-    #expect(Config.parse("stats-bar-rows=1").0.statsBarRows == 1)
+    #expect(defaults.statsBarOpacity == 0.7 && defaults.statsBarRows == 1 && defaults.text(forKey: "stats-bar-rows") == "1")
+    #expect(Config.parse("stats-bar-rows=2").0.statsBarRows == 2)
     #expect(Config.parse("stats-bar-rows=3").1.count == 1)
     #expect(defaults.toastPosition == .center && defaults.text(forKey: "toast-position") == "bottom")
     let (c, w) = Config.parse("stats-progress=no\nstats-folder-name=no\nstats-bar-opacity=0.8\ntoast-position=left")
@@ -653,9 +653,9 @@ import Foundation
     let (retired, retiredWarnings) = Config.parse("stats-toast=no\nstats-bar-clear=yes")
     #expect(retired == defaults && retiredWarnings.count == 2)
     // Near the end, just before app-icon.
-    #expect(Array(Config.keys.suffix(14)) == [
+    #expect(Array(Config.keys.suffix(15)) == [
         "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position",
-        "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "fullscreen-toolbar",
+        "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set", "fullscreen-toolbar",
         "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay", "app-icon",
     ])
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
@@ -712,12 +712,12 @@ import Foundation
 
 @Test func thumbZoomKeysDefaultParseAndRoundTrip() {
     let d = Config()
-    #expect(d.thumbWheelZoom && d.thumbZoomSpeed == 2 && d.thumbZoomStops == .tick && !d.thumbZoomInvert)
+    #expect(d.thumbWheelZoom && d.thumbZoomSpeed == 2.4 && d.thumbZoomStops == .halt && !d.thumbZoomInvert)
     #expect(Config.parse("thumb-zoom-invert=yes").0.thumbZoomInvert)
-    #expect(d.text(forKey: "thumb-wheel-zoom") == "yes" && d.text(forKey: "thumb-zoom-speed") == "2"
-            && d.text(forKey: "thumb-zoom-stops") == "tick")
-    let (c, w) = Config.parse("thumb-wheel-zoom=no\nthumb-zoom-speed=0.75\nthumb-zoom-stops=HALT\n")
-    #expect(w.isEmpty && !c.thumbWheelZoom && c.thumbZoomSpeed == 0.75 && c.thumbZoomStops == .halt)
+    #expect(d.text(forKey: "thumb-wheel-zoom") == "yes" && d.text(forKey: "thumb-zoom-speed") == "2.4"
+            && d.text(forKey: "thumb-zoom-stops") == "halt")
+    let (c, w) = Config.parse("thumb-wheel-zoom=no\nthumb-zoom-speed=0.75\nthumb-zoom-stops=TICK\n")
+    #expect(w.isEmpty && !c.thumbWheelZoom && c.thumbZoomSpeed == 0.75 && c.thumbZoomStops == .tick)
     #expect(Config.parse("thumb-zoom-speed=8").0.thumbZoomSpeed == 8)
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
     #expect(Config.parse(text) == (c, []))
@@ -922,11 +922,11 @@ import Foundation
 
 @Test func folderScrollDirectionKey() throws {
     let d = Config()
-    #expect(d.folderScrollDirection == .reversed && d.text(forKey: "folder-scroll-direction") == "reversed")
+    #expect(d.folderScrollDirection == .natural && d.text(forKey: "folder-scroll-direction") == "natural")
     let gesture = try #require(Config.keys.firstIndex(of: "folder-scroll-gesture"))
     #expect(Config.keys[gesture + 1] == "folder-scroll-direction")
-    let (c, w) = Config.parse("folder-scroll-direction=Natural")
-    #expect(w.isEmpty && c.folderScrollDirection == .natural && c.text(forKey: "folder-scroll-direction") == "natural")
+    let (c, w) = Config.parse("folder-scroll-direction=Reversed")
+    #expect(w.isEmpty && c.folderScrollDirection == .reversed && c.text(forKey: "folder-scroll-direction") == "reversed")
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
     #expect(Config.parse(text) == (c, []))
     for bad in ["left", "yes", ""] {
@@ -969,12 +969,12 @@ import Foundation
     #expect(c.upscale == .kernel(.mitchell) && c.downscale == .kernel(.catmullRom))
     #expect(c.lanczosAntiring && c.pixelArtPercent == 800)
     let d = Config()
-    #expect(d.upscale == .kernel(.lanczos3) && d.downscale == .kernel(.lanczos3))
-    #expect(!d.lanczosAntiring && d.pixelArtPercent == 400)
+    #expect(d.upscale == .metalfx && d.downscale == .kernel(.lanczos3))
+    #expect(!d.lanczosAntiring && d.pixelArtPercent == 800)
     #expect(Config.parse("upscale=bilinear\ndownscale=lanczos2").0.upscale == .bilinear)
     let (h, hw) = Config.parse("upscale-high=catmull-rom\nupscale-high-from=450")
     #expect(hw.isEmpty && h.upscaleHigh == .kernel(.catmullRom) && h.upscaleHighPercent == 450)
-    #expect(d.upscaleHigh == .kernel(.mitchell) && d.upscaleHighPercent == 300)
+    #expect(d.upscaleHigh == .metalfx && d.upscaleHighPercent == 200)
     #expect(Config.parse("upscale-high-from=0").0.upscaleHighPercent == 0)
 }
 
@@ -1146,7 +1146,8 @@ import Foundation
     #expect(ResampleSettings(config: c)
             == ResampleSettings(upscale: .kernel(.mitchell), upscaleHigh: .bilinear, upscaleHighPercent: 500,
                                 downscale: .bilinear, antiringing: true, pixelArtPercent: 1600))
-    #expect(ResampleSettings(config: Config()) == ResampleSettings())
+    #expect(ResampleSettings(config: Config())
+            == ResampleSettings(upscale: .metalfx, upscaleHigh: .metalfx, upscaleHighPercent: 200, pixelArtPercent: 800))
 }
 
 // MARK: Per-key setter and folder overlay
@@ -1156,7 +1157,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     // Unknown tokens are warned about by `parse`, not refused: the list always takes (spec §8.4).
     "zoom-stops": ("fit-height, 200%", nil),
     "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
-    "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("halt", "stop"),
+    "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("tick", "stop"),
     "thumb-zoom-invert": ("yes", "maybe"),
     "archive-folders": ("no", "maybe"),
     "stash-url": ("http://localhost:9999", "ftp://x"), "stash-api-key": ("k", nil), "stash-path-map": ("S:\\=/Volumes/S$", nil),
@@ -1164,13 +1165,14 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "rubber-band": ("no", "maybe"), "drag-inertia": ("no", "maybe"), "inertia-deceleration": ("0.99", "0.98"),
     "rmb-zoom-invert": ("yes", "maybe"),
     "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"), "keep-zoom-as": ("scale", "pixels"),
+    "step-pan": ("keep", "middle"), "subject-target": ("person", "cat"), "subject-size": ("80", "101"), "subject-recheck": ("yes", "maybe"), "zoom-anchor-center": ("no", "maybe"), "smart-zoom": ("frame", "unknown"), "smart-zoom-gesture": ("no", "maybe"), "smart-zoom-options": (#"{"vision":{"size":"80%"}}"#, "bad"), "step-zoom": ("subject", "fit"), "subject-pull": ("80", "101"), "zoom-anchor": ("subject", "mouse"), "subject-analysis": ("off", "sometimes"),
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
     "spread": ("yes", "maybe"), "spread-shift": ("yes", "maybe"), "spread-direction": ("rtl", "up"), "spread-landscape": ("pair", "both"),
     "spread-wide-ratio": ("1.25", "2.1"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
     "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
-    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-path-bar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("square", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
+    "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-path-bar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("aspect", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"), "keep-share": ("30", "81"),
     "jxl-threads-current": ("6", "17"), "jxl-threads-other": ("3", "0"), "jxl-dc-preview": ("no", "maybe"),
@@ -1184,24 +1186,27 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "upscale": ("mitchell", "metalfxx"), "upscale-high": ("ewa-lanczos", "ewa-x"),
     "upscale-high-from": ("500", "50"), "downscale": ("bilinear", "metalfx"), "lanczos-antiring": ("yes", "maybe"),
     "pixel-art": ("1600", "50"), "pyramid-filter": ("box", "mitchell"), "exif-orientation": ("no", "maybe"),
-    "strip-window": ("over", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
-    "strip-corner-radius": ("8", "99"), "strip-scroll-direction": ("reversed", "sideways"),
+    "slot-left": ("folders, overlay, glass, mouse-leaves, 400, hidden, at-once", "folders"),
+    "slot-right": ("empty, pinned, dark, manual, 480, shown, tongue", "bad, overlay, glass, manual, 400, hidden, at-once"),
+    "slot-bottom": ("folders, overlay, clear, after-choice, 240, hidden, tongue", "empty, unknown, glass, manual, 240, hidden, at-once"),
+    "strip-window": ("beside", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
+    "strip-corner-radius": ("4", "99"), "strip-scroll-direction": ("natural", "sideways"),
     "strip-hide-delay": ("800", "-1"), "strip-fade-in": ("100", "5000"), "strip-fade-out": ("100", "5000"),
-    "strip-jump-preview": ("no", "maybe"), "strip-loading-indicator": ("yes", "maybe"),
+    "strip-jump-preview": ("no", "maybe"), "strip-loading-indicator": ("no", "maybe"),
     "thumb-size": ("768", "100"), "thumb-cache-size": ("0", "-5"), "folder-poll": ("2000", "100"), "folder-view-memory": ("no", "maybe"),
-    "folder-scroll-gesture": ("no", "maybe"), "folder-scroll-direction": ("natural", "left"), "folder-scroll-threshold": ("100", "1"),
+    "folder-scroll-gesture": ("no", "maybe"), "folder-scroll-direction": ("reversed", "left"), "folder-scroll-threshold": ("100", "1"),
     "folder-scroll-repeat": ("500", "50"), "config-warnings": ("no", "maybe"), "folder-toast": ("no", "maybe"),
     "mouse-long-press": ("500", "149"), "mouse-move-step": ("30", "3"), "mouse-haptics": ("no", "maybe"),
     "haptic-zoom-stop": ("knock", "bzzz"), "haptic-limit": ("none", "bzzz"), "haptic-step": ("0x0c", "15"),
     "haptic-toggle": ("damp-collision", "bzzz"), "haptic-end": ("knock", "strong"),
     "haptic-long-armed": ("knock", "bzzz"), "haptic-detent": ("none", "bzzz"),
-    "mx-panel-force": ("0", "101"), "mx-side-buttons": ("take", "steal"), "haptic-strength": ("35", "101"), "haptic-strong-strength": ("81", "keep"),
+    "mx-side-buttons": ("take", "steal"), "haptic-strong-strength": ("81", "keep"),
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
-    "stats-bar-rows": ("1", "3"), "stats-bar-with-toolbar": ("no", "perhaps"),
+    "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
     "fullscreen-toolbar": ("shown", "sliding"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
-    "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"),
+    "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("sf", "tabler"),
     "app-icon": ("profile", "two words"),
     "auto-color": ("yes", "maybe"), "auto-color-method": ("apple-luma", "oil"), "auto-color-strength": ("0.5", "1.5"),
     "auto-color-filters": ("curve", "curve,red"), "auto-color-vibrance-gain": ("2", "5"),
@@ -1237,11 +1242,15 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 @Test func folderKeysAreTheScalingFiltersAndColour() {
     #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"])
     #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"])
-    #expect(Config.zoomFolderKeys == ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"])
+    #expect(Config.zoomFolderKeys == ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode",
+                                     "zoom-anchor", "subject-target"])
     #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape",
                                         "spread-wide-ratio"])
-    #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys + Config.spreadFolderKeys)
-    #expect(Config.folderKeys.allSatisfy(Config.keys.contains))
+    #expect(Config.detectorFolderKeys == ["detector", "detector-mode"])
+    #expect(Config.folderKeys == Config.scalingFolderKeys + Config.colorFolderKeys + Config.zoomFolderKeys + Config.spreadFolderKeys
+            + Config.detectorFolderKeys)
+    // The custom detector's keys are a tab's and a folder's only: detector.conf, not loupe.conf, holds the rest.
+    #expect(Config.folderKeys.filter { !Config.detectorFolderKeys.contains($0) }.allSatisfy(Config.keys.contains))
 }
 
 @Test func applyingFolderKeys() {
@@ -1387,9 +1396,9 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 
 @Test func m4bKeyOrder() throws {
     let haptics = try #require(Config.keys.firstIndex(of: "zoom-stop-haptics"))
-    #expect(Array(Config.keys[(haptics + 1)...(haptics + 6)])
-            == ["zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "default-zoom-mode",
-                "fit-upscale"])
+    #expect(Array(Config.keys[(haptics + 1)...(haptics + 13)])
+            == ["zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom",
+                "subject-target", "subject-size", "subject-pull", "subject-recheck", "subject-analysis", "default-zoom-mode", "fit-upscale"])
     let invert = try #require(Config.keys.firstIndex(of: "rmb-zoom-invert"))
     #expect(Array(Config.keys[(invert + 1)...(invert + 3)])
             == ["pan-indicators", "pan-indicators-hide", "pan-indicators-fade"])
@@ -1467,35 +1476,34 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
             && c.text(forKey: "haptic-toggle") == "none")
 }
 
-@Test func m4cPanelForceAndStrengthKeys() {
+@Test func oldMouseDeviceKeysWarn() {
+    // The haptic strength and the panel force are MouseService's settings now (its core spec, "Device settings").
+    let (c, warnings) = Config.parse("haptic-strength=50\nmx-panel-force=10")
+    #expect(warnings == ["loupe.conf:1: haptic-strength: now in MouseService's settings",
+                         "loupe.conf:2: mx-panel-force: now in MouseService's settings"])
+    #expect(c == Config())
+    #expect(!Config.keys.contains("haptic-strength") && !Config.keys.contains("mx-panel-force"))
+}
+
+@Test func m4cStrongStrengthAndPatternKeys() {
     let d = Config()
-    #expect(d.mxPanelForce == .keep && d.hapticStrength == nil && d.hapticStrongStrength == 80)
+    #expect(d.hapticStrongStrength == 80)
     #expect(d.hapticEnd == HapticChoice(pattern: .sharpCollision, strong: true))
-    #expect(d.text(forKey: "mx-panel-force") == "keep" && d.text(forKey: "haptic-strength") == "keep"
-            && d.text(forKey: "haptic-strong-strength") == "80" && d.text(forKey: "haptic-end") == "sharp-collision strong")
-    for key in ["mx-panel-force", "haptic-strength", "haptic-strong-strength", "haptic-end"] {
+    #expect(d.text(forKey: "haptic-strong-strength") == "80" && d.text(forKey: "haptic-end") == "sharp-collision strong")
+    for key in ["haptic-strong-strength", "haptic-end"] {
         #expect(Config.keys.contains(key), "\(key)")
     }
-    #expect(Config.parse("mx-panel-force=0").0.mxPanelForce == .percent(0))
-    #expect(Config.parse("mx-panel-force=100").0.mxPanelForce == .percent(100))
-    #expect(Config.parse("mx-panel-force=default").0.mxPanelForce == .factory)
-    #expect(Config.parse("mx-panel-force=0\nmx-panel-force=keep").0.mxPanelForce == .keep)
-    #expect(Config.parse("haptic-strength=35").0.hapticStrength == 35)
-    #expect(Config.parse("haptic-strength=35\nhaptic-strength=keep").0.hapticStrength == nil)
     #expect(Config.parse("haptic-strong-strength=81").0.hapticStrongStrength == 81)
-    let (c, w) = Config.parse("mx-panel-force=0\nhaptic-strength=35\nhaptic-strong-strength=81\n"
+    let (c, w) = Config.parse("haptic-strong-strength=81\n"
                               + "haptic-end=sharp-collision strong\nhaptic-step=whisper-collision strong\nhaptic-limit=knock\n")
     #expect(w.isEmpty)
     #expect(c.hapticEnd == HapticChoice(pattern: .sharpCollision, strong: true) && c.hapticStep == HapticChoice(pattern: .whisperCollision, strong: true))
     #expect(c.hapticLimit == HapticChoice(pattern: .knock, strong: false))
-    #expect(c.text(forKey: "haptic-end") == "sharp-collision strong" && c.text(forKey: "haptic-step") == "whisper-collision strong"
-            && c.text(forKey: "mx-panel-force") == "0" && c.text(forKey: "haptic-strength") == "35")
+    #expect(c.text(forKey: "haptic-end") == "sharp-collision strong" && c.text(forKey: "haptic-step") == "whisper-collision strong")
     #expect(Config.parse(Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")) == (c, []))
-    let factory = Config.parse("mx-panel-force=default\nhaptic-end=none").0
-    #expect(factory.text(forKey: "mx-panel-force") == "default" && factory.hapticEnd == nil
-            && factory.text(forKey: "haptic-end") == "none")
-    for bad in ["mx-panel-force=101", "mx-panel-force=-1", "mx-panel-force=soft", "mx-panel-force=50.5",
-                "haptic-strength=101", "haptic-strength=default", "haptic-strong-strength=keep", "haptic-strong-strength=101",
+    let factory = Config.parse("haptic-end=none").0
+    #expect(factory.hapticEnd == nil && factory.text(forKey: "haptic-end") == "none")
+    for bad in ["haptic-strong-strength=keep", "haptic-strong-strength=101",
                 "haptic-end=strong", "haptic-end=none strong", "haptic-end=sharp-collision loud", "haptic-toggle=bzzz strong"] {
         let (parsed, warnings) = Config.parse(bad)
         #expect(parsed == Config() && warnings.count == 1, "\(bad)")
@@ -1515,21 +1523,6 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
         let (parsed, warnings) = Config.parse(bad)
         #expect(parsed == Config() && warnings.count == 1, "\(bad)")
     }
-}
-
-@Test func panelForcePercentMapsOverTheMouseRange() {
-    let range: ClosedRange<UInt16> = 3799...6316
-    #expect(PanelForceSetting.keep.value(range: range, defaultValue: 4749) == nil)
-    #expect(PanelForceSetting.factory.value(range: range, defaultValue: 4749) == 4749)
-    #expect(PanelForceSetting.percent(0).value(range: range, defaultValue: 4749) == 3799)
-    #expect(PanelForceSetting.percent(100).value(range: range, defaultValue: 4749) == 6316)
-    // 3799 + 2517 · 0.5 = 5057.5, rounded.
-    #expect(PanelForceSetting.percent(50).value(range: range, defaultValue: 4749) == 5058)
-    #expect(PanelForceSetting.percent(37).value(range: 0...UInt16.max, defaultValue: 0) == 24248)
-    #expect(PanelForceSetting.percent(40).value(range: 100...100, defaultValue: 100) == 100)
-    // Outside 0…100 (the parser rejects it, the mapping still holds to the range).
-    #expect(PanelForceSetting.percent(-5).value(range: range, defaultValue: 4749) == 3799)
-    #expect(PanelForceSetting.percent(105).value(range: range, defaultValue: 4749) == 6316)
 }
 
 // MARK: New key lands after its commented example
@@ -1609,8 +1602,8 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 }
 
 @Test func homeSidebarWidthParsesAndDefaults() {
-    #expect(Config().homeSidebarWidth == 236)
-    #expect(Config().text(forKey: "home-sidebar-width") == "236")
+    #expect(Config().homeSidebarWidth == 384)
+    #expect(Config().text(forKey: "home-sidebar-width") == "384")
     #expect(Config.parse("home-sidebar-width=1600").0.homeSidebarWidth == 1600)
     #expect(Config.parse("home-sidebar-width=179").1 == ["loupe.conf:1: bad option 'home-sidebar-width=179'"])
 }
@@ -1657,11 +1650,11 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 
 @Test func homeTabFoldersParses() {
     #expect(Config.parse("home-tab=folders").0.homeTab == .folders)
-    #expect(Config().text(forKey: "browser-card-size") == "220")
+    #expect(Config().text(forKey: "browser-card-size") == "387")
 }
 
 @Test func browserCardSizeRange() {
-    #expect(Config().browserCardSize == 220)
+    #expect(Config().browserCardSize == 387)
     #expect(Config.parse("browser-card-size=60").0.browserCardSize == 60)
     #expect(Config.parse("browser-card-size=480").0.browserCardSize == 480)
     var c = Config()
@@ -1671,9 +1664,9 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 
 @Test func gridDefaults() {
     let d = Config()
-    #expect(d.gridStyle == .aspect && d.text(forKey: "grid-style") == "aspect")
-    #expect(d.gridNames == .off && d.text(forKey: "grid-names") == "off")
-    #expect(d.browserCardSize == 220)
+    #expect(d.gridStyle == .square && d.text(forKey: "grid-style") == "square")
+    #expect(d.gridNames == .auto && d.text(forKey: "grid-names") == "auto")
+    #expect(d.browserCardSize == 387)
 }
 
 @Test func folderCoverKey() {
@@ -1781,8 +1774,8 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     // A bad value of one is Home's to ignore, too.
     #expect(Config().applying(["folder-cards": "huge"]).rejected.isEmpty)
     // `grid-style` in a folder's settings is the toggle's (`grid-style-memory=folder`), read by Home, not applied.
-    let styled = Config().applying(["grid-style": "square"])
-    #expect(styled.rejected.isEmpty && styled.config.gridStyle == .aspect)
+    let styled = Config().applying(["grid-style": "aspect"])
+    #expect(styled.rejected.isEmpty && styled.config.gridStyle == .square)
     // Other keys that are no folder keys are still reported.
     #expect(Config().applying(["strip-height": "100"]).rejected == ["strip-height=100"])
 }
@@ -1861,4 +1854,85 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     }
     let (folder, rejected) = Config().applying(["spread-wide-ratio": "1.4"])
     #expect(rejected.isEmpty && folder.spreadWideRatio == 1.4 && SpreadRules(config: folder).options.wideRatio == 1.4)
+}
+
+// Smart zoom spec §1, §2: keep-zoom-as=screen and step-pan.
+
+@Test func stepPanParsesAndWritesBack() {
+    #expect(Config().stepPan == .subject)
+    for v in ["subject", "keep", "center"] {
+        var c = Config()
+        #expect(c.set("step-pan", v) == .ok)
+        #expect(c.text(forKey: "step-pan") == v)
+    }
+    var c = Config()
+    #expect(c.set("step-pan", "middle") == .badValue)
+    #expect(Config.zoomFolderKeys.contains("step-pan"))
+}
+
+@Test func keepZoomAsTakesScreen() {
+    var c = Config()
+    #expect(c.set("keep-zoom-as", "screen") == .ok)
+    #expect(c.keepZoomAs == .screen && ZoomRules(config: c).carry == .screen)
+}
+
+@Test func subjectTargetParsesAListOfKinds() {
+    #expect(Config().text(forKey: "subject-target") == "face,person,object,saliency")
+    var c = Config()
+    #expect(c.set("subject-target", "person, Face") == .ok)
+    #expect(c.subjectTarget == [.person, .face])
+    #expect(c.text(forKey: "subject-target") == "person,face")
+    for bad in ["", "face,face", "face,cat"] {
+        var d = Config()
+        #expect(d.set("subject-target", bad) == .badValue, "\(bad)")
+    }
+}
+
+@Test func subjectAnalysisParses() {
+    #expect(Config().subjectAnalysis == .ahead)
+    for v in ["ahead", "on-demand", "off"] {
+        var c = Config()
+        #expect(c.set("subject-analysis", v) == .ok)
+        #expect(c.text(forKey: "subject-analysis") == v)
+    }
+    var c = Config()
+    #expect(c.set("subject-analysis", "sometimes") == .badValue)
+}
+
+@Test func zoomAnchorAndSubjectSizeParse() {
+    #expect(Config().zoomAnchor == .pointer && Config().subjectSize == 60)
+    for v in ["pointer", "center", "subject"] {
+        var c = Config()
+        #expect(c.set("zoom-anchor", v) == .ok)
+        #expect(c.text(forKey: "zoom-anchor") == v)
+    }
+    var c = Config()
+    #expect(c.set("zoom-anchor", "mouse") == .badValue)
+    #expect(c.set("subject-size", "20") == .ok && c.text(forKey: "subject-size") == "20")
+    #expect(c.set("subject-size", "10") == .badValue && c.set("subject-size", "101") == .badValue)
+    #expect(Config.zoomFolderKeys.contains("zoom-anchor"))
+}
+
+// Framing while browsing (owner, 2026-10-28): `step-zoom=subject` frames every next photo on its subject, `subject-pull`
+// says how hard the view is drawn to the subject's centre against showing the other boxes.
+@Test func stepZoomAndSubjectPullParse() {
+    #expect(Config().stepZoom == .keep && Config().subjectPull == 50)
+    for v in ["keep", "subject"] {
+        var c = Config()
+        #expect(c.set("step-zoom", v) == .ok && c.text(forKey: "step-zoom") == v)
+    }
+    var c = Config()
+    #expect(c.set("step-zoom", "fit") == .badValue)
+    #expect(c.set("subject-pull", "0") == .ok && c.set("subject-pull", "100") == .ok && c.text(forKey: "subject-pull") == "100")
+    #expect(c.set("subject-pull", "-1") == .badValue && c.set("subject-pull", "101") == .badValue)
+    #expect(Config.zoomFolderKeys.contains("step-zoom") && !Config.zoomFolderKeys.contains("subject-pull"))
+}
+
+// The crop check (the subject looked for again in the visible part as the zoom changes) is a mode of its own, off by
+// default (owner, 2026-10-28).
+@Test func subjectRecheckParses() {
+    #expect(!Config().subjectRecheck)
+    var c = Config()
+    #expect(c.set("subject-recheck", "yes") == .ok && c.text(forKey: "subject-recheck") == "yes")
+    #expect(c.set("subject-recheck", "maybe") == .badValue)
 }

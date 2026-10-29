@@ -1,8 +1,11 @@
 import AppKit
+import HomeChrome
 import LogiHIDPP
 import LoupeCore
 import LoupeRender
 import LoupeSettings
+import MouseClient
+import MouseContract
 import UniformTypeIdentifiers
 
 /// App lifecycle, the main menu and the ways a file arrives: Finder / `open` (open events),
@@ -42,13 +45,11 @@ import UniformTypeIdentifiers
     private var menuInputMap: InputMap?
     /// `LOUPE_AUTOPAN` (debug): the synthetic pan driver for latency runs.
     private var autoPan: AutoPan?
-    /// The Logitech mouse (M4c spec §3.1): the `MX_*` buttons and the thumb wheel `input.conf` binds, and the haptics.
-    /// Made after the first window is up, by the primary instance only.
-    private var logiMouse: LogiMouse?
-    /// What `logiMouse` was last asked to divert and watch; a reload that changes it diverts / watches again.
+    /// The Logitech mouse through MouseService (M4c spec §3.1; MouseService's core spec): the `MX_*` buttons and the
+    /// thumb wheel `input.conf` binds, and the haptics. Made after the first window is up, by the primary instance only.
+    private var mouseClient: MouseClient?
+    /// What the mouse was last asked to divert and watch; a reload that changes it sends a new wish.
     private var divertedInputs: (cids: Set<UInt16>, watched: Set<UInt16>, thumbWheel: Bool)?
-    /// The `haptic-strength` `logiMouse` was last given; a reload that changes it writes it again.
-    private var appliedHapticStrength: Int?
     /// The settings window's store over loupe.conf, made on the first ⌘, (`Settings.settingsStore` holds it weakly).
     private var settingsStore: ConfigSettingsStore?
     /// What refreshes the settings window's folder notes (`observeFolderNotes`).
@@ -65,6 +66,7 @@ import UniformTypeIdentifiers
         }
         // The Dock icon (~10 ms for an alternate's .icns) waits until the window is up.
         Settings.shared.reload(applyingIcon: false)
+        Icons.set = Icons.Set(rawValue: Settings.shared.config.iconSet.rawValue) ?? .lucide   // before the first icon
         stateDatabase = Self.openStateDatabase()
         positions = FolderPositions(database: stateDatabase)
         recent = RecentStore(database: stateDatabase)
@@ -128,7 +130,7 @@ import UniformTypeIdentifiers
         NSApp.activate()
         // Off the launch path, like the Dock icon: `start()` opens the receivers synchronously. `follow` takes the
         // app's state as it is then, so a `didBecomeActive` that came before is not missed.
-        DispatchQueue.main.async { self.startLogiMouse() }
+        DispatchQueue.main.async { self.startMouseClient() }
         // `LOUPE_SCREEN=<index into NSScreen.screens>` (debug): the window starts on that screen, so scripted runs
         // always measure the same display.
         if DebugLog.isEnabled, let i = ProcessInfo.processInfo.environment["LOUPE_SCREEN"].flatMap(Int.init),
@@ -152,6 +154,7 @@ import UniformTypeIdentifiers
         DispatchQueue.main.async { Settings.shared.applyAppIcon() }
         // `LOUPE_CHEATSHEET` (debug): the `?` sheet open from the start, to look at it without pressing a key.
         if DebugLog.isEnabled, ProcessInfo.processInfo.environment["LOUPE_CHEATSHEET"] != nil { controller.toggleCheatSheet() }
+        if DebugLog.isEnabled, ProcessInfo.processInfo.environment["LOUPE_SUBJECTS"] != nil { controller.toggleSubjects(nil) }
         // `LOUPE_SETTINGS=<page id>` (debug): the settings window open from the start (empty: on its last page).
         if DebugLog.isEnabled, let page = ProcessInfo.processInfo.environment["LOUPE_SETTINGS"] {
             DispatchQueue.main.async { self.openSettings(page: page.isEmpty ? nil : page) }
@@ -541,7 +544,6 @@ import UniformTypeIdentifiers
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.divertMouseInputs()
-                self.applyMouseSettings()
                 self.refreshStashItem()
                 self.registry.controllers.forEach { $0.stashSettingsChanged() }
                 guard let menu = NSApp.mainMenu, Settings.shared.inputMap != self.menuInputMap else { return }
@@ -553,28 +555,30 @@ import UniformTypeIdentifiers
 
     // MARK: Logitech mouse (M4c spec §3.1, §5)
 
-    /// The mouse after the window is up (its search runs off the launch path): the bound `MX_*` buttons and, with a
-    /// `+MX_THUMB` binding, the thumb wheel diverted while Loupe is in front (`follow`), the side buttons watched or
-    /// taken by `mx-side-buttons` (§12.1), their events into `MouseButtons`, and the mouse as `MouseHaptics`' player.
-    /// No mouse: nothing arrives, nothing fails.
-    private func startLogiMouse() {
-        let mouse = LogiMouse()
-        logiMouse = mouse
-        MouseButtons.shared.heardSideButtons = { [weak mouse] in Set(mouse?.watching.map(\.rawValue) ?? []) }
-        divertMouseInputs()
-        applyMouseSettings()
-        mouse.start()
-        mouse.follow(app: NSApp)
-        MouseHaptics.shared.player = LogiHapticPlayer(mouse: mouse)
-        Task { @MainActor in
-            for await event in mouse.events { Self.handle(event, from: mouse) }
+    /// The mouse after the window is up (MouseService is asked off the launch path): the bound `MX_*` buttons and, with
+    /// a `+MX_THUMB` binding, the thumb wheel diverted while Loupe is in front (the service decides), the side buttons
+    /// watched or taken by `mx-side-buttons` (§12.1), their events into `MouseButtons`, and the mouse as
+    /// `MouseHaptics`' player. No service or no mouse: nothing arrives, nothing fails. The mouse's own settings (haptic
+    /// strength, panel force) are the service's.
+    private func startMouseClient() {
+        let client = MouseClient()
+        mouseClient = client
+        MouseButtons.shared.heardSideButtons = { [weak client] in client?.watching ?? [] }
+        client.onButton = { cid, pressed, time in Self.button(cid, pressed: pressed, at: time) }
+        client.onThumbWheel = { [weak client] delta, touching, phase, _ in
+            Self.thumbWheel(delta: delta, touching: touching, phase: phase,
+                            stepsPerRevolution: client?.device.thumbWheelStepsPerRevolution)
         }
+        client.onAvailability = { DebugLog.log("mx MouseService \($0 ? "connected" : "not available")") }
+        divertMouseInputs()
+        client.start()
+        MouseHaptics.shared.player = MouseServiceHapticPlayer(client: client)
     }
 
     /// Diverts what the layout binds, plus the side buttons with `mx-side-buttons=take`, and watches them with `watch`
     /// (M4c spec §12.1), when that changed since the last call (a reload of input.conf or loupe.conf).
     private func divertMouseInputs() {
-        guard let logiMouse else { return }
+        guard let mouseClient else { return }
         let map = Settings.shared.inputMap
         let side = Settings.shared.config.mxSideButtons
         let wanted = (cids: map.divertedCIDs.union(side.divertedCIDs), watched: side.watchedCIDs,
@@ -583,81 +587,38 @@ import UniformTypeIdentifiers
         divertedInputs = wanted
         DebugLog.log("mx divert \(wanted.cids.sorted().map(Self.hex)) watch \(wanted.watched.sorted().map(Self.hex)) "
                      + "thumb wheel \(wanted.thumbWheel)")
-        logiMouse.divert(Set(wanted.cids.map { CID(rawValue: $0) }))
-        logiMouse.watch(Set(wanted.watched.map { CID(rawValue: $0) }))
-        logiMouse.divertThumbWheel(wanted.thumbWheel)
-    }
-
-    /// The mouse's own settings from loupe.conf (M4c spec §10.3, §10.4): `haptic-strength` when it changed since the
-    /// last call (the package keeps it and writes it at every setup), and `mx-panel-force` once the mouse has reported
-    /// its range (here when connected, again on `.connected`). `keep` writes nothing; a value written earlier in this
-    /// run stays in the mouse (and the package writes it again on reconnect) until Loupe quits.
-    private func applyMouseSettings() {
-        guard let logiMouse else { return }
-        if let strength = Settings.shared.config.hapticStrength, strength != appliedHapticStrength {
-            appliedHapticStrength = strength
-            DebugLog.log("mx haptic strength \(strength)")
-            logiMouse.setHapticStrength(UInt8(strength))   // Config holds it to 0…100
-        }
-        Self.applyPanelForce(to: logiMouse)
-    }
-
-    /// `mx-panel-force` mapped over the range the mouse reported; nothing before the mouse is set up, for `keep`, for
-    /// a force the mouse does not let change, or when the mouse already has that value.
-    private static func applyPanelForce(to mouse: LogiMouse) {
-        guard let force = mouse.panelForce, force.info.changeable,
-              let value = Settings.shared.config.mxPanelForce.value(range: force.info.range,
-                                                                   defaultValue: force.info.defaultValue),
-              value != force.current else { return }
-        DebugLog.log("mx panel force \(force.current) -> \(value) (\(Settings.shared.config.mxPanelForce.text), range "
-                     + "\(force.info.range.lowerBound)…\(force.info.range.upperBound))")
-        mouse.setPanelForce(value)
+        mouseClient.want(Want(divert: wanted.cids, watch: wanted.watched, thumbWheel: wanted.thumbWheel))
     }
 
     /// A button by its control ID goes to `MouseButtons` like an AppKit button; an unknown ID is ignored. A watched
     /// side button (`mx-side-buttons=watch`) comes the same way as a diverted one, through `AppKitButtonFilter`. Times
-    /// are taken on delivery, on NSEvent's clock (`systemUptime`): the package's own clock may be another.
-    private static func handle(_ event: MouseEvent, from mouse: LogiMouse) {
-        let now = ProcessInfo.processInfo.systemUptime
-        switch event {
-        case .pressed(let cid, _):
-            DebugLog.log("mx pressed \(hex(cid.rawValue))")
-            // Watched, not taken: the system delivers it too (only the side buttons, with `mx-side-buttons=watch`).
-            let watched = Settings.shared.config.mxSideButtons == .watch
-                && SideButtonsMode.watch.watchedCIDs.contains(cid.rawValue)
-            if let b = button(cid) { MouseButtons.shared.mousePress(b, at: now, watched: watched) }
-        case .released(let cid, _):
-            DebugLog.log("mx released \(hex(cid.rawValue))")
-            if let b = button(cid) { MouseButtons.shared.mouseRelease(b, at: now) }
-        case .thumbWheel(let delta, let touching, let phase, _):
-            DebugLog.log("mx thumb wheel \(delta) touching \(touching) \(phase) "
-                         + "per turn \(mouse.stepsPerRevolution ?? 0)")
-            // The turn size comes with the mouse's setup, before the package reports any wheel step; a step without it
-            // (which should not happen) cannot be scaled to `input.conf`'s steps and is dropped, logged above.
-            // With no button holding it, the wheel zooms (`thumb-wheel-zoom`) in the key window's viewer.
-            if let perTurn = mouse.stepsPerRevolution,
-               !MouseButtons.shared.thumbWheel(delta: delta, stepsPerRevolution: perTurn),
-               Settings.shared.config.thumbWheelZoom {
-                // On Home the same wheel sizes the cards, the way it zooms a photo.
-                if let controller = NSApp.keyWindow?.windowController as? ViewerWindowController, controller.isShowingHome {
-                    controller.homeThumbWheel(delta: delta, stepsPerRevolution: perTurn)
-                }
-                MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn,
-                                                             began: phase == .began)
-            }
-        case .connected:
-            DebugLog.log("mx connected")
-            applyPanelForce(to: mouse)
-        case .disconnected:
-            DebugLog.log("mx disconnected")
-        case .highResolutionWheel:
-            break   // Loupe never asks for the hi-res wheel.
-        case .wheelMode:
-            break   // Loupe never asks for a wheel mode.
+    /// are the service's, on NSEvent's clock (`systemUptime`).
+    private static func button(_ cid: UInt16, pressed: Bool, at time: TimeInterval) {
+        DebugLog.log("mx \(pressed ? "pressed" : "released") \(hex(cid))")
+        guard let b = MouseButton(cid: cid) else { return }
+        guard pressed else {
+            MouseButtons.shared.mouseRelease(b, at: time)
+            return
         }
+        // Watched, not taken: the system delivers it too (only the side buttons, with `mx-side-buttons=watch`).
+        let watched = Settings.shared.config.mxSideButtons == .watch && SideButtonsMode.watch.watchedCIDs.contains(cid)
+        MouseButtons.shared.mousePress(b, at: time, watched: watched)
     }
 
-    private static func button(_ cid: CID) -> MouseButton? { MouseButton(cid: cid.rawValue) }
+    /// The thumb wheel: a held button's binding first, else (`thumb-wheel-zoom`) the key window's zoom, or on Home the
+    /// card size. The turn size comes with the mouse's description; a step without it (which should not happen) cannot
+    /// be scaled to `input.conf`'s steps and is dropped.
+    private static func thumbWheel(delta: Int, touching: Bool, phase: ThumbPhase, stepsPerRevolution: Int?) {
+        DebugLog.log("mx thumb wheel \(delta) touching \(touching) \(phase) per turn \(stepsPerRevolution ?? 0)")
+        guard let perTurn = stepsPerRevolution,
+              !MouseButtons.shared.thumbWheel(delta: delta, stepsPerRevolution: perTurn),
+              Settings.shared.config.thumbWheelZoom else { return }
+        if let controller = NSApp.keyWindow?.windowController as? ViewerWindowController, controller.isShowingHome {
+            controller.homeThumbWheel(delta: delta, stepsPerRevolution: perTurn)
+        }
+        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn, began: phase == .began)
+    }
+
 
     private static func hex(_ cid: UInt16) -> String { "0x" + String(format: "%04x", cid) }
 
@@ -748,6 +709,15 @@ import UniformTypeIdentifiers
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
+        let slots = NSMenu(title: "Slots")
+        for (title, selector, key) in [("Left Slot", #selector(ViewerWindowController.toggleLeftSlot(_:)), "\u{f702}"),
+                                       ("Right Slot", #selector(ViewerWindowController.toggleRightSlot(_:)), "\u{f703}"),
+                                       ("Bottom Slot", #selector(ViewerWindowController.toggleBottomSlot(_:)), "\u{f701}")] {
+            let item = slots.addItem(withTitle: title, action: selector, keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.control, .command]
+        }
+        view.addItem(submenu: slots, title: "Slots")
+
         // How Home's browser draws a folder's folders and archives (folder cards spec): ⌥⌘1–⌥⌘3 (`CardStyleKeys`; ⌘
         // digits are the tabs'), on Home on a folder only, checked at its style (ViewerWindowController validates
         // them; `CardStyleMenuReset` unchecks them where no viewer answers). Elsewhere `MainMenu` lets the keys go on.
@@ -785,6 +755,10 @@ import UniformTypeIdentifiers
         stats.showKey(of: .cycleStats)
         // Retitled Hide Info while the panel is open (ViewerWindowController validates it).
         view.addItem(withTitle: "Show Info", action: #selector(ViewerWindowController.toggleInfoPanel(_:)), keyEquivalent: "i")
+        // The same as `⇧G`, whose key it shows; checked while this window shows what Vision found.
+        let subjects = view.addItem(withTitle: "Show Subjects", action: #selector(ViewerWindowController.toggleSubjects(_:)),
+                                    keyEquivalent: "")
+        subjects.showKey(of: .toggleSubjects)
         // The Dock icon picker (Settings), the same choices as the settings window's `app-icon` pop-up.
         let icon = view.addItem(withTitle: "App Icon…", action: #selector(Settings.showIconPicker(_:)), keyEquivalent: "i")
         icon.keyEquivalentModifierMask = [.control, .option, .command]
@@ -894,13 +868,13 @@ private extension NSMenu {
     }
 }
 
-/// `MouseHaptics`' player: the pattern on the Logitech mouse, strong plays at their strength.
-@MainActor private final class LogiHapticPlayer: HapticPlaying {
-    private let mouse: LogiMouse
+/// `MouseHaptics`' player: the pattern on the Logitech mouse through MouseService, strong plays at their strength.
+@MainActor private final class MouseServiceHapticPlayer: HapticPlaying {
+    private let client: MouseClient
 
-    init(mouse: LogiMouse) { self.mouse = mouse }
+    init(client: MouseClient) { self.client = client }
 
     func play(_ pattern: HapticPattern, strength: UInt8?) {
-        mouse.play(haptic: pattern, strength: strength)
+        client.play(pattern: pattern.rawValue, strength: strength)
     }
 }

@@ -1,5 +1,6 @@
 import FilmstripModel
 import Foundation
+import SlotModel
 import HomeScreenModel
 import LogiHIDPP
 
@@ -23,7 +24,7 @@ public enum StripWindowMode: String, Sendable {
 }
 
 /// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection (the kit's
-/// `FilmstripScrollDirection`: `natural`, fingers left go to the next files, or `reversed`).
+/// `FilmstripScrollDirection`: `natural`, fingers left go to the next files, or `reversed`, the default).
 public typealias StripScrollDirection = FilmstripScrollDirection
 
 /// `launch-reveal`: when the photo first appears at a launch that goes back into full screen. `settled` (the default):
@@ -31,6 +32,11 @@ public typealias StripScrollDirection = FilmstripScrollDirection
 /// growing with it read as a jump, user 2026-10-16); `immediate`: as soon as it is decoded, during the animation.
 public enum LaunchReveal: String, Sendable {
     case settled, immediate
+}
+
+/// `icon-set`: the set the line icons are drawn from (the kit's `Icons.Set`, by the same names).
+public enum IconSet: String, Sendable, CaseIterable {
+    case lucide, sf
 }
 
 /// `toast-position`: where a toast sits, one of the window's six places. `left`, `center` and `right` are the bottom ones.
@@ -72,7 +78,8 @@ public enum OpenIn: String, Sendable {
 }
 
 /// `home-tab`: the Home source a new tab, a new window or a launch without a file shows (Home spec §2.1, Photos style
-/// spec §3.1): Recent, Sessions, a folder (`folders`) or Stash; Loupe writes the last one chosen back.
+/// spec §3.1): Recent, Sessions, a folder (`folders`) or Stash. Not written back from the user's moves: every launch
+/// opens on Recent unless the file says otherwise (the owner's wish of 2026-10-27).
 public enum HomeTab: String, Sendable, Codable {
     case recent, sessions, folders, stash
 }
@@ -80,9 +87,41 @@ public enum HomeTab: String, Sendable, Codable {
 /// `keep-zoom-as`: what a free zoom (a pinch, a wheel, `=` / `-`) keeps when another photo comes or the window changes
 /// size (`ViewTransform.carryingZoom`). `share` (the default): the share of the picture in view, so a turned photo of the
 /// same pixel count keeps its scale and a resize keeps the framing; `scale`: the scale itself, 80 % stays 80 %, also
-/// across a resize and in the folder's saved view. A folder key: `K` switches it for the folder.
+/// across a resize and in the folder's saved view; `screen`: the share of the view the picture covers (by area), so the
+/// empty space does not change from photo to photo, a photo of another shape cut where needed (smart zoom spec §1). A
+/// folder key: `K` cycles it for the folder.
 public enum ZoomCarry: String, Sendable {
-    case share, scale
+    case share, scale, screen
+}
+
+/// `step-pan`: where the view lands after a step when the new photo does not fit in the view (smart zoom spec §2), on
+/// every step, whether the zoom is kept or not. `subject` (the default): on the photo's subject, until subjects are found
+/// the top of a photo taller than the view's shape, else the centre; `keep`: the same place, in proportion; `center`:
+/// the middle. A folder key.
+public enum StepPan: String, Sendable {
+    case subject, keep, center
+}
+
+/// `step-zoom`: what a step does to the zoom (owner, 2026-10-28). `keep` (the default): as `keep-zoom-position` and
+/// `keep-zoom-as` say; `subject`: every next photo opens framed on its subject at `subject-size`, drawn to its centre by
+/// `subject-pull`, whatever was done to the photo before (at Fit until its subjects are found). A folder key.
+public enum StepZoom: String, Sendable {
+    case keep, subject
+}
+
+/// `subject-analysis`: when the photos' subjects are looked for (smart zoom spec §5). `ahead` (the default): the photo
+/// on screen and the next few in the step direction, in the background; `on-demand`: only the photo on screen, only
+/// while something needs its subject; `off`: no pre-analysis. SmartZoom Off pauses all three policies;
+/// enabled SmartZoom interprets `off` as on-demand for its current photo.
+/// `zoom-anchor`: the point a gesture zoom keeps in place (smart zoom spec §3.1). `pointer` (the default): the spot
+/// under the pointer; `center`: the view's centre; `subject`: the centre of the subject's frame on screen, the pointer
+/// until the photo's subjects are in. A folder key.
+public enum ZoomAnchor: String, Sendable {
+    case pointer, center, subject
+}
+
+public enum SubjectAnalysis: String, Sendable {
+    case ahead, onDemand = "on-demand", off
 }
 
 /// `home-sidebar-indent`: how Home's sidebar indents its folder tree. `compact` (the default): 14 pt for the first
@@ -126,8 +165,8 @@ public enum CacheIdleKeep: String, Sendable {
 
 /// `folder-scroll-direction`: which way the held-button folder gesture goes. `natural`: fingers left go to the next
 /// folder, as the three-finger swipe goes to the next photo, and on a mouse tilt right / side wheel right / ⇧+wheel
-/// down does, as the vertical wheel's down; `reversed` (the default, user after M4a): both the other way, fingers
-/// right and tilt left / side wheel left / ⇧+wheel up go to the next folder.
+/// down does, as the vertical wheel's down (the default since 2026-10-28, the user's); `reversed` (the default from
+/// M4a until then): both the other way, fingers right and tilt left / side wheel left / ⇧+wheel up go to the next folder.
 public enum FolderScrollDirection: String, Sendable {
     case natural, reversed
 
@@ -139,44 +178,6 @@ public enum FolderScrollDirection: String, Sendable {
         let fingers = FingerDirection.sign(invertedFromDevice: invertedFromDevice)
         let natural = precise ? fingers : -fingers
         return self == .natural ? natural : -natural
-    }
-}
-
-/// `mx-panel-force`: how hard the MX Master 4's haptic panel must be pressed (M4c spec §10.3). `keep` (the default)
-/// never writes it, `default` writes the mouse's factory value, `0…100` goes linearly over the mouse's range (0 the
-/// lightest it takes, 100 the stiffest).
-public enum PanelForceSetting: Equatable, Sendable {
-    case keep, factory, percent(Int)
-
-    /// The force to write, in the mouse's units, given what the mouse reports; nil for `keep`.
-    public func value(range: ClosedRange<UInt16>, defaultValue: UInt16) -> UInt16? {
-        switch self {
-        case .keep: return nil
-        case .factory: return defaultValue
-        case .percent(let p):
-            let span = Double(range.upperBound - range.lowerBound)
-            return range.lowerBound + UInt16((Double(min(max(p, 0), 100)) * span / 100).rounded())
-        }
-    }
-
-    /// The value as loupe.conf spells it.
-    public var text: String {
-        switch self {
-        case .keep: return "keep"
-        case .factory: return "default"
-        case .percent(let p): return String(p)
-        }
-    }
-
-    /// `keep`, `default` (any case) or a whole number 0…100; nil otherwise.
-    public static func parse(_ text: String) -> PanelForceSetting? {
-        switch text.lowercased() {
-        case "keep": return .keep
-        case "default": return .factory
-        default:
-            guard let p = Int(text), (0...100).contains(p) else { return nil }
-            return .percent(p)
-        }
     }
 }
 
@@ -247,10 +248,41 @@ public struct Config: Equatable, Sendable {
     public var keepZoomPosition = true
     /// `keep-zoom-as`: what a kept free zoom keeps (`ZoomCarry`; folder key, `ZoomRules`).
     public var keepZoomAs = ZoomCarry.share
+    /// `step-pan`: where the view lands after a step (`StepPan`; folder key, `ZoomRules`).
+    public var stepPan = StepPan.subject
+    /// `step-zoom`: what a step does to the zoom (`StepZoom`; folder key, `ZoomRules`).
+    public var stepZoom = StepZoom.keep
+    public var smartZoomMode = SmartZoomMode.off
+    public var smartZoomGesture = true
+    public var smartZoomOptions: [String: [String: String]] = [:]
+    /// `subject-pull`: how hard (%, 0…100) framing while browsing draws the view to the subject's centre, against
+    /// showing more of the other boxes found (`SubjectFraming.pan`).
+    public var subjectPull = 50
+    /// `subject-target`: where a subject is looked for, the first kind found wins (`SubjectFraming`).
+    public var subjectTarget = SubjectKind.vision
+    /// detector.conf (`DetectorSetup`), read with loupe.conf: not a key of its own.
+    public var detectorSetup = DetectorSetup()
+    /// `detector`: the custom detector is on (a tab's and a folder's key, `⌥C`; not in loupe.conf: detector.conf's
+    /// `detector` is the default).
+    public var detector = false
+    /// `detector-mode`: the custom detector's mode (`⌥G` while it is on); empty: detector.conf's `mode`.
+    public var detectorMode = ""
+    /// `subject-analysis`: when subjects are looked for (`SubjectAnalysis`).
+    public var subjectAnalysis = SubjectAnalysis.ahead
     /// `default-zoom-mode`: the mode a photo opens in when `keep-zoom-position` is off (folder key, `ZoomRules`).
     public var defaultZoomMode = ZoomMode.fit
     /// `fit-upscale`: Fit magnifies a photo smaller than the window (`no`: at most 100 %).
     public var fitUpscale = true
+    /// `zoom-anchor`: where a gesture zoom is anchored (`ZoomAnchor`; folder key, `ZoomRules`).
+    public var zoomAnchor = ZoomAnchor.pointer
+    /// `zoom-anchor-center`: with `zoom-anchor=subject`, a gesture zooming in brings the subject to the view's centre,
+    /// there at `subject-size`'s scale (`SubjectCentring`; owner, 2026-10-28).
+    public var zoomAnchorCenter = true
+    /// `subject-recheck`: with Show Subjects, a zoomed view that rests is looked at again on its own (`SubjectCrop`),
+    /// as the subject may change with the crop; off by default (owner, 2026-10-28).
+    public var subjectRecheck = false
+    /// `subject-size`: how much of the view (%, 20…100) the subject's frame takes under Zoom to Subject.
+    public var subjectSize = 60
     /// `rmb-zoom-speed`: multiplier on the right-button zoom's rate (0.25...5); 1 is the M1 rate of 200 pt per
     /// doubling, the default 1.5 needs a third less travel.
     public var rmbZoomSpeed = 1.5
@@ -260,9 +292,10 @@ public struct Config: Equatable, Sendable {
     /// (`ThumbZoom`); `no` leaves it to the system's horizontal scrolling.
     public var thumbWheelZoom = true
     /// `thumb-zoom-speed`: doublings of the scale per turn of the thumb wheel (0.25...8).
-    public var thumbZoomSpeed = 2.0
-    /// `thumb-zoom-stops`: a `zoom-stops` stop only ticks the mouse (`tick`) or halts the turn (`halt`, as a pinch).
-    public var thumbZoomStops = ThumbZoomStops.tick
+    public var thumbZoomSpeed = 2.4
+    /// `thumb-zoom-stops`: a `zoom-stops` stop only ticks the mouse (`tick`) or halts the turn (`halt`, as a pinch, the
+    /// default).
+    public var thumbZoomStops = ThumbZoomStops.halt
     /// `thumb-zoom-invert`: the thumb wheel's zoom the other way, left = in.
     public var thumbZoomInvert = false
     /// `rubber-band`: panning past a photo's edge stretches it and springs back, instead of stopping dead.
@@ -347,7 +380,8 @@ public struct Config: Equatable, Sendable {
 
     // The thumbnail strip and thumbnail cache (M2.5 spec §7).
     /// `strip-window`: how the strip shows in a window; fullscreen always uses `over`.
-    public var stripWindow = StripWindowMode.beside
+    public var slots = FolderSlotSettings.defaults
+    public var stripWindow = StripWindowMode.over
     public static let stripHeightRange = 40...240
 
     /// A requested strip height (a drag's raw value, say) as a whole number of points inside `stripHeightRange`.
@@ -357,26 +391,26 @@ public struct Config: Equatable, Sendable {
     }
 
     /// `strip-height`: cell height in points, 40...240 (also set by dragging the strip's top edge).
-    public var stripHeight = 68
+    public var stripHeight = 105
     public static let stripCellMaxRange = 0.5625...1.5
     /// `strip-cell-max`: how wide (width : height) a strip cell may grow when the strip has room, 0.5625 (9:16, never
     /// wider than the narrow cell) ...1.5 (3:2); never wider than the cell's photo. A number or `w:h` in loupe.conf.
     public var stripCellMax = 1.5
     /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square).
-    public var stripCornerRadius = 3.0
+    public var stripCornerRadius = 8.0
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`FilmstripScroll`).
-    public var stripScrollDirection = StripScrollDirection.natural
+    public var stripScrollDirection = StripScrollDirection.reversed
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
-    public var stripHideDelayMilliseconds = 200
+    public var stripHideDelayMilliseconds = 250
     /// `strip-fade-in`: milliseconds of the strip's show fade, 0...2000 (0: it appears without animation).
     public var stripFadeInMilliseconds = 150
     /// `strip-fade-out`: milliseconds of the strip's hide fade, 0...2000 (0: it disappears without animation).
-    public var stripFadeOutMilliseconds = 150
+    public var stripFadeOutMilliseconds = 250
     /// `strip-jump-preview`: show the stretched thumbnail at once on a jump or scrub (`no`: a normal
     /// transition, as `show-blurry` says).
     public var stripJumpPreview = true
     /// `strip-loading-indicator`: a spinner while only the thumbnail is on screen.
-    public var stripLoadingIndicator = false
+    public var stripLoadingIndicator = true
     /// `thumb-size`: pixels on the long side, 256...1024 (part of the thumbnail cache key).
     public var thumbSize = 512
     /// `thumb-cache-size`: limit of the on-disk thumbnail database, in bytes; 0 keeps thumbnails in memory only.
@@ -393,7 +427,7 @@ public struct Config: Equatable, Sendable {
     /// right button + tilt / side wheel) steps to the next or previous folder (`FolderScrollGesture`).
     public var folderScrollGesture = true
     /// `folder-scroll-direction`: which way the fingers go to the next folder (`FolderScrollDirection`).
-    public var folderScrollDirection = FolderScrollDirection.reversed
+    public var folderScrollDirection = FolderScrollDirection.natural
     public static let folderScrollThresholdRange = 10.0...400.0
     /// `folder-scroll-threshold`: horizontal travel in points, 10...400, that the held-button scroll needs before it
     /// steps (a notched wheel steps on its first horizontal notch regardless).
@@ -413,15 +447,9 @@ public struct Config: Equatable, Sendable {
     public var mouseMoveStep = 20.0
     /// `mouse-haptics`: the mouse vibrates at all (`no`: never).
     public var mouseHaptics = true
-    /// `mx-panel-force`: the haptic panel's force, written to the mouse when it connects and after a reload.
-    public var mxPanelForce = PanelForceSetting.keep
     /// `mx-side-buttons`: how Loupe gets the MX Master's back / forward buttons (`SideButtonsMode`, M4c spec §12.1);
     /// applied at once by a reload.
     public var mxSideButtons = SideButtonsMode.watch
-    /// `haptic-strength`: the mouse's normal haptic strength, 0…100, written when the mouse starts and after a reload
-    /// that changes it; nil (`keep`, the default) never writes it (M4c spec §10.4). With `keep`, a strong play goes
-    /// back to the strength the mouse reported at setup.
-    public var hapticStrength: Int?
     /// `haptic-strong-strength`: 0…100, the strength of a `haptic-*` value that ends in `strong`.
     public var hapticStrongStrength = 80
     /// The `haptic-*` keys: a LogiHIDPP pattern, optionally strong, `nil` for `none` (M4c spec §5, §10.4).
@@ -454,15 +482,16 @@ public struct Config: Equatable, Sendable {
     /// coloured values (yellow, green, amber) about 0.7; the part the fill has not reached, which the fill lightens by
     /// `stats-progress-opacity`.
     public var statsBarOpacity = 0.7
-    /// `stats-bar-rows`: 2, the facts over the names, or 1, everything in one row (the names, the file and the folder, in the
-    /// middle).
-    public var statsBarRows = 2
+    /// `stats-bar-rows`: 2, the facts over the names, or 1 (the default), everything in one row (the names, the file and
+    /// the folder, in the middle).
+    public var statsBarRows = 1
     /// `stats-folder-name`: show the open folder's name in the image status.
     public var statsFolderName = true
     /// `toast-position`: where the key's one-line answer sits, one of six places.
     public var toastPosition = ToastPosition.bottom
-    /// `stats-bar-with-toolbar`: the stats bar stays while the toolbar is on screen (`no`: it shows only without it).
-    public var statsBarWithToolbar = true
+    /// `stats-bar-with-toolbar`: the stats bar stays while the toolbar is on screen (`no`, the default: it shows only
+    /// without it).
+    public var statsBarWithToolbar = false
     /// `fullscreen-toolbar`: the viewer's toolbar in full screen (`FullScreenToolbar`).
     public var fullScreenToolbar = FullScreenToolbar.remember
     /// `stats-modified`: the photo's modification date in the stats bar.
@@ -475,6 +504,8 @@ public struct Config: Equatable, Sendable {
     public var statsIcons = true
     /// `stats-monochrome`: the stats bar in white and grey, without the yellow of the parameters.
     public var statsMonochrome = false
+    /// `icon-set`: the line icons, Lucide or SF Symbols (read at launch).
+    public var iconSet = IconSet.lucide
 
     /// `background`: the colour around the picture.
     public var background = BackgroundColor.default
@@ -494,7 +525,7 @@ public struct Config: Equatable, Sendable {
     public var homePathBar = true
     /// `home-sidebar-width`: Home's sidebar width in points, 180...1600, shown at most a third of the window (never
     /// held under 400); dragging its edge writes it back.
-    public var homeSidebarWidth = 236
+    public var homeSidebarWidth = 384
     /// `home-sidebar-compact`: a folder holding one folder only shows with it on one row, `a › b › c`.
     public var homeSidebarCompact = true
     /// `home-sidebar-indent`: the sidebar tree's indent (`SidebarIndent`).
@@ -505,11 +536,12 @@ public struct Config: Equatable, Sendable {
     /// again further down, under one row of the folders left out; 0 (the default) never, else 3...20.
     public var homeSidebarReroot = 0
     /// `browser-card-size`: the wanted photo slot width in the file browser (Home's Folders tab) in points, 60...480.
-    public var browserCardSize = 220
-    /// `grid-style`: each photo filling its square, cropped, or whole inside it (the default).
-    public var gridStyle = GridStyle.aspect
-    /// `grid-names`: file names off (the default), on the photo, or under it.
-    public var gridNames = GridNames.off
+    public var browserCardSize = 387
+    /// `grid-style`: each photo filling its square, cropped (the default), or whole inside it.
+    public var gridStyle = GridStyle.square
+    /// `grid-names`: file names by the tile's size (`auto`, the default: under the photo with its facts from 160 pt,
+    /// a band on hover on smaller tiles), off, on the photo, or under it.
+    public var gridNames = GridNames.auto
     /// `folder-cover`: the layout of a folder's, a zip's or a session's card picture (`FolderCoverLayout`).
     public var folderCover = FolderCoverLayout.hero
     /// `folder-cards`: how Home's browser draws a folder's folders and archives (`CardStyle`: a poster with a band of
@@ -551,18 +583,20 @@ public struct Config: Equatable, Sendable {
     public var checkerColors = CheckerColors.light
 
     /// `upscale` / `downscale`: the resampling filter when the picture is magnified / reduced on screen (`metalfx` and
-    /// `ewa-lanczos` only magnify, so they are `upscale` / `upscale-high` values and a warning as `downscale`).
-    public var upscale = ResampleSettings().upscale
+    /// `ewa-lanczos` only magnify, so they are `upscale` / `upscale-high` values and a warning as `downscale`). The
+    /// magnifying defaults are MetalFX (the user's); a GPU without its spatial scaler draws those frames with
+    /// Lanczos-3 (`MetalContext.metalFXFallback`). `ResampleSettings()` keeps its own Lanczos-3 / Mitchell / 300.
+    public var upscale = UpscaleFilter.metalfx
     /// `upscale-high` / `upscale-high-from`: the filter from that magnification (percent) up; 0 is off.
-    public var upscaleHigh = ResampleSettings().upscaleHigh
-    public var upscaleHighPercent = ResampleSettings().upscaleHighPercent
+    public var upscaleHigh = UpscaleFilter.metalfx
+    public var upscaleHighPercent = 200
     public var downscale = ResampleSettings().downscale
 
     /// `lanczos-antiring`: clamp Lanczos upscaling to the range of its neighbourhood (less ringing, a bit softer).
     public var lanczosAntiring = false
 
     /// `pixel-art`: zoom in percent from which the picture is drawn nearest-neighbour; 0 is off.
-    public var pixelArtPercent = 400
+    public var pixelArtPercent = 800
 
     /// `pyramid-filter`: how the pyramid levels are built; photos uploaded after a change get it. Lanczos-3 by spec §4's
     /// rule: +7 ms of GPU per 147 MP upload, +1.2 to +7 dB at Fit through level >= 1 (docs/bench/2026-10-15-m3a-pyramid.md).
@@ -578,11 +612,11 @@ public struct Config: Equatable, Sendable {
     /// `auto-color-method`: `apple` (the chain as it is) or `apple-luma` (curve and shadows on luminance only).
     public var autoColorMethod = AutoColorMethod.apple
     /// `auto-color-strength`: 0...1, the share of the correction mixed into the picture (in linear light).
-    public var autoColorStrength = 1.0
+    public var autoColorStrength = 0.8
     /// `auto-color-filters`: which parts of Apple's chain are applied, at least one; written `curve,shadows,vibrance`.
     public var autoColorFilters = Set(AutoColorFilter.allCases)
     /// `auto-color-vibrance-gain`: 0...4, multiplies the vibrance Apple chose (the result is capped at 1).
-    public var autoColorVibranceGain = 1.0
+    public var autoColorVibranceGain = 1.5
     /// `auto-color-threshold`: 0...255, mean difference below which a photo is left alone; 0 corrects every photo.
     public var autoColorThreshold = 6.0
     /// `auto-color-full`: 0...255, the difference from which a photo gets the whole strength (a line from the threshold;
@@ -593,7 +627,7 @@ public struct Config: Equatable, Sendable {
     /// `vibrance`: `CIVibrance` on every photo, whatever auto colour does.
     public var vibrance = false
     /// `vibrance-amount`: `CIVibrance.inputAmount`, 0...1.
-    public var vibranceAmount = 0.5
+    public var vibranceAmount = 0.65
 
     /// `appearance`: light, dark or the system's windows and Home (`AppAppearance`).
     public var appearance = AppAppearance.system
@@ -621,9 +655,15 @@ public struct Config: Equatable, Sendable {
 
     public static var fileURL: URL { directory.appendingPathComponent("loupe.conf") }
 
+    public static func smartZoomOptionsText(_ profiles: [String: [String: String]]) -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(profiles)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
     /// Every key loupe.conf understands, in file order.
     public static let keys = ["zoom-stops", "zoom-stop-haptics",
-                              "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "default-zoom-mode", "fit-upscale",
+                              "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "subject-target", "subject-size", "subject-pull", "subject-recheck", "subject-analysis", "default-zoom-mode", "fit-upscale",
+                              "smart-zoom", "smart-zoom-gesture", "smart-zoom-options", "zoom-anchor", "zoom-anchor-center",
                               "rmb-zoom-speed", "rmb-zoom-inertia",
                               "rubber-band", "drag-inertia", "inertia-deceleration", "rmb-zoom-invert",
                               "pan-indicators", "pan-indicators-hide", "pan-indicators-fade",
@@ -648,12 +688,13 @@ public struct Config: Equatable, Sendable {
                               "folder-scroll-gesture", "folder-scroll-direction", "folder-scroll-threshold", "folder-scroll-repeat",
                               "archive-folders", "folder-toast",
                               "mouse-long-press", "mouse-move-step", "mouse-haptics",
-                              "mx-panel-force", "mx-side-buttons", "haptic-strength", "haptic-strong-strength",
+                              "mx-side-buttons", "haptic-strong-strength",
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
                               "haptic-long-armed", "haptic-detent",
+                              "slot-left", "slot-right", "slot-bottom",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
                               "appearance", "home-tab", "home-start", "home-sidebar", "home-path-bar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
-                              "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome",
+                              "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set",
                               "fullscreen-toolbar", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
 
@@ -663,12 +704,15 @@ public struct Config: Equatable, Sendable {
     public static let colorFolderKeys = ["auto-color", "auto-color-method", "auto-color-strength", "vibrance",
                                          "vibrance-amount"]
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
-    public static let zoomFolderKeys = ["keep-zoom-position", "keep-zoom-as", "default-zoom-mode"]
+    public static let zoomFolderKeys = ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode", "zoom-anchor",
+                                        "subject-target"]
+    /// The custom detector's keys, a tab's and a folder's (`⌥C`, `⌥G`), not loupe.conf's: detector.conf holds the rest.
+    public static let detectorFolderKeys = ["detector", "detector-mode"]
     /// The two-page keys a folder sets for itself.
     public static let spreadFolderKeys = ["spread", "spread-shift", "spread-direction", "spread-landscape",
                                           "spread-wide-ratio"]
     /// The keys a folder may set for itself.
-    public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys
+    public static let folderKeys = scalingFolderKeys + colorFolderKeys + zoomFolderKeys + spreadFolderKeys + detectorFolderKeys
     /// Home's own keys in a folder's settings: its sort (`BrowserSort.settingKey`), how its folders are drawn
     /// (`CardStyle.settingKey`) and Square / Aspect under `grid-style-memory=folder` (`GridStyle.settingKey`). Home
     /// reads them itself; a folder's config neither takes nor refuses them.
@@ -712,8 +756,22 @@ public struct Config: Equatable, Sendable {
         case "zoom-rubber-band": return zoomRubberBand ? "yes" : "no"
         case "keep-zoom-position": return keepZoomPosition ? "yes" : "no"
         case "keep-zoom-as": return keepZoomAs.rawValue
+        case "step-pan": return stepPan.rawValue
+        case "smart-zoom": return smartZoomMode.rawValue
+        case "smart-zoom-gesture": return smartZoomGesture ? "yes" : "no"
+        case "smart-zoom-options": return Self.smartZoomOptionsText(smartZoomOptions)
+        case "step-zoom": return stepZoom.rawValue
+        case "subject-pull": return String(subjectPull)
+        case "subject-target": return subjectTarget.map(\.rawValue).joined(separator: ",")
+        case "subject-analysis": return subjectAnalysis.rawValue
+        case "detector": return detector ? "yes" : "no"
+        case "detector-mode": return detectorMode
         case "default-zoom-mode": return ZoomRules.text(of: defaultZoomMode)
         case "fit-upscale": return fitUpscale ? "yes" : "no"
+        case "zoom-anchor": return zoomAnchor.rawValue
+        case "zoom-anchor-center": return zoomAnchorCenter ? "yes" : "no"
+        case "subject-recheck": return subjectRecheck ? "yes" : "no"
+        case "subject-size": return String(subjectSize)
         case "pan-indicators": return panIndicators.rawValue
         case "pan-indicators-hide": return String(panIndicatorsHideMilliseconds)
         case "pan-indicators-fade": return String(panIndicatorsFadeMilliseconds)
@@ -734,9 +792,7 @@ public struct Config: Equatable, Sendable {
         case "haptic-end": return HapticChoice.text(hapticEnd)
         case "haptic-long-armed": return HapticChoice.text(hapticLongArmed)
         case "haptic-detent": return HapticChoice.text(hapticDetent)
-        case "mx-panel-force": return mxPanelForce.text
         case "mx-side-buttons": return mxSideButtons.rawValue
-        case "haptic-strength": return hapticStrength.map(String.init) ?? "keep"
         case "haptic-strong-strength": return String(hapticStrongStrength)
         case "rmb-zoom-speed": return formatNumber(rmbZoomSpeed)
         case "rmb-zoom-inertia": return rmbZoomInertia ? "yes" : "no"
@@ -765,6 +821,8 @@ public struct Config: Equatable, Sendable {
         case "wheel-direction": return wheelDirection.rawValue
         case "key-step": return keyStep.rawValue
         case "cursor-autohide": return cursorAutohideMilliseconds.map(String.init) ?? "no"
+        case "slot-left", "slot-right", "slot-bottom":
+            return SlotEdge.allCases.first { $0.key == key }.flatMap { slots[$0] }.map(FolderSlotSettings.text)
         case "strip-window": return stripWindow.rawValue
         case "strip-height": return String(stripHeight)
         case "strip-cell-max": return formatNumber(stripCellMax)
@@ -799,6 +857,7 @@ public struct Config: Equatable, Sendable {
         case "stats-bar-hide-delay": return String(statsBarHideDelayMilliseconds)
         case "stats-icons": return statsIcons ? "yes" : "no"
         case "stats-monochrome": return statsMonochrome ? "yes" : "no"
+        case "icon-set": return iconSet.rawValue
         case "background": return background.text
         case "launch-reveal": return launchReveal.rawValue
         case "open-in": return openIn.rawValue
@@ -867,12 +926,12 @@ public struct Config: Equatable, Sendable {
     }
 
     /// Defaults when the file is missing (not an error); a file that exists but cannot be read is reported.
-    public static func load(from url: URL = Config.fileURL) -> (Config, [String]) {
-        guard FileManager.default.fileExists(atPath: url.path) else { return (Config(), []) }
+    public static func load(from url: URL = Config.fileURL, defaults: Config = Config()) -> (Config, [String]) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (defaults, []) }
         do {
-            return parse(try String(contentsOf: url, encoding: .utf8))
+            return parse(try String(contentsOf: url, encoding: .utf8), defaults: defaults)
         } catch {
-            return (Config(), ["\(url.path): \(error.localizedDescription)"])
+            return (defaults, ["\(url.path): \(error.localizedDescription)"])
         }
     }
 
@@ -898,6 +957,50 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { keepZoomPosition = v } else { return .badValue }
         case "keep-zoom-as":
             if let v = ZoomCarry(rawValue: value.lowercased()) { keepZoomAs = v } else { return .badValue }
+        case "step-pan":
+            if let v = StepPan(rawValue: value.lowercased()) { stepPan = v } else { return .badValue }
+        case "subject-target":
+            let kinds = value.split(separator: ",").map { SubjectKind(rawValue: $0.trimmingCharacters(in: .whitespaces).lowercased()) }
+            // Vision's kinds only: the custom detector's classes are detector.conf's.
+            guard !kinds.isEmpty, !kinds.contains(nil), Set(kinds).count == kinds.count,
+                  kinds.allSatisfy({ !$0!.isCustom }) else { return .badValue }
+            subjectTarget = kinds.compactMap { $0 }
+        case "detector":
+            if let v = Self.bool(value) { detector = v } else { return .badValue }
+        case "detector-mode":
+            detectorMode = value.lowercased()
+        case "subject-analysis":
+            if let v = SubjectAnalysis(rawValue: value.lowercased()) { subjectAnalysis = v } else { return .badValue }
+        case "subject-recheck":
+            if let v = Self.bool(value) { subjectRecheck = v } else { return .badValue }
+        case "zoom-anchor-center":
+            if let v = Self.bool(value) { zoomAnchorCenter = v } else { return .badValue }
+        case "zoom-anchor":
+            if let v = ZoomAnchor(rawValue: value.lowercased()) { zoomAnchor = v } else { return .badValue }
+        case "subject-size":
+            guard let v = Int(value), (20...100).contains(v) else { return .badValue }
+            subjectSize = v
+        case "smart-zoom":
+            guard let v = SmartZoomMode(rawValue: value.lowercased()) else { return .badValue }; smartZoomMode = v
+        case "smart-zoom-gesture":
+            guard let v = Self.bool(value) else { return .badValue }; smartZoomGesture = v
+        case "smart-zoom-options":
+            guard let data = value.data(using: .utf8),
+                  let profiles = try? JSONDecoder().decode([String: [String: String]].self, from: data) else { return .badValue }
+            for profile in profiles.values {
+                var options = CompositionOptions()
+                for (key, value) in profile {
+                    if key == "size" {
+                        guard let v = DetectorSetup.share(value), v.isFinite, (0.2...1).contains(v) else { return .badValue }
+                    } else if options.set(key, value) != true { return .badValue }
+                }
+            }
+            smartZoomOptions = profiles
+        case "step-zoom":
+            if let v = StepZoom(rawValue: value.lowercased()) { stepZoom = v } else { return .badValue }
+        case "subject-pull":
+            guard let v = Int(value), (0...100).contains(v) else { return .badValue }
+            subjectPull = v
         case "default-zoom-mode":
             if let v = ZoomRules.parseMode(value) { defaultZoomMode = v } else { return .badValue }
         case "fit-upscale":
@@ -951,18 +1054,8 @@ public struct Config: Equatable, Sendable {
             if let v = HapticChoice.parse(value) { hapticLongArmed = v } else { return .badValue }
         case "haptic-detent":
             if let v = HapticChoice.parse(value) { hapticDetent = v } else { return .badValue }
-        case "mx-panel-force":
-            if let v = PanelForceSetting.parse(value) { mxPanelForce = v } else { return .badValue }
         case "mx-side-buttons":
             if let v = SideButtonsMode(rawValue: value.lowercased()) { mxSideButtons = v } else { return .badValue }
-        case "haptic-strength":
-            if value.lowercased() == "keep" {
-                hapticStrength = nil
-            } else if let v = Int(value), (0...100).contains(v) {
-                hapticStrength = v
-            } else {
-                return .badValue
-            }
         case "haptic-strong-strength":
             if let v = Int(value), (0...100).contains(v) { hapticStrongStrength = v } else { return .badValue }
         case "rmb-zoom-speed":
@@ -1025,6 +1118,10 @@ public struct Config: Equatable, Sendable {
             if Self.bool(value) == false { cursorAutohideMilliseconds = nil }
             else if let v = Int(value), (1...600_000).contains(v) { cursorAutohideMilliseconds = v }
             else { return .badValue }
+        case "slot-left", "slot-right", "slot-bottom":
+            guard let edge = SlotEdge.allCases.first(where: { $0.key == key }),
+                  let setting = FolderSlotSettings.parse(value, edge: edge) else { return .badValue }
+            slots[edge] = setting
         case "strip-window":
             let word = value.lowercased()
             if let v = StripWindowMode(rawValue: Self.renamedValues["strip-window"]?[word] ?? word) { stripWindow = v } else { return .badValue }
@@ -1101,6 +1198,8 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { statsIcons = v } else { return .badValue }
         case "stats-monochrome":
             if let v = Self.bool(value) { statsMonochrome = v } else { return .badValue }
+        case "icon-set":
+            if let v = IconSet(rawValue: value.lowercased()) { iconSet = v } else { return .badValue }
         case "background":
             if let v = BackgroundColor(text: value) { background = v } else { return .badValue }
         case "launch-reveal":
@@ -1218,10 +1317,14 @@ public struct Config: Equatable, Sendable {
         return .ok
     }
 
+    /// The mouse's own settings, written by MouseService alone since Loupe became its client: a line with one of these
+    /// keys is ignored and reported.
+    static let movedToMouseService: Set<String> = ["haptic-strength", "mx-panel-force"]
+
     /// Parses config text. Lines with unknown keys or invalid values are ignored and reported; so are
     /// unknown `zoom-stops` tokens, while the rest of that list is kept.
-    public static func parse(_ text: String) -> (Config, [String]) {
-        var config = Config()
+    public static func parse(_ text: String, defaults: Config = Config()) -> (Config, [String]) {
+        var config = defaults
         var warnings: [String] = []
         for (number, raw) in text.components(separatedBy: .newlines).enumerated() {
             let line = stripComment(raw)
@@ -1233,6 +1336,10 @@ public struct Config: Equatable, Sendable {
             }
             let key = line[..<equals].trimmingCharacters(in: .whitespaces).lowercased()
             let value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if movedToMouseService.contains(key) {
+                warnings.append("\(location): \(key): now in MouseService's settings")
+                continue
+            }
             if retiredKeys.contains(key) {
                 warnings.append("\(location): '\(key)' is no longer used")
                 continue
@@ -1324,7 +1431,10 @@ public struct Config: Equatable, Sendable {
                                                   // The glass of the stats bar and the full-screen progress toast, which a
                                                   // dark strip and the stats bar itself took the place of.
                                                   "stats-toast", "stats-toast-position", "stats-toast-opacity",
-                                                  "stats-toast-clear", "stats-bar-clear", "stats-bar-position"]
+                                                  "stats-toast-clear", "stats-bar-clear", "stats-bar-position",
+                                                  // A zoom at the pointer moving a picture narrower than the window off
+                                                  // its middle (owner, 2026-10-28: it stood in an unnatural place).
+                                                  "zoom-at-pointer"]
 
     /// Values loupe.conf may still hold from earlier versions, by key: old word to new word. `set` reads the old word,
     /// `parse` warns about it.
@@ -1348,7 +1458,7 @@ public struct Config: Equatable, Sendable {
         return result
     }
 
-    private static func bool(_ value: String) -> Bool? {
+    static func bool(_ value: String) -> Bool? {
         switch value.lowercased() {
         case "yes", "true", "1": return true
         case "no", "false", "0": return false

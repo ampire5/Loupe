@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 import SQLite3
 
 /// The thumbnail disk cache (spec §3.2): `Catalog.db` knows volumes, folders and files (stamp, `ImageInfo`,
@@ -117,9 +118,13 @@ public final class ThumbnailDatabase {
                     progressive = NULL, file_size = NULL, color_space = NULL, orientation = NULL WHERE id = ?
                     """, [.int(Int64(file.stamp.size)), .double(file.stamp.modified.timeIntervalSinceReferenceDate),
                           .int(file.id)])
+                try catalog.run("DELETE FROM file_facts WHERE file_id = ?", [.int(file.id)])   // the file changed
+                try catalog.run("DELETE FROM file_subjects WHERE file_id = ?", [.int(file.id)])
             }
             if !orphans.isEmpty {
                 try catalog.run("DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
+                try catalog.run("DELETE FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
+                try catalog.run("DELETE FROM file_subjects WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
             }
             for file in added {
                 ids[file.name] = try catalog.run(
@@ -211,6 +216,8 @@ public final class ThumbnailDatabase {
                     UPDATE files SET size = ?, mtime = ?, width = NULL, height = NULL, uti = NULL,
                     progressive = NULL, file_size = NULL, color_space = NULL, orientation = NULL WHERE id = ?
                     """, [.int(Int64(stamp.size)), .double(stamp.modified.timeIntervalSinceReferenceDate), .int(row.id)])
+                try catalog.run("DELETE FROM file_facts WHERE file_id = ?", [.int(row.id)])   // the file changed
+                try catalog.run("DELETE FROM file_subjects WHERE file_id = ?", [.int(row.id)])
             } else {
                 id = try catalog.run("INSERT INTO files(folder, name, size, mtime, last_access) VALUES(?, ?, ?, ?, ?)",
                                      [.int(folderID), .text(location.name), .int(Int64(stamp.size)),
@@ -232,7 +239,10 @@ public final class ThumbnailDatabase {
                              colorSpaceName: r.isNull(5) ? nil : r.text(5),
                              orientation: ImageOrientation(rawValue: Int(r.int(6))) ?? .up)
         }
-        guard let info else { return nil }
+        guard var info else { return nil }
+        try catalog.query("SELECT facts FROM file_facts WHERE file_id = ?", [.int(id)]) { r in
+            info.facts = try? JSONDecoder().decode(FileFacts.self, from: r.blob(0))
+        }
         var jpeg: Data?
         try thumbs.query("SELECT jpeg FROM thumbs WHERE file_id = ?", [.int(id)]) { jpeg = $0.blob(0) }
         return jpeg.map { ($0, info) }
@@ -253,6 +263,53 @@ public final class ThumbnailDatabase {
             sizes[r.int(0)] = (applyingOrientation ? orientation : .up).orientedSize(stored)
         }
         return sizes
+    }
+
+    /// The facts kept for those of `ids` that have them.
+    public func facts(_ ids: [Int64]) throws -> [Int64: FileFacts] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [Int64: FileFacts] = [:]
+        try catalog.query("SELECT file_id, facts FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))",
+                          [Self.idList(ids)]) { r in
+            found[r.int(0)] = try? JSONDecoder().decode(FileFacts.self, from: r.blob(1))
+        }
+        return found
+    }
+
+    /// Facts read later than the thumbnail (the file's header, for a thumbnail made before they were kept).
+    public func putFacts(_ items: [(id: Int64, facts: FileFacts)]) throws {
+        guard !items.isEmpty else { return }
+        try catalog.transaction {
+            for item in items {
+                guard let json = try? JSONEncoder().encode(item.facts) else { continue }
+                try catalog.run("INSERT OR REPLACE INTO file_facts(file_id, facts) VALUES(?, ?)", [.int(item.id), .blob(json)])
+            }
+        }
+    }
+
+    /// The subjects kept for those of `ids` that have them (`SubjectBoxes`, smart zoom spec §5); boxes of another
+    /// version of the detection are left out.
+    public func subjects(_ ids: [Int64]) throws -> [Int64: SubjectBoxes] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [Int64: SubjectBoxes] = [:]
+        try catalog.query("SELECT file_id, boxes FROM file_subjects WHERE file_id IN (SELECT value FROM json_each(?))",
+                          [Self.idList(ids)]) { r in
+            if let boxes = try? JSONDecoder().decode(SubjectBoxes.self, from: r.blob(1)), boxes.version == SubjectBoxes.version {
+                found[r.int(0)] = boxes
+            }
+        }
+        return found
+    }
+
+    /// Subjects found for files of the catalog; they go with the file's facts when it changes.
+    public func putSubjects(_ items: [(id: Int64, boxes: SubjectBoxes)]) throws {
+        guard !items.isEmpty else { return }
+        try catalog.transaction {
+            for item in items {
+                guard let json = try? JSONEncoder().encode(item.boxes) else { continue }
+                try catalog.run("INSERT OR REPLACE INTO file_subjects(file_id, boxes) VALUES(?, ?)", [.int(item.id), .blob(json)])
+            }
+        }
     }
 
     /// Which of `ids` have a stored thumbnail.
@@ -287,6 +344,9 @@ public final class ThumbnailDatabase {
                           time, .int(item.id),
                           .int(Int64(item.stamp.size)), .double(item.stamp.modified.timeIntervalSinceReferenceDate)]) { _ in
                     current.append((item.id, item.jpeg))
+                }
+                if let facts = info.facts, let json = try? JSONEncoder().encode(facts) {
+                    try catalog.run("INSERT OR REPLACE INTO file_facts(file_id, facts) VALUES(?, ?)", [.int(item.id), .blob(json)])
                 }
             }
         }
@@ -544,6 +604,8 @@ public final class ThumbnailDatabase {
         try catalog.transaction {
             try deleteThumbs(ids)
             try catalog.run("DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
+            try catalog.run("DELETE FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
+            try catalog.run("DELETE FROM file_subjects WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
         }
         try thumbs.execute("PRAGMA incremental_vacuum")
     }
@@ -654,6 +716,13 @@ public final class ThumbnailDatabase {
             entries BLOB NOT NULL, PRIMARY KEY(volume, path));
         CREATE INDEX IF NOT EXISTS folder_listings_written ON folder_listings(written);
         """
+    /// A photo's facts for its card (`PhotoFacts`: pixels, EXIF), JSON, by file id; read with the thumbnail, gone
+    /// with the file's row or when the file changes. Its subjects (`SubjectBoxes`) beside them, gone with them. Created with `IF NOT EXISTS` on every open, out of the format
+    /// check, as the summaries.
+    private static let factsSchema = """
+        CREATE TABLE IF NOT EXISTS file_facts(file_id INTEGER PRIMARY KEY, facts BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS file_subjects(file_id INTEGER PRIMARY KEY, boxes BLOB NOT NULL);
+        """
     private static let thumbsSchema = metaSchema
         + "CREATE TABLE IF NOT EXISTS thumbs(file_id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);"
 
@@ -674,6 +743,7 @@ public final class ThumbnailDatabase {
             try db.execute(catalogSchema)
             try db.execute(summarySchema)
             try db.execute(listingSchema)
+            try db.execute(factsSchema)
             // A catalog without an id is a new one (or the remains of one): it gets a new id.
             catalogID = try readMeta(db)["catalog_id"] ?? UUID().uuidString
             try writeMeta(db, catalogID: catalogID, thumbSize: thumbSize)
