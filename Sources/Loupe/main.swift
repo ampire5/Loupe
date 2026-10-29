@@ -1,6 +1,16 @@
 import AppKit
 import LoupeCore
 
+#if DEBUG
+if CommandLine.arguments.contains("--native-toolbar-bench")
+    || Bundle.main.object(forInfoDictionaryKey: "LoupeNativeToolbarBench") as? Bool == true {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await NativeToolbarBench.run() }
+        NSApplication.shared.run()
+    }
+}
+#endif
+
 // `Loupe --print-input-conf`: the input.conf template (every built-in binding, commented) on stdout, before any window;
 // the installer makes the user's ~/.config/loupe/input.conf from it.
 if CommandLine.arguments.dropFirst().contains("--print-input-conf") {
