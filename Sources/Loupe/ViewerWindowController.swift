@@ -68,9 +68,6 @@ import UniformTypeIdentifiers
     /// Asked before a gallery clicked in this tab's Stash is opened: true when it was handled elsewhere (the registry
     /// switched to a tab showing it), and this tab stays on Stash.
     var onStashPick: ((StashGalleryPick) -> Bool)?
-    /// "‹ Recent" or "‹ Stash" (`backTarget`: whenever a photo is open), with the strip.
-    private let backButton = BackButton()
-    private var backButtonShown = false
     /// The app's per-folder values, which `S` and `A` write for this window's folder.
     private let folderSettings: FolderSettings
     /// The folder of the photo on screen (standardized), whose values the window's scaling takes; nil before the
@@ -91,9 +88,6 @@ import UniformTypeIdentifiers
     private var shownWarnings: [String] = []
     private let warningsBelowBar: NSLayoutConstraint
     private let warningsAtTop: NSLayoutConstraint
-    /// The back button's top: under the image status in a window, else from the window's top.
-    private let backBelowBar: NSLayoutConstraint
-    private let backAtTop: NSLayoutConstraint
     private let viewerAtTop: NSLayoutConstraint
     /// The pan pills' top: below the toolbar in a window, the container's top in full screen.
     private let pillsAtTop: NSLayoutConstraint
@@ -118,8 +112,9 @@ import UniformTypeIdentifiers
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
     private let windowToolbarController = WindowToolbarController()
     private var isFullScreen = false
+    private var isEnteringFullScreen = false
     /// Full screen: AppKit reveals the toolbar together with the menu bar and window controls;
-    /// `⌥⌘T` disables or enables the viewer's toolbar. Home uses the same native reveal. The stats bar (`I`) is shown over the
+    /// `⌥⌘T` disables or enables the viewer's toolbar. Home pins the same native toolbar, as Photos does. The stats bar (`I`) is shown over the
     /// picture on its own.
     private var fullScreenToolbarOverride: Bool?
     private var fullScreenToolbar: Bool {
@@ -141,7 +136,10 @@ import UniformTypeIdentifiers
         get { UserDefaults.standard.object(forKey: "viewerToolbar") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "viewerToolbar") }
     }
-    private var toolbarWanted: Bool { isFullScreen ? fullScreenToolbar : windowToolbar }
+    private let windowedToolbarReveal = WindowToolbarRevealController(hideDelay: Chrome.Motion.duration(Chrome.Motion.hide))
+    private var toolbarPinnedOverride: Bool?
+    private var viewerToolbarPinned: Bool { toolbarPinnedOverride ?? (!isFullScreen && windowToolbar) }
+    private var toolbarWanted: Bool { viewerToolbarPinned || (isFullScreen ? fullScreenToolbar : windowToolbar) }
     /// What the window's toolbar was last told, so the system's slide-in in full screen is not pinned by telling it again.
     private var toolbarWasWanted = true
     /// Remembered like the windowed `statsMode`, for the next full screen.
@@ -228,7 +226,7 @@ import UniformTypeIdentifiers
                                   styleMask: [.titled, .resizable, .closable, .miniaturizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
         window.toolbarStyle = .unified
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         window.titleVisibility = .hidden
         window.title = "Loupe"
         window.collectionBehavior = .fullScreenPrimary
@@ -259,15 +257,12 @@ import UniformTypeIdentifiers
         container.addSubview(loadingIndicator)
         // Over the strip too, centred above it; takes no clicks.
         container.addSubview(toast)
-        container.addSubview(backButton)
         // Over everything, top centre; the sibling's hit test passes every click outside the box through.
         container.addSubview(warningsOverlay)
         // Over everything, the whole window: while open it takes every click (see CheatSheetView).
         container.addSubview(cheatSheet)
         warningsBelowBar = warningsOverlay.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 8)
         warningsAtTop = warningsOverlay.topAnchor.constraint(equalTo: top, constant: 8)
-        backBelowBar = backButton.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 16)
-        backAtTop = backButton.topAnchor.constraint(equalTo: top, constant: 16)
         let overlayWidth = warningsOverlay.widthAnchor.constraint(lessThanOrEqualToConstant: 640)
         let overlayFits = warningsOverlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32)
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
@@ -306,7 +301,6 @@ import UniformTypeIdentifiers
             loadingIndicator.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor, constant: -12),
             loadingIndicator.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -10),
             toast.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
-            backButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             cheatSheet.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             cheatSheet.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             cheatSheet.topAnchor.constraint(equalTo: top),
@@ -318,6 +312,10 @@ import UniformTypeIdentifiers
         if let remembered = Settings.detectorPreferences.dictionary(forKey: SmartZoomState.preferenceKey) as? [String: String] {
             session.smartZoom = SmartZoomState(restoring: remembered)
             tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
+        }
+        viewerToolbar.onZoomModesChange = { [weak self] old, new in
+            guard let self else { return }
+            windowToolbarController.replaceItem(old, with: new, source: viewerToolbar.nsToolbar)
         }
         viewerToolbar.attach(to: window)
         windowToolbarController.show(viewerToolbar.nsToolbar)
@@ -341,10 +339,8 @@ import UniformTypeIdentifiers
             guard let self, let at = self.spreadKeyTime, ProcessInfo.processInfo.systemUptime - at < 2 else { return }
             self.toast.show(SpreadKeys.toast(on: true, refusal: refusal))
         }
-        backButton.translatesAutoresizingMaskIntoConstraints = false
-        backButton.alphaValue = 0
-        backButton.isHidden = true
-        backButton.onClick = { [weak self] in self?.goBack(nil) }
+        windowedToolbarReveal.onVisibilityChange = { [weak self] in self?.applyStatsLayout() }
+        viewerView.onToggleToolbarPin = { [weak self] in self?.toggleToolbarPin() }
         viewerView.onToggleStats = { [weak self] in self?.toggleStats() }
         viewerView.onToggleStrip = { [weak self] in self?.strip.togglePin() }
         viewerView.onToggleStripPlacement = { [weak self] in self?.strip.togglePlacement() }
@@ -362,7 +358,6 @@ import UniformTypeIdentifiers
         }
         viewerView.subjectOverlayView.onSettled = { [weak self] url, transform in self?.lookAtCrop(url, transform) }
         viewerView.onTabAction = { [weak self] in self?.tabAction($0) }
-        viewerView.onPointerMoved = { [weak self] in self?.pointerMoved() }
         viewerView.isCovered = { [weak self] in self?.isShowingHome ?? false }
         viewerView.onAdjust = { [weak self] key, step, steps in self?.adjust(key: key, step: step, steps: steps) }
         viewerView.onToast = { [weak self] text in self?.toast.show(text) }
@@ -428,7 +423,6 @@ import UniformTypeIdentifiers
         strip.onToast = { [weak self] in self?.toast.show($0) }
         strip.onShownChange = { [weak self] in
             self?.infoPanel.place()
-            self?.updateBackButton()
             self?.layoutFolderSlots()
         }
         // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
@@ -443,7 +437,10 @@ import UniformTypeIdentifiers
                 MainActor.assumeIsolated { if let self { action(self) } }
             })
         }
-        observe(NSWindow.willEnterFullScreenNotification) { $0.setFullScreen(true) }
+        observe(NSWindow.willEnterFullScreenNotification) {
+            $0.isEnteringFullScreen = true
+            $0.setFullScreen(true)
+        }
         observe(NSWindow.didExitFullScreenNotification) { $0.setFullScreen(false) }
         observe(NSWindow.didChangeScreenNotification) { $0.updateScreenSize() }
         // The panel's diagnostics refresh only while the window can be seen.
@@ -565,6 +562,8 @@ import UniformTypeIdentifiers
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
+        isEnteringFullScreen = false
+        applyFullScreenToolbar()
         applyStatsLayout()
         rememberFullScreen(true)
         viewerView.holdReveal(false)
@@ -640,17 +639,22 @@ import UniformTypeIdentifiers
     /// The longest a launch holds the photo back for the full-screen animation (about 0.5–1 s on its own).
     private static let revealTimeout: TimeInterval = 3
 
-    /// One native reveal for the toolbar, menu bar and window controls. Keep the same
-    /// presentation policy on Home and in the viewer; independently toggling isVisible
-    /// at the screen edge reveals the toolbar before AppKit reserves the controls' inset.
+    /// The initial native policy. Later Home/viewer switches change the existing
+    /// toolbar's autohiding policy, keeping AppKit in charge of its host and reveal.
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        proposed.union(.autoHideToolbar)
+        // Delegate can run before willEnter sets isFullScreen: only an explicit
+        // B pin carries into full screen, not legacy windowed toolbar visibility.
+        let pinned = toolbarPinnedOverride == true
+        let autohiding = (!isShowingHome && !pinned) || !windowToolbarController.supportsFullScreenAutohiding
+        windowToolbarController.prepareForFullScreen(autohiding: autohiding)
+        return autohiding ? proposed.union(.autoHideToolbar) : proposed.subtracting(.autoHideToolbar)
     }
 
     /// A failed enter reverts the layout chosen at `willEnterFullScreen`. (There is no matching failure
     /// callback for exit: the window stays in full screen then, and so does the layout.)
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        isEnteringFullScreen = false
         setFullScreen(false)
         viewerView.holdReveal(false)
         finishFullScreenEntry()
@@ -981,6 +985,7 @@ import UniformTypeIdentifiers
     func showHome(tab: HomeTab? = nil) {
         folderSlots?.setActive(false)
         guard let window else { return }
+        windowedToolbarReveal.setEnabled(false, for: window)
         let returningFromViewer = !isShowingHome
         let config = Settings.shared.config
         let wanted = tab ?? config.homeTab
@@ -989,12 +994,14 @@ import UniformTypeIdentifiers
         if !isShowingHome { titleVisibilityBeforeHome = window.titleVisibility }
         attachHome(view)
         view.isHidden = false
-        window.titlebarAppearsTransparent = true
+        // Photos' UXKit window also uses a unified, nontransparent titlebar:
+        // AppKit owns its material backdrop. Transparency exposes a split fill.
+        window.titlebarAppearsTransparent = false
         strip.setPhotosWorkVisible(false)
         session.setPhotosViewerVisible(false)
         window.titleVisibility = .hidden
         windowToolbarController.show(view.browser.nsToolbar)
-        // Home's toolbar stays enabled; in full screen AppKit handles its auto-hide.
+        // Home keeps its native toolbar visible in full screen, as Photos' grid does.
         if !windowToolbarController.toolbar.isVisible { windowToolbarController.toolbar.isVisible = true }
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
@@ -1024,6 +1031,7 @@ import UniformTypeIdentifiers
             if browser.location == location, hasShownHome { browser.reload() } else { browser.show(location, selecting: nil) }
         }
         hasShownHome = true
+        applyFullScreenToolbar()
         applyInfoPanel()
         updateBrowserInspectorActivity()
         if shown != .stash { window.makeFirstResponder(browser) }
@@ -1050,7 +1058,7 @@ import UniformTypeIdentifiers
             window?.toolbar?.isVisible = toolbarWanted
         }
         toolbarWasWanted = toolbarWanted
-        window?.titlebarAppearsTransparent = true
+        window?.titlebarAppearsTransparent = false
         if let titleVisibilityBeforeHome {
             window?.titleVisibility = titleVisibilityBeforeHome
             self.titleVisibilityBeforeHome = nil
@@ -1090,7 +1098,7 @@ import UniformTypeIdentifiers
     private func statusChoices() -> ViewerStatusChoices {
         let rules = ZoomRules(config: effectiveConfig)
         let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
-        let groups = boxes.map { boxes in rules.chain.filter {
+        let groups = boxes.map { boxes in rules.stepKinds.filter {
             SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
         } } ?? []
         return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
@@ -1108,7 +1116,6 @@ import UniformTypeIdentifiers
         case .profile(let name): setDetector(name == "Vision" ? nil : name)
         case .group(let kind):
             session.browse.followed = kind
-            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
             viewerView.frameSubjectNow()
             folderSlots?.refreshSmartZoom()
         default: break // Info, key bindings and steps are routed by the toolbar's existing actions.
@@ -1165,6 +1172,8 @@ import UniformTypeIdentifiers
         let source = LoupeHomeSource(folders: folders, collections: collections,
                                      hasStash: { StashLibrary.Source.current != nil },
                                      photos: PhotosBrowserSource(library: photosLibrary, sorts: photosSorts))
+        // Keep the browser inside its native safe area. Extending list/card
+        // edges under the titlebar reflects their text into the toolbar backdrop.
         let view = HomeView(source: source)
         let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
         view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
@@ -1815,50 +1824,30 @@ import UniformTypeIdentifiers
         RecentGalleryList(variables: list.variables, index: list.index, count: list.count)
     }
 
-    /// "‹ Recent" / "‹ Stash" shows with the strip while Back can go there; it fades as the strip does.
     private static func tabTitle(_ tab: HomeTab) -> String { WindowTitle.title(of: tab) }
 
-    /// The pointer moved: the ‹ button shows within its reveal zone (`BackButtonPolicy`).
-    private func pointerMoved() { updateBackButton() }
-
-    /// The pointer in the button's superview's coordinates; nil outside the window's content.
-    private var pointerInButtonSpace: CGPoint? {
-        guard let window, let container = backButton.superview else { return nil }
-        let p = container.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        return container.bounds.contains(p) ? p : nil
-    }
-
+    /// Keep the return destination on the native toolbar button in both window modes.
     private func updateBackButton() {
-        viewerToolbar.setBackEnabled(canGoBack)
-        let shown = BackButtonPolicy.isShown(wasShown: backButtonShown, pointer: pointerInButtonSpace,
-                                             button: backButton.frame, canGoBack: canGoBack)
-        if session.playlist?.isSourceOrdered == true { backButton.title = "Photos" }
-        else if let backTarget { backButton.title = Self.tabTitle(backTarget) }
-        guard shown != backButtonShown else { return }
-        backButtonShown = shown
-        if shown { backButton.isHidden = false }
-        infoPanel.place()   // a panel in the top left corner steps below the button, or back up
-        // A soft fade both ways (ease-out in, ease-in out): it comes up as the pointer nears, without a pop.
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = Chrome.Motion.duration(shown ? Chrome.Motion.show : Chrome.Motion.hide)
-            context.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
-            backButton.animator().alphaValue = shown ? 1 : 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.backButtonShown else { return }
-                self.backButton.isHidden = true
-            }
-        })
+        let destination: String?
+        if !canGoBack { destination = nil }
+        else if !isShowingHome, session.playlist?.isSourceOrdered == true { destination = "Photos" }
+        else { destination = backTarget.map(Self.tabTitle) }
+        viewerToolbar.setBackDestination(destination)
     }
 
     /// The one status of the photo on screen, to the stats bar and the toolbar's chip. A move to another photo brings back a
     /// stats bar that hides by itself.
     private func updateStatus() {
+        updateBackButton()
         folderSlots?.refreshSmartZoom()
         let status = session.imageStatus
         askPhotoFacts(status.photo)
         statsBar.update(status)
-        viewerToolbar.updateStatus(status, zoomMode: (session.zoomTarget ?? session.transform).mode)
+        let shownMode = (session.zoomTarget ?? session.transform).mode
+        let screenShare: Bool
+        if case .free = shownMode { screenShare = effectiveConfig.keepZoomAs == .screen }
+        else { screenShare = false }
+        viewerToolbar.updateStatus(status, zoomMode: shownMode, screenShare: screenShare)
         if !status.navigationKey.isEmpty, status.navigationKey != lastNavigationKey {
             lastNavigationKey = status.navigationKey
             statsBar.reveal()
@@ -2015,8 +2004,7 @@ import UniformTypeIdentifiers
     /// The custom detector on in `mode` for the folder, or off (nil), remembered at once (owner, 2026-10-28: "чтобы
     /// все было на автомате"): the folder's values, the tab's own dropped. The sizes carried start again from the mode's,
     /// and the photo on screen is framed now.
-    private func setDetector(_ mode: String?, activate: Bool = true) {
-        session.browse.followed = nil
+    private func setDetector(_ mode: String?, activate: Bool = false) {
         let selection = ZoomKeys.profileSelection(mode)
         var values = selection
         if activate && session.smartZoom.mode == .off { values["smart-zoom"] = session.smartZoom.lastEnabled.rawValue }
@@ -2246,6 +2234,14 @@ import UniformTypeIdentifiers
 
     /// `I` and View › Image Status: windowed hidden ↔ compact, fullscreen hidden ↔ shown.
     private func toggleStats() {
+        if viewerToolbarPinned {
+            toolbarPinnedOverride = false
+            if isFullScreen { fullScreenStatus = true } else { statsMode = .compact }
+            applyFullScreenToolbar()
+            statsBar.reveal()
+            applyStatsLayout()
+            return
+        }
         if isFullScreen {
             fullScreenStatus.toggle()
         } else {
@@ -2255,8 +2251,19 @@ import UniformTypeIdentifiers
         applyStatsLayout()
     }
 
+    func toggleToolbarPin() {
+        toolbarPinnedOverride = !viewerToolbarPinned
+        fullScreenToolbar = true
+        windowToolbar = true
+        applyFullScreenToolbar()
+        applyStatsLayout()
+    }
+
     @objc func toggleViewerToolbar(_ sender: Any?) {
-        if isFullScreen { fullScreenToolbar.toggle() } else { windowToolbar.toggle() }
+        let enabled = !toolbarWanted
+        toolbarPinnedOverride = nil
+        if isFullScreen { fullScreenToolbar = enabled } else { windowToolbar = enabled }
+        applyFullScreenToolbar()
         applyStatsLayout()
     }
 
@@ -2266,6 +2273,7 @@ import UniformTypeIdentifiers
         if on {
             applyFullScreenToolbar()
         } else {
+            windowToolbarController.resetFullScreenAutohiding()
             if !isShowingHome { windowToolbarController.toolbar.isVisible = windowToolbar }
             toolbarWasWanted = windowToolbar
         }
@@ -2408,7 +2416,7 @@ import UniformTypeIdentifiers
         case #selector(toggleStripPlacement(_:)):
             item.state = Settings.shared.config.stripWindow == .beside && !isFullScreen ? .on : .off
         case #selector(toggleStatsBar(_:)):
-            item.state = (isFullScreen ? fullScreenStatus : statsMode != .hidden) ? .on : .off
+            item.state = !isShowingHome && !statsBar.isHidden ? .on : .off
         case #selector(toggleViewerToolbar(_:)):
             item.state = toolbarWanted ? .on : .off
             return !isShowingHome
@@ -2476,20 +2484,28 @@ import UniformTypeIdentifiers
     /// bar in full screen, and setting it visible again pins it on screen. Only the viewer's own toolbar is touched, and
     /// only while it is the window's: Home's stays enabled, and `hideHome` puts the viewer's back as it was left.
     private func applyToolbarVisibility() {
-        guard !isClosed, !isShowingHome else { return }
+        guard !isClosed, !isShowingHome, let window else { return }
+        let windowedAuto = !isFullScreen && toolbarPinnedOverride == false && windowToolbar
+        windowedToolbarReveal.setEnabled(windowedAuto, for: window)
         if isFullScreen {
             if toolbarWanted != toolbarWasWanted { toolbarWasWanted = toolbarWanted; applyFullScreenToolbar() }
-            return
+        } else if !windowedAuto {
+            toolbarWasWanted = toolbarWanted
+            if windowToolbarController.toolbar.isVisible != toolbarWanted {
+                windowToolbarController.toolbar.isVisible = toolbarWanted
+            }
         }
-        guard toolbarWanted != toolbarWasWanted else { return }
-        toolbarWasWanted = toolbarWanted
-        windowToolbarController.toolbar.isVisible = toolbarWanted
     }
 
     private func applyFullScreenToolbar() {
         guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { return }
-        let enabled = isShowingHome || fullScreenToolbar
+        let enabled = isShowingHome || viewerToolbarPinned || fullScreenToolbar
         if toolbar.isVisible != enabled { toolbar.isVisible = enabled }
+        // willEnterFullScreen arrives before the native host is ready. didEnter
+        // applies the policy again once AppKit has finished creating that host.
+        if !isEnteringFullScreen, window?.styleMask.contains(.fullScreen) == true {
+            windowToolbarController.setFullScreenAutohiding(!isShowingHome && !viewerToolbarPinned)
+        }
     }
 
     /// The stats bar (`I`) floats over the picture and reserves no room, always at the top: windowed under the toolbar, in
@@ -2499,8 +2515,8 @@ import UniformTypeIdentifiers
         let toolbarWanted = toolbarWanted
         // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it. In full screen the toolbar
         // is not on screen but slides in on demand, so it does not count there: the bar shows as `I` says.
-        let toolbarShown = !isFullScreen && toolbarWanted
-        let visible = (isFullScreen ? fullScreenStatus : statsMode != .hidden)
+        let toolbarShown = viewerToolbarPinned || (!isFullScreen && (window?.toolbar?.isVisible ?? toolbarWanted))
+        let visible = !viewerToolbarPinned && (isFullScreen ? fullScreenStatus : statsMode != .hidden)
             && (Settings.shared.config.statsBarWithToolbar || !toolbarShown)
         statsBar.isHidden = !visible
         guard !isClosed else { return }
@@ -2510,13 +2526,9 @@ import UniformTypeIdentifiers
         if visible {
             warningsAtTop.isActive = false
             warningsBelowBar.isActive = true
-            backAtTop.isActive = false
-            backBelowBar.isActive = true
         } else {
             warningsBelowBar.isActive = false
             warningsAtTop.isActive = true
-            backBelowBar.isActive = false
-            backAtTop.isActive = true
         }
         statsAtTop.isActive = visible
         applyToastRows()
@@ -2618,16 +2630,7 @@ import UniformTypeIdentifiers
             top = min(top, statsBar.frame.minY)
         }
         if strip.isShown { bottom = max(bottom, strip.view.frame.maxY) }
-        let area = CGRect(x: viewer.minX, y: container.bounds.height - top, width: viewer.width, height: max(0, top - bottom))
-        guard backButtonShown else { return area }
-        // The package keeps the place under this key (`keyPrefix` `infoPanel`); none: its default, the top left. While
-        // the panel is on screen its corner is where it is now, so a drag out of the corner leaves the band at once.
-        let stored = PanelPlacement(stored: UserDefaults.standard.string(forKey: "infoPanelPlacement")) ?? .standard
-        let current = infoPanel?.panelFrame.map {
-            CGRect(x: $0.minX, y: container.bounds.height - $0.maxY, width: $0.width, height: $0.height)
-        }
-        return PanelArea.area(area, backButtonShown: true,
-                              corner: PanelArea.corner(current: current, stored: stored, in: area))
+        return CGRect(x: viewer.minX, y: container.bounds.height - top, width: viewer.width, height: max(0, top - bottom))
     }
 
     /// The window's field editor for the panel's values (the package's), nil for any other field.
@@ -2950,6 +2953,32 @@ import UniformTypeIdentifiers
     /// does not change.
     @discardableResult
     private func zoomKey(_ action: KeyAction) -> Bool {
+        if action == .toggleSmartZoom || action == .toggleZoomSet {
+            var state = session.smartZoom; state.togglePower()
+            setSmartZoomMode(state.mode)
+            return true
+        }
+        if action == .manualZoom { setSmartZoomMode(.off); return true }
+        if action == .zoomSubject {
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            else { viewerView.frameSubjectNow() }
+            return true
+        }
+        if action == .toggleStepZoom {
+            session.browse.forgetSizes()
+            setSmartZoomMode(.frame)
+            return true
+        }
+        if action == .nextTarget || action == .previousTarget {
+            if session.smartZoom.mode != .off {
+                viewerView.applySmartZoom(cycleGroup: true, groupDirection: action == .nextTarget ? 1 : -1)
+            }
+            return true
+        }
+        if action == .cycleDetectorMode || action == .previousDetectorMode {
+            setDetector(ZoomKeys.profileAfter(effectiveConfig, direction: action == .cycleDetectorMode ? 1 : -1), activate: false)
+            return true
+        }
         guard let folder else { return false }
         switch action {
         case .rememberZoom:
@@ -2981,17 +3010,6 @@ import UniformTypeIdentifiers
         case .screenShare:
             setTabZoom(ZoomKeys.carryKey, ZoomCarry.screen.rawValue)
             toast.show(ZoomKeys.toast(carry: .screen))
-        case .nextTarget:
-            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
-            viewerView.applySmartZoom(cycleGroup: true)
-        case .cycleDetectorMode:
-            guard let mode = ZoomKeys.modeAfterM(effectiveConfig) else {
-                toast.show("Detector: no model, classes or modes (detector.conf)")
-                return true
-            }
-            setDetector(mode)
-        case .fit:
-            setSmartZoomMode(.off)
         case .saveDetectorSize:
             guard let mode = ZoomRules(config: effectiveConfig).detector, let url = session.entry?.url,
                   let size = session.framedSize(url) else {
@@ -3003,18 +3021,6 @@ import UniformTypeIdentifiers
             let target = ZoomKeys.toggledTarget(effectiveConfig)
             setTabZoom(ZoomKeys.targetKey, target)
             toast.show(ZoomKeys.toast(target: target))
-        case .toggleSmartZoom:
-            var state = session.smartZoom; state.togglePower()
-            setSmartZoomMode(state.mode)
-        case .toggleStepZoom, .zoomSubject:
-            session.browse.followed = nil
-            session.browse.forgetSizes()
-            setSmartZoomMode(.frame)
-        case .manualZoom:
-            setSmartZoomMode(.off)
-        case .toggleZoomSet:
-            var state = session.smartZoom; state.togglePower()
-            setSmartZoomMode(state.mode)
         default:
             break
         }

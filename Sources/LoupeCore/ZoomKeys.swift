@@ -146,6 +146,15 @@ public enum ZoomKeys {
         config.detectorSetup.next(after: config.detectorMode)?.name
     }
 
+    /// UI selection is independent of whether its model is currently loaded.
+    public static func profileAfter(_ config: Config, direction: Int) -> String? {
+        let profiles: [String?] = [nil] + config.detectorSetup.modes.map { Optional($0.name) }
+        let selected = config.detector ? config.detectorSetup.mode(config.detectorMode)?.name : nil
+        guard let index = ChoiceCycle.index(current: profiles.firstIndex(of: selected), count: profiles.count,
+                                            direction: direction) else { return selected }
+        return profiles[index]
+    }
+
     /// `M`: the mode the custom detector turns on in (the folder's, else detector.conf's `mode`), or the next one while
     /// it is on; nil when it cannot frame (no model, classes or modes).
     public static func modeAfterM(_ config: Config) -> String? {

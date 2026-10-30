@@ -6,17 +6,15 @@ public struct InputMap: Sendable, Equatable {
         (.panel, .tap, .action(.toggleAutoColor)),
         (.panel, .long, .action(.toggleVibrance)),
         (.panel, .wheel, .add(key: "auto-color-strength", step: 0.05)),
-        (.panel, .move, .add(key: "vibrance-amount", step: 0.05)),
         (.middle, .tap, .action(.toggleFitActual)),
-        (.middle, .long, .action(.fill)),
-        (.back, .tap, .action(.back)),
-        (.back, .long, .action(.cycleStats)),
-        (.back, .wheel, .action(.nextFolder)),
-        (.forward, .tap, .action(.toggleInfoPanel)),
-        (.forward, .wheel, .zoomStep),
-        (.gesture, .tap, .action(.cycleStats)),
-        (.gesture, .wheel, .add(key: "vibrance-amount", step: 0.05)),
         (.middle, .withRight, .action(.fitWidth)),
+        (.back, .tap, .action(.previousTarget)),
+        (.forward, .tap, .action(.nextTarget)),
+        (.back, .withRight, .action(.previousDetectorMode)),
+        (.forward, .withRight, .action(.cycleDetectorMode)),
+        (.right, .wheel, .action(.nextFolder)),
+        (.gesture, .tap, .action(.toggleSmartZoom)),
+        (.gesture, .withRight, .action(.cycleStats)),
         (.threeUp, .tap, .action(.browse)),
         (.threeDown, .tap, .action(.back)),
         (.threeTap, .tap, .action(.cycleStats)),
@@ -168,7 +166,7 @@ public struct InputMap: Sendable, Equatable {
 
     private static let buttonOrder: [MouseButton] = [.panel, .middle, .back, .forward, .gesture, .shift, .right,
                                                      .threeUp, .threeDown, .threeTap, .forceClick, .clickDown, .clickUp]
-    private static let kindOrder: [PressKind] = [.tap, .long, .wheel, .thumbWheel, .move, .withRight]
+    private static let kindOrder: [PressKind] = [.tap, .long, .wheel, .thumbWheel, .move, .withRight, .withRightWheel]
 
     static func order(_ input: MouseInput) -> Int {
         let button = buttonOrder.firstIndex(of: input.button) ?? buttonOrder.count
@@ -199,6 +197,7 @@ public struct InputMap: Sendable, Equatable {
         case .thumbWheel: "\(button) + thumb wheel"
         case .move: "\(button) + move up/down"
         case .withRight: "Right + \(button.lowercased())"
+        case .withRightWheel: "Right + \(button.lowercased()) + wheel"
         }
     }
 

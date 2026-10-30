@@ -25,9 +25,12 @@ import LoupeCore
     private let statusView = ViewerToolbarStatusView()
     private var sliders: [String: NSSlider] = [:]
     private weak var hostWindow: NSWindow?
+    private var smartModesShown = false
+    var onZoomModesChange: ((NSToolbarItem.Identifier, NSToolbarItem.Identifier) -> Void)?
+
 
     private enum Item: String, CaseIterable {
-        case back, navigation, zoom, zoomSet, zoomModes, smartZoom, keepZoom, zoomMenu, status, autoColour, strength, vibranceSwitch, vibrance, strip, stats, scaling
+        case back, navigation, zoom, zoomSet, zoomModes, smartModes, smartZoom, keepZoom, zoomMenu, status, autoColour, strength, vibranceSwitch, vibrance, strip, stats, scaling
 
         var identifier: NSToolbarItem.Identifier { .init("viewer.\(rawValue)") }
         var priority: Int {
@@ -37,7 +40,7 @@ import LoupeCore
             case .navigation: 90
             case .zoom: 80
             case .zoomSet: 110
-            case .zoomModes: 25
+            case .zoomModes, .smartModes: 25
             case .smartZoom: 65
             case .keepZoom: 64
             case .autoColour: 50
@@ -58,6 +61,11 @@ import LoupeCore
         ("arrow.left.and.right", "Fit Width", .fitWidth),
         ("arrow.up.and.down", "Fit Height", .fitHeight),
         ("arrow.up.left.and.arrow.down.right", "Fill", .fill),
+    ]
+
+    private static let smartModes: [(String, String, SmartZoomMode)] = [
+        ("viewfinder", "Auto", .frame),
+        ("arrow.up.and.down.and.arrow.left.and.right", "Pan only", .pan),
     ]
 
     /// The colour switches, each in front of its slider; the `tag` of a switch's item is its index here.
@@ -132,6 +140,9 @@ import LoupeCore
             return workflow
         case .zoomModes:
             return group(item, Self.zoomModes.map { ($0.0, $0.1, $0.1) }, mode: .selectOne, action: #selector(presetClicked(_:)))
+        case .smartModes:
+            return group(item, Self.smartModes.map { ($0.0, $0.1, $0.1) }, mode: .selectOne,
+                         action: #selector(smartModeClicked(_:)))
         case .smartZoom:
             return button(item, symbol: "viewfinder", label: "SmartZoom", tip: "SmartZoom settings", action: #selector(smartZoomClicked))
         case .keepZoom:
@@ -238,10 +249,12 @@ import LoupeCore
         return toolbarItem
     }
 
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.order }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        Self.order.map { smartModesShown && $0 == Item.zoomModes.identifier ? Item.smartModes.identifier : $0 }
+    }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        Self.order
+        Self.order + [Item.smartModes.identifier]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
@@ -249,7 +262,17 @@ import LoupeCore
         items[identifier]
     }
 
-    func setBackEnabled(_ enabled: Bool) { items[Item.back.identifier]?.isEnabled = enabled }
+    func setBackDestination(_ destination: String?) {
+        guard let item = items[Item.back.identifier] else { return }
+        let title = destination ?? "Back"
+        let label = destination.map { "Back to \($0)" } ?? "Back"
+        // `title` is visible beside the native arrow even in icon-only toolbar
+        // mode; `label` also describes the destination in the overflow menu.
+        if item.title != title { item.title = title }
+        if item.label != label { item.label = label }
+        if item.toolTip != label { item.toolTip = label }
+        if item.isEnabled != (destination != nil) { item.isEnabled = destination != nil }
+    }
 
     /// The colour switches and their sliders follow the window's values (the folder's or loupe.conf's).
     func updateColour(_ config: Config) {
@@ -266,7 +289,13 @@ import LoupeCore
         if abs(slider.doubleValue - value) > 0.004, NSApp.currentEvent?.type != .leftMouseDragged { slider.doubleValue = value }
     }
 
-    func updateStatus(_ status: ImageStatus, zoomMode: ZoomMode? = nil) {
+    func updateStatus(_ status: ImageStatus, zoomMode: ZoomMode? = nil, screenShare: Bool = false) {
+        let smartMode = status.zoomDetails?.mode ?? .off
+        showSmartModes(smartMode != .off)
+        if let modes = items[Item.smartModes.identifier] as? NSToolbarItemGroup {
+            let selected = smartMode == .frame ? 0 : smartMode == .pan ? 1 : -1
+            if modes.selectedIndex != selected { modes.selectedIndex = selected }
+        }
         statusView.update(status)
         if let item = items[Item.status.identifier], item.maxSize.width != statusView.preferredWidth {
             item.maxSize = NSSize(width: statusView.preferredWidth, height: ViewerToolbarStatusView.height)
@@ -290,6 +319,25 @@ import LoupeCore
             keep.setSelected(status.zoomDetails?.keepingZoom == true, at: 0)
             keep.isEnabled = status.photo != nil
         }
+    }
+
+    private func showSmartModes(_ smart: Bool) {
+        guard smart != smartModesShown else { return }
+        let old = smartModesShown ? Item.smartModes.identifier : Item.zoomModes.identifier
+        let new = smart ? Item.smartModes.identifier : Item.zoomModes.identifier
+        smartModesShown = smart
+        // The standalone toolbar and the window's retained host use the same
+        // cached groups; only the mode slot changes, never the whole toolbar.
+        if let index = nsToolbar.items.firstIndex(where: { $0.itemIdentifier == old }) {
+            nsToolbar.removeItem(at: index)
+            nsToolbar.insertItem(withItemIdentifier: new, at: index)
+        }
+        onZoomModesChange?(old, new)
+    }
+
+    @objc private func smartModeClicked(_ sender: NSToolbarItemGroup) {
+        guard Self.smartModes.indices.contains(sender.selectedIndex) else { return }
+        actions.statusAction?(.mode(Self.smartModes[sender.selectedIndex].2))
     }
 
     @objc private func stepClicked(_ sender: NSToolbarItemGroup) { actions.step(sender.selectedIndex == 0 ? -1 : 1) }

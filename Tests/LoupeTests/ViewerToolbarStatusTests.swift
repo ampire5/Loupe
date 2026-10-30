@@ -5,6 +5,19 @@ import Testing
 @testable import Loupe
 
 @Suite(.serialized) @MainActor struct ViewerToolbarStatusTests {
+    @Test func statusUsesNativeToolbarAppearanceWithoutAnExtraGlassSurface() {
+        _ = NSApplication.shared
+        let view = ViewerToolbarStatusView()
+        view.update(sample())
+        #expect(view.appearance == nil)
+        #expect(!descendants(view).contains { $0 is NSVisualEffectView })
+        if #available(macOS 26.0, *) {
+            #expect(!descendants(view).contains { $0 is NSGlassEffectView })
+        }
+        let title = descendants(view).compactMap { $0 as? NSTextField }.first { $0.stringValue == "Portrait_001.jpg" }
+        #expect(title?.textColor == .labelColor)
+    }
+
     private func toolbar() -> ViewerToolbarController {
         ViewerToolbarController(actions: .init(back: {}, step: { _ in }, zoom: { _ in }, colour: { _ in },
             setValue: { _, _ in }, stats: {}, strip: {}, info: {}, smartZoom: {}))

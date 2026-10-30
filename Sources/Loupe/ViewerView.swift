@@ -57,6 +57,7 @@ import QuartzCore
     var onSpreadKey: ((KeyAction) -> Bool)?
     /// `i` pressed; the window controller owns the stats bar.
     var onToggleStats: (() -> Void)?
+    var onToggleToolbarPin: (() -> Void)?
     /// `t` pressed; the window controller owns the thumbnail strip.
     var onToggleStrip: (() -> Void)?
     var onToggleStripPlacement: (() -> Void)?
@@ -82,8 +83,6 @@ import QuartzCore
     var onTabAction: ((KeyAction) -> Void)?
     /// Home is over the picture: no hand cursor from here (this view's tracking area hears moves under it too).
     var isCovered: () -> Bool = { false }
-    /// The mouse moved over the picture or left it (the ‹ button's reveal zone, `BackButtonPolicy`).
-    var onPointerMoved: (() -> Void)?
     /// An `add <key> <step>` binding fired (input.conf): the folder value `key` changes by `step` × `steps` (a key press
     /// and each of its repeats is one step; a wheel or a move may give several). The window controller owns the
     /// folder's values.
@@ -341,11 +340,12 @@ import QuartzCore
     /// First of all, a mouse button held with a `+WHEEL` binding (and the tail of its scroll) takes the wheel
     /// (`MouseButtons`): nothing then pans, zooms or steps.
     override func scrollWheel(with event: NSEvent) {
-        invalidateSmartZoomRequest()
         if MouseButtons.shared.wheel(event) {
+            if MouseButtons.shared.rightZoomSuppressed { endRMBZoom() }
             if dragPoint == nil { releaseRubber() }   // a stretch of the fingers' gesture goes back, as for a folder step
             return
         }
+        invalidateSmartZoomRequest()
         let phase = ScrollPhase(rawValue: event.phase.rawValue)
         let momentum = ScrollPhase(rawValue: event.momentumPhase.rawValue)
         if !event.hasPreciseScrollingDeltas {
@@ -890,14 +890,12 @@ import QuartzCore
     override func mouseMoved(with event: NSEvent) {
         cursorAutohide.activity()
         refreshCursor()
-        onPointerMoved?()
         updatePointerPage(at: viewPoint(event))
         // A held button's travel comes from `MouseButtons`' own monitor of every mouse-moved event (M4c spec §12.2).
     }
     override func mouseEntered(with event: NSEvent) { cursorAutohide.activity() }
     override func mouseExited(with event: NSEvent) {
         shownCursor = nil
-        onPointerMoved?()
         updatePointerPage(at: nil)
     }
 
@@ -1008,7 +1006,7 @@ import QuartzCore
     /// `SubjectGlide.window` and its view is still the one it came with (`SubjectGlide`); otherwise the view stays.
     func subjectsArrived(for url: URL, boxes: SubjectBoxes?) {
         // A ⇧Z or 3 waiting for these boxes answers itself (`subjectZoomArrived`): no glide under it.
-        guard subjectZoomPress?.url != url, framePress?.photo != url, session.smartZoom.mode != .off else { return }
+        guard subjectZoomPress?.url != url, framePress?.photo != url, session.manualZoomPhoto != url, session.smartZoom.mode != .off else { return }
         // Both active modes own the point of interest, including slow results, until manual input cancels it.
         guard let boxes, let glide = subjectGlide,
               SubjectGlide.shouldGlide(shownAt: glide.shownAt, now: glide.shownAt,
@@ -1029,11 +1027,10 @@ import QuartzCore
         animateZoom(to: target)
     }
 
-    /// Exact toolbar zoom follows the same Manual transition and pending-request invalidation as a preset key.
+    /// A manual percentage overrides this photo without disabling the next photo's SmartZoom.
     func setManualZoom(percent: Double) {
         guard percent.isFinite, percent > 0, percent <= 6400, session.entry != nil else { return }
         let base = zoomBase
-        _ = onZoomKey?(.manualZoom)
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         session.subjectZoom = false
@@ -1265,9 +1262,14 @@ import QuartzCore
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     override func rightMouseDown(with event: NSEvent) {
-        invalidateSmartZoomRequest()
         DebugLog.log("mouse button 1 down")
         MouseButtons.shared.press(.right, at: event.timestamp)   // the first button of a chord (`MBTN_RIGHT+…`)
+        // A modifier by itself does not cancel or freeze pending composition.
+        if MouseButtons.shared.rightZoomSuppressed {
+            window?.makeFirstResponder(self)
+            cursorAutohide.activity()
+            return
+        }
         // A left drag in progress holds a stretch; an ignored right press must not drop it. A press that starts the
         // zoom drops it below (the zoom starts from offset 0).
         stopInertia(catching: dragPoint != nil && heldButtons.contains(.left))
@@ -1323,6 +1325,7 @@ import QuartzCore
             // Below the slop it is still a click: do nothing, so a shaky click never changes the zoom.
             guard hypot(p.x - press.x, p.y - press.y) / k >= RMBZoom.clickSlopPoints else { return }
             rmbDragging = true
+            invalidateSmartZoomRequest()
             session.subjectZoom = false
         }
         let dy = (p.y - press.y) / k
@@ -1534,8 +1537,8 @@ import QuartzCore
     /// When the last held button's wheel / move step changed the folder (`buttonFolderStep`), on the events' clock.
     private var lastButtonFolderStep = -Double.infinity
 
-    /// A folder step from a held button's wheel or move (built in: back + wheel, M4c spec §12.5): at most one per
-    /// `folder-scroll-repeat` (as the right button + side wheel), whatever the notches; the ones in between are
+    /// A folder step from a held button's wheel or move (built in: RMB + main wheel): at most one per
+    /// `folder-scroll-repeat`, whatever the notches; the ones in between are
     /// dropped, not saved up, so a fast spin goes one folder per gap. A gap of 0 lets every step through.
     private func buttonFolderStep(_ step: Int, at timestamp: TimeInterval) {
         let gap = Double(Settings.shared.config.folderScrollRepeatMilliseconds) / 1000
@@ -1624,15 +1627,13 @@ import QuartzCore
     @discardableResult
     private func perform(_ action: KeyAction, at timestamp: TimeInterval, fresh: Bool? = nil) -> Bool {
         let t = zoomBase
-        let manualPresets: Set<KeyAction> = [.fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .screenShare]
-        if manualPresets.contains(action) { _ = onZoomKey?(.manualZoom) }
         if Self.zoomCommands.contains(action) { session.noteManualZoom(); invalidateSmartZoomRequest(); session.subjectZoom = false; subjectZoomPress = nil }
         switch action {
         case .zoomSubject, .toggleStepZoom, .toggleSmartZoom, .manualZoom: return onZoomKey?(action) ?? false
         case .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor, .toggleZoomSet, .cycleSubjectTarget,
              .cycleDetectorMode, .saveDetectorSize:
             return onZoomKey?(action) ?? false
-        case .nextTarget: return onZoomKey?(action) ?? false
+        case .nextTarget, .previousTarget, .previousDetectorMode: return onZoomKey?(action) ?? false
         case .screenShare:
             // The zoom on screen becomes a free one, whose share of the screen the folder now keeps.
             session.subjectZoom = false
@@ -1665,7 +1666,6 @@ import QuartzCore
             guard let window, window.styleMask.contains(.fullScreen) else { return false }
             window.toggleFullScreen(nil)
         case .fit:
-            _ = onZoomKey?(.fit)
             animateZoom(to: t.withMode(.fit))
         case .actual100: animateZoom(to: t.withMode(.actual(1)))
         case .actual200: animateZoom(to: t.withMode(.actual(2)))
@@ -1680,6 +1680,7 @@ import QuartzCore
         case .zoomOut: animateZoom(to: t.zoomedStep(-1))
         case .toggleFullScreen: window?.toggleFullScreen(nil)
         case .cycleStats: onToggleStats?()
+        case .toggleToolbarPin: onToggleToolbarPin?()
         case .toggleStrip: onToggleStrip?()
         case .toggleStripPlacement: onToggleStripPlacement?()
         case .cheatSheet: onToggleCheatSheet?()
@@ -1794,27 +1795,30 @@ import QuartzCore
     func frameSubjectNow() { applySmartZoom(cycleGroup: false) }
 
     /// Explicit commands re-arm composition; an Off command never changes the view.
-    func applySmartZoom(cycleGroup: Bool = false) {
+    func applySmartZoom(cycleGroup: Bool = false, groupDirection: Int = 1) {
         invalidateSmartZoomRequest()
+        session.manualZoomPhoto = nil
         guard session.smartZoom.mode != .off, let url = session.entry?.url, url == session.playlist?.current,
               session.currentPages?.second == nil else { return }
         if let boxes = session.subjectBoxes(url) {
-            frameNow(url, boxes: boxes, cycleGroup: cycleGroup)
+            frameNow(url, boxes: boxes, cycleGroup: cycleGroup, groupDirection: groupDirection)
         } else {
             framePress = SmartZoomRequest(photo: url, revision: session.smartZoomRevision)
             frameCycle = cycleGroup
+            frameCycleDirection = groupDirection
             onSubjectZoom?(url)
         }
     }
 
-    private func frameNow(_ url: URL, boxes: SubjectBoxes, cycleGroup: Bool = false) {
+    private func frameNow(_ url: URL, boxes: SubjectBoxes, cycleGroup: Bool = false, groupDirection: Int = 1) {
         let now = zoomBase
         if cycleGroup {
             let rules = session.zoomRules(url)
             let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
-            if !kinds.isEmpty {
+            guard !kinds.isEmpty else { onToast?("No groups detected"); onSmartZoomChanged?(); return }
+            do {
                 let current = session.browse.chain(rules.chain).first { kinds.contains($0) }
-                let index = current.flatMap { kinds.firstIndex(of: $0) }.map { ($0 + 1) % kinds.count } ?? 0
+                let index = ChoiceCycle.index(current: current.flatMap { kinds.firstIndex(of: $0) }, count: kinds.count, direction: groupDirection) ?? 0
                 session.browse.followed = kinds[index]
                 onToast?("Group: \(kinds[index].title) \(index + 1)/\(kinds.count)")
             }
@@ -1827,6 +1831,7 @@ import QuartzCore
 
     private var framePress: SmartZoomRequest?
     private var frameCycle = false
+    private var frameCycleDirection = 1
     var onSmartZoomChanged: (() -> Void)?
 
     /// The subjects asked for by `⇧Z` are in: the zoom, if the photo and its view are still the ones of the press.
@@ -1835,7 +1840,7 @@ import QuartzCore
             framePress = nil
             if request.matches(photo: session.entry?.url, revision: session.smartZoomRevision,
                                enabled: session.smartZoom.mode != .off), let boxes {
-                frameNow(url, boxes: boxes, cycleGroup: frameCycle)
+                frameNow(url, boxes: boxes, cycleGroup: frameCycle, groupDirection: frameCycleDirection)
             }
             return
         }

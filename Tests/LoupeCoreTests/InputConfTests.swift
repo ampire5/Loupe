@@ -56,7 +56,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
 
 @Test func notInputs() {
     for name in ["MBTN_RIGHT", "Cmd+f", "Ctrl+f", "f-long", "MX_THUMB", "MX_FOO", "", "Shift+", "MBTN_RIGHT-long",
-                 "MBTN_RIGHT+MBTN_BACK", "MBTN_RIGHT+WHEEL", "LEFT+WHEEL", "f+MOVE"] {
+                 "LEFT+WHEEL", "f+MOVE"] {
         #expect(InputConf.trigger(name) == nil, "\(name)")
     }
 }
@@ -91,7 +91,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
 
 @Test func togglesAreTheToggleAndCycleActions() {
     let toggles = KeyAction.allCases.filter(InputConf.isToggle)
-    #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .cycleStats, .toggleStrip, .toggleStripPlacement,
+    #expect(Set(toggles) == [.toggleKeepZoom, .toggleZoomCarry, .toggleFullScreen, .toggleToolbarPin, .cycleStats, .toggleStrip, .toggleStripPlacement,
                              .toggleInfoPanel, .cyclePanIndicators, .cycleFilter, .toggleAntiring, .toggleAutoColor,
                              .toggleVibrance, .toggleSpread, .cycleStepPan, .cycleZoomAnchor, .toggleZoomSet, .cycleSubjectTarget, .cycleDetectorMode, .toggleSubjects, .toggleStepZoom, .toggleSmartZoom])
 }
@@ -156,7 +156,7 @@ private func key(_ code: UInt16, _ modifiers: KeyModifiers = []) -> InputTrigger
     #expect(warnings("f fit extra") == ["input.conf:2: fit takes no arguments"])
     #expect(warnings("f ignore now") == ["input.conf:2: ignore takes no arguments"])
     #expect(warnings("f") == ["input.conf:2: missing action"])
-    #expect(warnings("MBTN_RIGHT fit") == ["input.conf:2: MBTN_RIGHT only works as MBTN_RIGHT+MBTN_MID"])
+    #expect(warnings("MBTN_RIGHT fit") == ["input.conf:2: MBTN_RIGHT requires a button or wheel combination"])
 }
 
 @Test func stepBounds() {
