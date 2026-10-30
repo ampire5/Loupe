@@ -193,8 +193,13 @@ public final class PhotosLibrary: PhotosLibraryAccess, @unchecked Sendable {
             ?? resources.first(where: { $0.type == .fullSizePhoto })
             ?? resources.first(where: { $0.type == .alternatePhoto }) else { return "Photo" }
         let name: String?
+        // Xcode 26 also builds this target for Intel; a runtime check cannot hide an SDK-27 symbol from it.
+        #if compiler(>=6.4)
         if #available(macOS 27, *) { name = resource.filename }
         else { name = resource.originalFilename }
+        #else
+        name = resource.originalFilename
+        #endif
         if let name, !name.isEmpty { return name }
         return resource.contentType.preferredFilenameExtension.map { "Photo." + $0 } ?? "Photo"
     }
