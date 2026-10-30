@@ -3,6 +3,7 @@ import SlotModel
 import HomeChrome
 import HomeScreenKit
 import InfoPanelKit
+import LoupeInspector
 import LoupeCore
 import LoupeRender
 import StashKitUI
@@ -111,7 +112,9 @@ import UniformTypeIdentifiers
         stats: { [weak self] in self?.toggleStats() },
         strip: { [weak self] in self?.strip.togglePin() },
         info: { [weak self] in self?.toggleInfoPanel(nil) },
-        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() })
+        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() },
+        statusAction: { [weak self] action in self?.performStatusAction(action) },
+        statusChoices: { [weak self] in self?.statusChoices() ?? .init() })
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
     private let windowToolbarController = WindowToolbarController()
     private var isFullScreen = false
@@ -316,6 +319,7 @@ import UniformTypeIdentifiers
             session.smartZoom = SmartZoomState(restoring: remembered)
             tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
         }
+        viewerToolbar.attach(to: window)
         windowToolbarController.show(viewerToolbar.nsToolbar)
         window.toolbar = windowToolbarController.toolbar
         toolbarWasWanted = windowToolbar
@@ -1020,6 +1024,8 @@ import UniformTypeIdentifiers
             if browser.location == location, hasShownHome { browser.reload() } else { browser.show(location, selecting: nil) }
         }
         hasShownHome = true
+        applyInfoPanel()
+        updateBrowserInspectorActivity()
         if shown != .stash { window.makeFirstResponder(browser) }
         DebugLog.log("home shown: \(shown)")
         updateTitle()
@@ -1033,6 +1039,8 @@ import UniformTypeIdentifiers
         strip.setPhotosWorkVisible(photosIsVisible)
         session.setPhotosViewerVisible(photosIsVisible)
         homeView.isParked = true
+        updateBrowserInspectorActivity()
+        applyInfoPanel()
         windowToolbarController.show(viewerToolbar.nsToolbar)
         // Restore whether the viewer's toolbar is enabled. In full screen it stays
         // attached and AppKit reveals it with the native window controls.
@@ -1079,6 +1087,34 @@ import UniformTypeIdentifiers
         folderSettings.set(key, FolderAdjust.text(value), for: folder)
     }
 
+    private func statusChoices() -> ViewerStatusChoices {
+        let rules = ZoomRules(config: effectiveConfig)
+        let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
+        let groups = boxes.map { boxes in rules.chain.filter {
+            SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
+        } } ?? []
+        return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
+                     groups: groups, selectedGroup: session.browse.followed)
+    }
+
+    private func performStatusAction(_ action: ViewerStatusAction) {
+        switch action {
+        case .position(let index):
+            guard let count = session.playlist?.files.count, (0..<count).contains(index) else { return }
+            session.scrub(to: index)
+            session.endScrub()
+        case .zoomPercent(let percent): viewerView.setManualZoom(percent: percent)
+        case .mode(let mode): setSmartZoomMode(mode)
+        case .profile(let name): setDetector(name == "Vision" ? nil : name)
+        case .group(let kind):
+            session.browse.followed = kind
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            viewerView.frameSubjectNow()
+            folderSlots?.refreshSmartZoom()
+        default: break // Info, key bindings and steps are routed by the toolbar's existing actions.
+        }
+    }
+
     private func performViewerAction(_ action: KeyAction) {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.representedObject = action.rawValue
@@ -1102,6 +1138,8 @@ import UniformTypeIdentifiers
 
     /// Home: the sidebar and the browser, made on first show; nil until then.
     private var homeView: HomeView?
+    private var browserInspector: BrowserInspectorController?
+    private var browserWindowIsVisible = true
     private var titleVisibilityBeforeHome: NSWindow.TitleVisibility?
     /// Home's sources (the view holds its source weakly: kept here).
     private var homeSources: (folders: FolderBrowserSource, collections: CollectionSource, home: LoupeHomeSource)?
@@ -1128,6 +1166,21 @@ import UniformTypeIdentifiers
                                      hasStash: { StashLibrary.Source.current != nil },
                                      photos: PhotosBrowserSource(library: photosLibrary, sorts: photosSorts))
         let view = HomeView(source: source)
+        let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
+        view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
+            let inspector = BrowserInspectorController(thumbnails: thumbnails)
+            self?.browserInspector = inspector
+            inspector.onClose = { [weak view] in view?.isInspectorVisible = false }
+            inspector.loader.select(view?.browser.selectedEntry)
+            return inspector
+        }
+        view.onInspectorWidthChange = { UserDefaults.standard.set(Double($0), forKey: "browserInspector.width") }
+        view.onInspectorVisibilityChange = { [weak self] visible in
+            UserDefaults.standard.set(visible, forKey: "browserInspector.visible")
+            self?.updateBrowserInspectorActivity()
+        }
+        view.isInspectorVisible = UserDefaults.standard.bool(forKey: "browserInspector.visible")
+        view.browser.onSelectionChange = { [weak self] entry in self?.browserInspector?.loader.select(entry) }
         source.view = view.browser
         view.browser.unreadable = .app
         // A photo's exposure (else its pixels and size) under its name when names are below (file-cards spec).
@@ -1805,12 +1858,7 @@ import UniformTypeIdentifiers
         let status = session.imageStatus
         askPhotoFacts(status.photo)
         statsBar.update(status)
-        let shown = session.zoomTarget ?? session.transform
-        viewerToolbar.updateStatus(status, zoomMode: shown.mode)
-        viewerToolbar.updateWorkflow(session.smartZoom.mode)
-        viewerToolbar.updateSmartMode(subject: session.smartZoom.mode == .frame,
-                                      screen: effectiveConfig.keepZoomAs == .screen && { if case .free = shown.mode { true } else { false } }(),
-                                      fill: shown.mode == .fill)
+        viewerToolbar.updateStatus(status, zoomMode: (session.zoomTarget ?? session.transform).mode)
         if !status.navigationKey.isEmpty, status.navigationKey != lastNavigationKey {
             lastNavigationKey = status.navigationKey
             statsBar.reveal()
@@ -2383,7 +2431,7 @@ import UniformTypeIdentifiers
         case #selector(turnDetectorOff(_:)):
             return folder != nil && ZoomRules(config: effectiveConfig).detector != nil
         case #selector(toggleInfoPanel(_:)):
-            item.title = infoPanel.isVisible ? "Hide Info" : "Show Info"
+            item.title = (isShowingHome ? homeView?.isInspectorVisible == true : infoPanel.isVisible) ? "Hide Info" : "Show Info"
         case #selector(pickColourMethod(_:)):
             item.state = (item.representedObject as? String) == effectiveConfig.autoColorMethod.rawValue ? .on : .off
             return folder != nil
@@ -2521,13 +2569,18 @@ import UniformTypeIdentifiers
 
     /// View › Show Info / Hide Info (`⌘I`): the panel opens or closes in every window.
     @objc func toggleInfoPanel(_ sender: Any?) {
+        if isShowingHome, let homeView {
+            homeView.isInspectorVisible.toggle()
+            return
+        }
         infoPanel.toggle()
         applyInfoPanel()
     }
 
     /// Starts or stops this window's reads for the panel to match what the user wants (`isVisible`, any window's ⌘I).
     private func applyInfoPanel() {
-        let wanted = !isClosed && infoPanel.isVisible
+        infoPanel.isAvailable = !isClosed && !isShowingHome
+        let wanted = !isClosed && !isShowingHome && infoPanel.isVisible
         guard wanted != infoActive else { return }
         infoActive = wanted
         if wanted {
@@ -2703,7 +2756,20 @@ import UniformTypeIdentifiers
 
     /// The frame counter and the 0.5 s timer run while the panel is open and the window can be seen (not closed,
     /// miniaturized or fully occluded): M4a spec §3.5.
+    /// WindowRegistry includes native tab selection, whose occlusion notifications alone are unreliable.
+    func browserVisibilityChanged(_ visible: Bool) {
+        browserWindowIsVisible = visible
+        updateBrowserInspectorActivity()
+    }
+
+    private func updateBrowserInspectorActivity() {
+        let seen = window.map { !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
+        browserInspector?.loader.isActive = !isClosed && browserWindowIsVisible && isShowingHome && homeView?.isInspectorVisible == true && seen
+        if isShowingHome { browserInspector?.loader.select(homeView?.browser.selectedEntry) }
+    }
+
     private func updateDiagnosticsTimer() {
+        updateBrowserInspectorActivity()
         let seen = window.map { !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
         let on = !isClosed && infoActive && seen
         if on != (diagnosticsTimer != nil) { DebugLog.log("info panel diagnostics \(on ? "on" : "off")") }

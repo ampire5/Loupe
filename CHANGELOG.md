@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-29
+
+- Restore photo metadata and EXIF in the toolbar, with independent file and folder names and more readable text.
+- Use native full-screen toolbar auto-hide for Home and the viewer, removing the custom edge monitor and hide timer.
+- Keep one toolbar attached to each window and reuse Home/viewer controls when switching screens.
+
 ## 0.2.0 — 2026-10-29
 
 - Add SmartZoom with Vision and optional user-supplied Core ML detectors, composition profiles, a profile editor and remembered model choices.

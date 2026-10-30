@@ -16,6 +16,12 @@ extension ViewerSession {
             status.noteTone = folderMessage == FolderRequest.loadingText ? .quiet : .caution
         }
         guard let list else { return status }
+        status.index = list.index
+        status.count = folderCounted ? list.files.count : nil
+        let currentRules = zoomRules(list.current)
+        status.zoomDetails = .init(mode: smartZoom.mode, profile: currentRules.detector?.name ?? "Vision",
+            group: browse.followed?.title ?? currentRules.chain.first?.title ?? "—",
+            scale: (zoomTarget ?? transform).scale, keepingZoom: currentRules.keep)
         let pages = currentPages
         // The position the facts and the progress fill give: the current photo's, a pair's range and last page.
         let index = pages?.first ?? list.index
@@ -51,6 +57,9 @@ extension ViewerSession {
             let group = boxes.flatMap { boxes in
                 browse.chain(rules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
             }
+            status.zoomDetails?.group = group?.title ?? (smartZoom.mode == .off
+                ? (browse.followed?.title ?? rules.chain.first?.title ?? "—")
+                : (boxes == nil ? "Analysing…" : "No group"))
             let modeText = smartZoom.mode == .off ? "Manual · \(zoom)"
                 : "SmartZoom · \(smartZoom.mode == .frame ? "Auto" : "Pan") · \(rules.detector?.name ?? "Vision") · \(group?.title ?? (boxes == nil ? "Looking for subjects…" : "No complete group")) · \(zoom)"
             status.facts = facts.map { $0.kind == .zoom ? ImageStatus.Fact(.zoom, modeText, tone: $0.tone) : $0 }

@@ -45,16 +45,17 @@ enum HotPathsBench {
             // --only: the measures whose name starts so (a profile of one).
             if let only, !name.hasPrefix(only) { return }
             _ = body()
-            var times: [Double] = []
+            var times: [Double] = [], cpu: [Double] = []
             var sink = 0
             for _ in 0..<runs {
-                let start = DispatchTime.now().uptimeNanoseconds
+                let start = DispatchTime.now().uptimeNanoseconds, before = threadCPU()
                 sink &+= body()
+                cpu.append(threadCPU() - before)
                 times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6)
             }
-            times.sort()
-            print(String(format: "%-34@ %9.3f ms   (min %.3f, max %.3f)%@", name as NSString, times[times.count / 2],
-                         times[0], times[times.count - 1], sink == .min ? " " : ""))
+            times.sort(); cpu.sort()
+            print(String(format: "%-34@ %9.3f ms   (min %.3f, max %.3f); main CPU %.3f ms%@", name as NSString, times[times.count / 2],
+                         times[0], times[times.count - 1], cpu[cpu.count / 2], sink == .min ? " " : ""))
         }
 
         print("hotpaths: \(count) files, median of \(runs) runs")
@@ -97,6 +98,39 @@ enum HotPathsBench {
         }
         let values = ["browser-sort": "date-desc", "step-zoom": "subject", "subject-size": "70", "zoom-anchor": "subject"]
         measure("zoom rules") { ZoomRules(config: Config().applying(values).config).subjectSize > 0 ? 1 : 0 }
+        if only == nil || "folder prepare".hasPrefix(only!) {
+            measurePreparation(target, sort: sort, remembered: remembered, runs: runs)
+        }
         exit(0)
+    }
+
+    /// Same preparation as ViewerSession: the caller stays on the real main thread, with its run loop free
+    /// during the actor hop. CPU time includes run-loop overhead while waiting; wall time includes the sort.
+    private static func measurePreparation(_ target: FolderTarget, sort: BrowserSort, remembered: URL, runs: Int) {
+        Task(priority: .userInitiated) { @MainActor in
+            var wall: [Double] = [], cpu: [Double] = []
+            for round in 0...runs {
+                precondition(Thread.isMainThread)
+                let start = ContinuousClock.now, before = threadCPU()
+                let list = try! await FolderPlaylistPreparation.shared.prepare(target, sort: sort) { _, _ in remembered }
+                precondition(Thread.isMainThread && list.current == remembered)
+                let spent = threadCPU() - before
+                if round > 0 {
+                    wall.append(Double((ContinuousClock.now - start) / .nanoseconds(1)) / 1e6)
+                    cpu.append(spent)
+                }
+            }
+            wall.sort(); cpu.sort()
+            print(String(format: "folder prepare: wall %.3f ms; main CPU %.3f ms (min %.3f, max %.3f)",
+                         wall[runs / 2], cpu[runs / 2], cpu[0], cpu[runs - 1]))
+            exit(0)
+        }
+        RunLoop.main.run()
+    }
+
+    private static func threadCPU() -> Double {
+        var ts = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
+        return Double(ts.tv_sec) * 1000 + Double(ts.tv_nsec) / 1e6
     }
 }

@@ -48,15 +48,22 @@ public struct FolderRequest: Sendable {
                                 sort: (URL) -> BrowserSort = { _ in .standard },
                                 remembered: (URL, [URL]) -> URL?) -> Outcome {
         guard let pending, pending.token == token else { return .drop }
+        guard current?.standardizedFileURL == pending.origin else { self.pending = nil; return .drop }
+        return finish(token, prepared: result.map { target in
+            target.map { Self.playlist(for: $0, sort: sort($0.folder), remembered: remembered) }
+        }, current: current)
+    }
+
+    /// Commits an already prepared result. Only constant-size request bookkeeping belongs on the main actor;
+    /// the playlist is made by `FolderPlaylistPreparation` before this final stale-result check.
+    public mutating func finish(_ token: Token, prepared result: Result<Playlist?, Error>, current: URL?) -> Outcome {
+        guard let pending, pending.token == token else { return .drop }
         self.pending = nil
         guard current?.standardizedFileURL == pending.origin else { return .drop }
         switch result {
-        case .success(nil):
-            return .stay
-        case .success(let target?):
-            return .enter(Self.playlist(for: target, sort: sort(target.folder), remembered: remembered))
-        case .failure(let error):
-            return .fail(Self.errorText(error, origin: pending.origin))
+        case .success(nil): return .stay
+        case .success(let list?): return .enter(list)
+        case .failure(let error): return .fail(Self.errorText(error, origin: pending.origin))
         }
     }
 

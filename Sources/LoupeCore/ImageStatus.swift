@@ -5,6 +5,22 @@ import HomeScreenModel
 /// (or the message that wins over it), the facts, each of one kind so a view gives it a slot of its own, the folder, and
 /// how far along the folder the photo is. Pure, so it is tested without AppKit or a session.
 public struct ImageStatus: Equatable, Sendable {
+    /// Structured controls for the toolbar; the stats line remains a human-readable description.
+    public struct ZoomDetails: Equatable, Sendable {
+        public var mode: SmartZoomMode
+        public var profile: String
+        public var group: String
+        public var scale: Double
+        public var keepingZoom: Bool
+        public init(mode: SmartZoomMode, profile: String, group: String, scale: Double, keepingZoom: Bool) {
+            self.mode = mode; self.profile = profile; self.group = group
+            self.scale = scale; self.keepingZoom = keepingZoom
+        }
+    }
+    public var zoomDetails: ZoomDetails?
+    /// Zero-based position and complete known count, independent of the formatted spread position.
+    public var index: Int?
+    public var count: Int?
     /// The facts of a photo, in the order they are shown.
     public enum Kind: CaseIterable, Sendable {
         case position, size, megapixels, exposure, fileSize, format, zoom

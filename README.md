@@ -104,7 +104,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 </tr>
 <tr>
 <td><b>Auto colour and vibrance.</b> <code>c</code> and <code>v</code> for this folder (<code>⇧C</code> / <code>⇧V</code> make it the default) — left half original, right half corrected. Applied on the GPU as a colour cube, never written to your files.</td>
-<td><b>Info panel.</b> <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
+<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
 </tr>
 <tr>
 <td><img src="docs/images/sidebar.webp" alt="Sidebar with the folder tree"></td>
