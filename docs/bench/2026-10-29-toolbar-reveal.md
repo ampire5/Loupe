@@ -51,3 +51,35 @@ CPU uses `CLOCK_THREAD_CPUTIME_ID` via ThreadCPU. The deferred-attachment waits
 are excluded from these CPU timings. This verifies real native hosting and state
 transitions. The user subsequently confirmed the native reveal and reported that
 the app also felt faster. Intel timings remain unmeasured.
+
+## Rejected internal browser bar trial
+
+A trial build added a 48 pt opaque navigation bar above Home in full screen. It
+stays attached with Home and collapses when the viewer is shown or full screen
+ends. The native toolbar and its presentation policy remain attached as before.
+The bar forwards sort commands to the existing browser toolbar control and uses
+the browser's navigation and card-style actions. Path components are assembled
+from URLs without filesystem reads.
+
+The extended `NativeToolbarBench` passed on the same local Mac on 2026-10-29,
+using a debug build and disposable configuration. It verified all three rounds'
+bar visibility and height, hiding on return to the viewer, native toolbar hosting,
+full-screen exit, and selecting Date with the internal sort control (including
+the matching direction indicator).
+
+| Round | Show Home, main-thread CPU | Return to viewer, main-thread CPU |
+| --- | ---: | ---: |
+| First | 53.151 ms | 4.595 ms |
+| Return 1 | 16.569 ms | 4.846 ms |
+| Return 2 | 17.058 ms | 4.078 ms |
+
+An internal sort action took 0.574 ms of main-thread CPU. These are debug-build
+measurements, not a controlled before/after comparison with the release numbers
+above. No increasing cost over the return rounds was observed. Intel remains
+unmeasured. Release bundle label: `File View Toolbar Trial`.
+
+## Superseded by the Photos implementation
+
+The internal-bar trial was rejected and removed on 2026-10-30. Home now pins the
+existing native toolbar, while the viewer restores its native autohiding policy.
+See [the Photos investigation and verification](2026-10-30-photos-toolbar.md).

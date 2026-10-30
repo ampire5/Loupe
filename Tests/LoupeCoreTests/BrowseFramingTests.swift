@@ -143,3 +143,15 @@ private func leftAFace(at size: Double) -> BrowseFraming {
     let framed = f.frame(square, boxes: both, rules: rules())!
     #expect(abs(BrowseFraming.size(framed, frame: target.frame) - rules().subjectSize) < 1e-9)
 }
+
+@Test func preferredGroupIsRememberedForEachProfile() {
+    var framing = BrowseFraming()
+    framing.followed = .face
+    framing.useProfile("Cats")
+    #expect(framing.followed == nil)
+    framing.followed = .object
+    framing.useProfile("vision")
+    #expect(framing.followed == .face)
+    framing.useProfile("Cats")
+    #expect(framing.followed == .object)
+}

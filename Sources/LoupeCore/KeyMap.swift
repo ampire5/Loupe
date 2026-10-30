@@ -9,9 +9,10 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case toggleZoomCarry, saveZoomCarry
     case zoomSubject, cycleStepPan, saveStepPan, cycleZoomAnchor, saveZoomAnchor
     case toggleZoomSet, screenShare, fillSubject, cycleSubjectTarget
-    /// The custom detector (docs/detector.md): `M` on, then its next mode, kept for the folder; `⇧M` the size framed
-    /// on screen into the mode's `size` in detector.conf; `N` the next target found on the photo.
-    case cycleDetectorMode, saveDetectorSize, nextTarget
+    /// SmartZoom profiles: M / ⇧M cycle forward / backward; ⌥⇧M saves the framed size in detector.conf.
+    /// N / ⇧N cycle the groups detected on the current photo.
+    case cycleDetectorMode, previousDetectorMode, saveDetectorSize, nextTarget, previousTarget
+    case toggleToolbarPin
     /// Show Subjects: what Vision found over the photo (`SubjectOverlay`), for the window.
     case toggleSubjects
     /// `⌥L`: the tab's zoom choices (`ZoomKeys.layered`) written for the folder at once.
@@ -275,7 +276,7 @@ public struct KeyMap: Sendable, Equatable {
         .saveKeepZoom: ("Save keep zoom as default", .zoom),
         .toggleZoomCarry: ("Keep the share of the photo / the scale / the share of the screen (this folder)", .zoom),
         .saveZoomCarry: ("Save what the zoom keeps as default", .zoom),
-        .zoomSubject: ("Apply automatic crop using the selected SmartZoom profile", .zoom),
+        .zoomSubject: ("Apply SmartZoom using the selected mode and profile", .zoom),
         .cycleStepPan: ("After a step: the subject / the same place / the centre (this folder)", .zoom),
         .saveStepPan: ("Save after a step as default", .zoom),
         .cycleZoomAnchor: ("Gesture zoom towards the pointer / the centre / the subject (this folder)", .zoom),
@@ -284,7 +285,10 @@ public struct KeyMap: Sendable, Equatable {
         .screenShare: ("Keep the share of the screen from here (this folder)", .zoom),
         .fillSubject: ("Fill the window, centred on the subject", .zoom),
         .cycleSubjectTarget: ("Zoom to: a face / a person / an object / where the eye goes (this folder)", .zoom),
-        .cycleDetectorMode: ("Custom detector: on, then its next mode; every step framed on what your model finds (this folder; 0 off)", .zoom),
+        .previousDetectorMode: ("Previous SmartZoom profile", .zoom),
+        .previousTarget: ("Previous detected group in the selected profile", .zoom),
+        .toggleToolbarPin: ("Pin toolbar / automatically hide it", .view),
+        .cycleDetectorMode: ("Next SmartZoom profile", .zoom),
         .saveDetectorSize: ("Save the size on screen as the custom detector's mode's size (detector.conf)", .zoom),
         .nextTarget: ("The next target found on the photo, framed on the next steps too", .zoom),
         .toggleSubjects: ("Show or hide what Vision found: the subjects, the frame, its centre", .view),
@@ -334,6 +338,7 @@ public struct KeyMap: Sendable, Equatable {
     public static let gestures: [(input: String, title: String)] = [
         ("Left-drag", "Pan (glides on after release)"),
         ("Right-drag up / down", "Zoom in / out at the pointer"),
+        ("Right held", "Modifier for buttons and the main wheel"),
         ("Pinch", "Zoom at the pointer"),
         ("Two-finger double tap", "Fit ↔ 100 % at the fingers (Smart zoom)"),
         ("Two-finger scroll", "Pan"),
@@ -404,9 +409,12 @@ public struct KeyMap: Sendable, Equatable {
         KeyBinding(character: "a", modifiers: .shift, allowsRepeat: false, action: .saveAntiring),
         KeyBinding(character: "a", allowsRepeat: false, action: .toggleAntiring),
         // Colour, the same way.
-        KeyBinding(character: "m", modifiers: .shift, allowsRepeat: false, action: .saveDetectorSize),
+        KeyBinding(character: "m", modifiers: [.option, .shift], allowsRepeat: false, action: .saveDetectorSize),
+        KeyBinding(character: "m", modifiers: .shift, allowsRepeat: false, action: .previousDetectorMode),
         KeyBinding(character: "m", allowsRepeat: false, action: .cycleDetectorMode),
+        KeyBinding(character: "n", modifiers: .shift, allowsRepeat: false, action: .previousTarget),
         KeyBinding(character: "n", allowsRepeat: false, action: .nextTarget),
+        KeyBinding(character: "b", allowsRepeat: false, action: .toggleToolbarPin),
         KeyBinding(character: "c", modifiers: .shift, allowsRepeat: false, action: .saveAutoColor),
         KeyBinding(character: "c", allowsRepeat: false, action: .toggleAutoColor),
         KeyBinding(character: "v", modifiers: .shift, allowsRepeat: false, action: .saveVibrance),

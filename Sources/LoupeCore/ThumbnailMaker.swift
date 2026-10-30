@@ -7,14 +7,13 @@ import ImageIO
 /// into pictures for the strip. Pure functions with no state, so `ThumbnailStore` runs them inside
 /// `DecodePool` off its actor.
 ///
-/// A thumbnail is `maxSide` px on the long side (never upscaled), JPEG 0.8, tagged with the decoded
+/// A thumbnail is `maxSide` px on the long side (never upscaled), ImageIO JPEG 0.8 by default, tagged with the decoded
 /// colour space so the source's ICC profile travels with it. It is turned by the file's EXIF orientation
 /// (M3b spec §2.2), as the strip shows it and as a seed stretches it (`seedLevel`, drawn without a turn
 /// of its own), whatever `exif-orientation` says; the `ImageInfo` stored with it stays the stored header. With
 /// `exif-orientation=no` the strip turns the decoded cell back (`unturned`), so it shows the photo as stored.
 /// Transparency is composited onto a neutral checkerboard (M3b spec §3), since JPEG stores no alpha.
 public enum ThumbnailMaker {
-    static let quality = 0.8
 
     /// Whether `data`, the start of a file, already holds a whole thumbnail's worth, a 1/8-scale picture: a
     /// progressive JPEG whose DC scans are complete, or a JPEG XL holding its DC image
@@ -251,13 +250,7 @@ public enum ThumbnailMaker {
         }
         guard let image = context.makeImage() else { throw ThumbnailMakerError.cannotEncode }
 
-        let out = NSMutableData()
-        guard let jpeg = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else {
-            throw ThumbnailMakerError.cannotEncode
-        }
-        CGImageDestinationAddImage(jpeg, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        guard CGImageDestinationFinalize(jpeg) else { throw ThumbnailMakerError.cannotEncode }
-        return out as Data
+        return try ThumbnailEncoding.current.encode(image)
     }
 }
 

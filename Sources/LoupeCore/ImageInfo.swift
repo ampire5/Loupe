@@ -57,6 +57,18 @@ public struct ImageInfo: Equatable, Sendable {
         return applying ? .up : orientation.inverse
     }
 
+    /// The browser's columns combine EXIF with the header already held beside the thumbnail.
+    public var browserFacts: FileFacts? {
+        var value = facts ?? FileFacts()
+        value.width = value.width ?? orientedSize.width
+        value.height = value.height ?? orientedSize.height
+        value.colorSpace = colorSpaceName
+        value.orientation = orientation.rawValue
+        value.progressive = isProgressive
+        value.typeIdentifier = typeIdentifier
+        return value
+    }
+
     /// The header as the thumbnail catalog keeps it: the colour space by name only (the orientation is kept).
     public var catalogued: ImageInfo {
         ImageInfo(pixelSize: pixelSize, typeIdentifier: typeIdentifier, isProgressive: isProgressive, fileSize: fileSize,

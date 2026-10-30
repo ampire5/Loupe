@@ -47,6 +47,7 @@ public final class ThumbnailDatabase {
 
     private let directory: URL
     private let thumbSize: Int
+    private let encoding: ThumbnailEncoding
     private let now: () -> Date
     private let summaryCapacity: Int
     private let summaryStampWindow: TimeInterval
@@ -65,14 +66,16 @@ public final class ThumbnailDatabase {
     public init(directory: URL, thumbSize: Int, now: @escaping () -> Date = Date.init,
                 summaryCapacity: Int = ThumbnailDatabase.summaryCapacity,
                 summaryStampWindow: TimeInterval = ThumbnailDatabase.summaryStampWindow,
-                listingCapacity: Int = ThumbnailDatabase.listingCapacity) throws {
+                listingCapacity: Int = ThumbnailDatabase.listingCapacity,
+                encoding: ThumbnailEncoding = .current) throws {
         self.listingCapacity = listingCapacity
+        self.encoding = encoding
         self.directory = directory
         self.thumbSize = thumbSize
         self.now = now
         self.summaryCapacity = summaryCapacity
         self.summaryStampWindow = summaryStampWindow
-        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize)
+        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize, encoding: encoding)
     }
 
     /// Records an opened folder's listing and returns name → file id. A file whose size or mtime changed
@@ -119,11 +122,13 @@ public final class ThumbnailDatabase {
                     """, [.int(Int64(file.stamp.size)), .double(file.stamp.modified.timeIntervalSinceReferenceDate),
                           .int(file.id)])
                 try catalog.run("DELETE FROM file_facts WHERE file_id = ?", [.int(file.id)])   // the file changed
+                try catalog.run("DELETE FROM photo_metadata WHERE file_id = ?", [.int(file.id)])
                 try catalog.run("DELETE FROM file_subjects WHERE file_id = ?", [.int(file.id)])
             }
             if !orphans.isEmpty {
                 try catalog.run("DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
                 try catalog.run("DELETE FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
+                try catalog.run("DELETE FROM photo_metadata WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
                 try catalog.run("DELETE FROM file_subjects WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(orphans)])
             }
             for file in added {
@@ -217,6 +222,7 @@ public final class ThumbnailDatabase {
                     progressive = NULL, file_size = NULL, color_space = NULL, orientation = NULL WHERE id = ?
                     """, [.int(Int64(stamp.size)), .double(stamp.modified.timeIntervalSinceReferenceDate), .int(row.id)])
                 try catalog.run("DELETE FROM file_facts WHERE file_id = ?", [.int(row.id)])   // the file changed
+                try catalog.run("DELETE FROM photo_metadata WHERE file_id = ?", [.int(row.id)])
                 try catalog.run("DELETE FROM file_subjects WHERE file_id = ?", [.int(row.id)])
             } else {
                 id = try catalog.run("INSERT INTO files(folder, name, size, mtime, last_access) VALUES(?, ?, ?, ?, ?)",
@@ -266,14 +272,41 @@ public final class ThumbnailDatabase {
     }
 
     /// The facts kept for those of `ids` that have them.
-    public func facts(_ ids: [Int64]) throws -> [Int64: FileFacts] {
+    public func facts(_ ids: [Int64], includingHeader: Bool = false) throws -> [Int64: FileFacts] {
         guard !ids.isEmpty else { return [:] }
         var found: [Int64: FileFacts] = [:]
-        try catalog.query("SELECT file_id, facts FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))",
-                          [Self.idList(ids)]) { r in
-            found[r.int(0)] = try? JSONDecoder().decode(FileFacts.self, from: r.blob(1))
+        let query = includingHeader ? """
+            SELECT f.file_id, f.facts, i.uti, i.progressive, i.color_space, i.orientation
+            FROM file_facts f LEFT JOIN files i ON i.id = f.file_id
+            WHERE f.file_id IN (SELECT value FROM json_each(?))
+            """ : "SELECT file_id, facts FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))"
+        try catalog.query(query, [Self.idList(ids)]) { r in
+            guard var value = try? JSONDecoder().decode(FileFacts.self, from: r.blob(1)) else { return }
+            if includingHeader, !r.isNull(2) {
+                value.typeIdentifier = r.text(2)
+                value.progressive = r.isNull(3) ? nil : r.int(3) != 0
+                value.colorSpace = r.isNull(4) ? nil : r.text(4)
+                value.orientation = r.isNull(5) ? nil : Int(r.int(5))
+            }
+            found[r.int(0)] = value
         }
         return found
+    }
+
+    /// Cached image headers even when no EXIF record exists. Never reads thumbnail blobs or source files.
+    public func imageHeaders(_ ids: [Int64]) throws -> [Int64: ImageInfo] {
+        guard !ids.isEmpty else { return [:] }
+        var result: [Int64: ImageInfo] = [:]
+        try catalog.query("""
+            SELECT id, width, height, uti, progressive, file_size, color_space, orientation FROM files
+            WHERE id IN (SELECT value FROM json_each(?)) AND width IS NOT NULL
+            """, [Self.idList(ids)]) { r in
+            result[r.int(0)] = ImageInfo(pixelSize: PixelSize(width: Int(r.int(1)), height: Int(r.int(2))),
+                typeIdentifier: r.text(3), isProgressive: r.int(4) != 0, fileSize: Int(r.int(5)),
+                colorSpaceName: r.isNull(6) ? nil : r.text(6),
+                orientation: ImageOrientation(rawValue: Int(r.int(7))) ?? .up)
+        }
+        return result
     }
 
     /// Facts read later than the thumbnail (the file's header, for a thumbnail made before they were kept).
@@ -283,6 +316,49 @@ public final class ThumbnailDatabase {
             for item in items {
                 guard let json = try? JSONEncoder().encode(item.facts) else { continue }
                 try catalog.run("INSERT OR REPLACE INTO file_facts(file_id, facts) VALUES(?, ?)", [.int(item.id), .blob(json)])
+            }
+        }
+    }
+
+    /// Complete, successful metadata for this exact file version. A corrupt or older-reader payload is a miss.
+    public func photoMetadata(_ id: Int64, stamp: FileStamp) throws -> PhotoMetadata? {
+        var found: PhotoMetadata?
+        try catalog.query("""
+            SELECT m.payload FROM photo_metadata m JOIN files f ON f.id = m.file_id
+            WHERE f.id = ? AND f.size = ? AND f.mtime = ? AND m.reader = ? AND length(m.payload) <= ?
+            """, [.int(id), .int(Int64(stamp.size)), .double(stamp.modified.timeIntervalSinceReferenceDate),
+                  .int(Int64(PhotoMetadataRecord.readerVersion)), .int(Int64(PhotoMetadataRecord.maximumBytes))]) { r in
+            let data = r.blob(0)
+            guard data.count <= PhotoMetadataRecord.maximumBytes else { return }
+            found = (try? JSONDecoder().decode(PhotoMetadataRecord.self, from: data))?.value
+        }
+        return found
+    }
+
+    /// A late read can only write against the catalog stamp it started with. Transient failures are never cached.
+    public func putPhotoMetadata(_ metadata: PhotoMetadata, id: Int64, stamp: FileStamp) throws {
+        guard metadata.error == nil else { return }
+        let textBytes = [metadata.camera, metadata.lens, metadata.focalLength, metadata.aperture, metadata.exposure,
+                         metadata.iso, metadata.captured, metadata.gps, metadata.software, metadata.description,
+                         metadata.compensation, metadata.generation].compactMap { $0 }.reduce(0) { $0 + $1.utf8.count }
+        guard textBytes <= PhotoMetadataRecord.maximumBytes else { return }
+        let data = try JSONEncoder().encode(PhotoMetadataRecord(metadata))
+        guard data.count <= PhotoMetadataRecord.maximumBytes else { return }
+        try catalog.transaction {
+            try catalog.run("""
+                INSERT OR REPLACE INTO photo_metadata(file_id, reader, payload, stored)
+                SELECT id, ?, ?, ? FROM files WHERE id = ? AND size = ? AND mtime = ?
+                """, [.int(Int64(PhotoMetadataRecord.readerVersion)), .blob(data),
+                      .double(now().timeIntervalSinceReferenceDate), .int(id), .int(Int64(stamp.size)),
+                      .double(stamp.modified.timeIntervalSinceReferenceDate)])
+            // Bounded FIFO; reads are read-only and never trigger a per-selection WAL commit.
+            var bytes = 0, count = 0, dropped: [Int64] = []
+            try catalog.query("SELECT file_id, length(payload) FROM photo_metadata ORDER BY stored DESC, file_id DESC", []) { r in
+                count += 1; bytes += Int(r.int(1))
+                if bytes > PhotoMetadataRecord.totalBytes || count > PhotoMetadataRecord.maximumRecords { dropped.append(r.int(0)) }
+            }
+            if !dropped.isEmpty {
+                try catalog.run("DELETE FROM photo_metadata WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(dropped)])
             }
         }
     }
@@ -605,6 +681,7 @@ public final class ThumbnailDatabase {
             try deleteThumbs(ids)
             try catalog.run("DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
             try catalog.run("DELETE FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
+            try catalog.run("DELETE FROM photo_metadata WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
             try catalog.run("DELETE FROM file_subjects WHERE file_id IN (SELECT value FROM json_each(?))", [Self.idList(ids)])
         }
         try thumbs.execute("PRAGMA incremental_vacuum")
@@ -642,7 +719,7 @@ public final class ThumbnailDatabase {
         catalog.close()
         thumbs.close()
         let oldID = catalogID
-        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize)
+        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize, encoding: encoding)
         // The id also changes when the catalog is reopened only alongside `Thumbs.db` and turns out corrupt.
         return catalogChanged || catalogID != oldID ? .catalog : .thumbnails
     }
@@ -660,7 +737,7 @@ public final class ThumbnailDatabase {
         try Self.setAside(directory.appendingPathComponent("Thumbs.db"), reason: "a query failed")
         if !catalogOK { try Self.setAside(directory.appendingPathComponent("Catalog.db"), reason: "a query failed") }
         let oldID = catalogID
-        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize)
+        (catalog, thumbs, catalogID) = try Self.openBoth(directory: directory, thumbSize: thumbSize, encoding: encoding)
         return catalogID != oldID ? .catalog : .thumbnails
     }
 
@@ -721,12 +798,14 @@ public final class ThumbnailDatabase {
     /// check, as the summaries.
     private static let factsSchema = """
         CREATE TABLE IF NOT EXISTS file_facts(file_id INTEGER PRIMARY KEY, facts BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS photo_metadata(file_id INTEGER PRIMARY KEY, reader INTEGER NOT NULL,
+            payload BLOB NOT NULL, stored REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS file_subjects(file_id INTEGER PRIMARY KEY, boxes BLOB NOT NULL);
         """
     private static let thumbsSchema = metaSchema
         + "CREATE TABLE IF NOT EXISTS thumbs(file_id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);"
 
-    private static func openBoth(directory: URL, thumbSize: Int)
+    private static func openBoth(directory: URL, thumbSize: Int, encoding: ThumbnailEncoding)
         throws -> (catalog: SQLiteConnection, thumbs: SQLiteConnection, catalogID: String) {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var catalogID = ""
@@ -736,6 +815,7 @@ public final class ThumbnailDatabase {
             // `Thumbs.db` is emptied below, and every file id handed out before is void.
             if let format = try readMeta(db)["format_version"], format != String(formatVersion) {
                 try db.execute("""
+                    DROP TABLE IF EXISTS photo_metadata; DROP TABLE IF EXISTS file_facts; DROP TABLE IF EXISTS file_subjects;
                     DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS folders; DROP TABLE IF EXISTS volumes;
                     DELETE FROM meta;
                     """)
@@ -752,10 +832,11 @@ public final class ThumbnailDatabase {
             try db.execute(thumbsSchema)
             let meta = try readMeta(db)
             if meta["catalog_id"] != catalogID || meta["format_version"] != String(formatVersion)
-                || meta["thumb_size"] != String(thumbSize) {
+                || meta["thumb_size"] != String(thumbSize)
+                || (meta["thumbnail_encoding"] ?? ThumbnailEncoding.standard.cacheKey) != encoding.cacheKey {
                 try clear(db)
-                try writeMeta(db, catalogID: catalogID, thumbSize: thumbSize)
             }
+            try writeMeta(db, catalogID: catalogID, thumbSize: thumbSize, encoding: encoding)
         }
         return (catalog, thumbs, catalogID)
     }
@@ -806,8 +887,9 @@ public final class ThumbnailDatabase {
         return meta
     }
 
-    private static func writeMeta(_ db: SQLiteConnection, catalogID: String, thumbSize: Int) throws {
-        let wanted = ["catalog_id": catalogID, "format_version": String(formatVersion), "thumb_size": String(thumbSize)]
+    private static func writeMeta(_ db: SQLiteConnection, catalogID: String, thumbSize: Int, encoding: ThumbnailEncoding? = nil) throws {
+        var wanted = ["catalog_id": catalogID, "format_version": String(formatVersion), "thumb_size": String(thumbSize)]
+        if let encoding { wanted["thumbnail_encoding"] = encoding.cacheKey }
         guard try readMeta(db) != wanted else { return }
         try db.transaction {
             for (key, value) in wanted {

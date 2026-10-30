@@ -87,7 +87,7 @@ import UniformTypeIdentifiers
         // One reader for photos and thumbnails: the generator's lowest priority then really yields to the viewer
         // (spec §3.6). Four threads: the viewer's two, and two only background reads may use. The thumbnails decode
         // in a pool of their own, at utility QoS.
-        let reader = FileReader(threads: 4), pool = DecodePool()
+        let reader = PhotosReader(fallback: FileReader(threads: 4)), pool = DecodePool()
         // pyramid-filter: read by the loader at each upload, set again on every reload (Settings).
         let pyramidFilter = PyramidFilterSetting(config.pyramidFilter)
         Settings.shared.pyramidFilter = pyramidFilter
@@ -422,14 +422,14 @@ import UniformTypeIdentifiers
     /// File › Show in Finder (`⌘R`, M4a spec §2.5): Finder opens the photo's folder with the file selected. With two
     /// pages on screen it is the current page (the one the last step landed on: the pair's first page after a step).
     @objc func showInFinder(_ sender: Any?) {
-        guard let url = registry.current?.session.playlist?.current else { return }
+        guard let url = registry.current?.session.playlist?.current, url.isFileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([ArchivePath.split(url)?.archive ?? url])
     }
 
     /// File › Copy Path (⌥⌘C, as Finder's Copy as Pathname): the photo's path; in an archive, the archive's and the
     /// inner path. With two pages on screen, the current page's, as Show in Finder.
     @objc func copyPath(_ sender: Any?) {
-        guard let url = registry.current?.session.playlist?.current else { return }
+        guard let url = registry.current?.session.playlist?.current, url.isFileURL else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(ArchivePath.copyText(url), forType: .string)
     }
@@ -500,7 +500,7 @@ import UniformTypeIdentifiers
     /// Show in Finder needs a photo.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(showInFinder(_:)) || item.action == #selector(copyPath(_:)) {
-            return registry.current?.session.playlist?.current != nil
+            return registry.current?.session.playlist?.current.isFileURL == true
         }
         if item.action == #selector(reopenClosedTab(_:)) { return registry.canReopenTab }
         if item.action == #selector(showNextTab(_:)) || item.action == #selector(showPreviousTab(_:)) {

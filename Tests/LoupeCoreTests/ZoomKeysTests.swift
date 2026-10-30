@@ -131,3 +131,17 @@ import Testing
     #expect(ZoomKeys.saveKeys(for: .off) == ZoomKeys.manualSaveKeys)
     #expect(ZoomKeys.saveKeys(for: .frame) == ZoomKeys.smartSaveKeys)
 }
+
+@Test func profileCyclingDoesNotRequireALoadedDetector() {
+    var config = Config()
+    config.detectorSetup.modes = [.init(name: "Cats", chain: [.object], size: 0.5),
+                                  .init(name: "Dogs", chain: [.object], size: 0.5)]
+    #expect(!config.detectorSetup.detects)
+    #expect(ZoomKeys.profileAfter(config, direction: 1) == "Cats")
+    config.detector = true; config.detectorMode = "Cats"
+    #expect(ZoomKeys.profileAfter(config, direction: 1) == "Dogs")
+    #expect(ZoomKeys.profileAfter(config, direction: -1) == nil)
+    config.detectorMode = "Dogs"
+    #expect(ZoomKeys.profileAfter(config, direction: 1) == nil)
+    #expect(ZoomKeys.profileAfter(config, direction: -1) == "Cats")
+}

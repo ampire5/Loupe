@@ -30,6 +30,7 @@ extension Notification.Name {
     private let places: BrowserPlaces
     private let settings: FolderSettings?
     private let positions: FolderPositions
+    var fileViewHistory: FileViewHistory { positions.fileViews }
     /// Where Recent has a folder's photo, for a card whose folder has no visit yet (`FolderCardFacts.visit`).
     private let recent: RecentStore?
     private let actions: BrowserFileActions
@@ -733,8 +734,12 @@ extension Notification.Name {
         guard !entries.isEmpty else { return }
         let found = await thumbnails.facts(entries.map(\.url))
         guard !Task.isCancelled else { return }
+        // A cached header exists for formats ImageIO cannot read too; show it while EXIF fallback stays independent.
+        let headerEntries = entries.filter { found[$0.url] == nil }
+        let headers = await thumbnails.headerFacts(headerEntries.map(\.url))
+        guard !Task.isCancelled else { return }
         var byID: [String: FileFacts] = [:]
-        for entry in entries { if let f = found[entry.url] { byID[entry.id] = f } }
+        for entry in entries { if let f = found[entry.url] ?? headers[entry.url] { byID[entry.id] = f } }
         view?.setFacts(byID)
         let missing = entries.filter { inView.contains($0.id) && found[$0.url] == nil && !noFacts.contains($0.url) }
         guard !missing.isEmpty else { return }
@@ -742,7 +747,13 @@ extension Notification.Name {
         for entry in missing {
             guard !Task.isCancelled else { break }
             let url = entry.url
-            if let facts = await Task.detached(priority: .utility, operation: { PhotoFacts.read(url: url) }).value {
+            if var facts = await Task.detached(priority: .utility, operation: { PhotoFacts.read(url: url) }).value {
+                if let header = headers[url] {
+                    facts.colorSpace = header.colorSpace
+                    facts.orientation = header.orientation
+                    facts.progressive = header.progressive
+                    facts.typeIdentifier = header.typeIdentifier
+                }
                 read[url] = facts
                 view?.setFacts([entry.id: facts])
             } else {
@@ -1200,7 +1211,11 @@ extension Notification.Name {
                 self.view?.setImage(image, for: id)
                 UnreadableFiles.app.clear(url)
                 self.pictured.insert(url)
-                if let facts = await self.thumbnails.facts([url])[url] { self.view?.setFacts([id: facts]) }
+                if let facts = await self.thumbnails.facts([url])[url] {
+                    self.view?.setFacts([id: facts])
+                } else if let header = await self.thumbnails.headerFacts([url])[url] {
+                    self.view?.setFacts([id: header])
+                }
             } else if await self.thumbnails.status(url) == .unavailable {
                 // A file the decoders cannot read is marked for the app (its card faint, the arrow keys and the viewer's
                 // steps go past it); a read that failed is not. Waited for still, so a picture that comes later lifts it.

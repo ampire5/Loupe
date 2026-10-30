@@ -117,3 +117,60 @@ private func target(_ files: [String]) -> FolderTarget {
     #expect(remembered.current == a)
     #expect(remembered.files == [b, a])   // the folder's sort kept on the remembered photo
 }
+
+@Test @MainActor func folderPreparationLeavesTheMainThreadAndKeepsSortAndMemory() async throws {
+    let folder = URL(fileURLWithPath: "/photos/b")
+    let a = folder.appendingPathComponent("a.jpg"), b = folder.appendingPathComponent("b.jpg")
+    let stamps = [a: FileStamp(modified: Date(timeIntervalSinceReferenceDate: 1), size: 1),
+                  b: FileStamp(modified: Date(timeIntervalSinceReferenceDate: 2), size: 2)]
+    let target = FolderTarget(folder: folder, images: [a, b], stamps: stamps)
+    let list = try await FolderPlaylistPreparation.shared.prepare(target, sort: BrowserSort(text: "date-desc")!) { _, _ in
+        #expect(!Thread.isMainThread)
+        return a
+    }
+    #expect(list.files == [b, a])
+    #expect(list.current == a)
+    #expect(list.stamps == stamps)
+}
+
+@Test func cancelledFolderPreparationDoesNotStartBuilding() async {
+    let pending = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await FolderPlaylistPreparation.shared.prepare(target(["1.jpg"])) { _, _ in
+            Issue.record("cancelled request reached the playlist builder")
+            return nil
+        }
+    }
+    do {
+        _ = try await pending.value
+        Issue.record("expected cancellation")
+    } catch { #expect(error is CancellationError) }
+}
+
+@Test func folderPreparationCancelledDuringBuildDiscardsTheResult() async {
+    let pending = Task {
+        try await FolderPlaylistPreparation.shared.prepare(target(["1.jpg"])) { _, _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return nil
+        }
+    }
+    do {
+        _ = try await pending.value
+        Issue.record("expected cancellation")
+    } catch { #expect(error is CancellationError) }
+}
+
+@Test func preparedFolderResultStillChecksOriginAndRequestToken() {
+    let list = FolderRequest.playlist(for: target(["2.jpg", "1.jpg"]), remembered: none)
+    var request = FolderRequest()
+    let old = request.begin(from: origin)!
+    request.cancel()
+    let new = request.begin(from: origin)!
+    #expect(request.finish(old, prepared: .success(list), current: origin) == .drop)
+    #expect(request.isPending)
+    #expect(request.finish(new, prepared: .success(list), current: origin) == .enter(list))
+    #expect(!request.isPending)
+    let moved = request.begin(from: origin)!
+    #expect(request.finish(moved, prepared: .success(list), current: origin.deletingLastPathComponent().appendingPathComponent("2.jpg")) == .drop)
+    #expect(!request.isPending)
+}

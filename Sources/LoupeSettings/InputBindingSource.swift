@@ -130,7 +130,7 @@ public final class InputBindingSource: KeyBindingSource {
     public func pressKinds(for button: String) -> [(id: String, title: String, enabled: Bool)] {
         let kinds: [(PressKind, String)] = [(.tap, "Tap"), (.long, "Long press"), (.wheel, "+ wheel"),
                                             (.thumbWheel, "+ thumb wheel"), (.move, "+ move up/down"),
-                                            (.withRight, "With right button")]
+                                            (.withRight, "With right button"), (.withRightWheel, "With right button + wheel")]
         guard let b = MouseButton(rawValue: button) else { return [] }
         return kinds.map { kind, title in
             let text = InputConf.text(of: .mouse(b, kind))

@@ -15,8 +15,11 @@ struct RenderPage: @unchecked Sendable {   // TiledImage is Sendable, ShownColor
     var orientation: ImageOrientation
     var color: ShownColor<ColorLUT>?
     var rect: CGRect
+    var viewReceipt: FileViewReceipt?
 
-    init(image: TiledImage?, orientation: ImageOrientation, color: ShownColor<ColorLUT>?, rect: CGRect) {
+    init(image: TiledImage?, orientation: ImageOrientation, color: ShownColor<ColorLUT>?, rect: CGRect,
+         viewReceipt: FileViewReceipt? = nil) {
+        self.viewReceipt = viewReceipt
         self.image = image
         self.orientation = orientation
         self.color = color
@@ -401,7 +404,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         // no wake-up and is simply seen here.
         let (snapshot, action) = state.withLock { s -> (Snapshot?, IdlePolicy.Action) in
             guard !s.stopped else { return (nil, .skip) }   // stopped during the latch: the stop block comes next
-            let action = idlePolicy.frame(changed: s.generation != drawnGeneration || drawnColorRunning, at: target)
+            let retry = !s.held && (s.pages.first.viewReceipt?.requestPresentationRetry() == true
+                || s.pages.second?.viewReceipt?.requestPresentationRetry() == true)
+            let action = idlePolicy.frame(changed: s.generation != drawnGeneration || drawnColorRunning || retry, at: target)
             if action == .pause { s.paused = true }
             return (action == .draw ? s : nil, action)
         }
@@ -478,6 +483,21 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
         // Held: tagged for the image above all the same, so no retag on reveal; only the background is drawn.
         let shown = snapshot.held ? nil : snapshot.pages.leadImage
         drawPages(snapshot, pair: pair, at: drawTime, into: commands, target: target)
+        if !snapshot.held {
+            func observe(_ page: RenderPage) {
+                guard let image = page.image, let receipt = page.viewReceipt, receipt.isPending else { return }
+                let visible = Self.placement(page, image, snapshot.transform)?.viewport.isEmpty == false
+                    || (Self.placement(page, image, snapshot.transform) == nil
+                        && CGRect(origin: .zero, size: snapshot.transform.imageSize).intersects(snapshot.transform.visibleRect))
+                guard visible else { return }
+                drawable.addPresentedHandler { presented in
+                    guard presented.presentedTime > 0 else { return }
+                    receipt.presented(at: Date(timeIntervalSinceNow: presented.presentedTime - CACurrentMediaTime()))
+                }
+            }
+            observe(snapshot.pages.first)
+            if let second = snapshot.pages.second { observe(second) }
+        }
         if DebugLog.isEnabled {
             // The first frame at the level the zoom wants after an activation (`watchSharp`).
             let generation = snapshot.generation

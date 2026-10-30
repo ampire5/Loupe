@@ -494,14 +494,28 @@ public actor ThumbnailStore {
         var result: [URL: FileFacts] = [:]
         var byID: [Int64: URL] = [:]
         for url in urls {
-            if let facts = made[url]?.info.facts {
+            if let info = made[url]?.info, info.facts != nil, let facts = info.browserFacts {
                 result[url] = facts
             } else if let id = ids[url] {
                 byID[id] = url
             }
         }
-        if !byID.isEmpty, let found = perform("facts", { try $0.facts(Array(byID.keys)) }) {
+        if !byID.isEmpty, let found = perform("facts", { try $0.facts(Array(byID.keys), includingHeader: true) }) {
             for (id, facts) in found { if let url = byID[id] { result[url] = facts } }
+        }
+        return result
+    }
+
+    /// Header-only table cells for thumbnails without EXIF, kept separate so EXIF fallback is not suppressed.
+    public func headerFacts(_ urls: [URL]) -> [URL: FileFacts] {
+        var result: [URL: FileFacts] = [:]
+        var byID: [Int64: URL] = [:]
+        for url in urls {
+            if let info = made[url]?.info { result[url] = info.browserFacts }
+            else if let id = ids[url] { byID[id] = url }
+        }
+        if !byID.isEmpty, let found = perform("headers", { try $0.imageHeaders(Array(byID.keys)) }) {
+            for (id, info) in found { if let url = byID[id] { result[url] = info.browserFacts } }
         }
         return result
     }

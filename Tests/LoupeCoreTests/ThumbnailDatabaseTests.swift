@@ -146,6 +146,38 @@ import HomeScreenModel
         #expect(try db.facts([a]).isEmpty)
     }
 
+    @Test func browserHeaderFactsDoNotRequireExif() {
+        let image = info(1)
+        #expect(image.facts == nil)
+        #expect(image.browserFacts?.width == image.orientedSize.width)
+        #expect(image.browserFacts?.colorSpace == image.colorSpaceName)
+    }
+
+    @Test func cachedHeaderCanBeReadWithoutExifOrThumbnailBytes() throws {
+        let db = try open(tempDir())
+        let id = try #require(db.sync(folder: folderX, files: listing(["a.jpg"]))["a.jpg"])
+        let image = info(1)
+        try db.put([(id: id, stamp: stamp(of: "a.jpg"), jpeg: jpeg(7), info: image)])
+        #expect(try db.facts([id]).isEmpty)
+        let header = try #require(db.imageHeaders([id])[id])
+        #expect(header.browserFacts?.width == image.orientedSize.width)
+        #expect(header.browserFacts?.colorSpace == image.colorSpaceName)
+    }
+
+    @Test func tableFactsIncludeTheCachedHeader() throws {
+        let db = try open(tempDir())
+        let id = try #require(db.sync(folder: folderX, files: listing(["a.jpg"]))["a.jpg"])
+        var image = info(1)
+        image.facts = FileFacts(width: 6001, height: 4001, camera: "Camera", iso: 400)
+        try db.put([(id: id, stamp: stamp(of: "a.jpg"), jpeg: jpeg(7), info: image)])
+        let facts = try #require(db.facts([id], includingHeader: true)[id])
+        #expect(facts.colorSpace == image.colorSpaceName)
+        #expect(facts.orientation == image.orientation.rawValue)
+        #expect(facts.progressive == image.isProgressive)
+        #expect(facts.typeIdentifier == image.typeIdentifier)
+        #expect(facts.camera == "Camera" && facts.iso == 400)
+    }
+
     /// A photo's subjects (smart zoom spec §5) are kept by file, read back as written, and go when the file changes.
     @Test func subjectsRoundTripAndGoWhenTheFileChanges() throws {
         let db = try open(tempDir())

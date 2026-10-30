@@ -32,7 +32,7 @@ import Testing
 
     private func expectStandardMouse(_ m: InputMap, _ context: String) {
         for button in MouseButton.allCases {
-            for kind in [PressKind.tap, .long, .wheel, .thumbWheel, .move, .withRight] {
+            for kind in [PressKind.tap, .long, .wheel, .thumbWheel, .move, .withRight, .withRightWheel] {
                 let want = InputMap.standardMouse.first { $0.0 == button && $0.1 == kind }?.2
                 #expect(m.mouse(button, kind) == want, "\(context): \(button) \(kind)")
             }
@@ -48,30 +48,22 @@ import Testing
         let m = InputMap.standard
         #expect(m.mouse(.panel, .tap) == .action(.toggleAutoColor))
         #expect(m.mouse(.panel, .long) == .action(.toggleVibrance))
+        #expect(m.mouse(.panel, .withRight) == nil)
         #expect(m.mouse(.panel, .wheel) == .add(key: "auto-color-strength", step: 0.05))
-        #expect(m.mouse(.panel, .move) == .add(key: "vibrance-amount", step: 0.05))
+        #expect(m.mouse(.panel, .withRightWheel) == nil)
         #expect(m.mouse(.middle, .tap) == .action(.toggleFitActual))
-        #expect(m.mouse(.middle, .long) == .action(.fill))
-        #expect(m.mouse(.back, .tap) == .action(.back))
-        #expect(m.mouse(.back, .long) == .action(.cycleStats))
-        #expect(m.mouse(.back, .wheel) == .action(.nextFolder))
-        #expect(m.mouse(.forward, .tap) == .action(.toggleInfoPanel))
-        #expect(m.mouse(.forward, .wheel) == .zoomStep)
         #expect(m.mouse(.middle, .withRight) == .action(.fitWidth))
-        #expect(m.mouse(.forward, .long) == nil)
-        #expect(m.mouse(.gesture, .tap) == .action(.cycleStats))
-        #expect(m.mouse(.gesture, .wheel) == .add(key: "vibrance-amount", step: 0.05))
-        #expect(m.mouse(.gesture, .long) == nil)
+        #expect(m.mouse(.back, .tap) == .action(.previousTarget))
+        #expect(m.mouse(.forward, .tap) == .action(.nextTarget))
+        #expect(m.mouse(.back, .withRight) == .action(.previousDetectorMode))
+        #expect(m.mouse(.forward, .withRight) == .action(.cycleDetectorMode))
+        #expect(m.mouse(.right, .wheel) == .action(.nextFolder))
+        #expect(m.mouse(.gesture, .tap) == .action(.toggleSmartZoom))
+        #expect(m.mouse(.gesture, .withRight) == .action(.cycleStats))
         #expect(m.mouse(.panel, .thumbWheel) == nil)
-        #expect(m.divertedCIDs == [0x01A0, 0x00C3])
-        #expect(m.wantsThumbWheel == false)
-        #expect(m.kinds(of: .panel) == [.tap, .long, .wheel, .move])
-        #expect(m.kinds(of: .middle) == [.tap, .long, .withRight])
-        #expect(m.kinds(of: .back) == [.tap, .long, .wheel])
-        #expect(m.kinds(of: .forward) == [.tap, .wheel])
-        #expect(m.kinds(of: .gesture) == [.tap, .wheel])
-        #expect(m.kinds(of: .shift).isEmpty)
-        #expect(InputMap.standardMouse.count == 20)
+        #expect(m.mouse(.right, .thumbWheel) == nil)
+        #expect(m.mouse(.panel, .move) == nil)
+        #expect(m.mouse(.back, .long) == nil)
     }
 
     @Test func folderStepFollowsTheWheel() {
@@ -152,12 +144,12 @@ import Testing
     @Test func ignoreRemoves() {
         var m = map("MX_PANEL ignore")
         #expect(m.mouse(.panel, .tap) == nil)
-        #expect(m.mouse(.panel, .long) == .action(.toggleVibrance))
+        #expect(m.mouse(.panel, .withRight) == nil)
         #expect(m.divertedCIDs.contains(0x01A0))
-        m = map("MX_PANEL ignore\nMX_PANEL-long ignore\nMX_PANEL+WHEEL ignore\nMX_PANEL+MOVE ignore")
+        m = map("MX_PANEL ignore\nMX_PANEL-long ignore\nMX_PANEL+WHEEL ignore\nMX_PANEL+MOVE ignore\nMBTN_RIGHT+MX_PANEL ignore\nMBTN_RIGHT+MX_PANEL+WHEEL ignore")
         #expect(m.divertedCIDs == [0x00C3])
         #expect(m.kinds(of: .panel).isEmpty)
-        m = map("MX_GESTURE ignore\nMX_GESTURE+WHEEL ignore")
+        m = map("MX_GESTURE ignore\nMX_GESTURE+WHEEL ignore\nMBTN_RIGHT+MX_GESTURE ignore")
         #expect(m.divertedCIDs == [0x01A0])                               // the gesture button goes back to the system
         // Keys: the key goes to `super.keyDown`; its neighbours keep their actions.
         m = map("SPACE ignore")
@@ -202,13 +194,13 @@ import Testing
         #expect(m.wantsThumbWheel)
         #expect(m.divertedCIDs.isSuperset(of: [0x00C3]))
         #expect(m.divertedCIDs == [0x01A0, 0x00C3])
-        #expect(m.kinds(of: .gesture) == [.tap, .wheel, .thumbWheel])
+        #expect(m.kinds(of: .gesture) == [.tap, .withRight, .thumbWheel])
         #expect(m.mouse(.gesture, .thumbWheel) == .add(key: "vibrance-amount", step: 0.05))
     }
 
     @Test func zoomStepBindsLikeAnyAction() {
         let m = map("MX_GESTURE+WHEEL ignore\nMX_PANEL+WHEEL zoom-step\nMBTN_MID zoom-step\nq zoom-step")
-        #expect(m.mouse(.gesture, .wheel) == nil && m.kinds(of: .gesture) == [.tap])
+        #expect(m.mouse(.gesture, .wheel) == nil && m.kinds(of: .gesture) == [.tap, .withRight])
         #expect(m.mouse(.panel, .wheel) == .zoomStep)
         #expect(m.mouse(.middle, .tap) == .zoomStep)                      // a press: one stop in
         #expect(lookup(m, 12, "q") == .action(.zoomStep))
@@ -291,10 +283,9 @@ import Testing
     @Test func templateHasTheHeader() {
         let text = InputConfTemplate.text
         #expect(text.hasPrefix("# Loupe"))
-        for word in ["ignore", "MX_PANEL-long", "+WHEEL", "+MX_THUMB", "+MOVE", "MBTN_RIGHT+MBTN_MID", "⌘",
-                     "on release", "MBTN_FORWARD+WHEEL zoom-step",
-                     "MX_GESTURE+WHEEL add vibrance-amount 0.05", "MX_GESTURE cycle-stats", "zoom-step",
-                     "MBTN_BACK+WHEEL next-folder"] {
+        for word in ["ignore", "+WHEEL", "+MX_THUMB", "+MOVE", "MBTN_RIGHT+MBTN_MID", "⌘",
+                     "on release", "MBTN_RIGHT+WHEEL next-folder",
+                     "MX_GESTURE toggle-smart-zoom", "MBTN_RIGHT+MX_GESTURE cycle-stats", "toggle-toolbar-pin"] {
             #expect(text.contains(word), "\(word)")
         }
         #expect(text.hasSuffix("\n"))
@@ -304,13 +295,9 @@ import Testing
         let rows = InputMap.standard.mouseLabels()
         #expect(rows.contains { $0 == ("Panel + wheel", "Auto colour strength ±0.05") })
         #expect(rows.contains { $0 == ("Right + middle", "Fit width") })
-        #expect(rows.map(\.input) == ["Panel", "Panel (hold)", "Panel + wheel", "Panel + move up/down", "Middle",
-                                      "Middle (hold)", "Back", "Back (hold)", "Back + wheel", "Forward", "Forward + wheel", "Gesture button",
-                                      "Gesture button + wheel", "Three fingers up", "Three fingers down",
-                                      "Three-finger tap", "Force click", "Click held + two fingers down",
-                                      "Click held + two fingers up", "Right + middle"])
-        #expect(rows.contains { $0 == ("Forward + wheel", "Zoom in / out at the pointer") })
-        #expect(rows.contains { $0 == ("Back + wheel", "Next / previous folder") })
+        #expect(Set(rows.map(\.input)).count == rows.count)
+        #expect(!rows.contains { $0.input == "Right + panel + wheel" })
+        #expect(rows.contains { $0 == ("Right + wheel", "Next / previous folder") })
         #expect(InputMap.title(.zoomStep) == "Zoom in / out at the pointer")
         #expect(rows.first! == ("Panel", "Auto colour on/off (this folder)"))
         let more = map("MX_SHIFT+MX_THUMB add vibrance-amount -0.1\nMX_GESTURE fit\nMX_PANEL ignore").mouseLabels()

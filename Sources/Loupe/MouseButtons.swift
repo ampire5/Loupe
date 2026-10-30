@@ -33,6 +33,8 @@ import LoupeCore
     /// The side buttons' control IDs LogiMouse hears itself right now (`LogiMouse.watching`, set by `AppDelegate`):
     /// their AppKit events are dropped (`AppKitButtonFilter`, M4c spec §12.1). Empty without a Logitech mouse.
     var heardSideButtons: () -> Set<UInt16> = { [] }
+    /// Physical state is injectable for deterministic modifier-release tests.
+    var pressedButtons: () -> Int = { NSEvent.pressedMouseButtons }
     private var appKitFilter = AppKitButtonFilter()
     private var moveMonitor: Any?
 
@@ -55,7 +57,7 @@ import LoupeCore
 
         var gestures: ButtonGestures {
             let kinds = Dictionary(uniqueKeysWithValues: MouseButton.allCases.map { ($0, map.kinds(of: $0)) })
-            return ButtonGestures(kinds: kinds, longPress: Double(longPressMilliseconds) / 1000, moveStep: moveStep)
+            return ButtonGestures(kinds: kinds, longPress: Double(longPressMilliseconds) / 1000, moveStep: moveStep, tapOnRelease: [.back, .forward, .gesture])
         }
     }
 
@@ -100,7 +102,7 @@ import LoupeCore
     /// `t` on NSEvent's clock (`systemUptime`). A right button the recogniser holds that is up in fact (its release was
     /// lost: let go over another app's window, a drag that ended outside) is released first, so it chords nothing.
     func press(_ b: MouseButton, at t: TimeInterval) {
-        if b != .right, gestures.rightHeld, NSEvent.pressedMouseButtons & 2 == 0 {
+        if b != .right, gestures.rightHeld, pressedButtons() & 2 == 0 {
             DebugLog.log("mouse buttons: right button up without a release, released")
             dispatch(gestures.release(.right, at: t), at: t)
         }
@@ -218,8 +220,12 @@ import LoupeCore
     /// keeps presses, `keepingPresses`), and without this every plain scroll would be the held button's. LogiMouse's
     /// buttons bring their own releases.
     private func dropLostReleases() {
+        if gestures.rightHeld, pressedButtons() & 2 == 0 {
+            _ = gestures.release(.right, at: ProcessInfo.processInfo.systemUptime)
+            rearm()
+        }
         guard appKitFilter.hasHeld else { return }
-        for b in appKitFilter.lostReleases(pressedButtons: NSEvent.pressedMouseButtons) {
+        for b in appKitFilter.lostReleases(pressedButtons: pressedButtons()) {
             DebugLog.log("mouse button \(b.rawValue) up without a release, dropped")
             gestures.drop(b)
             rearm()

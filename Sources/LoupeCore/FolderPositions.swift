@@ -11,6 +11,7 @@ public final class FolderPositions: @unchecked Sendable {
 
     private struct Entry { var file: String; var view: SavedView?; var tick: Int; var visit: FolderVisit? = nil }
 
+    public let fileViews: FileViewHistory
     private let database: StateDatabase?
     private let capacity: Int
     private let debounce: Duration
@@ -29,6 +30,7 @@ public final class FolderPositions: @unchecked Sendable {
     /// in memory.
     public init(database: StateDatabase?, capacity: Int = defaultCapacity, debounce: Duration = .seconds(2)) {
         self.database = database
+        self.fileViews = FileViewHistory(database: database)
         self.capacity = max(1, capacity)
         self.debounce = debounce
         try? database?.perform { db in
@@ -129,6 +131,7 @@ public final class FolderPositions: @unchecked Sendable {
     /// Writes pending changes now and waits for the write; for quitting.
     public func flush() {
         queue.sync { write() }
+        fileViews.flush()
     }
 
     /// One transaction for everything changed since the last write: each changed folder's row is replaced or
@@ -181,6 +184,7 @@ extension FolderPositions: PathMoving {
     /// A rename in the file browser: the folders at or under `from` move, and a folder's photo that was renamed keeps
     /// its place under the new name.
     public func movePaths(from: URL, to: URL) {
+        fileViews.movePaths(from: from, to: to)
         let move = PathMove(from: from, to: to)
         let schedule = lock.withLock { () -> Bool in
             for (key, entry) in entries {

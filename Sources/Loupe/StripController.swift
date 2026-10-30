@@ -71,6 +71,7 @@ extension Notification.Name {
     private let reveal = FilmstripRevealView()
     private let session: ViewerSession
     private let store: ThumbnailStore
+    private let photosLibrary: any PhotosLibraryAccess
     private let aspects: StripAspects
     private var heightConstraint: NSLayoutConstraint!
 
@@ -147,6 +148,16 @@ extension Notification.Name {
     /// the file differs or the size is off. Pictures in flight, and when each visible file came into view.
     private var given: [Int: (url: URL, maxPixel: Int)] = [:]
     private var loads: [Int: Task<Void, Never>] = [:]
+    private var photosWorkVisible = true
+
+    func setPhotosWorkVisible(_ visible: Bool) {
+        guard visible != photosWorkVisible else { return }
+        photosWorkVisible = visible
+        if !visible, files.first.flatMap(PhotosLocation.asset(in:)) != nil {
+            loads.values.forEach { $0.cancel() }
+            loads = [:]
+        } else if visible { loadVisible() }
+    }
     /// The decoded picture each file's cell holds, by file (the same images the view shows, so no memory of their own):
     /// the viewer's stand-in for a photo navigated to (`cellPicture`).
     private var pictures: [URL: CGImage] = [:]
@@ -172,9 +183,10 @@ extension Notification.Name {
 
     private var isMoving: Bool { scroll.isMoving || dragging }
 
-    init(session: ViewerSession, store: ThumbnailStore) {
+    init(session: ViewerSession, store: ThumbnailStore, photosLibrary: any PhotosLibraryAccess = PhotosLibrary.shared) {
         self.session = session
         self.store = store
+        self.photosLibrary = photosLibrary
         aspects = session.stripAspects
         super.init()
         // A file the viewer or Home found broken: its cell shows so at once, as one whose thumbnail failed.
@@ -482,6 +494,10 @@ extension Notification.Name {
 
     private func hide() {
         guard isShown else { return }
+        if files.first.flatMap(PhotosLocation.asset(in:)) != nil {
+            loads.values.forEach { $0.cancel() }
+            loads = [:]
+        }
         isShown = false
         view.acceptsMouse = false   // clicks reach the picture while it fades
         dropHover()
@@ -784,6 +800,9 @@ extension Notification.Name {
     private func visibleChanged() {
         let visible = view.visibleItems, now = ContinuousClock.now
         let set = Set(visible)
+        if files.first.flatMap(PhotosLocation.asset(in:)) != nil {
+            for (file, task) in loads where !set.contains(file) { task.cancel(); loads[file] = nil }
+        }
         inViewSince = inViewSince.filter { set.contains($0.key) }
         for file in visible where inViewSince[file] == nil { inViewSince[file] = now }
         loadVisible()
@@ -814,6 +833,7 @@ extension Notification.Name {
     /// asks once, for the final pixel size). Pictures far from the window are dropped.
     private func loadVisible() {
         guard isShown, !resizing, !closed else { return }
+        if !photosWorkVisible, files.first.flatMap(PhotosLocation.asset(in:)) != nil { return }
         let moving = isMoving, now = ContinuousClock.now
         for file in view.visibleItems where files.indices.contains(file) && loads[file] == nil && !isSettled(file) {
             if moving, let since = inViewSince[file], now - since < ViewerSession.dwellDelay { continue }
@@ -839,8 +859,10 @@ extension Notification.Name {
         let url = files[file], store = self.store, maxPixel = maxPixel(forFile: file)
         let applies = appliesOrientation
         loads[file] = Task { [weak self] in
-            let image = await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies)
-            let status = image == nil ? await store.status(url) : .ready
+            let photo = PhotosLocation.asset(in: url) != nil
+            let image = if photo { try? await self?.photosLibrary.thumbnail(url, pixels: maxPixel) }
+                        else { await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies) }
+            let status = image == nil ? (photo ? .unavailable : await store.status(url)) : .ready
             guard let self, !Task.isCancelled else { return }
             self.loads[file] = nil
             // Another playlist meanwhile: this file is someone else's cell now.
@@ -851,7 +873,7 @@ extension Notification.Name {
                 self.aspects.cellPictureArrived(url)
             } else if status == .unavailable {
                 self.view.setUnavailable(forItem: file)
-                if await store.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.session.playlist?.stamps[url]) }
+                if !photo, await store.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.session.playlist?.stamps[url]) }
             } else {
                 self.view.setImage(nil, forItem: file)
             }
@@ -1073,7 +1095,7 @@ extension Notification.Name {
         labelled = file
         view.showLabel(item: file, text: label(file))
         let url = files[file]
-        guard labelFacts[url] == nil else { return }
+        guard url.isFileURL, labelFacts[url] == nil else { return }
         let store = store
         Task { @MainActor [weak self] in
             guard let facts = await store.facts([url])[url], let self else { return }

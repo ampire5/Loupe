@@ -2,6 +2,12 @@ import AppKit
 import LoupeCore
 
 #if DEBUG
+if CommandLine.arguments.contains("--file-view-history-bench") {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await FileViewHistoryBench.run() }
+        NSApplication.shared.run()
+    }
+}
 if CommandLine.arguments.contains("--native-toolbar-bench")
     || Bundle.main.object(forInfoDictionaryKey: "LoupeNativeToolbarBench") as? Bool == true {
     MainActor.assumeIsolated {
@@ -16,6 +22,13 @@ if CommandLine.arguments.contains("--native-toolbar-bench")
 if CommandLine.arguments.dropFirst().contains("--print-input-conf") {
     print(InputConfTemplate.text, terminator: InputConfTemplate.text.hasSuffix("\n") ? "" : "\n")
     exit(0)
+}
+
+if CommandLine.arguments.contains("--photos-read-bench") {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await PhotosReadBench.run() }
+        NSApplication.shared.run()
+    }
 }
 
 if CommandLine.arguments.contains("--smartzoom-bench") {

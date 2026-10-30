@@ -3,6 +3,7 @@ import SlotModel
 import HomeChrome
 import HomeScreenKit
 import InfoPanelKit
+import LoupeInspector
 import LoupeCore
 import LoupeRender
 import StashKitUI
@@ -48,6 +49,16 @@ import UniformTypeIdentifiers
     }
     /// The Home tab a gallery being entered returns to (Recent when a Recent card opened it).
     private var galleryReturn = HomeTab.stash
+    private var photosTask: Task<Void, Never>?
+    private var photosObservation: (any PhotosChangeObservation)?
+    private var photosAlbum: String?
+    private var photosGeneration = 0
+    private var photosIsVisible = true
+    private var photosNeedsRefresh = false
+    private var photosWantedAsset: String?
+    private var photosPendingOpen = false
+    private let photosLibrary: any PhotosLibraryAccess
+    private let photosSorts: PhotosSortStore
     private let thumbnails: ThumbnailStore
     /// The Stash gallery last entered from this tab's Stash, or stepped to in its list, and its folder (or zip): the tab
     /// shows that gallery while it is in that folder (another open leaves it).
@@ -57,9 +68,6 @@ import UniformTypeIdentifiers
     /// Asked before a gallery clicked in this tab's Stash is opened: true when it was handled elsewhere (the registry
     /// switched to a tab showing it), and this tab stays on Stash.
     var onStashPick: ((StashGalleryPick) -> Bool)?
-    /// "‹ Recent" or "‹ Stash" (`backTarget`: whenever a photo is open), with the strip.
-    private let backButton = BackButton()
-    private var backButtonShown = false
     /// The app's per-folder values, which `S` and `A` write for this window's folder.
     private let folderSettings: FolderSettings
     /// The folder of the photo on screen (standardized), whose values the window's scaling takes; nil before the
@@ -80,9 +88,6 @@ import UniformTypeIdentifiers
     private var shownWarnings: [String] = []
     private let warningsBelowBar: NSLayoutConstraint
     private let warningsAtTop: NSLayoutConstraint
-    /// The back button's top: under the image status in a window, else from the window's top.
-    private let backBelowBar: NSLayoutConstraint
-    private let backAtTop: NSLayoutConstraint
     private let viewerAtTop: NSLayoutConstraint
     /// The pan pills' top: below the toolbar in a window, the container's top in full screen.
     private let pillsAtTop: NSLayoutConstraint
@@ -101,12 +106,15 @@ import UniformTypeIdentifiers
         stats: { [weak self] in self?.toggleStats() },
         strip: { [weak self] in self?.strip.togglePin() },
         info: { [weak self] in self?.toggleInfoPanel(nil) },
-        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() })
+        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() },
+        statusAction: { [weak self] action in self?.performStatusAction(action) },
+        statusChoices: { [weak self] in self?.statusChoices() ?? .init() })
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
     private let windowToolbarController = WindowToolbarController()
     private var isFullScreen = false
+    private var isEnteringFullScreen = false
     /// Full screen: AppKit reveals the toolbar together with the menu bar and window controls;
-    /// `⌥⌘T` disables or enables the viewer's toolbar. Home uses the same native reveal. The stats bar (`I`) is shown over the
+    /// `⌥⌘T` disables or enables the viewer's toolbar. Home pins the same native toolbar, as Photos does. The stats bar (`I`) is shown over the
     /// picture on its own.
     private var fullScreenToolbarOverride: Bool?
     private var fullScreenToolbar: Bool {
@@ -128,7 +136,10 @@ import UniformTypeIdentifiers
         get { UserDefaults.standard.object(forKey: "viewerToolbar") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "viewerToolbar") }
     }
-    private var toolbarWanted: Bool { isFullScreen ? fullScreenToolbar : windowToolbar }
+    private let windowedToolbarReveal = WindowToolbarRevealController(hideDelay: Chrome.Motion.duration(Chrome.Motion.hide))
+    private var toolbarPinnedOverride: Bool?
+    private var viewerToolbarPinned: Bool { toolbarPinnedOverride ?? (!isFullScreen && windowToolbar) }
+    private var toolbarWanted: Bool { viewerToolbarPinned || (isFullScreen ? fullScreenToolbar : windowToolbar) }
     /// What the window's toolbar was last told, so the system's slide-in in full screen is not pinned by telling it again.
     private var toolbarWasWanted = true
     /// Remembered like the windowed `statsMode`, for the next full screen.
@@ -196,22 +207,26 @@ import UniformTypeIdentifiers
     }
 
     init(cache: ImageCache<MetalPyramidLoader>, thumbnails: ThumbnailStore, thumbnailsReady: Task<Void, Never>?,
-         positions: FolderPositions, folderSettings: FolderSettings, recent: RecentStore?) {
+         positions: FolderPositions, folderSettings: FolderSettings, recent: RecentStore?,
+         photosLibrary: any PhotosLibraryAccess = PhotosLibrary.shared, photosSorts: PhotosSortStore? = nil) {
+        self.photosLibrary = photosLibrary
+        self.photosSorts = photosSorts ?? .shared
         self.folderSettings = folderSettings
         self.thumbnails = thumbnails
-        session = ViewerSession(cache: cache, thumbnails: thumbnails, thumbnailsReady: thumbnailsReady, positions: positions)
+        session = ViewerSession(cache: cache, thumbnails: thumbnails, thumbnailsReady: thumbnailsReady,
+                                positions: positions, photosLibrary: photosLibrary)
         session.recent = recent
         // No photo yet, so no folder: the effective config is loupe.conf's.
         appliedResampling = ResampleSettings(config: Settings.shared.config)
         viewerView = ViewerView(session: session, resampling: appliedResampling)
-        strip = StripController(session: session, store: thumbnails)
+        strip = StripController(session: session, store: thumbnails, photosLibrary: photosLibrary)
         // The content runs under the title bar and the toolbar Home brings, as Home's grid does; the viewer's parts hold to
         // `contentLayoutGuide` (the area below them), so under a bare title bar they stand where they always stood.
         let window = ViewerWindow(contentRect: Self.initialFrame(),
                                   styleMask: [.titled, .resizable, .closable, .miniaturizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
         window.toolbarStyle = .unified
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         window.titleVisibility = .hidden
         window.title = "Loupe"
         window.collectionBehavior = .fullScreenPrimary
@@ -242,15 +257,12 @@ import UniformTypeIdentifiers
         container.addSubview(loadingIndicator)
         // Over the strip too, centred above it; takes no clicks.
         container.addSubview(toast)
-        container.addSubview(backButton)
         // Over everything, top centre; the sibling's hit test passes every click outside the box through.
         container.addSubview(warningsOverlay)
         // Over everything, the whole window: while open it takes every click (see CheatSheetView).
         container.addSubview(cheatSheet)
         warningsBelowBar = warningsOverlay.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 8)
         warningsAtTop = warningsOverlay.topAnchor.constraint(equalTo: top, constant: 8)
-        backBelowBar = backButton.topAnchor.constraint(equalTo: statsBar.bottomAnchor, constant: 16)
-        backAtTop = backButton.topAnchor.constraint(equalTo: top, constant: 16)
         let overlayWidth = warningsOverlay.widthAnchor.constraint(lessThanOrEqualToConstant: 640)
         let overlayFits = warningsOverlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32)
         let overlayShort = warningsOverlay.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor, constant: -100)
@@ -289,7 +301,6 @@ import UniformTypeIdentifiers
             loadingIndicator.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor, constant: -12),
             loadingIndicator.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -10),
             toast.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
-            backButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             cheatSheet.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             cheatSheet.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             cheatSheet.topAnchor.constraint(equalTo: top),
@@ -302,6 +313,11 @@ import UniformTypeIdentifiers
             session.smartZoom = SmartZoomState(restoring: remembered)
             tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
         }
+        viewerToolbar.onZoomModesChange = { [weak self] old, new in
+            guard let self else { return }
+            windowToolbarController.replaceItem(old, with: new, source: viewerToolbar.nsToolbar)
+        }
+        viewerToolbar.attach(to: window)
         windowToolbarController.show(viewerToolbar.nsToolbar)
         window.toolbar = windowToolbarController.toolbar
         toolbarWasWanted = windowToolbar
@@ -323,10 +339,8 @@ import UniformTypeIdentifiers
             guard let self, let at = self.spreadKeyTime, ProcessInfo.processInfo.systemUptime - at < 2 else { return }
             self.toast.show(SpreadKeys.toast(on: true, refusal: refusal))
         }
-        backButton.translatesAutoresizingMaskIntoConstraints = false
-        backButton.alphaValue = 0
-        backButton.isHidden = true
-        backButton.onClick = { [weak self] in self?.goBack(nil) }
+        windowedToolbarReveal.onVisibilityChange = { [weak self] in self?.applyStatsLayout() }
+        viewerView.onToggleToolbarPin = { [weak self] in self?.toggleToolbarPin() }
         viewerView.onToggleStats = { [weak self] in self?.toggleStats() }
         viewerView.onToggleStrip = { [weak self] in self?.strip.togglePin() }
         viewerView.onToggleStripPlacement = { [weak self] in self?.strip.togglePlacement() }
@@ -344,7 +358,6 @@ import UniformTypeIdentifiers
         }
         viewerView.subjectOverlayView.onSettled = { [weak self] url, transform in self?.lookAtCrop(url, transform) }
         viewerView.onTabAction = { [weak self] in self?.tabAction($0) }
-        viewerView.onPointerMoved = { [weak self] in self?.pointerMoved() }
         viewerView.isCovered = { [weak self] in self?.isShowingHome ?? false }
         viewerView.onAdjust = { [weak self] key, step, steps in self?.adjust(key: key, step: step, steps: steps) }
         viewerView.onToast = { [weak self] text in self?.toast.show(text) }
@@ -410,7 +423,6 @@ import UniformTypeIdentifiers
         strip.onToast = { [weak self] in self?.toast.show($0) }
         strip.onShownChange = { [weak self] in
             self?.infoPanel.place()
-            self?.updateBackButton()
             self?.layoutFolderSlots()
         }
         // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
@@ -425,7 +437,10 @@ import UniformTypeIdentifiers
                 MainActor.assumeIsolated { if let self { action(self) } }
             })
         }
-        observe(NSWindow.willEnterFullScreenNotification) { $0.setFullScreen(true) }
+        observe(NSWindow.willEnterFullScreenNotification) {
+            $0.isEnteringFullScreen = true
+            $0.setFullScreen(true)
+        }
         observe(NSWindow.didExitFullScreenNotification) { $0.setFullScreen(false) }
         observe(NSWindow.didChangeScreenNotification) { $0.updateScreenSize() }
         // The panel's diagnostics refresh only while the window can be seen.
@@ -524,6 +539,8 @@ import UniformTypeIdentifiers
 
     /// The window goes away: nothing it does from here on is the user's choice of full screen or not.
     func windowWillClose(_ notification: Notification) {
+        stopPhotos()
+        homeSources?.home.photos.stop()
         dropStash()
         homeView?.browser.stop()
         homeSources?.folders.stop()
@@ -545,6 +562,8 @@ import UniformTypeIdentifiers
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
+        isEnteringFullScreen = false
+        applyFullScreenToolbar()
         applyStatsLayout()
         rememberFullScreen(true)
         viewerView.holdReveal(false)
@@ -620,17 +639,22 @@ import UniformTypeIdentifiers
     /// The longest a launch holds the photo back for the full-screen animation (about 0.5–1 s on its own).
     private static let revealTimeout: TimeInterval = 3
 
-    /// One native reveal for the toolbar, menu bar and window controls. Keep the same
-    /// presentation policy on Home and in the viewer; independently toggling isVisible
-    /// at the screen edge reveals the toolbar before AppKit reserves the controls' inset.
+    /// The initial native policy. Later Home/viewer switches change the existing
+    /// toolbar's autohiding policy, keeping AppKit in charge of its host and reveal.
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        proposed.union(.autoHideToolbar)
+        // Delegate can run before willEnter sets isFullScreen: only an explicit
+        // B pin carries into full screen, not legacy windowed toolbar visibility.
+        let pinned = toolbarPinnedOverride == true
+        let autohiding = (!isShowingHome && !pinned) || !windowToolbarController.supportsFullScreenAutohiding
+        windowToolbarController.prepareForFullScreen(autohiding: autohiding)
+        return autohiding ? proposed.union(.autoHideToolbar) : proposed.subtracting(.autoHideToolbar)
     }
 
     /// A failed enter reverts the layout chosen at `willEnterFullScreen`. (There is no matching failure
     /// callback for exit: the window stays in full screen then, and so does the layout.)
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        isEnteringFullScreen = false
         setFullScreen(false)
         viewerView.holdReveal(false)
         finishFullScreenEntry()
@@ -724,7 +748,7 @@ import UniformTypeIdentifiers
     /// is its session's id, the window its tab group as it is now.
     func tabFacts(rank: Int) -> TabFacts {
         let current = isShowingHome ? nil : session.playlist?.current.standardizedFileURL
-        let folder = current.map(OpenRouter.folder(of:))
+        let folder = current.flatMap { $0.isFileURL ? OpenRouter.folder(of: $0) : nil }
         let gallery = stashGallery.flatMap { $0.folder.path == folder?.path ? $0.id : nil }
         let group = window.map { $0.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier($0) }
         return TabFacts(tab: session.cacheID.raw, window: group.map { Int(bitPattern: $0) } ?? 0, current: current,
@@ -736,6 +760,8 @@ import UniformTypeIdentifiers
     /// (spec §2.3). `returnTo`: the Home tab ⌘W goes back to (a Recent card opened it here); nil: as from Stash.
     func open(_ target: OpenTarget, stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil) {
         switch target {
+        case .photos(let album, let asset):
+            openPhotos(album: album, asset: asset)
         case .file(let url): open(url)
         case .folder(let url): openFolder(url)
         case .stashGallery:
@@ -751,6 +777,11 @@ import UniformTypeIdentifiers
     }
 
     func open(_ url: URL) {
+        if let album = PhotosLocation.album(in: url), let asset = PhotosLocation.asset(in: url) {
+            openPhotos(album: album, asset: asset)
+            return
+        }
+        stopPhotos()
         // A file from outside while Stash is shown: the viewer comes back, and ⌘W returns to Stash.
         if isShowingHome {
             returnsTo = shownTab
@@ -766,6 +797,7 @@ import UniformTypeIdentifiers
     /// without photos of its own (only subfolders) or that cannot be listed shows in Folders instead, where its
     /// subfolders or the reason are, rather than leaving an empty viewer.
     private func openFolder(_ url: URL) {
+        stopPhotos()
         if isShowingHome {
             returnsTo = shownTab
             hideHome()
@@ -816,7 +848,7 @@ import UniformTypeIdentifiers
     /// The photo on screen (in a Stash gallery or not), or nil. With two pages on screen, the current page: a restored
     /// tab opens the pair containing it.
     private func viewerTab() -> SessionSnapshot.Tab? {
-        guard let current = session.playlist?.current else { return nil }
+        guard let current = session.playlist?.current, current.isFileURL else { return nil }
         let view = session.currentViewText
         if let gallery = stashGallery, gallery.folder == OpenRouter.folder(of: current) {
             return .gallery(id: gallery.id, list: stashList?.variables, index: stashList?.index, count: stashList?.count,
@@ -875,7 +907,9 @@ import UniformTypeIdentifiers
     private func updateTitle() {
         let home = isShowingHome ? shownTab : nil
         let text: String
-        if home == nil, let pending {
+        if home == nil, let list = session.playlist, list.isSourceOrdered {
+            text = "\(list.index + 1) / \(list.files.count) · \(list.current.lastPathComponent)"
+        } else if home == nil, let pending {
             text = WindowTitle.text(of: pending)
         } else {
             // A pair names both pages, in reading order (spread spec, «Положение»).
@@ -951,6 +985,7 @@ import UniformTypeIdentifiers
     func showHome(tab: HomeTab? = nil) {
         folderSlots?.setActive(false)
         guard let window else { return }
+        windowedToolbarReveal.setEnabled(false, for: window)
         let returningFromViewer = !isShowingHome
         let config = Settings.shared.config
         let wanted = tab ?? config.homeTab
@@ -959,19 +994,27 @@ import UniformTypeIdentifiers
         if !isShowingHome { titleVisibilityBeforeHome = window.titleVisibility }
         attachHome(view)
         view.isHidden = false
-        window.titlebarAppearsTransparent = true
+        // Photos' UXKit window also uses a unified, nontransparent titlebar:
+        // AppKit owns its material backdrop. Transparency exposes a split fill.
+        window.titlebarAppearsTransparent = false
+        strip.setPhotosWorkVisible(false)
+        session.setPhotosViewerVisible(false)
         window.titleVisibility = .hidden
         windowToolbarController.show(view.browser.nsToolbar)
-        // Home's toolbar stays enabled; in full screen AppKit handles its auto-hide.
+        // Home keeps its native toolbar visible in full screen, as Photos' grid does.
         if !windowToolbarController.toolbar.isVisible { windowToolbarController.toolbar.isVisible = true }
         view.sidebarWidth = CGFloat(config.homeSidebarWidth)
         view.isSidebarVisible = config.homeSidebar
         view.isParked = false
         homeSources?.folders.isPaused = false
+        homeSources?.home.photos.isPaused = !photosIsVisible
         applyBrowserSettings()
         returnsTo = nil
         let browser = view.browser
-        if shown == .folders {
+        if returningFromViewer, let current = session.playlist?.current, let album = PhotosLocation.album(in: current),
+           tab == nil || tab == .recent {
+            browser.show(.source(PhotosLocation.collection(album)), selecting: current.absoluteString)
+        } else if shown == .folders {
             if let start = browseAt ?? (returningFromViewer ? session.playlist.map { BrowseTarget.location(for: $0.current) } : nil) {
                 browser.lastOpenedID = start.select
                 browser.show(start.location, selecting: start.select)
@@ -988,6 +1031,9 @@ import UniformTypeIdentifiers
             if browser.location == location, hasShownHome { browser.reload() } else { browser.show(location, selecting: nil) }
         }
         hasShownHome = true
+        applyFullScreenToolbar()
+        applyInfoPanel()
+        updateBrowserInspectorActivity()
         if shown != .stash { window.makeFirstResponder(browser) }
         DebugLog.log("home shown: \(shown)")
         updateTitle()
@@ -995,10 +1041,14 @@ import UniformTypeIdentifiers
     }
 
     func hideHome() {
-        folderSlots?.setActive(session.playlist != nil)
+        folderSlots?.setActive(session.playlist?.current.isFileURL == true)
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
+        strip.setPhotosWorkVisible(photosIsVisible)
+        session.setPhotosViewerVisible(photosIsVisible)
         homeView.isParked = true
+        updateBrowserInspectorActivity()
+        applyInfoPanel()
         windowToolbarController.show(viewerToolbar.nsToolbar)
         // Restore whether the viewer's toolbar is enabled. In full screen it stays
         // attached and AppKit reveals it with the native window controls.
@@ -1008,12 +1058,14 @@ import UniformTypeIdentifiers
             window?.toolbar?.isVisible = toolbarWanted
         }
         toolbarWasWanted = toolbarWanted
-        window?.titlebarAppearsTransparent = true
+        window?.titlebarAppearsTransparent = false
         if let titleVisibilityBeforeHome {
             window?.titleVisibility = titleVisibilityBeforeHome
             self.titleVisibilityBeforeHome = nil
         }
         homeSources?.folders.isPaused = true
+        homeSources?.home.photos.stop()
+        homeSources?.home.photos.isPaused = true
         updateBackButton()
         window?.makeFirstResponder(viewerView)
         updateTitle()
@@ -1043,6 +1095,33 @@ import UniformTypeIdentifiers
         folderSettings.set(key, FolderAdjust.text(value), for: folder)
     }
 
+    private func statusChoices() -> ViewerStatusChoices {
+        let rules = ZoomRules(config: effectiveConfig)
+        let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
+        let groups = boxes.map { boxes in rules.stepKinds.filter {
+            SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
+        } } ?? []
+        return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
+                     groups: groups, selectedGroup: session.browse.followed)
+    }
+
+    private func performStatusAction(_ action: ViewerStatusAction) {
+        switch action {
+        case .position(let index):
+            guard let count = session.playlist?.files.count, (0..<count).contains(index) else { return }
+            session.scrub(to: index)
+            session.endScrub()
+        case .zoomPercent(let percent): viewerView.setManualZoom(percent: percent)
+        case .mode(let mode): setSmartZoomMode(mode)
+        case .profile(let name): setDetector(name == "Vision" ? nil : name)
+        case .group(let kind):
+            session.browse.followed = kind
+            viewerView.frameSubjectNow()
+            folderSlots?.refreshSmartZoom()
+        default: break // Info, key bindings and steps are routed by the toolbar's existing actions.
+        }
+    }
+
     private func performViewerAction(_ action: KeyAction) {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.representedObject = action.rawValue
@@ -1066,6 +1145,8 @@ import UniformTypeIdentifiers
 
     /// Home: the sidebar and the browser, made on first show; nil until then.
     private var homeView: HomeView?
+    private var browserInspector: BrowserInspectorController?
+    private var browserWindowIsVisible = true
     private var titleVisibilityBeforeHome: NSWindow.TitleVisibility?
     /// Home's sources (the view holds its source weakly: kept here).
     private var homeSources: (folders: FolderBrowserSource, collections: CollectionSource, home: LoupeHomeSource)?
@@ -1089,8 +1170,27 @@ import UniformTypeIdentifiers
             self?.attachedStash()?.container
         })
         let source = LoupeHomeSource(folders: folders, collections: collections,
-                                     hasStash: { StashLibrary.Source.current != nil })
+                                     hasStash: { StashLibrary.Source.current != nil },
+                                     photos: PhotosBrowserSource(library: photosLibrary, sorts: photosSorts))
+        // Keep the browser inside its native safe area. Extending list/card
+        // edges under the titlebar reflects their text into the toolbar backdrop.
         let view = HomeView(source: source)
+        view.browser.selectsOnHover = false
+        let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
+        view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
+            let inspector = BrowserInspectorController(thumbnails: thumbnails)
+            self?.browserInspector = inspector
+            inspector.onClose = { [weak view] in view?.isInspectorVisible = false }
+            inspector.loader.select(view?.browser.selectedEntry)
+            return inspector
+        }
+        view.onInspectorWidthChange = { UserDefaults.standard.set(Double($0), forKey: "browserInspector.width") }
+        view.onInspectorVisibilityChange = { [weak self] visible in
+            UserDefaults.standard.set(visible, forKey: "browserInspector.visible")
+            self?.updateBrowserInspectorActivity()
+        }
+        view.isInspectorVisible = UserDefaults.standard.bool(forKey: "browserInspector.visible")
+        view.browser.onSelectionChange = { [weak self] entry in self?.browserInspector?.loader.select(entry) }
         source.view = view.browser
         view.browser.unreadable = .app
         // A photo's exposure (else its pixels and size) under its name when names are below (file-cards spec).
@@ -1106,6 +1206,8 @@ import UniformTypeIdentifiers
         }
         browser.onLocation = { [weak self] location in
             guard let self else { return }
+            if self.photosTask != nil, let album = self.photosAlbum,
+               location != .source(PhotosLocation.collection(album)) { self.stopPhotos() }
             // A write to Loupe.db: off the main thread, in the order of the moves.
             if case .folder(let url) = location { Self.placesWriter.async { places.lastFolder = url } }
             let tab = HomeCollections.tab(of: location)
@@ -1147,6 +1249,7 @@ import UniformTypeIdentifiers
             self.registry?.open(folder ? .folder(url) : .file(url), openIn: .replace, from: self)
         }
         folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
+        source.photos.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
         // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done. The popover (View ›
         // Thumbnails…) has the counts whether or not anything is being prepared (`ThumbsProgress.display`).
@@ -1322,7 +1425,109 @@ import UniformTypeIdentifiers
     private func openFromBrowser(_ target: OpenTarget, _ how: HomeClick) {
         DebugLog.measureTurn("open from browser")
         let force: OpenForce? = how == .openNewTab ? .tab : how == .openNewWindow ? .window : nil
-        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: .folders)
+        let returnTo: HomeTab = if case .photos = target { .recent } else { .folders }
+        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: returnTo)
+    }
+
+    private func stopPhotos() {
+        photosGeneration += 1
+        photosTask?.cancel()
+        photosTask = nil
+        photosObservation = nil
+        photosAlbum = nil
+        photosNeedsRefresh = false
+        photosWantedAsset = nil
+        photosPendingOpen = false
+    }
+
+    /// WindowRegistry supplies selected-tab visibility, including tab switches without an occlusion event.
+    func photosVisibilityChanged(_ visible: Bool) {
+        photosIsVisible = visible
+        session.setPhotosViewerVisible(visible && !isShowingHome)
+        homeSources?.home.photos.isPaused = !visible || !isShowingHome
+        strip.setPhotosWorkVisible(visible && !isShowingHome)
+        if !visible, photosTask != nil {
+            photosTask?.cancel()
+            photosTask = nil
+            photosNeedsRefresh = true
+        }
+        let current = session.playlist.map(\.current)
+        let selected = photosPendingOpen ? photosWantedAsset : current.flatMap(PhotosLocation.asset(in:))
+        if visible, photosNeedsRefresh, photosPendingOpen || !isShowingHome, let album = photosAlbum,
+           let asset = selected {
+            let refreshing = !photosPendingOpen && current.flatMap(PhotosLocation.album(in:)) == album
+            photosNeedsRefresh = false
+            openPhotos(album: album, asset: asset, refreshing: refreshing)
+        }
+    }
+
+    private var photosViewerSort: BrowserSort?
+
+    private func openPhotos(album: String, asset: String, refreshing: Bool = false) {
+        let sort = refreshing && photosAlbum == album ? photosViewerSort ?? photosSorts.sort(for: PhotosLocation.collection(album))
+            : photosSorts.sort(for: PhotosLocation.collection(album))
+        photosViewerSort = sort
+        photosTask?.cancel()
+        photosGeneration += 1
+        let generation = photosGeneration
+        if photosAlbum != album { photosObservation = nil }
+        photosAlbum = album
+        photosWantedAsset = asset
+        photosPendingOpen = !refreshing
+        photosTask = Task { [weak self] in
+            do {
+                guard let library = self?.photosLibrary else { return }
+                try await library.authorize()
+                let assets = try await library.assets(in: album)
+                let files = await Task.detached(priority: .userInitiated) {
+                    sort.order(PhotosAlbumListing.entries(assets, album: album)).map(\.url)
+                }.value
+                guard let self, !self.isClosed, !Task.isCancelled, self.photosGeneration == generation else { return }
+                self.photosTask = nil
+                self.photosPendingOpen = false
+                self.photosNeedsRefresh = false
+                guard !files.isEmpty else {
+                    self.showHome(tab: .recent)
+                    self.homeView?.browser.show(.source(PhotosLocation.collection(album)), selecting: nil)
+                    return
+                }
+                let selected = refreshing ? self.session.playlist.map(\.current).flatMap(PhotosLocation.asset(in:)) ?? asset : asset
+                let selectedIndex = files.firstIndex { PhotosLocation.asset(in: $0) == selected }
+                    ?? min(self.session.playlist?.index ?? 0, files.count - 1)
+                let current = files[selectedIndex]
+                if !refreshing {
+                    self.restoredTab = nil
+                    self.stashPicks.cancel()
+                    self.hideHome()
+                    self.returnsTo = .recent
+                }
+                let previous = self.session.playlist.map(\.current)
+                let samePhoto = previous.flatMap(PhotosLocation.album(in:)) == album
+                    && previous.flatMap(PhotosLocation.asset(in:)) == selected
+                self.session.openPhotos(files, current: current, refreshing: refreshing || samePhoto)
+                if self.photosObservation == nil {
+                    self.photosObservation = library.observeChanges { [weak self] in
+                        Task { @MainActor in
+                            guard let self, self.photosAlbum == album, let current = self.session.playlist?.current,
+                                  let asset = PhotosLocation.asset(in: current) else { return }
+                            self.photosNeedsRefresh = true
+                            if self.photosIsVisible, !self.isShowingHome {
+                                self.openPhotos(album: album, asset: asset, refreshing: true)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                guard let self, !Task.isCancelled, !self.isClosed, self.photosGeneration == generation else { return }
+                self.photosTask = nil
+                self.photosPendingOpen = false
+                if refreshing {
+                    self.showHome(tab: .recent)
+                    self.homeView?.browser.show(.source(PhotosLocation.root), selecting: nil)
+                }
+                self.toast.show(error.localizedDescription)
+            }
+        }
     }
 
     /// The MX side wheel on Home: twelve size steps a turn, right larger (as it zooms a photo in).
@@ -1529,6 +1734,7 @@ import UniformTypeIdentifiers
     /// The gallery of `pick`, whichever tab it was clicked in: asked of Stash, mapped to this Mac (mounting its share),
     /// opened like a folder; Stash goes away only once the gallery is entered, and only for the latest click.
     private func enterFromStash(_ pick: StashGalleryPick) {
+        stopPhotos()
         guard let library = stash else { return }
         let token = stashPicks.begin()
         Task { [weak self] in
@@ -1619,54 +1825,30 @@ import UniformTypeIdentifiers
         RecentGalleryList(variables: list.variables, index: list.index, count: list.count)
     }
 
-    /// "‹ Recent" / "‹ Stash" shows with the strip while Back can go there; it fades as the strip does.
     private static func tabTitle(_ tab: HomeTab) -> String { WindowTitle.title(of: tab) }
 
-    /// The pointer moved: the ‹ button shows within its reveal zone (`BackButtonPolicy`).
-    private func pointerMoved() { updateBackButton() }
-
-    /// The pointer in the button's superview's coordinates; nil outside the window's content.
-    private var pointerInButtonSpace: CGPoint? {
-        guard let window, let container = backButton.superview else { return nil }
-        let p = container.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        return container.bounds.contains(p) ? p : nil
-    }
-
+    /// Keep the return destination on the native toolbar button in both window modes.
     private func updateBackButton() {
-        viewerToolbar.setBackEnabled(canGoBack)
-        let shown = BackButtonPolicy.isShown(wasShown: backButtonShown, pointer: pointerInButtonSpace,
-                                             button: backButton.frame, canGoBack: canGoBack)
-        if let backTarget { backButton.title = Self.tabTitle(backTarget) }
-        guard shown != backButtonShown else { return }
-        backButtonShown = shown
-        if shown { backButton.isHidden = false }
-        infoPanel.place()   // a panel in the top left corner steps below the button, or back up
-        // A soft fade both ways (ease-out in, ease-in out): it comes up as the pointer nears, without a pop.
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = Chrome.Motion.duration(shown ? Chrome.Motion.show : Chrome.Motion.hide)
-            context.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
-            backButton.animator().alphaValue = shown ? 1 : 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.backButtonShown else { return }
-                self.backButton.isHidden = true
-            }
-        })
+        let destination: String?
+        if !canGoBack { destination = nil }
+        else if !isShowingHome, session.playlist?.isSourceOrdered == true { destination = "Photos" }
+        else { destination = backTarget.map(Self.tabTitle) }
+        viewerToolbar.setBackDestination(destination)
     }
 
     /// The one status of the photo on screen, to the stats bar and the toolbar's chip. A move to another photo brings back a
     /// stats bar that hides by itself.
     private func updateStatus() {
+        updateBackButton()
         folderSlots?.refreshSmartZoom()
         let status = session.imageStatus
         askPhotoFacts(status.photo)
         statsBar.update(status)
-        let shown = session.zoomTarget ?? session.transform
-        viewerToolbar.updateStatus(status, zoomMode: shown.mode)
-        viewerToolbar.updateWorkflow(session.smartZoom.mode)
-        viewerToolbar.updateSmartMode(subject: session.smartZoom.mode == .frame,
-                                      screen: effectiveConfig.keepZoomAs == .screen && { if case .free = shown.mode { true } else { false } }(),
-                                      fill: shown.mode == .fill)
+        let shownMode = (session.zoomTarget ?? session.transform).mode
+        let screenShare: Bool
+        if case .free = shownMode { screenShare = effectiveConfig.keepZoomAs == .screen }
+        else { screenShare = false }
+        viewerToolbar.updateStatus(status, zoomMode: shownMode, screenShare: screenShare)
         if !status.navigationKey.isEmpty, status.navigationKey != lastNavigationKey {
             lastNavigationKey = status.navigationKey
             statsBar.reveal()
@@ -1676,7 +1858,7 @@ import UniformTypeIdentifiers
     /// The photo's EXIF for the status chip and the stats bar: its thumbnail's facts (memory or the catalog), else its
     /// header (ImageIO reads only that; the viewer is reading the file anyway). Once per photo.
     private func askPhotoFacts(_ url: URL?) {
-        guard let url, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
+        guard let url, url.isFileURL, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
         if factsAsked.count > 300 { factsAsked = []; session.photoFacts = [:] }
         factsAsked.insert(url)
         let store = thumbnails
@@ -1823,8 +2005,7 @@ import UniformTypeIdentifiers
     /// The custom detector on in `mode` for the folder, or off (nil), remembered at once (owner, 2026-10-28: "чтобы
     /// все было на автомате"): the folder's values, the tab's own dropped. The sizes carried start again from the mode's,
     /// and the photo on screen is framed now.
-    private func setDetector(_ mode: String?, activate: Bool = true) {
-        session.browse.followed = nil
+    private func setDetector(_ mode: String?, activate: Bool = false) {
         let selection = ZoomKeys.profileSelection(mode)
         var values = selection
         if activate && session.smartZoom.mode == .off { values["smart-zoom"] = session.smartZoom.lastEnabled.rawValue }
@@ -1933,8 +2114,8 @@ import UniformTypeIdentifiers
     private var subjectsAsked: String?
 
     private func sessionDidChange() {
-        folderSlots?.synchronize(folder: session.playlist?.current.deletingLastPathComponent())
-        folderSlots?.setActive(!isShowingHome && session.playlist != nil)
+        folderSlots?.synchronize(folder: session.playlist?.current.isFileURL == true ? session.playlist?.current.deletingLastPathComponent() : nil)
+        folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true)
         updateFolder()
         viewerView.sessionDidChange()
         askSubjects()
@@ -1970,7 +2151,7 @@ import UniformTypeIdentifiers
 
     /// The folder of the photo on screen; a step into another folder recomputes the effective config.
     private func updateFolder() {
-        let current = session.playlist?.current.deletingLastPathComponent().standardizedFileURL
+        let current = session.playlist?.current.isFileURL == true ? session.playlist?.current.deletingLastPathComponent().standardizedFileURL : nil
         guard current != folder else { return }
         let previous = folder
         folder = current
@@ -2054,6 +2235,14 @@ import UniformTypeIdentifiers
 
     /// `I` and View › Image Status: windowed hidden ↔ compact, fullscreen hidden ↔ shown.
     private func toggleStats() {
+        if viewerToolbarPinned {
+            toolbarPinnedOverride = false
+            if isFullScreen { fullScreenStatus = true } else { statsMode = .compact }
+            applyFullScreenToolbar()
+            statsBar.reveal()
+            applyStatsLayout()
+            return
+        }
         if isFullScreen {
             fullScreenStatus.toggle()
         } else {
@@ -2063,8 +2252,19 @@ import UniformTypeIdentifiers
         applyStatsLayout()
     }
 
+    func toggleToolbarPin() {
+        toolbarPinnedOverride = !viewerToolbarPinned
+        fullScreenToolbar = true
+        windowToolbar = true
+        applyFullScreenToolbar()
+        applyStatsLayout()
+    }
+
     @objc func toggleViewerToolbar(_ sender: Any?) {
-        if isFullScreen { fullScreenToolbar.toggle() } else { windowToolbar.toggle() }
+        let enabled = !toolbarWanted
+        toolbarPinnedOverride = nil
+        if isFullScreen { fullScreenToolbar = enabled } else { windowToolbar = enabled }
+        applyFullScreenToolbar()
         applyStatsLayout()
     }
 
@@ -2074,6 +2274,7 @@ import UniformTypeIdentifiers
         if on {
             applyFullScreenToolbar()
         } else {
+            windowToolbarController.resetFullScreenAutohiding()
             if !isShowingHome { windowToolbarController.toolbar.isVisible = windowToolbar }
             toolbarWasWanted = windowToolbar
         }
@@ -2191,7 +2392,7 @@ import UniformTypeIdentifiers
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(toggleLeftSlot(_:)), #selector(toggleRightSlot(_:)), #selector(toggleBottomSlot(_:)):
-            return !isShowingHome && session.playlist != nil
+            return !isShowingHome && session.playlist?.current.isFileURL == true
         case #selector(chooseCardStyle(_:)):
             let browser = isShowingHome ? homeView?.browser : nil
             item.state = browser?.canChooseCardStyle == true && CardStyle.allCases.indices.contains(item.tag)
@@ -2216,7 +2417,7 @@ import UniformTypeIdentifiers
         case #selector(toggleStripPlacement(_:)):
             item.state = Settings.shared.config.stripWindow == .beside && !isFullScreen ? .on : .off
         case #selector(toggleStatsBar(_:)):
-            item.state = (isFullScreen ? fullScreenStatus : statsMode != .hidden) ? .on : .off
+            item.state = !isShowingHome && !statsBar.isHidden ? .on : .off
         case #selector(toggleViewerToolbar(_:)):
             item.state = toolbarWanted ? .on : .off
             return !isShowingHome
@@ -2239,7 +2440,7 @@ import UniformTypeIdentifiers
         case #selector(turnDetectorOff(_:)):
             return folder != nil && ZoomRules(config: effectiveConfig).detector != nil
         case #selector(toggleInfoPanel(_:)):
-            item.title = infoPanel.isVisible ? "Hide Info" : "Show Info"
+            item.title = (isShowingHome ? homeView?.isInspectorVisible == true : infoPanel.isVisible) ? "Hide Info" : "Show Info"
         case #selector(pickColourMethod(_:)):
             item.state = (item.representedObject as? String) == effectiveConfig.autoColorMethod.rawValue ? .on : .off
             return folder != nil
@@ -2257,7 +2458,7 @@ import UniformTypeIdentifiers
     /// The viewer ends at the strip's top while the strip is a bar of its own, at the window's bottom otherwise.
     private func layoutFolderSlots() {
         guard let container = window?.contentView else { return }
-        folderSlots?.setActive(!isShowingHome && session.playlist != nil && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
+        folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
         folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - viewerView.frame.maxY),
                             bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
     }
@@ -2284,20 +2485,28 @@ import UniformTypeIdentifiers
     /// bar in full screen, and setting it visible again pins it on screen. Only the viewer's own toolbar is touched, and
     /// only while it is the window's: Home's stays enabled, and `hideHome` puts the viewer's back as it was left.
     private func applyToolbarVisibility() {
-        guard !isClosed, !isShowingHome else { return }
+        guard !isClosed, !isShowingHome, let window else { return }
+        let windowedAuto = !isFullScreen && toolbarPinnedOverride == false && windowToolbar
+        windowedToolbarReveal.setEnabled(windowedAuto, for: window)
         if isFullScreen {
             if toolbarWanted != toolbarWasWanted { toolbarWasWanted = toolbarWanted; applyFullScreenToolbar() }
-            return
+        } else if !windowedAuto {
+            toolbarWasWanted = toolbarWanted
+            if windowToolbarController.toolbar.isVisible != toolbarWanted {
+                windowToolbarController.toolbar.isVisible = toolbarWanted
+            }
         }
-        guard toolbarWanted != toolbarWasWanted else { return }
-        toolbarWasWanted = toolbarWanted
-        windowToolbarController.toolbar.isVisible = toolbarWanted
     }
 
     private func applyFullScreenToolbar() {
         guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { return }
-        let enabled = isShowingHome || fullScreenToolbar
+        let enabled = isShowingHome || viewerToolbarPinned || fullScreenToolbar
         if toolbar.isVisible != enabled { toolbar.isVisible = enabled }
+        // willEnterFullScreen arrives before the native host is ready. didEnter
+        // applies the policy again once AppKit has finished creating that host.
+        if !isEnteringFullScreen, window?.styleMask.contains(.fullScreen) == true {
+            windowToolbarController.setFullScreenAutohiding(!isShowingHome && !viewerToolbarPinned)
+        }
     }
 
     /// The stats bar (`I`) floats over the picture and reserves no room, always at the top: windowed under the toolbar, in
@@ -2307,8 +2516,8 @@ import UniformTypeIdentifiers
         let toolbarWanted = toolbarWanted
         // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it. In full screen the toolbar
         // is not on screen but slides in on demand, so it does not count there: the bar shows as `I` says.
-        let toolbarShown = !isFullScreen && toolbarWanted
-        let visible = (isFullScreen ? fullScreenStatus : statsMode != .hidden)
+        let toolbarShown = viewerToolbarPinned || (!isFullScreen && (window?.toolbar?.isVisible ?? toolbarWanted))
+        let visible = !viewerToolbarPinned && (isFullScreen ? fullScreenStatus : statsMode != .hidden)
             && (Settings.shared.config.statsBarWithToolbar || !toolbarShown)
         statsBar.isHidden = !visible
         guard !isClosed else { return }
@@ -2318,13 +2527,9 @@ import UniformTypeIdentifiers
         if visible {
             warningsAtTop.isActive = false
             warningsBelowBar.isActive = true
-            backAtTop.isActive = false
-            backBelowBar.isActive = true
         } else {
             warningsBelowBar.isActive = false
             warningsAtTop.isActive = true
-            backBelowBar.isActive = false
-            backAtTop.isActive = true
         }
         statsAtTop.isActive = visible
         applyToastRows()
@@ -2377,13 +2582,18 @@ import UniformTypeIdentifiers
 
     /// View › Show Info / Hide Info (`⌘I`): the panel opens or closes in every window.
     @objc func toggleInfoPanel(_ sender: Any?) {
+        if isShowingHome, let homeView {
+            homeView.isInspectorVisible.toggle()
+            return
+        }
         infoPanel.toggle()
         applyInfoPanel()
     }
 
     /// Starts or stops this window's reads for the panel to match what the user wants (`isVisible`, any window's ⌘I).
     private func applyInfoPanel() {
-        let wanted = !isClosed && infoPanel.isVisible
+        infoPanel.isAvailable = !isClosed && !isShowingHome
+        let wanted = !isClosed && !isShowingHome && infoPanel.isVisible
         guard wanted != infoActive else { return }
         infoActive = wanted
         if wanted {
@@ -2421,16 +2631,7 @@ import UniformTypeIdentifiers
             top = min(top, statsBar.frame.minY)
         }
         if strip.isShown { bottom = max(bottom, strip.view.frame.maxY) }
-        let area = CGRect(x: viewer.minX, y: container.bounds.height - top, width: viewer.width, height: max(0, top - bottom))
-        guard backButtonShown else { return area }
-        // The package keeps the place under this key (`keyPrefix` `infoPanel`); none: its default, the top left. While
-        // the panel is on screen its corner is where it is now, so a drag out of the corner leaves the band at once.
-        let stored = PanelPlacement(stored: UserDefaults.standard.string(forKey: "infoPanelPlacement")) ?? .standard
-        let current = infoPanel?.panelFrame.map {
-            CGRect(x: $0.minX, y: container.bounds.height - $0.maxY, width: $0.width, height: $0.height)
-        }
-        return PanelArea.area(area, backButtonShown: true,
-                              corner: PanelArea.corner(current: current, stored: stored, in: area))
+        return CGRect(x: viewer.minX, y: container.bounds.height - top, width: viewer.width, height: max(0, top - bottom))
     }
 
     /// The window's field editor for the panel's values (the package's), nil for any other field.
@@ -2499,8 +2700,9 @@ import UniformTypeIdentifiers
         let info = entry?.info ?? (infoURL == url ? metadata?.header : nil)
         // An archive entry: the archive and its inner path, in the archive's folder (Stash spec §2.4).
         let archive = ArchivePath.split(url)?.archive
+        let photo = PhotosLocation.asset(in: url) != nil
         return InfoFileFacts(name: ArchivePath.displayName(url),
-                             folder: ((archive ?? url).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath,
+                             folder: photo ? "Photos" : ((archive ?? url).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath,
                              fileSize: info?.fileSize ?? statSize, info: info,
                              applyingOrientation: session.appliesOrientation, error: entry?.failure)
     }
@@ -2523,14 +2725,25 @@ import UniformTypeIdentifiers
         statSize = nil
         metadata = nil
         metadataPending = false
-        guard let url else { return }
+        guard let url, url.isFileURL else { return }
         let cache = Self.metadataCache
         metadataTask = Task { [weak self] in
             let stamp = await Task.detached(priority: .utility) { Self.fileStamp(url) }.value
             guard let self, self.infoURL == url else { return }
             self.statSize = stamp.size
             self.updateInfoPanel()   // the size, while the header is read
-            let result = await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+            let version = stamp.size.flatMap { size in stamp.modified.map { FileStamp(modified: $0, size: size) } }
+            let stored: PhotoMetadata?
+            if let version { stored = await self.thumbnails.photoMetadata(for: url, stamp: version) }
+            else { stored = nil }
+            let result: PhotoMetadata
+            if let stored { result = stored }
+            else {
+                result = await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+                if let version, result.modified == version.modified {
+                    await self.thumbnails.keepPhotoMetadata(result, for: url, stamp: version)
+                }
+            }
             guard self.infoURL == url else { return }
             self.slowReadTask?.cancel()
             self.metadata = result
@@ -2558,7 +2771,20 @@ import UniformTypeIdentifiers
 
     /// The frame counter and the 0.5 s timer run while the panel is open and the window can be seen (not closed,
     /// miniaturized or fully occluded): M4a spec §3.5.
+    /// WindowRegistry includes native tab selection, whose occlusion notifications alone are unreliable.
+    func browserVisibilityChanged(_ visible: Bool) {
+        browserWindowIsVisible = visible
+        updateBrowserInspectorActivity()
+    }
+
+    private func updateBrowserInspectorActivity() {
+        let seen = window.map { !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
+        browserInspector?.loader.isActive = !isClosed && browserWindowIsVisible && isShowingHome && homeView?.isInspectorVisible == true && seen
+        if isShowingHome { browserInspector?.loader.select(homeView?.browser.selectedEntry) }
+    }
+
     private func updateDiagnosticsTimer() {
+        updateBrowserInspectorActivity()
         let seen = window.map { !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
         let on = !isClosed && infoActive && seen
         if on != (diagnosticsTimer != nil) { DebugLog.log("info panel diagnostics \(on ? "on" : "off")") }
@@ -2739,6 +2965,32 @@ import UniformTypeIdentifiers
     /// does not change.
     @discardableResult
     private func zoomKey(_ action: KeyAction) -> Bool {
+        if action == .toggleSmartZoom || action == .toggleZoomSet {
+            var state = session.smartZoom; state.togglePower()
+            setSmartZoomMode(state.mode)
+            return true
+        }
+        if action == .manualZoom { setSmartZoomMode(.off); return true }
+        if action == .zoomSubject {
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            else { viewerView.frameSubjectNow() }
+            return true
+        }
+        if action == .toggleStepZoom {
+            session.browse.forgetSizes()
+            setSmartZoomMode(.frame)
+            return true
+        }
+        if action == .nextTarget || action == .previousTarget {
+            if session.smartZoom.mode != .off {
+                viewerView.applySmartZoom(cycleGroup: true, groupDirection: action == .nextTarget ? 1 : -1)
+            }
+            return true
+        }
+        if action == .cycleDetectorMode || action == .previousDetectorMode {
+            setDetector(ZoomKeys.profileAfter(effectiveConfig, direction: action == .cycleDetectorMode ? 1 : -1), activate: false)
+            return true
+        }
         guard let folder else { return false }
         switch action {
         case .rememberZoom:
@@ -2770,17 +3022,6 @@ import UniformTypeIdentifiers
         case .screenShare:
             setTabZoom(ZoomKeys.carryKey, ZoomCarry.screen.rawValue)
             toast.show(ZoomKeys.toast(carry: .screen))
-        case .nextTarget:
-            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
-            viewerView.applySmartZoom(cycleGroup: true)
-        case .cycleDetectorMode:
-            guard let mode = ZoomKeys.modeAfterM(effectiveConfig) else {
-                toast.show("Detector: no model, classes or modes (detector.conf)")
-                return true
-            }
-            setDetector(mode)
-        case .fit:
-            setSmartZoomMode(.off)
         case .saveDetectorSize:
             guard let mode = ZoomRules(config: effectiveConfig).detector, let url = session.entry?.url,
                   let size = session.framedSize(url) else {
@@ -2792,18 +3033,6 @@ import UniformTypeIdentifiers
             let target = ZoomKeys.toggledTarget(effectiveConfig)
             setTabZoom(ZoomKeys.targetKey, target)
             toast.show(ZoomKeys.toast(target: target))
-        case .toggleSmartZoom:
-            var state = session.smartZoom; state.togglePower()
-            setSmartZoomMode(state.mode)
-        case .toggleStepZoom, .zoomSubject:
-            session.browse.followed = nil
-            session.browse.forgetSizes()
-            setSmartZoomMode(.frame)
-        case .manualZoom:
-            setSmartZoomMode(.off)
-        case .toggleZoomSet:
-            var state = session.smartZoom; state.togglePower()
-            setSmartZoomMode(state.mode)
         default:
             break
         }

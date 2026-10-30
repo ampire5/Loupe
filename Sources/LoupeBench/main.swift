@@ -41,8 +41,14 @@ if getenv("MallocLargeCache") == nil {
     fail("cannot re-execute with MallocLargeCache=0 (errno \(errno)); run with MallocLargeCache=0 set")
 }
 
+if CommandLine.arguments.dropFirst().first == "inspector" {
+    InspectorBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
 if CommandLine.arguments.dropFirst().first == "settings" {
     SettingsBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
+if CommandLine.arguments.dropFirst().first == "photos" {
+    PhotosBench.main(Array(CommandLine.arguments.dropFirst(2)))
 }
 if CommandLine.arguments.dropFirst().first == "replay" {
     Replay.main(Array(CommandLine.arguments.dropFirst(2)))

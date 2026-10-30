@@ -89,6 +89,7 @@ public final class StateDatabase: @unchecked Sendable {
     /// The file browser's pinned folders and small values (the last folder), file browser spec §4.2: added to any
     /// version 2 file without a new version, so a Loupe from before the browser still opens it (it never reads them).
     private static let browserTables = """
+        CREATE TABLE IF NOT EXISTS file_views(path TEXT PRIMARY KEY, viewed REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS browser_pins(path TEXT PRIMARY KEY, pinned REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS browser_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """

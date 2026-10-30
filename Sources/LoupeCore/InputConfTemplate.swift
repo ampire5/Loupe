@@ -72,9 +72,12 @@ public enum InputConfTemplate {
     # g toggle-zoom-set                             # Manual / SmartZoom (ordinary numeric presets stay fixed)
     # Alt+g cycle-subject-target                    # zoom to a face / a person / an object / where the eye goes
     # m cycle-detector-mode                         # next SmartZoom profile
+    # Shift+m previous-detector-mode                 # previous SmartZoom profile
     # Alt+s toggle-smart-zoom                       # Manual / SmartZoom; preserves view and profile
-    # M save-detector-size                          # the size on screen as the mode's size (detector.conf)
-    # n next-target                                 # the next target found on the photo
+    # Alt+Shift+m save-detector-size                          # the size on screen as the mode's size (detector.conf)
+    # n next-target                                 # next detected group
+    # Shift+n previous-target                        # previous detected group
+    # b toggle-toolbar-pin                           # pinned toolbar (stats hidden) / auto-hide, also in full screen
     # G toggle-subjects                             # show what Vision found: the subjects, the frame, its centre
     # Alt+Shift+g toggle-step-zoom                  # apply Auto (legacy mouse/key alias)
     # Alt+l remember-zoom                           # the tab's zoom choices for the folder (keys and menu choose for the tab)
@@ -91,7 +94,7 @@ public enum InputConfTemplate {
     # L save-keep-zoom                              # keep zoom as the default for all folders
     # k toggle-zoom-carry                           # a kept zoom keeps the share of the photo / the scale, this folder
     # K save-zoom-carry                             # share / scale as the default for all folders
-    # Z zoom-subject                                # apply Auto using the selected SmartZoom profile (Shift+z)
+    # Z zoom-subject                                # apply the selected SmartZoom mode and profile again (Shift+z)
     # Alt+k cycle-step-pan                          # after a step: the subject / the same place / the centre, this folder
     # Alt+K save-step-pan                           # after a step as the default for all folders
     # Alt+z cycle-zoom-anchor                       # gesture zoom towards the pointer / the centre / the subject
@@ -161,23 +164,24 @@ public enum InputConfTemplate {
     # TP_CLICK_UP previous-tab                      # click held + two fingers up: previous tab
 
     # ── Mouse ─────────────────────────────────────────────────────────────────────────────────────────
-    # MX_PANEL toggle-auto-color                    # panel: auto colour in this folder, on/off
-    # MX_PANEL-long toggle-vibrance                 # panel, long: vibrance in this folder, on/off
-    # MX_PANEL+WHEEL add auto-color-strength 0.05   # panel + wheel: auto colour strength for this folder
-    # MX_PANEL+MOVE add vibrance-amount 0.05        # panel + move up/down: vibrance strength for this folder
-    # MBTN_MID toggle-fit-actual                    # middle: fit ↔ 100 % at the pointer
-    # MBTN_MID-long fill                            # middle, long: fill the window
-    # MBTN_BACK back                                # back: back to Recent, Folders or Stash, as in a browser
-    # MBTN_BACK-long cycle-stats                    # back, long: stats bar
-    # MBTN_BACK+WHEEL next-folder                   # back + wheel: down for the next folder, up for the previous
-    # MBTN_FORWARD toggle-info-panel                # forward: info panel
-    # MBTN_FORWARD+WHEEL zoom-step                  # forward + wheel: zoom through the stops at the pointer
-    # MX_GESTURE cycle-stats                        # gesture button (in front of forward/back): stats bar
-    # MX_GESTURE+WHEEL add vibrance-amount 0.05     # gesture button + wheel: vibrance strength for this folder
-    # MBTN_RIGHT+MBTN_MID fit-width                 # right + middle: fit width
-    #   Free: MBTN_FORWARD-long, MX_GESTURE-long, MX_SHIFT and every +MX_THUMB. Back (long) and the
-    #   gesture button do the same thing, so one of them can be reassigned.
-    #   Loupe hears the MX Master's back and forward buttons even alongside Mac Mouse Fix: mx-side-buttons in loupe.conf.
+    # MX_GESTURE toggle-smart-zoom                  # Manual / SmartZoom, retaining the selected profile
+    # MBTN_BACK previous-target                     # previous detected group (File View: directory history)
+    # MBTN_FORWARD next-target                      # next detected group (File View: directory history)
+    # MBTN_RIGHT+MBTN_BACK previous-detector-mode    # previous SmartZoom profile
+    # MBTN_RIGHT+MBTN_FORWARD cycle-detector-mode    # next SmartZoom profile
+    # Right-drag up/down zooms; using a right-button chord suspends zoom until release.
+    # MBTN_RIGHT+WHEEL next-folder                   # neighbouring folders, rate limited, no queued steps
+    # MBTN_RIGHT+MX_GESTURE cycle-stats              # show / hide status bar
+    # MX_PANEL-long toggle-vibrance                 # long hold, then release: vibrance on/off; strength is in the toolbar
+    # MX_PANEL toggle-auto-color                    # auto colour on/off
+    # MX_PANEL+WHEEL add auto-color-strength 0.05    # hold panel + main wheel: auto colour strength
+    # MBTN_MID toggle-fit-actual                     # Fit / 100%; current photo only while SmartZoom is on
+    # MBTN_RIGHT+MBTN_MID fit-width                  # fit width
+    #   No panel + thumb wheel: those controls need the same thumb.
+    #   Thumb wheel without a held button remains smooth zoom (thumb-wheel-zoom).
+    #   After a combination, releasing its buttons does not also trigger a tap or a long press.
+    #   Free: MX_SHIFT, other long presses, and button + thumb wheel bindings.
+    #   Custom bindings override these defaults, including in this existing file.
 
     """
 }

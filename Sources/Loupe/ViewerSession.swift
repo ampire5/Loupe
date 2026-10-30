@@ -20,6 +20,7 @@ import LoupeRender
     /// visible strip cells (`setRequest`) on every change of them.
     let thumbnails: ThumbnailStore
     private let positions: FolderPositions
+    var fileViewHistory: FileViewHistory { positions.fileViews }
     private let navigator: FolderNavigator
     private(set) var playlist: Playlist? {
         didSet {
@@ -27,6 +28,10 @@ import LoupeRender
             if let left = oldValue?.current, left != playlist?.current { recordView(of: left) }
             // The pair the new position is in (no cache call here: the navigation that set the playlist makes them).
             updateSpread()
+            if playlist?.isSourceOrdered != oldValue?.isSourceOrdered {
+                setActivity(active: requestedCacheActive, visible: requestedCacheVisible, lastActive: lastActive)
+            }
+            if playlist?.isSourceOrdered == true { watcher.stop(); return }
             // Entering another folder (open, folder switch) moves the watcher with it.
             guard !closed, let folder = playlist?.current.deletingLastPathComponent(),
                   folder != oldValue?.current.deletingLastPathComponent() else { return }
@@ -362,14 +367,18 @@ import LoupeRender
     /// `thumbnailsReady` finishes once the store knows the viewer cache's activity: it starts out `.idle`, and a
     /// request before that could start a thumbnail read while the first photo loads.
     init(cache: ImageCache<MetalPyramidLoader>, thumbnails: ThumbnailStore, thumbnailsReady: Task<Void, Never>? = nil,
-         positions: FolderPositions, navigator: FolderNavigator = FolderNavigator()) {
+         positions: FolderPositions, navigator: FolderNavigator = FolderNavigator(),
+         photosLibrary: any PhotosLibraryAccess = PhotosLibrary.shared) {
         self.cache = cache
         self.thumbnails = thumbnails
         self.positions = positions
         self.navigator = navigator
         thumbnailChain = thumbnailsReady
         stripAspects = StripAspects(fetch: { urls, applies in
-            await thumbnails.aspects(urls, applyingOrientation: applies)
+            if urls.first.flatMap(PhotosLocation.asset(in:)) != nil {
+                return (try? await photosLibrary.aspects(urls)) ?? [:]
+            }
+            return await thumbnails.aspects(urls, applyingOrientation: applies)
         })
         colorCorrector = ColorCorrector(thumbnails: thumbnails)
         colorCorrector.onChange = { [weak self] url in
@@ -413,6 +422,16 @@ import LoupeRender
     /// last told the cache.
     private var isCacheActive = false
     private var isCacheVisible = false
+    private var requestedCacheActive = false
+    private var requestedCacheVisible = false
+    private var photosViewerVisible = true
+
+    func setPhotosViewerVisible(_ visible: Bool) {
+        guard photosViewerVisible != visible else { return }
+        photosViewerVisible = visible
+        guard playlist?.isSourceOrdered == true else { return }
+        setActivity(active: requestedCacheActive, visible: requestedCacheVisible, lastActive: lastActive)
+    }
     /// How recently the window was key (`WindowRegistry.activityRank`): the other windows' thumbnails go by it.
     private var lastActive = 0 {
         didSet { if lastActive != oldValue { sendThumbnailRequest() } }
@@ -428,6 +447,10 @@ import LoupeRender
     /// With `LOUPE_DEBUG` an activation logs what it found (`StatsLine.activationLog`, windows spec §3.8).
     func setActivity(active: Bool, visible: Bool, lastActive: Int) {
         guard !closed else { return }
+        requestedCacheActive = active
+        requestedCacheVisible = visible
+        let sourceVisible = playlist?.isSourceOrdered != true || photosViewerVisible
+        let active = active && sourceVisible, visible = visible && sourceVisible
         self.lastActive = lastActive
         watcher.isPaused = !visible
         colorCorrector.isPaused = !visible
@@ -468,6 +491,7 @@ import LoupeRender
     }
 
     func open(_ url: URL) {
+        guard url.isFileURL else { return }
         stashNavigator = nil
         cancelOpenFolder()
         // A zip from Finder, `open` or Open… opens like a folder (Stash spec §2.4); `openFolder` lists it off the main
@@ -494,6 +518,22 @@ import LoupeRender
         if uncountedFolder == file.deletingLastPathComponent() { quickList(file) }
     }
 
+    /// The source supplies membership and order. No folder reads, watcher or filename sort are involved.
+    func openPhotos(_ files: [URL], current: URL, refreshing: Bool = false) {
+        guard let list = Playlist(ordered: files, current: current) else { return }
+        stashNavigator = nil
+        cancelOpenFolder()
+        cancelFolderRequest()
+        uncountedFolder = nil
+        if refreshing, playlist?.isSourceOrdered == true {
+            _ = apply(list)
+            return
+        }
+        playlist = list
+        endScrubOnReplace()
+        navigated(direction: 1, from: nil, fresh: true, opened: true)
+    }
+
     /// Opens a folder or a zip archive (Finder, Stash): its photos, landing on the one last viewed there (or the
     /// first), as a folder step lands. Listed off the main thread, the stats line saying "Loading folder…" meanwhile;
     /// the latest call wins. `completion` gets true once the folder is entered, false when it cannot be listed or has
@@ -505,15 +545,18 @@ import LoupeRender
         let token = openFolderToken, navigator = self.navigator, name = folder.lastPathComponent
         folderMessage = FolderRequest.loadingText
         onChange?()
-        openFolderTask = Task { [weak self] in
+        openFolderTask = Task(priority: .userInitiated) { [weak self] in
             let result: Result<FolderTarget?, Error>
             do { result = .success(try await navigator.contents(of: folder)) } catch { result = .failure(error) }
-            guard let self, token == self.openFolderToken, isWanted?() ?? true else { return }
+            guard !Task.isCancelled, let self, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
             switch result {
             case .success(let target?):
                 let positions = self.positions
                 let sort = BrowserSort.forFolder(target.folder, settings: Settings.shared.folderSettings)
-                self.playlist = FolderRequest.playlist(for: target, sort: sort) { positions.recall(in: $0, among: $1) }
+                guard let list = try? await FolderPlaylistPreparation.shared.prepare(target, sort: sort, remembered: {
+                    positions.recall(in: $0, among: $1)
+                }), !Task.isCancelled, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
+                self.playlist = list
                 self.endScrubOnReplace()
                 self.navigated(direction: 1, from: nil, fresh: true)   // clears the message
                 completion?(true)
@@ -529,24 +572,44 @@ import LoupeRender
         }
     }
 
-    /// A folder selected in the filmstrip has already been listed off main. Commit only if still wanted.
+    /// A folder selected in the filmstrip has already been listed off main. Prepare it there too;
+    /// commit and call completion only if still wanted (a superseded request must not cancel a newer interaction).
     func openFolderStripTarget(_ target: FolderTarget, isWanted: @escaping @MainActor () -> Bool,
                                completion: @escaping @MainActor (Bool) -> Void) {
         guard !closed, !target.images.isEmpty, isWanted() else { completion(false); return }
         cancelOpenFolder(); cancelFolderRequest()
         let positions = self.positions
         let sort = BrowserSort.forFolder(target.folder, settings: Settings.shared.folderSettings)
-        let list = FolderRequest.playlist(for: target, sort: sort) { positions.recall(in: $0, among: $1) }
-        guard isWanted() else { completion(false); return }
-        playlist = list
-        endScrubOnReplace()
-        navigated(direction: 1, from: nil, fresh: true)
-        if let label = target.label { onFolderLabel?(label) }
-        if target.listID != nil { onListFolder?(target.listID, target.folder) }
-        completion(true)
+        let token = openFolderToken
+        folderMessage = FolderRequest.loadingText
+        onChange?()
+        openFolderTask = Task(priority: .userInitiated) { [weak self] in
+            let list = try? await FolderPlaylistPreparation.shared.prepare(target, sort: sort, remembered: {
+                positions.recall(in: $0, among: $1)
+            })
+            guard let self, !Task.isCancelled, self.wantsOpenFolder(token, isWanted: isWanted) else { return }
+            guard let list else { completion(false); return }
+            self.playlist = list
+            self.endScrubOnReplace()
+            self.navigated(direction: 1, from: nil, fresh: true)
+            if let label = target.label { self.onFolderLabel?(label) }
+            if target.listID != nil { self.onListFolder?(target.listID, target.folder) }
+            completion(true)
+        }
     }
 
-    /// A later open or folder step wins over a folder still listing.
+    /// Only the current request may clear its message when an external selection is cancelled.
+    private func wantsOpenFolder(_ token: Int, isWanted: (@MainActor () -> Bool)?) -> Bool {
+        guard !closed, token == openFolderToken else { return false }
+        guard isWanted?() ?? true else {
+            folderMessage = nil
+            onChange?()
+            return false
+        }
+        return true
+    }
+
+    /// A later navigation wins over a folder still listing or preparing.
     private func cancelOpenFolder() {
         openFolderToken &+= 1
         openFolderTask?.cancel()
@@ -643,7 +706,7 @@ import LoupeRender
     /// now at its index is shown. An unchanged folder changes nothing; one that cannot be listed keeps the playlist.
     /// When a listing starts, how requests fold into one and when one is dropped is `FolderRereads`'s.
     func rereadFolder(_ request: Rereads.Request = .idle) {
-        guard !closed, let folder = playlist?.current.deletingLastPathComponent() else { return }
+        guard !closed, playlist?.isSourceOrdered != true, let folder = playlist?.current.deletingLastPathComponent() else { return }
         perform(rereads.request(request, folder: folder, now: .now), folder: folder)
     }
 
@@ -703,7 +766,8 @@ import LoupeRender
     private func apply(_ listed: Playlist) -> Bool {
         guard let old = playlist else { return false }
         let folder = listed.current.deletingLastPathComponent()
-        let new = old.replacing(with: listed.sorted(BrowserSort.forFolder(folder, settings: Settings.shared.folderSettings)))
+        let ordered = listed.isSourceOrdered ? listed : listed.sorted(BrowserSort.forFolder(folder, settings: Settings.shared.folderSettings))
+        let new = old.replacing(with: ordered)
         guard new.files != old.files || new.stamps != old.stamps else { return false }
         DebugLog.log("folder changed: \(old.files.count) -> \(new.files.count) files, "
                      + "current \(new.current == old.current ? "kept" : "gone, now \(new.current.lastPathComponent)")")
@@ -729,7 +793,7 @@ import LoupeRender
     /// folder…" and the current photo stays. At the first / last sibling nothing happens; a failure keeps the
     /// current folder and says why. A second request while one is pending is ignored.
     func goFolder(by step: Int) {
-        guard let current = playlist?.current, let token = folderRequest.begin(from: current) else { return }
+        guard playlist?.isSourceOrdered != true, let current = playlist?.current, let token = folderRequest.begin(from: current) else { return }
         cancelOpenFolder()
         folderMessage = FolderRequest.loadingText
         onChange?()
@@ -739,7 +803,7 @@ import LoupeRender
         // Siblings in the order Home shows their parent in.
         let siblingSort = BrowserSort.forFolder(folder.standardizedFileURL.deletingLastPathComponent(),
                                                 settings: Settings.shared.folderSettings)
-        folderTask = Task { [weak self] in
+        folderTask = Task(priority: .userInitiated) { [weak self] in
             let result: Result<FolderTarget?, Error>
             do {
                 // A gallery opened from a Stash list steps through that list (Stash spec §2.3); any other folder by disk.
@@ -749,15 +813,23 @@ import LoupeRender
             } catch {
                 result = .failure(error)
             }
-            guard let self else { return }
+            guard !Task.isCancelled, let self, !self.closed else { return }
             let found = (try? result.get()) ?? nil
             let label = found?.label
-            let positions = self.positions
-            let settings = Settings.shared.folderSettings
-            let outcome = self.folderRequest.finish(token, result: result, current: self.playlist?.current,
-                                                    sort: { BrowserSort.forFolder($0, settings: settings) }) {
-                positions.recall(in: $0, among: $1)
+            let prepared: Result<Playlist?, Error>
+            if let found {
+                let positions = self.positions
+                let sort = BrowserSort.forFolder(found.folder, settings: Settings.shared.folderSettings)
+                do {
+                    prepared = .success(try await FolderPlaylistPreparation.shared.prepare(found, sort: sort, remembered: {
+                        positions.recall(in: $0, among: $1)
+                    }))
+                } catch { return }   // cancelled while preparing; navigation owns the new state
+            } else {
+                prepared = result.map { _ in nil }
             }
+            guard !Task.isCancelled, !self.closed else { return }
+            let outcome = self.folderRequest.finish(token, prepared: prepared, current: self.playlist?.current)
             switch outcome {
             case .drop:
                 return
@@ -843,7 +915,7 @@ import LoupeRender
     /// (with `strip-jump-preview=no` a jump is a plain navigation). Seeded after the focus that made it current went
     /// out, so a failed photo reset for its retry gets its thumbnail; dropped when the cursor moved on meanwhile.
     private func seedCurrent() {
-        guard !closed, seeding == nil, seedsCurrent, let url = playlist?.current else { return }
+        guard !closed, seeding == nil, seedsCurrent, let url = playlist?.current, url.isFileURL else { return }
         seeding = url
         let thumbnails = self.thumbnails, cache = self.cache
         Task { [weak self] in
@@ -907,6 +979,7 @@ import LoupeRender
         guard let current = playlist?.current else { return }
         settleZoom()            // the new photo inherits the mode a zoom key asked for, not a frame on the way
         if collapseView?.page != current { collapseView = nil }
+        cancelOpenFolder()
         cancelFolderRequest()   // any navigation outranks a folder switch still being resolved
         jumpedFromStrip = fromStrip
         stepWait = wait
@@ -930,8 +1003,11 @@ import LoupeRender
         DebugLog.log("navigate -> \(current.lastPathComponent)")
         let folder = current.deletingLastPathComponent(), name = current.lastPathComponent
         // The folder's view and the file it was saved with, read before recording this photo as the folder's file.
-        let saved = fresh ? positions.view(in: folder) : nil, savedFile = positions.fileName(in: folder)
-        positions.record(folder: folder, file: name, keepingView: Settings.shared.config.folderViewMemory == .folder)
+        let saved = fresh && current.isFileURL ? positions.view(in: folder) : nil
+        let savedFile = current.isFileURL ? positions.fileName(in: folder) : nil
+        if current.isFileURL {
+            positions.record(folder: folder, file: name, keepingView: Settings.shared.config.folderViewMemory == .folder)
+        }
         // A step of the user's own in a restored tab: Recent hears of it from now on.
         if !opened, !recordsRecent { recordsRecent = true }
         recordRecent(folder: folder, file: name)
@@ -996,6 +1072,12 @@ import LoupeRender
     /// them changed since the last request (window id: this session).
     private func sendThumbnailRequest() {
         guard !closed, let list = playlist else { return }
+        if list.isSourceOrdered {
+            sentThumbnailRequest = nil
+            let thumbnails = self.thumbnails, window = thumbnailWindowID
+            enqueueThumbnails { await thumbnails.setRequest(window: window, nil, stamps: [:]) }
+            return
+        }
         let request = ThumbnailRequest(files: list.files, current: list.index, visible: stripVisibleFiles,
                                        isKey: isKeyWindow, lastActive: lastActive)
         guard request != sentThumbnailRequest || list.stamps != sentStamps else { return }
@@ -1011,6 +1093,10 @@ import LoupeRender
     /// its old order has not started).
     private func sendColorPlan() {
         guard !closed, let list = playlist else { return }
+        if list.isSourceOrdered {
+            colorCorrector.update(files: [], current: 0, direction: direction, stamps: [:], settings: colorSettings, reach: 0)
+            return
+        }
         colorCorrector.update(files: list.files, current: list.index, direction: direction, stamps: list.stamps,
                               settings: colorSettings, reach: colorReach, companion: companionIndex)
     }
@@ -1753,7 +1839,7 @@ import LoupeRender
     /// screen it is the current page (its index and the folder's remembered file), so reopening shows the pair
     /// containing it.
     private func recordRecent(folder: URL, file: String) {
-        guard recordsRecent, let recent, let playlist else { return }
+        guard folder.isFileURL, recordsRecent, let recent, let playlist else { return }
         if folder != recentFolder {
             recentFolder = folder
             recent.entered(folder, kind: ArchivePath.isArchive(folder) ? .archive : .folder, gallery: nil, title: nil,
@@ -1768,7 +1854,7 @@ import LoupeRender
     /// Saves how `photo` is looked at for its folder (`FolderPositions`): only while it is the photo on screen (the
     /// transform has its size, not a previous photo's while it loads) and the photo its folder remembers.
     private func recordView(of photo: URL) {
-        guard let entry, entry.url == photo, entry.failure == nil, entry.info != nil else { return }
+        guard photo.isFileURL, let entry, entry.url == photo, entry.failure == nil, entry.info != nil else { return }
         let folder = photo.deletingLastPathComponent(), name = photo.lastPathComponent
         guard positions.fileName(in: folder) == name else { return }
         positions.record(folder: folder, file: name, view: SavedView(judgedTransform))
@@ -1787,6 +1873,7 @@ import LoupeRender
         watcher.stop()
         stripAspects.close()
         rereads.reset()   // a listing in flight is dropped
+        cancelOpenFolder()
         cancelFolderRequest()
         dwellTask?.cancel()
         if let thumbnailObserver { NotificationCenter.default.removeObserver(thumbnailObserver) }

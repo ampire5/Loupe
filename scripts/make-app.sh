@@ -119,10 +119,10 @@ fi
 # the bundle ID and the certificate, the same for every build, so TCC grants (network volumes, Accessibility) survive
 # rebuilds; ad hoc it is the build's own hash, and every new build must be allowed again.
 if security find-identity -p codesigning | grep -q '"Local Code Signing"'; then
-    codesign --force --sign "Local Code Signing" "$app"
+    codesign --force --sign "Local Code Signing" --entitlements Resources/Loupe.entitlements "$app"
 else
     echo "warning: no \"Local Code Signing\" identity: signed ad hoc, TCC grants must be given again" >&2
-    codesign --force --sign - "$app"
+    codesign --force --sign - --entitlements Resources/Loupe.entitlements "$app"
 fi
 codesign --verify --deep --strict "$app"
 echo "Built $app"

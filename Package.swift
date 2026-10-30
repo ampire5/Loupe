@@ -9,7 +9,7 @@ let package = Package(
         .executable(name: "LoupeBench", targets: ["LoupeBench"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.11.8"),
+        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.12.0"),
         .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.1.0"),
         .package(url: "https://github.com/ampire5/LogiHIDPP.git", from: "0.1.0"),
         .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.6.0"),
@@ -31,7 +31,8 @@ let package = Package(
         .target(name: "LoupeSettings", dependencies: ["LoupeCore", .product(name: "SettingsKit", package: "SettingsKit"),
                                                      .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                      .product(name: "StashKit", package: "StashKit")]),
-        .executableTarget(name: "Loupe", dependencies: ["LoupeCore", "LoupeRender", "LoupeSettings",
+        .target(name: "LoupeInspector", dependencies: ["LoupeCore", .product(name: "HomeScreenKit", package: "HomeScreenKit")]),
+        .executableTarget(name: "Loupe", dependencies: ["LoupeCore", "LoupeRender", "LoupeSettings", "LoupeInspector",
                                                         .product(name: "SettingsKit", package: "SettingsKit"),
                                                         .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                         .product(name: "InfoPanelKit", package: "InfoPanelKit"),
@@ -43,7 +44,7 @@ let package = Package(
                                                         .product(name: "StashKit", package: "StashKit"),
                                                         .product(name: "StashKitUI", package: "StashKit"),
                                                         .product(name: "MouseClient", package: "MouseService")]),
-        .executableTarget(name: "LoupeBench", dependencies: ["LoupeCore", "LoupeRender", "CTurboJPEG", "CHeif", "CJXL",
+        .executableTarget(name: "LoupeBench", dependencies: ["LoupeCore", "LoupeRender", "LoupeInspector", .product(name: "HomeScreenKit", package: "HomeScreenKit"), "CTurboJPEG", "CHeif", "CJXL",
                                                              .product(name: "FilmstripModel", package: "HomeScreenKit"),
                                                              .product(name: "HomeScreenModel", package: "HomeScreenKit"),
                                                              "LoupeSettings"]),
@@ -53,6 +54,8 @@ let package = Package(
         .testTarget(name: "LoupeSettingsTests", dependencies: ["LoupeSettings", "LoupeCore", .product(name: "SettingsKit", package: "SettingsKit"),
                                                                .product(name: "LogiHIDPP", package: "LogiHIDPP")]),
         .testTarget(name: "LoupeRenderTests", dependencies: ["LoupeRender", "LoupeCore"]),
+        .testTarget(name: "LoupeInspectorTests", dependencies: ["LoupeInspector", "LoupeCore", .product(name: "HomeScreenModel", package: "HomeScreenKit")]),
+        .testTarget(name: "LoupeTests", dependencies: ["Loupe", "LoupeCore", "LoupeRender", .product(name: "HomeScreenKit", package: "HomeScreenKit")]),
     ],
     swiftLanguageModes: [.v5]
 )

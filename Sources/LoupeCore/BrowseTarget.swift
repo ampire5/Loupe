@@ -5,6 +5,9 @@ import HomeScreenModel
 /// the archive) with the photo selected.
 public enum BrowseTarget {
     public static func location(for photo: URL) -> (location: BrowserLocation, select: String) {
+        if let album = PhotosLocation.album(in: photo) {
+            return (.source(PhotosLocation.collection(album)), photo.absoluteString)
+        }
         let photo = photo.standardizedFileURL
         return (.folder(photo.deletingLastPathComponent()), photo.path)
     }

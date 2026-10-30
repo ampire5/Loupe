@@ -45,7 +45,9 @@ public struct ButtonGestures: Sendable {
         /// The deadline passed on a long-on-release press that could still count: the "release now" haptic played.
         var armed = false
         /// A chord (`withRight`) press: it already fired and takes no part in anything else.
+        var rightChord = false
         var dead = false
+        var wheelUsed = false
         var wheel = 0.0
         var thumb = 0.0
         var moveX = 0.0
@@ -53,6 +55,7 @@ public struct ButtonGestures: Sendable {
     }
 
     private let kinds: [MouseButton: Set<PressKind>]
+    private let tapOnRelease: Set<MouseButton>
     private let longPress: Double
     private let moveStep: Double
     private var presses: [MouseButton: Press] = [:]
@@ -73,8 +76,9 @@ public struct ButtonGestures: Sendable {
     public var rightDragged: Bool { rightHeld && rightMoved }
 
     /// `longPress` in seconds, `moveStep` in points.
-    public init(kinds: [MouseButton: Set<PressKind>], longPress: Double, moveStep: Double) {
+    public init(kinds: [MouseButton: Set<PressKind>], longPress: Double, moveStep: Double, tapOnRelease: Set<MouseButton> = []) {
         self.kinds = kinds
+        self.tapOnRelease = tapOnRelease
         self.longPress = longPress
         self.moveStep = moveStep
     }
@@ -83,7 +87,7 @@ public struct ButtonGestures: Sendable {
 
     /// A tap that fires on the press itself: nothing else is bound to the button (besides the right chord).
     private func firesOnPress(_ b: MouseButton) -> Bool {
-        has(b, .tap) && kinds[b, default: []].subtracting([.tap, .withRight]).isEmpty
+        !tapOnRelease.contains(b) && has(b, .tap) && kinds[b, default: []].subtracting([.tap, .withRight]).isEmpty
     }
 
     private func fire(_ b: MouseButton, _ kind: PressKind, _ steps: Int = 1) -> Fire {
@@ -92,12 +96,17 @@ public struct ButtonGestures: Sendable {
 
     /// The held, live button with a binding for `kind` that was pressed last.
     private func target(_ kind: PressKind) -> MouseButton? {
-        presses.filter { !$0.value.dead && has($0.key, kind) }.max { $0.value.seq < $1.value.seq }?.key
+        presses.filter { !$0.value.dead && has($0.key, activeKind(kind, for: $0.key)) }.max { $0.value.seq < $1.value.seq }?.key
+    }
+
+    private func activeKind(_ kind: PressKind, for button: MouseButton) -> PressKind {
+        if kind == .wheel, presses[button]?.rightChord == true, has(button, .withRightWheel) { return .withRightWheel }
+        return kind
     }
 
     /// A long press is still possible: bound, and nothing cancelled it or fired it yet.
     private func longPossible(_ b: MouseButton, _ p: Press) -> Bool {
-        has(b, .long) && !p.cancelled && !p.longFired && !p.dead
+        has(b, .long) && !p.rightChord && !p.cancelled && !p.longFired && !p.dead
     }
 
     /// A button with a wheel / thumb-wheel / move binding fires its long press on release, not at the deadline: the
@@ -113,15 +122,46 @@ public struct ButtonGestures: Sendable {
 
     public mutating func press(_ b: MouseButton, at t: Double) -> [Fire] {
         if b == .right {
-            if !rightHeld { rightHeld = true; rightMoveX = 0; rightMoveY = 0; rightMoved = false }
+            if !rightHeld {
+                rightHeld = true; rightMoveX = 0; rightMoveY = 0; rightMoved = false
+                rightZoomSuppressed = false
+                if has(.right, .wheel) {
+                    sequence += 1
+                    presses[.right] = Press(seq: sequence, deadline: t + longPress)
+                    for button in Array(presses.keys) where button != .right && has(button, .withRightWheel) {
+                        if presses[button]?.dead == false {
+                            // A wheel already adjusting colour owns this hold;
+                            // adding RMB cannot turn it into folder navigation.
+                            presses[.right]!.dead = true
+                            rightZoomSuppressed = true
+                            if presses[button]?.wheelUsed == false { presses[button]!.rightChord = true }
+                        }
+                    }
+                }
+            }
             return []
         }
         let own = kinds[b, default: []]
         guard presses[b] == nil, !own.isEmpty else { return [] }
         sequence += 1
         var p = Press(seq: sequence, deadline: t + longPress)
-        if own.contains(.withRight), rightHeld, !rightDragged {
+        if own.contains(.withRightWheel), rightHeld {
+            p.rightChord = true
+            presses[.right]?.dead = true
+            presses[b] = p
+            rightZoomSuppressed = true
+            return []
+        }
+        if own.contains(.withRight), rightHeld, (!rightDragged || has(.right, .wheel)) {
+            if tapOnRelease.contains(b) {
+                p.rightChord = true
+                presses[.right]?.dead = true
+                presses[b] = p
+                rightZoomSuppressed = true
+                return []
+            }
             p.dead = true
+            presses[.right]?.dead = true
             presses[b] = p
             rightZoomSuppressed = true
             return [fire(b, .withRight)]
@@ -137,11 +177,15 @@ public struct ButtonGestures: Sendable {
 
     public mutating func release(_ b: MouseButton, at t: Double) -> [Fire] {
         if b == .right {
+            presses.removeValue(forKey: .right)
             rightHeld = false
             rightZoomSuppressed = false
             return []
         }
         guard let p = presses.removeValue(forKey: b) else { return [] }
+        if p.rightChord {
+            return !p.cancelled && !p.dead && has(b, .withRight) ? [fire(b, .withRight)] : []
+        }
         // A timer-driven long press whose timer ran late, or one that waits for the release.
         if longPossible(b, p), t >= p.deadline { return [fire(b, .long)] }
         if !p.cancelled, !p.dead, has(b, .tap) { return [fire(b, .tap)] }
@@ -184,9 +228,13 @@ public struct ButtonGestures: Sendable {
     public mutating func wheel(dy: Double, precise: Bool, momentum: Bool,
                                at t: Double) -> (fires: [Fire], consumed: Bool) {
         if !momentum, dy != 0 {
-            for b in Array(presses.keys) where !has(b, .wheel) { presses[b]!.cancelled = true }
+            for b in Array(presses.keys) where !has(b, activeKind(.wheel, for: b)) { presses[b]!.cancelled = true }
         }
         guard let b = target(.wheel) else {
+            if rightHeld, presses[.right]?.dead == true {
+                absorbing = true; lastAbsorbed = t
+                return ([], true)
+            }
             guard absorbing else { return ([], false) }
             if t - lastAbsorbed >= Self.absorbGap { absorbing = false; return ([], false) }
             lastAbsorbed = t
@@ -194,15 +242,16 @@ public struct ButtonGestures: Sendable {
         }
         // The momentum of a scroll that began before the press is eaten but leaves the press alive: a tap or a long
         // press made while a scroll still coasts must fire.
-        if !momentum { presses[b]!.cancelled = true }
+        if !momentum { presses[b]!.cancelled = true; presses[b]!.wheelUsed = true; if rightHeld { rightZoomSuppressed = true } }
+        let kind = activeKind(.wheel, for: b)
         absorbing = true
         lastAbsorbed = t
         guard dy != 0, !momentum else { return ([], true) }
-        if !precise { return ([fire(b, .wheel, dy > 0 ? 1 : -1)], true) }
+        if !precise { return ([fire(b, kind, dy > 0 ? 1 : -1)], true) }
         presses[b]!.wheel += dy
         let steps = Int((presses[b]!.wheel / Self.preciseWheelPoints).rounded(.towardZero))
         presses[b]!.wheel -= Double(steps) * Self.preciseWheelPoints
-        return (steps == 0 ? [] : [fire(b, .wheel, steps)], true)
+        return (steps == 0 ? [] : [fire(b, kind, steps)], true)
     }
 
     /// A held button takes the thumb wheel (it has a `+MX_THUMB` binding); otherwise the wheel is free for

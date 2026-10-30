@@ -93,21 +93,21 @@ import Testing
         let rows = InputMap.rows(lines: parsed("MX_PANEL-long ignore\n")).filter(\.isMouse)
         let names = rows.map(\.input)
         #expect(names.contains("Panel (hold)"))
-        #expect(names.contains("Back + wheel"))
+        #expect(names.contains("Right + wheel"))
         #expect(names.contains("Right + middle"))
-        #expect(names.contains("Gesture button + wheel"))
+        #expect(!names.contains("Right + panel + wheel"))
         #expect(rows.first { $0.input == "Panel (hold)" }?.source == .off)
     }
 
     @Test func mouseFolderStepsReadAsTheCheatSheet() {
         let rows = InputMap.rows(lines: parsed("MBTN_BACK+MOVE next-folder\nMX_PANEL+WHEEL previous-folder\nMX_GESTURE+MX_THUMB next-folder\n"))
         func title(_ input: String) -> String? { rows.first { $0.input == input }?.title }
-        #expect(title("Back + wheel") == "Next / previous folder")        // built-in
+        #expect(title("Right + wheel") == "Next / previous folder")        // built-in
         #expect(title("Back + move up/down") == "Next / previous folder")
         #expect(title("Panel + wheel") == "Previous / next folder")
         #expect(title("Gesture button + thumb wheel") == "Next / previous folder")
-        #expect(title("Back") == "Back to Recent, Folders or Stash, where it was opened from")
-        #expect(title("Back (hold)") == "Stats bar on/off")
+        #expect(title("Back") == "Previous detected group in the selected profile")
+        #expect(title("Right + gesture button") == "Stats bar on/off")
     }
 
     @Test func keypadKeysAreToldApart() {

@@ -42,6 +42,7 @@ public struct BrowseFraming: Equatable, Sendable {
     public var followed: SubjectKind?
 
     private var profile = "vision"
+    private var profileGroups: [String: SubjectKind] = [:]
     private var profileSizes: [String: [SubjectKind: Double]] = [:]
     private func key(_ kind: SubjectKind) -> SubjectKind {
         SubjectKind(rawValue: kind.parts.map(\.rawValue).sorted().joined(separator: "+")) ?? kind
@@ -49,7 +50,9 @@ public struct BrowseFraming: Equatable, Sendable {
     public mutating func useProfile(_ name: String) {
         guard name != profile else { return }
         profileSizes[profile] = sizes
+        profileGroups[profile] = followed
         sizes = profileSizes[name] ?? [:]
+        followed = profileGroups[name]
         profile = name; left = nil; framedView = nil
     }
     public init() {}

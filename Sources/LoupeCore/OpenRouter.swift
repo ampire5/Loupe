@@ -5,6 +5,7 @@ public enum OpenTarget: Equatable, Sendable {
     case file(URL)                 // a photo, a zip to enter, or a zip entry
     case folder(URL)               // a directory to enter (the caller checked the path is one)
     case stashGallery(id: String)
+    case photos(album: String, asset: String)
 }
 
 /// What the router needs to know about one viewer tab.
@@ -66,7 +67,7 @@ public enum OpenRouter {
             switch $0 {
             case .file(let url): return seen.insert(folder(of: url).path).inserted
             case .folder(let url): return seen.insert(url.standardizedFileURL.path).inserted
-            case .stashGallery: return true
+            case .stashGallery, .photos: return true
             }
         }
     }
@@ -85,6 +86,11 @@ public enum OpenRouter {
             hits.reduce(nil) { best, t in t.lastActive > (best?.lastActive ?? Int.min) ? t : best }
         }
         switch target {
+        case .photos(let album, let asset):
+            guard let hit = latest(tabs.filter { $0.current.flatMap(PhotosLocation.album(in:)) == album }) else { return nil }
+            // The source grid may have changed its collection sort in another window. Reopen the source target
+            // even for the same selected asset so that this viewer refreshes its sequence from the shared choice.
+            return .focus(tab: hit.tab, open: PhotosLocation.assetURL(album: album, asset: asset, revision: ""))
         case .stashGallery(let id):
             return latest(tabs.filter { $0.stashGallery == id }).map { .focus(tab: $0.tab, open: nil) }
         case .folder(let url):

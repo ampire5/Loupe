@@ -14,6 +14,7 @@
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>Loupe displays your Photos albums and lets you browse their photos.</string>
     <!-- Stash on the local network over plain HTTP (Stash spec §2.1): its API calls go through URLSession. -->
     <key>NSAppTransportSecurity</key>
     <dict>

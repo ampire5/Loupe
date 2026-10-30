@@ -28,7 +28,7 @@ public enum MouseButton: String, CaseIterable, Sendable {
 
 /// How a button is pressed: a short tap, a long press, held with the wheel / the thumb wheel / a move, or the
 /// middle button pressed while the right one is held.
-public enum PressKind: Hashable, Sendable { case tap, long, wheel, thumbWheel, move, withRight }
+public enum PressKind: Hashable, Sendable { case tap, long, wheel, thumbWheel, move, withRight, withRightWheel }
 
 /// A key and its modifiers, as `input.conf` names it: a letter by `character` (lowercase), everything else by
 /// `keyCode`; exactly one of the two is set.
@@ -172,6 +172,7 @@ public enum InputConf {
             case .thumbWheel: name + "+MX_THUMB"
             case .move: name + "+MOVE"
             case .withRight: "MBTN_RIGHT+" + name
+            case .withRightWheel: "MBTN_RIGHT+" + name + "+WHEEL"
             }
         case .key(let chord):
             var modifiers = chord.modifiers
@@ -219,13 +220,24 @@ public enum InputConf {
 
     private static func resolve(_ name: String) -> Result<InputTrigger, Problem> {
         let unknown = Problem(text: "unknown input \"\(name)\"")
+        if name.hasPrefix("MBTN_RIGHT+"), name != "MBTN_RIGHT+WHEEL" {
+            let rest = String(name.dropFirst("MBTN_RIGHT+".count))
+            if rest.hasSuffix("+WHEEL"), let button = MouseButton(rawValue: String(rest.dropLast(6))),
+               button != .right, !button.isTrackpad {
+                return .success(.mouse(button, .withRightWheel))
+            }
+            if let button = MouseButton(rawValue: rest), button != .right, !button.isTrackpad {
+                return .success(.mouse(button, .withRight))
+            }
+            return .failure(unknown)
+        }
         // A press kind after a name: `-long` or `+WHEEL`, `+MX_THUMB`, `+MOVE`.
         let kinds: [(suffix: String, kind: PressKind)] = [("-long", .long), ("+WHEEL", .wheel), ("+MX_THUMB", .thumbWheel), ("+MOVE", .move)]
         for (suffix, kind) in kinds where name.hasSuffix(suffix) {
             let base = String(name.dropLast(suffix.count))
             if let button = MouseButton(rawValue: base) {
                 if button.isTrackpad { return .failure(Problem(text: "trackpad gestures take no press kind")) }
-                return button == .right ? .failure(rightOnly) : .success(.mouse(button, kind))
+                return button == .right && kind != .wheel ? .failure(rightOnly) : .success(.mouse(button, kind))
             }
             if case .success = resolveKey(base) { return .failure(Problem(text: "press kinds are for mouse buttons")) }
             return .failure(unknown)
@@ -243,7 +255,7 @@ public enum InputConf {
         }
     }
 
-    private static let rightOnly = Problem(text: "MBTN_RIGHT only works as MBTN_RIGHT+MBTN_MID")
+    private static let rightOnly = Problem(text: "MBTN_RIGHT requires a button or wheel combination")
 
     private enum KeyFailure: Error { case notAKey, menus }
 

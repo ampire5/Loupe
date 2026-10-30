@@ -29,6 +29,7 @@ whole folders of photos on a NAS — with the keyboard, the trackpad or an MX Ma
 - **Every format gets its fastest decoder.** libjpeg-turbo for JPEG, a patched libjxl for JPEG XL (with an instant 1:8 preview), ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP — chosen by the file's magic bytes, not its extension.
 - **It predicts where you're going.** Neighbouring photos are decoded and uploaded to the GPU before you ask, so the next photo is already there.
 - **A real home for your photos.** A Photos-style Home with Recent, Sessions, a folder browser with live covers, a sidebar tree, two thumbnail modes — and a native window onto your [Stash](https://github.com/stashapp/stash) library.
+- **Apple Photos.** Choose Photos in the Home sidebar and allow library access. Open Library for all photos, including images not assigned to any album, or browse your albums and their folders. Sort photos by their original filename or capture date, in either direction; the viewer follows the grid order and returns to the same Photos collection. The sort choice is remembered across launches. Photos supplies the current edited image; an iCloud-only photo downloads when opened. Loupe does not change library contents; videos, Live Photo animation and restoring Photos tabs after quitting are not supported yet.
 - **Every pixel on a big screen.** 100 % means one image pixel per physical pixel, not per Retina point, so a 6K display shows a 300 MP photo at its true resolution; MetalFX and Lanczos keep it clean when it is scaled.
 - **Made for hands, not menus.** mpv-style `input.conf` bindings, trackpad gestures, right-button drag zoom with inertia, and first-class Logitech MX Master 4 support, haptics included.
 
@@ -103,7 +104,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 </tr>
 <tr>
 <td><b>Auto colour and vibrance.</b> <code>c</code> and <code>v</code> for this folder (<code>⇧C</code> / <code>⇧V</code> make it the default) — left half original, right half corrected. Applied on the GPU as a colour cube, never written to your files.</td>
-<td><b>Info panel.</b> <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
+<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. Choose a file by click or keyboard; hovering another card keeps the information on your selection. Information sections start expanded and remember manual collapse. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
 </tr>
 <tr>
 <td><img src="docs/images/sidebar.webp" alt="Sidebar with the folder tree"></td>
@@ -283,6 +284,17 @@ Loupe keeps its data in three places, which `--zap` removes:
 - `~/.config/loupe` — your settings, bindings and Dock icons.
 - `~/Library/Application Support/Loupe` — Recent, sessions and per-folder settings.
 - `~/Library/Caches/Loupe` — the thumbnail cache.
+
+### Advanced thumbnail encoding
+
+Thumbnails use ImageIO JPEG at quality 80 by default. Choose format and quality in **Settings → Strip → Thumbnails**. These per-app preferences `thumbnail-format` (`jpeg`, `heic`, `avif`) and `thumbnail-quality` (10–100) apply on the next launch; an unavailable encoder falls back to JPEG. For example:
+
+```sh
+defaults write local.loupe thumbnail-format -string jpeg
+defaults write local.loupe thumbnail-quality -int 80
+```
+
+Changing either preference rebuilds the disposable thumbnail payloads while keeping the file catalog and metadata. Last Viewed is recorded per file after an actual visible presentation and kept in the separate user-state database, including across cache cleanup. HEIC and AVIF can save space but cost more CPU; the shared codec benchmark kept JPEG as the default.
 
 ## Configure
 

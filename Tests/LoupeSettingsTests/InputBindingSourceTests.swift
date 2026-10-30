@@ -97,9 +97,9 @@ struct InputBindingSourceTests {
         #expect(row?.canRestore == true)
         #expect(row?.actionID == nil)
         // A built-in mouse binding the same way.
-        try fixture.source.remove(rowID: "MX_GESTURE+WHEEL")
-        #expect(fixture.row("MX_GESTURE+WHEEL")?.source == "off")
-        #expect(fixture.lines.contains { $0.trigger == .mouse(.gesture, .wheel) && $0.action == .ignore })
+        try fixture.source.remove(rowID: "MX_PANEL+WHEEL")
+        #expect(fixture.row("MX_PANEL+WHEEL")?.source == "off")
+        #expect(fixture.lines.contains { $0.trigger == .mouse(.panel, .wheel) && $0.action == .ignore })
         // Restore Built-in on an off row comments its ignore line out.
         try fixture.source.restoreBuiltIn(rowID: "f")
         #expect(fixture.row("f")?.source == "built-in")
@@ -140,17 +140,17 @@ struct InputBindingSourceTests {
         let source = fixture.source!
         let right = source.pressKinds(for: "MBTN_RIGHT")
         #expect(right.first { $0.title == "Tap" }?.enabled == false)
-        #expect(right.allSatisfy { !$0.enabled })
+        #expect(right.filter { $0.enabled }.map(\.id) == ["MBTN_RIGHT+WHEEL"])
         let panel = source.pressKinds(for: "MX_PANEL")
         #expect(panel.map(\.id) == ["MX_PANEL", "MX_PANEL-long", "MX_PANEL+WHEEL", "MX_PANEL+MX_THUMB", "MX_PANEL+MOVE",
-                                    "MBTN_RIGHT+MX_PANEL"])
-        #expect(panel.map(\.enabled) == [true, true, true, true, true, false])
-        #expect(source.pressKinds(for: "MBTN_MID").last?.enabled == true)
+                                    "MBTN_RIGHT+MX_PANEL", "MBTN_RIGHT+MX_PANEL+WHEEL"])
+        #expect(panel.map(\.enabled) == [true, true, true, true, true, true, true])
+        #expect(source.pressKinds(for: "MBTN_MID").first { $0.id == "MBTN_RIGHT+MBTN_MID" }?.enabled == true)
         #expect(source.mouseButtons().map(\.id) == ["MBTN_MID", "MBTN_BACK", "MBTN_FORWARD", "MX_PANEL", "MX_GESTURE",
                                                     "MX_SHIFT", "TP_3UP", "TP_3DOWN", "TP_3TAP", "TP_FORCE",
                                                     "TP_CLICK_DOWN", "TP_CLICK_UP"])
         // A trackpad gesture has only its tap.
-        #expect(source.pressKinds(for: "TP_3UP").map(\.enabled) == [true, false, false, false, false, false])
+        #expect(source.pressKinds(for: "TP_3UP").map(\.enabled) == [true, false, false, false, false, false, false])
     }
 
     /// Every action of the file is offered once, `ignore` is not (that is «−»), and `add` takes a step.
@@ -228,9 +228,9 @@ struct InputBindingSourceTests {
         func found(_ query: String) -> Set<String> {
             Set(search.matches(query).filter { $0.page == "key-bindings" }.map(\.rowID))
         }
-        #expect(found("MX_GESTURE+WHEEL") == ["#Mouse bindings"])
-        #expect(found("add vibrance-amount") == ["#Keyboard bindings", "#Mouse bindings"])
-        #expect(found("Gesture button + wheel") == ["#Mouse bindings"])
+        #expect(found("MX_PANEL+WHEEL") == ["#Mouse bindings"])
+        #expect(found("add vibrance-amount") == ["#Keyboard bindings"])
+        #expect(found("Panel + wheel") == ["#Mouse bindings"])
         #expect(found("Toggle full screen") == ["#Keyboard bindings"])
         // The vibrance rows of the Colour page are found too.
         #expect(search.matches("vibrance").contains { $0.page == "colour" })

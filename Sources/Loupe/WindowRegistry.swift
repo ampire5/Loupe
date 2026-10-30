@@ -149,6 +149,7 @@ import StashKitUI
         case .file(let url): url.lastPathComponent
         case .folder(let url): url.lastPathComponent + "/"
         case .stashGallery(let id): "gallery \(id)"
+        case .photos: "Photos album"
         }
     }
 
@@ -466,10 +467,14 @@ import StashKitUI
             let visible = Self.isVisible(previous)
             entries[p].visible = visible
             previous.session.setActivity(active: false, visible: visible, lastActive: entries[p].rank)
+            previous.browserVisibilityChanged(visible)
+            previous.photosVisibilityChanged(visible)
         }
         let visible = Self.isVisible(controller)
         entries[i].visible = visible
         controller.session.setActivity(active: true, visible: visible, lastActive: entries[i].rank)
+        controller.browserVisibilityChanged(visible)
+        controller.photosVisibilityChanged(visible)
         if DebugLog.isEnabled { controller.viewerView.watchSharp(session: controller.session.cacheID.raw) }
         controller.rememberFullScreenAsActive()
     }
@@ -482,6 +487,8 @@ import StashKitUI
             guard visible != entries[i].visible else { continue }
             entries[i].visible = visible
             controller.session.setActivity(active: controller === active, visible: visible, lastActive: entries[i].rank)
+            controller.browserVisibilityChanged(visible)
+            controller.photosVisibilityChanged(visible)
         }
     }
 

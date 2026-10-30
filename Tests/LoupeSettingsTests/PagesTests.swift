@@ -25,7 +25,7 @@ struct PagesTests {
         let keys = pages.flatMap(\.keys)
         #expect(Config.keys.count == 158)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
-        #expect(Set(keys) == Set(Config.keys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
+        #expect(Set(keys) == Set(Config.keys).union(ConfigSettingsStore.thumbnailKeys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
 
     /// Spec §5: the sections of each page, in order.
@@ -97,6 +97,12 @@ struct PagesTests {
             guard let key = row.key, case .choice(let items) = row.kind else { continue }
             #expect(Set(items.map(\.word)).count == items.count, "\(key): a word twice")
             #expect(Set(items.map(\.title)).count == items.count, "\(key): a title twice")
+            if ConfigSettingsStore.thumbnailKeys.contains(key) {
+                let store = ConfigSettingsStore(fileURL: URL(fileURLWithPath: "/tmp/unused-thumbnail-settings"), current: { Config() }, reload: {})
+                for item in items { #expect(store.validate(item.word, forKey: key) == nil) }
+                #expect(items.contains { $0.word == store.defaultValue(forKey: key) })
+                continue
+            }
             for item in items {
                 var config = Config()
                 #expect(config.set(key, item.word) == .ok, "\(key)=\(item.word) is refused")
