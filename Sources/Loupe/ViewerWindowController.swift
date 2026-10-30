@@ -1175,6 +1175,7 @@ import UniformTypeIdentifiers
         // Keep the browser inside its native safe area. Extending list/card
         // edges under the titlebar reflects their text into the toolbar backdrop.
         let view = HomeView(source: source)
+        view.browser.selectsOnHover = false
         let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
         view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
             let inspector = BrowserInspectorController(thumbnails: thumbnails)
@@ -2731,7 +2732,18 @@ import UniformTypeIdentifiers
             guard let self, self.infoURL == url else { return }
             self.statSize = stamp.size
             self.updateInfoPanel()   // the size, while the header is read
-            let result = await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+            let version = stamp.size.flatMap { size in stamp.modified.map { FileStamp(modified: $0, size: size) } }
+            let stored: PhotoMetadata?
+            if let version { stored = await self.thumbnails.photoMetadata(for: url, stamp: version) }
+            else { stored = nil }
+            let result: PhotoMetadata
+            if let stored { result = stored }
+            else {
+                result = await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+                if let version, result.modified == version.modified {
+                    await self.thumbnails.keepPhotoMetadata(result, for: url, stamp: version)
+                }
+            }
             guard self.infoURL == url else { return }
             self.slowReadTask?.cancel()
             self.metadata = result

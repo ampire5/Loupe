@@ -20,6 +20,7 @@ import LoupeRender
     /// visible strip cells (`setRequest`) on every change of them.
     let thumbnails: ThumbnailStore
     private let positions: FolderPositions
+    var fileViewHistory: FileViewHistory { positions.fileViews }
     private let navigator: FolderNavigator
     private(set) var playlist: Playlist? {
         didSet {

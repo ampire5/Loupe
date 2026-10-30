@@ -25,7 +25,7 @@ import Foundation
             try $0.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", []) { tables.append($0.text(0)) }
         }
         #expect(version == 2)   // the browser's tables and the visit columns are additive: an older Loupe opens it
-        #expect(tables == ["browser_pins", "browser_state", "folder_positions", "folder_settings", "recent", "sessions"])
+        #expect(tables == ["browser_pins", "browser_state", "file_views", "folder_positions", "folder_settings", "recent", "sessions"])
         var columns: [String] = []
         try db.perform { try $0.query("SELECT name FROM pragma_table_info('folder_positions')", []) { columns.append($0.text(0)) } }
         #expect(columns == ["path", "file", "view", "touched", "idx", "count", "visited"])

@@ -39,6 +39,7 @@ enum InspectorBench {
         window.title = "Loupe — Inspector benchmark"
         window.titlebarAppearsTransparent = true
         let home = HomeView(source: source)
+        home.browser.selectsOnHover = false
         home.frame = window.contentView!.bounds
         home.autoresizingMask = [.width, .height]
         window.contentView?.addSubview(home)
@@ -112,6 +113,7 @@ enum InspectorBench {
             window.autorecalculatesKeyViewLoop = true
             let start = cpu()
             let home = HomeView(source: source)
+            home.browser.selectsOnHover = false
             home.frame = window.contentView!.bounds
             home.autoresizingMask = [.width, .height]
             home.isSidebarVisible = false

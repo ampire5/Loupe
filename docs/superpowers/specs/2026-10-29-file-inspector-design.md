@@ -19,3 +19,7 @@ Initial width 320 pt, native draggable divider, sensible minimum width. No autom
 ## Follow-up: lazy creation
 
 At the user's request, a hidden inspector now registers only a one-shot factory and toolbar action. Its controller, loader and split item are created on first visible request and retained afterward. A visibility request while Home is parked waits for unpark; explicit restore of an open inspector still creates it when it needs to become visible. Selection callbacks before construction do not read files; the factory takes the latest selection on first opening. See docs/bench/2026-10-29-lazy-startup.md for the A/B measurement and further startup candidates.
+
+## Follow-up: explicit selection and expanded defaults
+
+File View disables pointer-following selection and keeps the existing selected card/ring until a click, keyboard navigation or context-menu choice changes it. The inspector uses that selection. Card hover decorations remain independent; listing/session restoration remains supported, with a new explicit click overriding unfinished restoration. All non-empty information groups start expanded unless the user has saved a collapse choice. Lazy creation remains unchanged. Verification and native timings: docs/bench/2026-10-30-explicit-inspector-selection.md.

@@ -13,6 +13,8 @@ public final class ConfigSettingsStore: SettingsStore {
     private let folder: () -> (url: URL, values: [String: String])?
     private let clearFolder: (String, URL) -> Void
     private let profile: MachineProfile
+    private let defaults: UserDefaults
+    public static let thumbnailKeys: Set<String> = ["thumbnail-format", "thumbnail-quality"]
 
     /// `current` is the app's live config; `reload` re-reads the file into it (and calls `configDidReload(from:)`).
     /// `folder` is the main viewer window's folder and the values it records for itself (nil without a window or a
@@ -21,7 +23,8 @@ public final class ConfigSettingsStore: SettingsStore {
     public init(fileURL: URL, current: @escaping () -> Config, reload: @escaping () -> Void,
                 folder: @escaping () -> (url: URL, values: [String: String])? = { nil },
                 clearFolder: @escaping (String, URL) -> Void = { _, _ in },
-                profile: MachineProfile = .current) {
+                profile: MachineProfile = .current, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.fileURL = fileURL
         self.current = current
         self.reload = reload
@@ -42,14 +45,24 @@ public final class ConfigSettingsStore: SettingsStore {
         NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": keys])
     }
 
-    public func value(forKey key: String) -> String? { current().text(forKey: key) }
+    public func value(forKey key: String) -> String? {
+        if key == "thumbnail-format" { return defaults.string(forKey: key).flatMap(ThumbnailEncoding.Format.init(rawValue:))?.rawValue ?? "jpeg" }
+        if key == "thumbnail-quality" { return String(Int((ThumbnailEncoding.configured(defaults).quality * 100).rounded())) }
+        return current().text(forKey: key)
+    }
 
-    public func defaultValue(forKey key: String) -> String { Config().text(forKey: key) ?? "" }
+    public func defaultValue(forKey key: String) -> String {
+        if key == "thumbnail-format" { return "jpeg" }
+        if key == "thumbnail-quality" { return "80" }
+        return Config().text(forKey: key) ?? ""
+    }
 
     /// Checks the exact line a write puts in the file, read back as `Config.parse` reads it: so a value with a ` #`
     /// (read as a comment), unknown `zoom-stops` tokens and a list parse would fall back on are refused too (spec §11).
     /// A line break would write a second line, so it is refused before parsing.
     public func validate(_ value: String, forKey key: String) -> String? {
+        if key == "thumbnail-format" { return ThumbnailEncoding.Format(rawValue: value) == nil ? "Choose JPEG, HEIC or AVIF" : nil }
+        if key == "thumbnail-quality" { return Int(value).map { (10...100).contains($0) } == true ? nil : "Enter a whole number from 10 to 100" }
         guard value.rangeOfCharacter(from: .newlines) == nil,
               Config.parse("\(key)=\(value)").1.isEmpty else { return "Not a valid value" }
         return nil
@@ -78,6 +91,13 @@ public final class ConfigSettingsStore: SettingsStore {
     }
 
     public func setValue(_ value: String, forKey key: String) throws {
+        if Self.thumbnailKeys.contains(key) {
+            guard validate(value, forKey: key) == nil else { throw NSError(domain: "LoupeSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid thumbnail setting"]) }
+            if key == "thumbnail-quality" { defaults.set(Int(value), forKey: key) }
+            else { defaults.set(value, forKey: key) }
+            NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": [key]])
+            return
+        }
         // Only a missing file starts empty; any other read failure must not clobber the file.
         let existing = FileManager.default.fileExists(atPath: fileURL.path)
             ? try String(contentsOf: fileURL, encoding: .utf8) : ""
@@ -92,6 +112,13 @@ public final class ConfigSettingsStore: SettingsStore {
     /// (`cache-memory`, `jxl-threads-current`) follows it again. One write and one reload for a whole page; no file,
     /// or none of the keys in it: nothing is written.
     public func removeValues(forKeys keys: [String]) throws {
+        let preferences = keys.filter(Self.thumbnailKeys.contains)
+        for key in preferences { defaults.removeObject(forKey: key) }
+        if !preferences.isEmpty {
+            NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": preferences])
+        }
+        let keys = keys.filter { !Self.thumbnailKeys.contains($0) }
+        guard !keys.isEmpty else { return }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         let existing = try String(contentsOf: fileURL, encoding: .utf8)
         let updated = ConfigText.removing(keys, in: existing)

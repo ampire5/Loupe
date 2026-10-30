@@ -25,11 +25,21 @@ import LoupeCore
     public init(thumbnails: ThumbnailStore? = nil, defaults: UserDefaults = .standard,
                 loader: BrowserInspectorLoader? = nil) {
         self.defaults = defaults
-        self.loader = loader ?? BrowserInspectorLoader(reader: { entry in
-            var result = await Task.detached(priority: .utility) { BrowserInspectorResult.read(entry) }.value
-            if let thumbnails {
-                // Existing checked thumbnails only; never decode the source or extract a ZIP entry just for the preview.
-                result.thumbnail = await thumbnails.cell(entry.url, maxPixel: 160)
+        self.loader = loader ?? BrowserInspectorLoader(catalog: { entry in
+            guard let thumbnails else { return nil }
+            let facts = await thumbnails.facts([entry.url])[entry.url]
+            let header = await thumbnails.headerFacts([entry.url])[entry.url]
+            let image = await thumbnails.cell(entry.url, maxPixel: 160)
+            let metadata: PhotoMetadata?
+            if let size = entry.size.flatMap(Int.init(exactly:)), let date = entry.date {
+                metadata = await thumbnails.photoMetadata(for: entry.url, stamp: FileStamp(modified: date, size: size))
+            } else { metadata = nil }
+            return BrowserInspectorSeed(facts: BrowserInspectorSeed.supplement(facts, with: header), thumbnail: image, metadata: metadata)
+        }, reader: { entry in
+            let result = await Task.detached(priority: .utility) { BrowserInspectorResult.read(entry) }.value
+            if let thumbnails, let size = entry.size.flatMap(Int.init(exactly:)), let date = entry.date,
+               result.metadata.modified == date {
+                await thumbnails.keepPhotoMetadata(result.metadata, for: entry.url, stamp: FileStamp(modified: date, size: size))
             }
             return result
         })
@@ -133,13 +143,15 @@ import LoupeCore
             message.stringValue = value.message ?? ""
             message.isHidden = value.message == nil
             summary.show(value.summary)
-            for (title, section) in sections { section.show(value.sections.first { $0.title == title }?.rows ?? []) }
+            for (title, section) in sections {
+                let data = value.sections.first { $0.title == title }
+                section.show(data?.rows ?? [], present: data != nil, pending: value.pendingSections.contains(title))
+            }
             let hasPath = loader.entry?.url.isFileURL == true
             reveal.isHidden = !hasPath; copyPath.isHidden = !hasPath
-            if value.name != displayed?.name { scroll.contentView.scroll(to: .zero) }
             displayed = value
         }
-        let image = loader.result?.thumbnail
+        let image = loader.thumbnail
         if image !== previewImage {
             previewImage = image
             preview.image = image.map { NSImage(cgImage: $0, size: .zero) }
@@ -192,6 +204,7 @@ private final class FlippedInspectorView: NSView {
 @MainActor private final class InspectorSection: NSStackView {
     let rows = InspectorRows()
     private let disclosure: NSButton
+    private let status = NSTextField(labelWithString: "")
     private let key: String
     private let defaults: UserDefaults
     init(title: String, defaults: UserDefaults) {
@@ -206,7 +219,7 @@ private final class FlippedInspectorView: NSView {
         disclosure.setButtonType(.onOff)
         disclosure.bezelStyle = .disclosure
         disclosure.font = .systemFont(ofSize: 13, weight: .semibold)
-        disclosure.state = (defaults.object(forKey: key) as? Bool ?? (title == "Capture")) ? .on : .off
+        disclosure.state = (defaults.object(forKey: key) as? Bool ?? true) ? .on : .off
         disclosure.target = self; disclosure.action = #selector(toggle)
         // The native triangle and an adjacent text label share the same click target and accessibility label.
         let label = NSButton(title: title, target: self, action: #selector(toggleLabel))
@@ -216,14 +229,23 @@ private final class FlippedInspectorView: NSView {
         addArrangedSubview(rows)
         rows.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
         rows.isHidden = disclosure.state != .on
+        status.font = .systemFont(ofSize: 12)
+        status.textColor = .secondaryLabelColor
+        status.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        addArrangedSubview(status)
+        status.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
+        status.isHidden = disclosure.state != .on
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    func show(_ values: [InfoRow]) {
-        isHidden = values.isEmpty
+    func show(_ values: [InfoRow], present: Bool, pending: Bool) {
+        if isHidden == present { isHidden = !present }
         rows.show(values)
+        let text = pending ? "Requesting information…" : values.isEmpty ? "No information in file." : ""
+        if status.stringValue != text { status.stringValue = text }
     }
     @objc private func toggle() {
         rows.isHidden = disclosure.state != .on
+        status.isHidden = disclosure.state != .on
         defaults.set(disclosure.state == .on, forKey: key)
     }
     @objc private func toggleLabel() { disclosure.state = disclosure.state == .on ? .off : .on; toggle() }
@@ -233,6 +255,7 @@ private final class FlippedInspectorView: NSView {
     var onFullText: ((String, String) -> Void)?
     private var fields: [String: (NSView, NSTextField, NSButton)] = [:]
     private var values: [String: String] = [:]
+    private var shown: [InfoRow] = []
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         orientation = .vertical; alignment = .leading; spacing = 8
@@ -240,8 +263,13 @@ private final class FlippedInspectorView: NSView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     func show(_ rows: [InfoRow]) {
+        guard rows != shown else { return }
+        shown = rows
         let labels = Set(rows.map(\.label))
-        for (label, field) in fields { field.0.isHidden = !labels.contains(label) }
+        for (label, field) in fields {
+            let hidden = !labels.contains(label)
+            if field.0.isHidden != hidden { field.0.isHidden = hidden }
+        }
         for row in rows {
             if fields[row.label] == nil {
                 let label = NSTextField(labelWithString: row.label)
@@ -261,7 +289,7 @@ private final class FlippedInspectorView: NSView {
                 fields[row.label] = (horizontal, value, more)
             }
             let (container, field, more) = fields[row.label]!
-            container.isHidden = false
+            if container.isHidden { container.isHidden = false }
             if values[row.label] != row.value {
                 // Limit summary text layout even for a large embedded workflow or description.
                 field.stringValue = String(row.value.prefix(320)) + (row.value.count > 320 ? "…" : "")

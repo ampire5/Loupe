@@ -9,6 +9,7 @@ import LoupeCore
     let folders: FolderBrowserSource
     let collections: CollectionSource
     let photos: PhotosBrowserSource
+    private var historyObserver: NSObjectProtocol?
     private func isPhotos(_ location: BrowserLocation?) -> Bool {
         if case .source(let id) = location { return PhotosLocation.owns(id) }
         return false
@@ -22,7 +23,14 @@ import LoupeCore
         self.collections = collections
         self.hasStash = hasStash
         self.photos = photos ?? PhotosBrowserSource()
+        historyObserver = NotificationCenter.default.addObserver(forName: FileViewHistory.didChange,
+            object: folders.fileViewHistory, queue: .main) { [weak self] note in
+                guard let dates = note.userInfo?["dates"] as? [URL: Date] else { return }
+                MainActor.assumeIsolated { self?.view?.setLastViewed(dates) }
+            }
     }
+
+    deinit { if let historyObserver { NotificationCenter.default.removeObserver(historyObserver) } }
 
     /// The browser both halves draw into.
     weak var view: HomeBrowserView? {
@@ -36,8 +44,27 @@ import LoupeCore
     func places() async -> [BrowserEntry] { await folders.places() }
 
     func list(_ location: BrowserLocation) -> AsyncThrowingStream<BrowserListing, Error> {
-        if case .source(let id) = location { return PhotosLocation.owns(id) ? photos.list(id) : collections.list(id) }
-        return folders.list(location)
+        let stream: AsyncThrowingStream<BrowserListing, Error>
+        if case .source(let id) = location { stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id) }
+        else { stream = folders.list(location) }
+        let history = folders.fileViewHistory
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await original in stream {
+                        try Task.checkCancellation()
+                        continuation.yield(original)
+                        let dates = await history.lastViewed(original.entries.filter(\.isFile).map(\.url))
+                        try Task.checkCancellation()
+                        // Optional history never holds back the already available listing or rebuilds its tree.
+                        await Task.yield()
+                        if self.view?.location == location { self.view?.setLastViewed(dates) }
+                    }
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     func lastListing(for location: BrowserLocation) -> BrowserListing? { folders.lastListing(for: location) }

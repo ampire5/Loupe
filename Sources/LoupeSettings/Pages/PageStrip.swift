@@ -51,6 +51,13 @@ extension SettingsPanel {
             .number("thumb-size", "Thumbnail size", unit: "px", step: 64, symbol: "photo",
                     description: "Long side of a stored thumbnail; a change makes every thumbnail again. 256–1024 px, "
                         + "default 512."),
+            .choice("thumbnail-format", "Thumbnail format", [
+                (word: "jpeg", title: "JPEG"), (word: "heic", title: "HEIC"), (word: "avif", title: "AVIF"),
+            ], symbol: "photo.badge.checkmark", description: "JPEG is the fast default. HEIC and AVIF can save space but use more CPU. "
+                + "Applies after restarting Loupe; thumbnails are rebuilt, viewing history is kept. Unavailable encoders use JPEG."),
+            .number("thumbnail-quality", "Thumbnail quality", step: 1,
+                    symbol: "slider.horizontal.3", description: "Compression quality, 10–100; default 80. The same number can look "
+                + "different between formats. Applies after restarting Loupe; existing thumbnails are rebuilt."),
             .number("thumb-cache-size", "Thumbnail store limit", symbol: "internaldrive",
                     description: "~/Library/Caches/Loupe/Thumbs.db, ≈ 50 KB a thumbnail; the longest unseen go first. "
                         + "M or G, or bytes; 0 = in memory only until quit. Default 2G (≈ 40 000 photos)."),

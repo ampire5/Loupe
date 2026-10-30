@@ -104,7 +104,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 </tr>
 <tr>
 <td><b>Auto colour and vibrance.</b> <code>c</code> and <code>v</code> for this folder (<code>⇧C</code> / <code>⇧V</code> make it the default) — left half original, right half corrected. Applied on the GPU as a colour cube, never written to your files.</td>
-<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
+<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. Choose a file by click or keyboard; hovering another card keeps the information on your selection. Information sections start expanded and remember manual collapse. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
 </tr>
 <tr>
 <td><img src="docs/images/sidebar.webp" alt="Sidebar with the folder tree"></td>
@@ -284,6 +284,17 @@ Loupe keeps its data in three places, which `--zap` removes:
 - `~/.config/loupe` — your settings, bindings and Dock icons.
 - `~/Library/Application Support/Loupe` — Recent, sessions and per-folder settings.
 - `~/Library/Caches/Loupe` — the thumbnail cache.
+
+### Advanced thumbnail encoding
+
+Thumbnails use ImageIO JPEG at quality 80 by default. Choose format and quality in **Settings → Strip → Thumbnails**. These per-app preferences `thumbnail-format` (`jpeg`, `heic`, `avif`) and `thumbnail-quality` (10–100) apply on the next launch; an unavailable encoder falls back to JPEG. For example:
+
+```sh
+defaults write local.loupe thumbnail-format -string jpeg
+defaults write local.loupe thumbnail-quality -int 80
+```
+
+Changing either preference rebuilds the disposable thumbnail payloads while keeping the file catalog and metadata. Last Viewed is recorded per file after an actual visible presentation and kept in the separate user-state database, including across cache cleanup. HEIC and AVIF can save space but cost more CPU; the shared codec benchmark kept JPEG as the default.
 
 ## Configure
 

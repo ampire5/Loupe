@@ -31,6 +31,10 @@ import QuartzCore
     /// The photo `shownImage` is of (`session.entry`'s URL), nil without an image: a new image of the same photo (the
     /// decoded pyramid replacing a seeded thumbnail) is not a new photo (`imageDidChange`).
     private var shownPhoto: URL?
+    private let historyClient = UUID()
+    private let historyVisibility = FileViewVisibility()
+    private var historyWasVisible = false
+    private var viewReceipts: [URL: FileViewReceipt] = [:]
     /// `shownImage.revision` when handed over: a level arriving in (or evicted from) the same image redraws.
     private var shownRevision: Int?
     private var shownTransform: ViewTransform?
@@ -244,7 +248,35 @@ import QuartzCore
             .next(shown: shownCompanionColor, url: url, cube: session.colorCube(for: url), now: CACurrentMediaTime(),
                   durationMs: Settings.shared.config.autoColorFadeMilliseconds)
         }
-        let changed = image !== shownImage || revision != shownRevision || session.transform != shownTransform
+        let primaryURL = image == nil ? nil : session.entry?.url
+        let companionURL = companion == nil ? nil : session.shownCompanion?.url
+        let historyVisible = window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor
+        historyVisibility.setVisible(historyVisible)
+        let possibleURLs = Set([primaryURL, companionURL].compactMap { $0 })
+        var visibleURLs = Set<URL>()
+        if historyVisible {
+            let visibleRect = session.transform.visibleRect
+            if let layout, layout.rects.count == 2 {
+                let primary = session.companionFirst ? 1 : 0
+                for position in 0..<2 where layout.rects[position].intersects(visibleRect) {
+                    if let url = layout.order[position] == primary ? primaryURL : companionURL { visibleURLs.insert(url) }
+                }
+            } else if CGRect(origin: .zero, size: session.transform.imageSize).intersects(visibleRect), let primaryURL {
+                visibleURLs.insert(primaryURL)
+            }
+        }
+        viewReceipts = viewReceipts.filter { historyVisible && possibleURLs.contains($0.key)
+            && (!$0.value.isPending || visibleURLs.contains($0.key)) }
+        let missing = visibleURLs.filter { viewReceipts[$0] == nil }
+        if !missing.isEmpty {
+            let urls = Array(missing)
+            guard let receipts = session.fileViewHistory.presentations(for: urls, client: historyClient,
+                visibility: historyVisibility, retry: { [weak self] in
+                    DispatchQueue.main.async { [weak self] in self?.sessionDidChange() }
+                }) else { return }
+            for (url, receipt) in zip(urls, receipts) { viewReceipts[url] = receipt }
+        }
+        let changed = historyVisible != historyWasVisible || image !== shownImage || revision != shownRevision || session.transform != shownTransform
             || orientation != shownOrientation || color != shownColor
             || companion !== shownCompanion || companionRevision != shownCompanionRevision
             || companionOrientation != shownCompanionOrientation || companionColor != shownCompanionColor
@@ -255,6 +287,7 @@ import QuartzCore
                 imageDidChange(samePhoto: photo != nil && photo == shownPhoto)
                 shownPhoto = photo
             }
+            historyWasVisible = historyVisible
             shownImage = image
             shownRevision = revision
             shownTransform = session.transform
@@ -267,11 +300,12 @@ import QuartzCore
             shownLayout = layout
             let transform = session.transform
             let page = RenderPage(image: image, orientation: orientation, color: color,
-                                  rect: CGRect(origin: .zero, size: transform.imageSize))
+                                  rect: CGRect(origin: .zero, size: transform.imageSize),
+                                  viewReceipt: primaryURL.flatMap { viewReceipts[$0] })
             if let layout, layout.rects.count == 2 {
                 // Two pages, left to right on screen, each in its rect of the virtual picture the transform shows.
                 let other = RenderPage(image: companion, orientation: companionOrientation, color: companionColor,
-                                       rect: .zero)
+                                       rect: .zero, viewReceipt: companionURL.flatMap { viewReceipts[$0] })
                 let reading = session.companionFirst ? (other, page) : (page, other)
                 var left = layout.order[0] == 0 ? reading.0 : reading.1
                 var right = layout.order[0] == 0 ? reading.1 : reading.0
@@ -708,9 +742,15 @@ import QuartzCore
 
     /// Touches stop arriving when the window loses key status or the view leaves its window, again without
     /// an "ended" for the fingers on the pad; drop whatever the recogniser remembered.
+    override func viewDidHide() { super.viewDidHide(); sessionDidChange() }
+    override func viewDidUnhide() { super.viewDidUnhide(); sessionDidChange() }
+    @objc private func historyVisibilityChanged(_ note: Notification) { sessionDidChange() }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         let center = NotificationCenter.default
+        center.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        historyVisibility.setVisible(false)
         center.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         center.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
         center.removeObserver(self, name: NSWindow.willEnterFullScreenNotification, object: nil)
@@ -720,6 +760,8 @@ import QuartzCore
         stopWheelLink()
         cursorAutohide.stop()
         guard let window else { return }
+        center.addObserver(self, selector: #selector(historyVisibilityChanged(_:)),
+                           name: NSWindow.didChangeOcclusionStateNotification, object: window)
         center.addObserver(self, selector: #selector(windowDidResignKey(_:)),
                            name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(windowDidBecomeKey(_:)),

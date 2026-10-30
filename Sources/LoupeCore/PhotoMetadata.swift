@@ -4,7 +4,7 @@ import ImageIO
 
 /// What the info panel says about a photo beyond the decoder's own facts: capture settings from ImageIO's properties,
 /// the generation text of AI pictures, the file's dates. Every field is the finished string, nil when the file has none.
-public struct PhotoMetadata: Equatable, Sendable {
+public struct PhotoMetadata: Equatable, Sendable, Codable {
     public var camera, lens, focalLength, aperture, exposure, iso, captured, gps, software, description: String?
     /// Exposure compensation: `−0.3 EV`, `+1 EV` (nil at zero).
     public var compensation: String?
@@ -21,7 +21,13 @@ public struct PhotoMetadata: Equatable, Sendable {
     public var error: String?
     /// The header facts of an ImageIO-readable file (`ImageIODecoder.probe`), so the panel's File section is complete
     /// before the decoder has read the photo; nil for a file ImageIO cannot read (JPEG XL) and for a failed read.
-    public var header: ImageInfo?
+    public var header: ImageInfo? = nil
+
+    // Rendering objects are not persisted. PhotoMetadataRecord keeps the portable header alongside this payload.
+    private enum CodingKeys: String, CodingKey {
+        case camera, lens, focalLength, aperture, exposure, iso, captured, gps, software, description
+        case compensation, generation, comfyWorkflowBytes, created, modified, bitDepth, hasAlpha, error
+    }
 
     /// `pngSizes` holds the true byte length of PNG text that the reader cut (`PNGText.readAll`); a missing key means "as long as the text".
     public init(properties: [String: Any], pngText: [String: String], pngSizes: [String: Int] = [:], created: Date?, modified: Date?) {

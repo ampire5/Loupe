@@ -2,6 +2,12 @@ import AppKit
 import LoupeCore
 
 #if DEBUG
+if CommandLine.arguments.contains("--file-view-history-bench") {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await FileViewHistoryBench.run() }
+        NSApplication.shared.run()
+    }
+}
 if CommandLine.arguments.contains("--native-toolbar-bench")
     || Bundle.main.object(forInfoDictionaryKey: "LoupeNativeToolbarBench") as? Bool == true {
     MainActor.assumeIsolated {
