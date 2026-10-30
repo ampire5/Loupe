@@ -241,11 +241,15 @@ private final class AlbumsFixture: PhotosLibraryAccess, @unchecked Sendable {
     }
     func assets(in album: String) async throws -> [PhotosAsset] {
         let revision = lock.withLock { version }
-        return (0..<count).map {
-            PhotosAsset(id: $0 == 0 ? "a" : $0 == 1 ? "b" : "asset-\($0)",
-                        modified: Date(timeIntervalSinceReferenceDate: Double(revision)),
-                        created: Date(timeIntervalSinceReferenceDate: Double($0)), width: 2, height: 2,
-                        filename: "Image-\($0).HEIC")
+        let modified = Date(timeIntervalSinceReferenceDate: Double(revision))
+        return (0..<count).map { (index: Int) -> PhotosAsset in
+            let id: String
+            if index == 0 { id = "a" }
+            else if index == 1 { id = "b" }
+            else { id = "asset-\(index)" }
+            let created = Date(timeIntervalSinceReferenceDate: Double(index))
+            let filename = "Image-\(index).HEIC"
+            return PhotosAsset(id: id, modified: modified, created: created, width: 2, height: 2, filename: filename)
         }
     }
     func cover(in album: String) async throws -> URL? { nil }
