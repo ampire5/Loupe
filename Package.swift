@@ -54,6 +54,7 @@ let package = Package(
         .testTarget(name: "LoupeSettingsTests", dependencies: ["LoupeSettings", "LoupeCore", .product(name: "SettingsKit", package: "SettingsKit"),
                                                                .product(name: "LogiHIDPP", package: "LogiHIDPP")]),
         .testTarget(name: "LoupeRenderTests", dependencies: ["LoupeRender", "LoupeCore"]),
+        .testTarget(name: "LoupeTests", dependencies: ["Loupe", "LoupeCore", "LoupeRender", .product(name: "HomeScreenKit", package: "HomeScreenKit")]),
     ],
     swiftLanguageModes: [.v5]
 )

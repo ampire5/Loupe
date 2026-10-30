@@ -1029,6 +1029,18 @@ import QuartzCore
         animateZoom(to: target)
     }
 
+    /// Exact toolbar zoom follows the same Manual transition and pending-request invalidation as a preset key.
+    func setManualZoom(percent: Double) {
+        guard percent.isFinite, percent > 0, percent <= 6400, session.entry != nil else { return }
+        let base = zoomBase
+        _ = onZoomKey?(.manualZoom)
+        session.noteManualZoom()
+        invalidateSmartZoomRequest()
+        session.subjectZoom = false
+        subjectZoomPress = nil
+        animateZoom(to: base.withMode(.actual(percent / 100)))
+    }
+
     func animateZoom(to target: ViewTransform) {
         let now = CACurrentMediaTime()
         let from = session.transform

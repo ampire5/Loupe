@@ -102,7 +102,9 @@ import UniformTypeIdentifiers
         stats: { [weak self] in self?.toggleStats() },
         strip: { [weak self] in self?.strip.togglePin() },
         info: { [weak self] in self?.toggleInfoPanel(nil) },
-        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() })
+        smartZoom: { [weak self] in self?.folderSlots?.showSmartZoom() },
+        statusAction: { [weak self] action in self?.performStatusAction(action) },
+        statusChoices: { [weak self] in self?.statusChoices() ?? .init() })
     private lazy var viewerToolbar = ViewerToolbarController(actions: viewerActions)
     private let windowToolbarController = WindowToolbarController()
     private var isFullScreen = false
@@ -303,6 +305,7 @@ import UniformTypeIdentifiers
             session.smartZoom = SmartZoomState(restoring: remembered)
             tabZoomValues["smart-zoom"] = session.smartZoom.mode.rawValue
         }
+        viewerToolbar.attach(to: window)
         windowToolbarController.show(viewerToolbar.nsToolbar)
         window.toolbar = windowToolbarController.toolbar
         toolbarWasWanted = windowToolbar
@@ -1048,6 +1051,34 @@ import UniformTypeIdentifiers
         folderSettings.set(key, FolderAdjust.text(value), for: folder)
     }
 
+    private func statusChoices() -> ViewerStatusChoices {
+        let rules = ZoomRules(config: effectiveConfig)
+        let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
+        let groups = boxes.map { boxes in rules.chain.filter {
+            SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
+        } } ?? []
+        return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
+                     groups: groups, selectedGroup: session.browse.followed)
+    }
+
+    private func performStatusAction(_ action: ViewerStatusAction) {
+        switch action {
+        case .position(let index):
+            guard let count = session.playlist?.files.count, (0..<count).contains(index) else { return }
+            session.scrub(to: index)
+            session.endScrub()
+        case .zoomPercent(let percent): viewerView.setManualZoom(percent: percent)
+        case .mode(let mode): setSmartZoomMode(mode)
+        case .profile(let name): setDetector(name == "Vision" ? nil : name)
+        case .group(let kind):
+            session.browse.followed = kind
+            if session.smartZoom.mode == .off { setSmartZoomMode(session.smartZoom.lastEnabled) }
+            viewerView.frameSubjectNow()
+            folderSlots?.refreshSmartZoom()
+        default: break // Info, key bindings and steps are routed by the toolbar's existing actions.
+        }
+    }
+
     private func performViewerAction(_ action: KeyAction) {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.representedObject = action.rawValue
@@ -1683,12 +1714,7 @@ import UniformTypeIdentifiers
         let status = session.imageStatus
         askPhotoFacts(status.photo)
         statsBar.update(status)
-        let shown = session.zoomTarget ?? session.transform
-        viewerToolbar.updateStatus(status, zoomMode: shown.mode)
-        viewerToolbar.updateWorkflow(session.smartZoom.mode)
-        viewerToolbar.updateSmartMode(subject: session.smartZoom.mode == .frame,
-                                      screen: effectiveConfig.keepZoomAs == .screen && { if case .free = shown.mode { true } else { false } }(),
-                                      fill: shown.mode == .fill)
+        viewerToolbar.updateStatus(status, zoomMode: (session.zoomTarget ?? session.transform).mode)
         if !status.navigationKey.isEmpty, status.navigationKey != lastNavigationKey {
             lastNavigationKey = status.navigationKey
             statsBar.reveal()
