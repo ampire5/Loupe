@@ -3,7 +3,8 @@ import AppKit
 /// One NSToolbar for the window's lifetime. Switch items instead of replacing
 /// NSWindow.toolbar, preserving AppKit's full-screen auto-hide host and layout.
 @MainActor final class WindowToolbarController: NSObject, NSToolbarDelegate {
-    let toolbar = NSToolbar(identifier: "loupe.window")
+    // Equal identifiers synchronize item mutations between independently navigated windows.
+    let toolbar = NSToolbar(identifier: "loupe.window.\(UUID().uuidString)")
     private var source: NSToolbar?
 
     override init() {

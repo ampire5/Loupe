@@ -44,6 +44,9 @@ if getenv("MallocLargeCache") == nil {
 if CommandLine.arguments.dropFirst().first == "settings" {
     SettingsBench.main(Array(CommandLine.arguments.dropFirst(2)))
 }
+if CommandLine.arguments.dropFirst().first == "photos" {
+    PhotosBench.main(Array(CommandLine.arguments.dropFirst(2)))
+}
 if CommandLine.arguments.dropFirst().first == "replay" {
     Replay.main(Array(CommandLine.arguments.dropFirst(2)))
 }

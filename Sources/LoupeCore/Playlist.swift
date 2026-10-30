@@ -11,9 +11,11 @@ public struct Playlist: Equatable, Sendable {
 
     /// The order and the position: the grid's own sort over the same entries the grid has (`BrowserListingSource.fileEntry`).
     private var model: FolderPlaylist
+    private var sourceIndex: Int?
+    public var isSourceOrdered: Bool { sourceIndex != nil }
     /// `model`'s URLs, kept: the cache and the strip read them on every step.
     public private(set) var files: [URL]
-    public var index: Int { model.index }
+    public var index: Int { sourceIndex ?? model.index }
     public var sort: BrowserSort { model.sort }
     /// Size and mtime of the files, as the folder listing reported them (empty when the playlist was
     /// built without a listing). The thumbnail cache validates against these, so it needs no `stat` per
@@ -23,6 +25,17 @@ public struct Playlist: Equatable, Sendable {
     /// `init(files:current:stamps:)` without stamps.
     public init(files: [URL], current: URL) {
         self.init(files: files, current: current, stamps: [:])
+    }
+
+    /// An authoritative source sequence: no extension filtering, filename sorting or folder lookup.
+    public init?(ordered: [URL], current: URL) {
+        var seen = Set<URL>()
+        let files = ordered.filter { seen.insert($0).inserted }
+        guard !files.isEmpty else { return nil }
+        sourceIndex = files.firstIndex(of: current) ?? 0
+        self.files = files
+        stamps = [:]
+        model = FolderPlaylist(folder: current.deletingLastPathComponent(), entries: [], sort: .standard, current: current)
     }
 
     /// Pure: filters `files` to image extensions (case-insensitive), adds `current` and `keeping` (files the
@@ -61,7 +74,8 @@ public struct Playlist: Equatable, Sendable {
     /// (spelled differently, or gone). The result's own position means nothing; a folder left with nothing to show
     /// is just `current`.
     public static func relist(current: URL, keeping: [URL] = []) async -> Playlist? {
-        await Task.detached(priority: .userInitiated) {
+        guard current.isFileURL else { return nil }
+        return await Task.detached(priority: .userInitiated) {
             guard let entries = list(folderOf: current) else { return nil }
             let me = current.standardizedFileURL
             let keep = Set(keeping.map(\.standardizedFileURL))
@@ -91,7 +105,8 @@ public struct Playlist: Equatable, Sendable {
     /// playlist shown after an open until `relist` brings the stamps: dot names are left out, the hidden flag is not
     /// known yet, `current` always stays. Nil if the folder cannot be opened.
     public static func quickList(current: URL) async -> Playlist? {
-        await Task.detached(priority: .userInitiated) {
+        guard current.isFileURL else { return nil }
+        return await Task.detached(priority: .userInitiated) {
             let me = current.standardizedFileURL
             let folder = me.deletingLastPathComponent()
             if ArchivePath.split(me) != nil {
@@ -138,6 +153,13 @@ public struct Playlist: Equatable, Sendable {
     /// reached while the folder was listing.
     public func replacing(with listed: Playlist) -> Playlist {
         var result = listed
+        if result.isSourceOrdered {
+            let identity = PhotosLocation.asset(in: current)
+            if let identity, let i = result.files.firstIndex(where: { PhotosLocation.asset(in: $0) == identity }) {
+                result.sourceIndex = i
+            } else { result.sourceIndex = min(index, result.files.count - 1) }
+            return result
+        }
         if !result.model.move(to: current) {
             _ = result.model.move(by: min(index, listed.files.count - 1) - listed.index)
         }
@@ -148,6 +170,7 @@ public struct Playlist: Equatable, Sendable {
 
     /// The same files and stamps in `sort`'s order, on the same photo.
     public func sorted(_ sort: BrowserSort) -> Playlist {
+        guard !isSourceOrdered else { return self }
         guard sort != self.sort else { return self }
         var result = self
         result.model.resort(sort)
@@ -158,16 +181,36 @@ public struct Playlist: Equatable, Sendable {
     /// `from`, or the first index beyond it in the direction of `step` whose file `skipping` does not refuse; nil past
     /// either end (`FolderPlaylist.index(from:step:skipping:)`).
     public func index(from: Int, step: Int, skipping: (URL) -> Bool) -> Int? {
-        model.index(from: from, step: step) { skipping($0.url) }
+        if isSourceOrdered {
+            var i = from
+            while files.indices.contains(i), skipping(files[i]) { i += step < 0 ? -1 : 1 }
+            return files.indices.contains(i) ? i : nil
+        }
+        return model.index(from: from, step: step) { skipping($0.url) }
     }
 
     /// Moves by `step` entries. Returns `false` and changes nothing if that would leave the
     /// list: navigation stops at the ends rather than wrapping.
-    public mutating func move(by step: Int) -> Bool { model.move(by: step) }
+    public mutating func move(by step: Int) -> Bool {
+        if let index = sourceIndex {
+            let (next, overflow) = index.addingReportingOverflow(step)
+            guard !overflow, files.indices.contains(next) else { return false }
+            sourceIndex = next
+            return true
+        }
+        return model.move(by: step)
+    }
 
     /// Moves to `url` (standardized); false and nothing changed when it is not in the list.
-    public mutating func move(to url: URL) -> Bool { model.move(to: url) }
+    public mutating func move(to url: URL) -> Bool {
+        if isSourceOrdered {
+            guard let i = files.firstIndex(of: url) else { return false }
+            sourceIndex = i
+            return true
+        }
+        return model.move(to: url)
+    }
 
-    public mutating func moveToFirst() { _ = model.move(by: -index) }
-    public mutating func moveToLast() { _ = model.move(by: files.count - 1 - index) }
+    public mutating func moveToFirst() { _ = move(by: -index) }
+    public mutating func moveToLast() { _ = move(by: files.count - 1 - index) }
 }

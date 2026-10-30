@@ -489,6 +489,10 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// Starts what `goal` of `url` still needs; `mayRead`: a read of the file may start for it (without, nothing of
     /// an entry not held can start, and none is made for it).
     private func start(_ url: URL, _ goal: CacheGoal, mayRead: Bool) {
+        // Photos image data is requested only for a selected page. A local-only neighbour request cannot be
+        // promoted in place to download from iCloud; selection starts a fresh, network-capable source request.
+        // Existing resident bytes may still be decoded/kept under the usual memory budget.
+        let mayRead = mayRead && (PhotosLocation.asset(in: url) == nil || isCurrent(url))
         let e: CacheEntry<Pyramid>
         if let existing = entries[url] {
             e = existing

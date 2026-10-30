@@ -52,6 +52,7 @@ let package = Package(
                                                      .product(name: "FilmstripModel", package: "HomeScreenKit")]),
         .testTarget(name: "LoupeSettingsTests", dependencies: ["LoupeSettings", "LoupeCore", .product(name: "SettingsKit", package: "SettingsKit"),
                                                                .product(name: "LogiHIDPP", package: "LogiHIDPP")]),
+        .testTarget(name: "LoupeTests", dependencies: ["Loupe", "LoupeCore", "LoupeRender", .product(name: "HomeScreenKit", package: "HomeScreenKit")]),
         .testTarget(name: "LoupeRenderTests", dependencies: ["LoupeRender", "LoupeCore"]),
     ],
     swiftLanguageModes: [.v5]

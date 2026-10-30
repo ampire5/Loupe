@@ -16,3 +16,10 @@ import Testing
     #expect(location == .folder(URL(fileURLWithPath: "/Volumes/T/g.zip")))
     #expect(select == entry.path)
 }
+
+@Test func browseTargetPhotosReturnsToItsSourceWithStableSelection() {
+    let photo = PhotosLocation.assetURL(album: PhotosLocation.library, asset: "asset/one", revision: "edited")
+    let (location, select) = BrowseTarget.location(for: photo)
+    #expect(location == .source(PhotosLocation.collection(PhotosLocation.library)))
+    #expect(select == photo.absoluteString)
+}

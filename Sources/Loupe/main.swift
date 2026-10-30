@@ -18,6 +18,13 @@ if CommandLine.arguments.dropFirst().contains("--print-input-conf") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--photos-read-bench") {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await PhotosReadBench.run() }
+        NSApplication.shared.run()
+    }
+}
+
 if CommandLine.arguments.contains("--smartzoom-bench") {
     MainActor.assumeIsolated { SmartZoomBench.run() }
 }

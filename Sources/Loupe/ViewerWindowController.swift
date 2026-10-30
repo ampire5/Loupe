@@ -48,6 +48,16 @@ import UniformTypeIdentifiers
     }
     /// The Home tab a gallery being entered returns to (Recent when a Recent card opened it).
     private var galleryReturn = HomeTab.stash
+    private var photosTask: Task<Void, Never>?
+    private var photosObservation: (any PhotosChangeObservation)?
+    private var photosAlbum: String?
+    private var photosGeneration = 0
+    private var photosIsVisible = true
+    private var photosNeedsRefresh = false
+    private var photosWantedAsset: String?
+    private var photosPendingOpen = false
+    private let photosLibrary: any PhotosLibraryAccess
+    private let photosSorts: PhotosSortStore
     private let thumbnails: ThumbnailStore
     /// The Stash gallery last entered from this tab's Stash, or stepped to in its list, and its folder (or zip): the tab
     /// shows that gallery while it is in that folder (another open leaves it).
@@ -196,15 +206,19 @@ import UniformTypeIdentifiers
     }
 
     init(cache: ImageCache<MetalPyramidLoader>, thumbnails: ThumbnailStore, thumbnailsReady: Task<Void, Never>?,
-         positions: FolderPositions, folderSettings: FolderSettings, recent: RecentStore?) {
+         positions: FolderPositions, folderSettings: FolderSettings, recent: RecentStore?,
+         photosLibrary: any PhotosLibraryAccess = PhotosLibrary.shared, photosSorts: PhotosSortStore? = nil) {
+        self.photosLibrary = photosLibrary
+        self.photosSorts = photosSorts ?? .shared
         self.folderSettings = folderSettings
         self.thumbnails = thumbnails
-        session = ViewerSession(cache: cache, thumbnails: thumbnails, thumbnailsReady: thumbnailsReady, positions: positions)
+        session = ViewerSession(cache: cache, thumbnails: thumbnails, thumbnailsReady: thumbnailsReady,
+                                positions: positions, photosLibrary: photosLibrary)
         session.recent = recent
         // No photo yet, so no folder: the effective config is loupe.conf's.
         appliedResampling = ResampleSettings(config: Settings.shared.config)
         viewerView = ViewerView(session: session, resampling: appliedResampling)
-        strip = StripController(session: session, store: thumbnails)
+        strip = StripController(session: session, store: thumbnails, photosLibrary: photosLibrary)
         // The content runs under the title bar and the toolbar Home brings, as Home's grid does; the viewer's parts hold to
         // `contentLayoutGuide` (the area below them), so under a bare title bar they stand where they always stood.
         let window = ViewerWindow(contentRect: Self.initialFrame(),
@@ -524,6 +538,8 @@ import UniformTypeIdentifiers
 
     /// The window goes away: nothing it does from here on is the user's choice of full screen or not.
     func windowWillClose(_ notification: Notification) {
+        stopPhotos()
+        homeSources?.home.photos.stop()
         dropStash()
         homeView?.browser.stop()
         homeSources?.folders.stop()
@@ -724,7 +740,7 @@ import UniformTypeIdentifiers
     /// is its session's id, the window its tab group as it is now.
     func tabFacts(rank: Int) -> TabFacts {
         let current = isShowingHome ? nil : session.playlist?.current.standardizedFileURL
-        let folder = current.map(OpenRouter.folder(of:))
+        let folder = current.flatMap { $0.isFileURL ? OpenRouter.folder(of: $0) : nil }
         let gallery = stashGallery.flatMap { $0.folder.path == folder?.path ? $0.id : nil }
         let group = window.map { $0.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier($0) }
         return TabFacts(tab: session.cacheID.raw, window: group.map { Int(bitPattern: $0) } ?? 0, current: current,
@@ -736,6 +752,8 @@ import UniformTypeIdentifiers
     /// (spec §2.3). `returnTo`: the Home tab ⌘W goes back to (a Recent card opened it here); nil: as from Stash.
     func open(_ target: OpenTarget, stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil) {
         switch target {
+        case .photos(let album, let asset):
+            openPhotos(album: album, asset: asset)
         case .file(let url): open(url)
         case .folder(let url): openFolder(url)
         case .stashGallery:
@@ -751,6 +769,11 @@ import UniformTypeIdentifiers
     }
 
     func open(_ url: URL) {
+        if let album = PhotosLocation.album(in: url), let asset = PhotosLocation.asset(in: url) {
+            openPhotos(album: album, asset: asset)
+            return
+        }
+        stopPhotos()
         // A file from outside while Stash is shown: the viewer comes back, and ⌘W returns to Stash.
         if isShowingHome {
             returnsTo = shownTab
@@ -766,6 +789,7 @@ import UniformTypeIdentifiers
     /// without photos of its own (only subfolders) or that cannot be listed shows in Folders instead, where its
     /// subfolders or the reason are, rather than leaving an empty viewer.
     private func openFolder(_ url: URL) {
+        stopPhotos()
         if isShowingHome {
             returnsTo = shownTab
             hideHome()
@@ -816,7 +840,7 @@ import UniformTypeIdentifiers
     /// The photo on screen (in a Stash gallery or not), or nil. With two pages on screen, the current page: a restored
     /// tab opens the pair containing it.
     private func viewerTab() -> SessionSnapshot.Tab? {
-        guard let current = session.playlist?.current else { return nil }
+        guard let current = session.playlist?.current, current.isFileURL else { return nil }
         let view = session.currentViewText
         if let gallery = stashGallery, gallery.folder == OpenRouter.folder(of: current) {
             return .gallery(id: gallery.id, list: stashList?.variables, index: stashList?.index, count: stashList?.count,
@@ -875,7 +899,9 @@ import UniformTypeIdentifiers
     private func updateTitle() {
         let home = isShowingHome ? shownTab : nil
         let text: String
-        if home == nil, let pending {
+        if home == nil, let list = session.playlist, list.isSourceOrdered {
+            text = "\(list.index + 1) / \(list.files.count) · \(list.current.lastPathComponent)"
+        } else if home == nil, let pending {
             text = WindowTitle.text(of: pending)
         } else {
             // A pair names both pages, in reading order (spread spec, «Положение»).
@@ -960,6 +986,8 @@ import UniformTypeIdentifiers
         attachHome(view)
         view.isHidden = false
         window.titlebarAppearsTransparent = true
+        strip.setPhotosWorkVisible(false)
+        session.setPhotosViewerVisible(false)
         window.titleVisibility = .hidden
         windowToolbarController.show(view.browser.nsToolbar)
         // Home's toolbar stays enabled; in full screen AppKit handles its auto-hide.
@@ -968,10 +996,14 @@ import UniformTypeIdentifiers
         view.isSidebarVisible = config.homeSidebar
         view.isParked = false
         homeSources?.folders.isPaused = false
+        homeSources?.home.photos.isPaused = !photosIsVisible
         applyBrowserSettings()
         returnsTo = nil
         let browser = view.browser
-        if shown == .folders {
+        if returningFromViewer, let current = session.playlist?.current, let album = PhotosLocation.album(in: current),
+           tab == nil || tab == .recent {
+            browser.show(.source(PhotosLocation.collection(album)), selecting: current.absoluteString)
+        } else if shown == .folders {
             if let start = browseAt ?? (returningFromViewer ? session.playlist.map { BrowseTarget.location(for: $0.current) } : nil) {
                 browser.lastOpenedID = start.select
                 browser.show(start.location, selecting: start.select)
@@ -995,9 +1027,11 @@ import UniformTypeIdentifiers
     }
 
     func hideHome() {
-        folderSlots?.setActive(session.playlist != nil)
+        folderSlots?.setActive(session.playlist?.current.isFileURL == true)
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
+        strip.setPhotosWorkVisible(photosIsVisible)
+        session.setPhotosViewerVisible(photosIsVisible)
         homeView.isParked = true
         windowToolbarController.show(viewerToolbar.nsToolbar)
         // Restore whether the viewer's toolbar is enabled. In full screen it stays
@@ -1014,6 +1048,8 @@ import UniformTypeIdentifiers
             self.titleVisibilityBeforeHome = nil
         }
         homeSources?.folders.isPaused = true
+        homeSources?.home.photos.stop()
+        homeSources?.home.photos.isPaused = true
         updateBackButton()
         window?.makeFirstResponder(viewerView)
         updateTitle()
@@ -1089,7 +1125,8 @@ import UniformTypeIdentifiers
             self?.attachedStash()?.container
         })
         let source = LoupeHomeSource(folders: folders, collections: collections,
-                                     hasStash: { StashLibrary.Source.current != nil })
+                                     hasStash: { StashLibrary.Source.current != nil },
+                                     photos: PhotosBrowserSource(library: photosLibrary, sorts: photosSorts))
         let view = HomeView(source: source)
         source.view = view.browser
         view.browser.unreadable = .app
@@ -1106,6 +1143,8 @@ import UniformTypeIdentifiers
         }
         browser.onLocation = { [weak self] location in
             guard let self else { return }
+            if self.photosTask != nil, let album = self.photosAlbum,
+               location != .source(PhotosLocation.collection(album)) { self.stopPhotos() }
             // A write to Loupe.db: off the main thread, in the order of the moves.
             if case .folder(let url) = location { Self.placesWriter.async { places.lastFolder = url } }
             let tab = HomeCollections.tab(of: location)
@@ -1147,6 +1186,7 @@ import UniformTypeIdentifiers
             self.registry?.open(folder ? .folder(url) : .file(url), openIn: .replace, from: self)
         }
         folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
+        source.photos.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
         // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done. The popover (View ›
         // Thumbnails…) has the counts whether or not anything is being prepared (`ThumbsProgress.display`).
@@ -1322,7 +1362,109 @@ import UniformTypeIdentifiers
     private func openFromBrowser(_ target: OpenTarget, _ how: HomeClick) {
         DebugLog.measureTurn("open from browser")
         let force: OpenForce? = how == .openNewTab ? .tab : how == .openNewWindow ? .window : nil
-        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: .folders)
+        let returnTo: HomeTab = if case .photos = target { .recent } else { .folders }
+        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: returnTo)
+    }
+
+    private func stopPhotos() {
+        photosGeneration += 1
+        photosTask?.cancel()
+        photosTask = nil
+        photosObservation = nil
+        photosAlbum = nil
+        photosNeedsRefresh = false
+        photosWantedAsset = nil
+        photosPendingOpen = false
+    }
+
+    /// WindowRegistry supplies selected-tab visibility, including tab switches without an occlusion event.
+    func photosVisibilityChanged(_ visible: Bool) {
+        photosIsVisible = visible
+        session.setPhotosViewerVisible(visible && !isShowingHome)
+        homeSources?.home.photos.isPaused = !visible || !isShowingHome
+        strip.setPhotosWorkVisible(visible && !isShowingHome)
+        if !visible, photosTask != nil {
+            photosTask?.cancel()
+            photosTask = nil
+            photosNeedsRefresh = true
+        }
+        let current = session.playlist.map(\.current)
+        let selected = photosPendingOpen ? photosWantedAsset : current.flatMap(PhotosLocation.asset(in:))
+        if visible, photosNeedsRefresh, photosPendingOpen || !isShowingHome, let album = photosAlbum,
+           let asset = selected {
+            let refreshing = !photosPendingOpen && current.flatMap(PhotosLocation.album(in:)) == album
+            photosNeedsRefresh = false
+            openPhotos(album: album, asset: asset, refreshing: refreshing)
+        }
+    }
+
+    private var photosViewerSort: BrowserSort?
+
+    private func openPhotos(album: String, asset: String, refreshing: Bool = false) {
+        let sort = refreshing && photosAlbum == album ? photosViewerSort ?? photosSorts.sort(for: PhotosLocation.collection(album))
+            : photosSorts.sort(for: PhotosLocation.collection(album))
+        photosViewerSort = sort
+        photosTask?.cancel()
+        photosGeneration += 1
+        let generation = photosGeneration
+        if photosAlbum != album { photosObservation = nil }
+        photosAlbum = album
+        photosWantedAsset = asset
+        photosPendingOpen = !refreshing
+        photosTask = Task { [weak self] in
+            do {
+                guard let library = self?.photosLibrary else { return }
+                try await library.authorize()
+                let assets = try await library.assets(in: album)
+                let files = await Task.detached(priority: .userInitiated) {
+                    sort.order(PhotosAlbumListing.entries(assets, album: album)).map(\.url)
+                }.value
+                guard let self, !self.isClosed, !Task.isCancelled, self.photosGeneration == generation else { return }
+                self.photosTask = nil
+                self.photosPendingOpen = false
+                self.photosNeedsRefresh = false
+                guard !files.isEmpty else {
+                    self.showHome(tab: .recent)
+                    self.homeView?.browser.show(.source(PhotosLocation.collection(album)), selecting: nil)
+                    return
+                }
+                let selected = refreshing ? self.session.playlist.map(\.current).flatMap(PhotosLocation.asset(in:)) ?? asset : asset
+                let selectedIndex = files.firstIndex { PhotosLocation.asset(in: $0) == selected }
+                    ?? min(self.session.playlist?.index ?? 0, files.count - 1)
+                let current = files[selectedIndex]
+                if !refreshing {
+                    self.restoredTab = nil
+                    self.stashPicks.cancel()
+                    self.hideHome()
+                    self.returnsTo = .recent
+                }
+                let previous = self.session.playlist.map(\.current)
+                let samePhoto = previous.flatMap(PhotosLocation.album(in:)) == album
+                    && previous.flatMap(PhotosLocation.asset(in:)) == selected
+                self.session.openPhotos(files, current: current, refreshing: refreshing || samePhoto)
+                if self.photosObservation == nil {
+                    self.photosObservation = library.observeChanges { [weak self] in
+                        Task { @MainActor in
+                            guard let self, self.photosAlbum == album, let current = self.session.playlist?.current,
+                                  let asset = PhotosLocation.asset(in: current) else { return }
+                            self.photosNeedsRefresh = true
+                            if self.photosIsVisible, !self.isShowingHome {
+                                self.openPhotos(album: album, asset: asset, refreshing: true)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                guard let self, !Task.isCancelled, !self.isClosed, self.photosGeneration == generation else { return }
+                self.photosTask = nil
+                self.photosPendingOpen = false
+                if refreshing {
+                    self.showHome(tab: .recent)
+                    self.homeView?.browser.show(.source(PhotosLocation.root), selecting: nil)
+                }
+                self.toast.show(error.localizedDescription)
+            }
+        }
     }
 
     /// The MX side wheel on Home: twelve size steps a turn, right larger (as it zooms a photo in).
@@ -1529,6 +1671,7 @@ import UniformTypeIdentifiers
     /// The gallery of `pick`, whichever tab it was clicked in: asked of Stash, mapped to this Mac (mounting its share),
     /// opened like a folder; Stash goes away only once the gallery is entered, and only for the latest click.
     private func enterFromStash(_ pick: StashGalleryPick) {
+        stopPhotos()
         guard let library = stash else { return }
         let token = stashPicks.begin()
         Task { [weak self] in
@@ -1636,7 +1779,8 @@ import UniformTypeIdentifiers
         viewerToolbar.setBackEnabled(canGoBack)
         let shown = BackButtonPolicy.isShown(wasShown: backButtonShown, pointer: pointerInButtonSpace,
                                              button: backButton.frame, canGoBack: canGoBack)
-        if let backTarget { backButton.title = Self.tabTitle(backTarget) }
+        if session.playlist?.isSourceOrdered == true { backButton.title = "Photos" }
+        else if let backTarget { backButton.title = Self.tabTitle(backTarget) }
         guard shown != backButtonShown else { return }
         backButtonShown = shown
         if shown { backButton.isHidden = false }
@@ -1676,7 +1820,7 @@ import UniformTypeIdentifiers
     /// The photo's EXIF for the status chip and the stats bar: its thumbnail's facts (memory or the catalog), else its
     /// header (ImageIO reads only that; the viewer is reading the file anyway). Once per photo.
     private func askPhotoFacts(_ url: URL?) {
-        guard let url, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
+        guard let url, url.isFileURL, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
         if factsAsked.count > 300 { factsAsked = []; session.photoFacts = [:] }
         factsAsked.insert(url)
         let store = thumbnails
@@ -1933,8 +2077,8 @@ import UniformTypeIdentifiers
     private var subjectsAsked: String?
 
     private func sessionDidChange() {
-        folderSlots?.synchronize(folder: session.playlist?.current.deletingLastPathComponent())
-        folderSlots?.setActive(!isShowingHome && session.playlist != nil)
+        folderSlots?.synchronize(folder: session.playlist?.current.isFileURL == true ? session.playlist?.current.deletingLastPathComponent() : nil)
+        folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true)
         updateFolder()
         viewerView.sessionDidChange()
         askSubjects()
@@ -1970,7 +2114,7 @@ import UniformTypeIdentifiers
 
     /// The folder of the photo on screen; a step into another folder recomputes the effective config.
     private func updateFolder() {
-        let current = session.playlist?.current.deletingLastPathComponent().standardizedFileURL
+        let current = session.playlist?.current.isFileURL == true ? session.playlist?.current.deletingLastPathComponent().standardizedFileURL : nil
         guard current != folder else { return }
         let previous = folder
         folder = current
@@ -2191,7 +2335,7 @@ import UniformTypeIdentifiers
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(toggleLeftSlot(_:)), #selector(toggleRightSlot(_:)), #selector(toggleBottomSlot(_:)):
-            return !isShowingHome && session.playlist != nil
+            return !isShowingHome && session.playlist?.current.isFileURL == true
         case #selector(chooseCardStyle(_:)):
             let browser = isShowingHome ? homeView?.browser : nil
             item.state = browser?.canChooseCardStyle == true && CardStyle.allCases.indices.contains(item.tag)
@@ -2257,7 +2401,7 @@ import UniformTypeIdentifiers
     /// The viewer ends at the strip's top while the strip is a bar of its own, at the window's bottom otherwise.
     private func layoutFolderSlots() {
         guard let container = window?.contentView else { return }
-        folderSlots?.setActive(!isShowingHome && session.playlist != nil && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
+        folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
         folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - viewerView.frame.maxY),
                             bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
     }
@@ -2499,8 +2643,9 @@ import UniformTypeIdentifiers
         let info = entry?.info ?? (infoURL == url ? metadata?.header : nil)
         // An archive entry: the archive and its inner path, in the archive's folder (Stash spec §2.4).
         let archive = ArchivePath.split(url)?.archive
+        let photo = PhotosLocation.asset(in: url) != nil
         return InfoFileFacts(name: ArchivePath.displayName(url),
-                             folder: ((archive ?? url).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath,
+                             folder: photo ? "Photos" : ((archive ?? url).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath,
                              fileSize: info?.fileSize ?? statSize, info: info,
                              applyingOrientation: session.appliesOrientation, error: entry?.failure)
     }
@@ -2523,7 +2668,7 @@ import UniformTypeIdentifiers
         statSize = nil
         metadata = nil
         metadataPending = false
-        guard let url else { return }
+        guard let url, url.isFileURL else { return }
         let cache = Self.metadataCache
         metadataTask = Task { [weak self] in
             let stamp = await Task.detached(priority: .utility) { Self.fileStamp(url) }.value
