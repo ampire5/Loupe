@@ -115,3 +115,22 @@ normal application preferences use UserDefaults’ standard persistence.
 
 Build `Photos-Persistent-Library` completed. Label, Photos usage description, entitlement and strict code
 signature were verified. No installation or transfer back to `polish-3` was performed.
+
+## Integration into polish-3
+
+The user accepted the feature and requested landing into `polish-3`. Final independent review of the merge
+composition found no important issues: source routing/cancellation, file-URL guards, native BackDestination,
+Home background/selection and per-window toolbar isolation are preserved. Unrelated dirty inspector/toolbar
+work in the main checkout is retained outside the Photos commit.
+
+An existing eviction test imposed a fixed first-five retention cutoff even though the documented keep set
+contains only the current image and its neighbour. Transient upload reservations may legitimately evict an
+extra unplanned pyramid after the oldest session’s extras are gone. Independent review confirmed the
+assertion was over-specified. It now checks the guaranteed keep set plus preferential retention of newer
+extras; production eviction policy was not changed. The integrated parallel suite then passed.
+
+The actual combined main checkout passed its full default wrapper: 25 app tests, 63 inspector tests, three
+inspector integration tests and 2,229 core tests (seven skips). Validation uses the existing local edited
+HomeScreenKit dependency, as `polish-3`'s already-committed inspector needs APIs not yet present in tag 0.11.8.
+No edit-mode Package.resolved changes are part of the Photos commits. This lands development work into
+`polish-3`; releasing/tagging the other kit work and release CI remain separate.
