@@ -194,6 +194,8 @@ Stash support is under active development in both Loupe and its sibling video pl
 
 ## Under the hood
 
+Developer guide: [architecture and code map](docs/architecture.md).
+
 Native Swift and AppKit: no Electron and no web views, except the Stash tab, which is a WebKit view of your Stash server.
 
 | | |

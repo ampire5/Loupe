@@ -168,17 +168,12 @@ import UniformTypeIdentifiers
     /// step swaps them at once; the timer ends a hold at its limit.
     private var infoHold = InfoPanelHold()
     private var infoHoldTimer: Timer?
-    /// The app's one metadata cache (M4a spec §3.4): every window's panel reads through it. Made on first use, so
-    /// a session that never opens the panel never makes it.
-    private static let metadataCache = PhotoMetadataCache()
-    /// The photo the panel's File and Capture sections are about (the current one), with what was read for it: the
-    /// file's size from a stat, the metadata, and whether the read has taken a second already (`Reading…`).
-    private var infoURL: URL?
-    private var statSize: Int?
-    private var metadata: PhotoMetadata?
-    private var metadataPending = false
-    private var metadataTask: Task<Void, Never>?
-    private var slowReadTask: Task<Void, Never>?
+    /// Selection/read lifetime is independent of AppKit presentation and diagnostics.
+    private lazy var viewerMetadata: ViewerMetadataLoader = {
+        let loader = ViewerMetadataLoader(thumbnails: thumbnails)
+        loader.onChange = { [weak self] force in self?.updateInfoPanel(force: force) }
+        return loader
+    }()
     /// The panel's Diagnostics rows as of the last timer tick.
     private var diagnosticsRows: [InfoRow] = []
     /// The File and Display inputs the panel shows, so the session changes that alter neither (most frames of a pan)
@@ -2609,12 +2604,7 @@ import UniformTypeIdentifiers
         infoHold.cancel()
         infoHoldTimer?.invalidate()
         infoHoldTimer = nil
-        metadataTask?.cancel()
-        slowReadTask?.cancel()
-        infoURL = nil
-        statSize = nil
-        metadata = nil
-        metadataPending = false
+        viewerMetadata.stop()
         diagnosticsRows = []
         shownFile = nil
         shownDisplay = nil
@@ -2646,14 +2636,14 @@ import UniformTypeIdentifiers
         guard infoActive else { return }
         var force = force
         let current = infoPhoto
-        if current != infoURL {
+        if current != viewerMetadata.url {
             force = true
             // A panel showing a photo keeps it until the new one's facts are in (none to keep on opening).
             if shownFile != nil { infoHold.photoChanged(at: ProcessInfo.processInfo.systemUptime) }
-            readMetadata(of: current)
+            viewerMetadata.select(current)
         }
         let file = fileFacts(of: current), display = displayFacts()
-        let ready = current == nil || (metadata != nil && (file?.info != nil || file?.error != nil))
+        let ready = current == nil || (viewerMetadata.metadata != nil && (file?.info != nil || file?.error != nil))
         if infoHold.holds(ready: ready, now: ProcessInfo.processInfo.systemUptime) {
             scheduleInfoHoldEnd()
             return
@@ -2665,7 +2655,7 @@ import UniformTypeIdentifiers
         shownDisplay = display
         // No photo, no sections: the panel is off screen (`hidesWhenEmpty`). The package places it for the new height
         // and gives the keys back to the viewer when a selected value's field went.
-        infoPanel.show(InfoPanelContent.sections(file: file, metadata: metadata, metadataPending: metadataPending,
+        infoPanel.show(InfoPanelContent.sections(file: file, metadata: viewerMetadata.metadata, metadataPending: viewerMetadata.isPending,
                                                  display: display, diagnostics: diagnosticsRows))
     }
 
@@ -2697,13 +2687,13 @@ import UniformTypeIdentifiers
         guard let url else { return nil }
         let entry = [session.entry, session.shownCompanion].lazy.compactMap { $0 }.first { $0.url == url }
         // The metadata read's header until the decoder's own is in: the same ImageIO header, read sooner on a cold photo.
-        let info = entry?.info ?? (infoURL == url ? metadata?.header : nil)
+        let info = entry?.info ?? (viewerMetadata.url == url ? viewerMetadata.metadata?.header : nil)
         // An archive entry: the archive and its inner path, in the archive's folder (Stash spec §2.4).
         let archive = ArchivePath.split(url)?.archive
         let photo = PhotosLocation.asset(in: url) != nil
         return InfoFileFacts(name: ArchivePath.displayName(url),
                              folder: photo ? "Photos" : ((archive ?? url).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath,
-                             fileSize: info?.fileSize ?? statSize, info: info,
+                             fileSize: info?.fileSize ?? viewerMetadata.size, info: info,
                              applyingOrientation: session.appliesOrientation, error: entry?.failure)
     }
 
@@ -2713,60 +2703,6 @@ import UniformTypeIdentifiers
         guard session.entry != nil else { return nil }
         return InfoDisplayFacts(mode: StatsLine.modeText(session.zoomTarget ?? session.transform), filter: filterName(),
                                 colour: colourLine())
-    }
-
-    /// Asks the shared cache for `url`'s metadata off the main thread (the stat too: a share may be slow to answer).
-    /// The Capture section says `Reading…` only once a second has passed without the result, so a quick read never
-    /// flashes it; a result arriving after the photo changed (or the panel closed) is dropped.
-    private func readMetadata(of url: URL?) {
-        metadataTask?.cancel()
-        slowReadTask?.cancel()
-        infoURL = url
-        statSize = nil
-        metadata = nil
-        metadataPending = false
-        guard let url, url.isFileURL else { return }
-        let cache = Self.metadataCache
-        metadataTask = Task { [weak self] in
-            let stamp = await Task.detached(priority: .utility) { Self.fileStamp(url) }.value
-            guard let self, self.infoURL == url else { return }
-            self.statSize = stamp.size
-            self.updateInfoPanel()   // the size, while the header is read
-            let version = stamp.size.flatMap { size in stamp.modified.map { FileStamp(modified: $0, size: size) } }
-            let stored: PhotoMetadata?
-            if let version { stored = await self.thumbnails.photoMetadata(for: url, stamp: version) }
-            else { stored = nil }
-            let result: PhotoMetadata
-            if let stored { result = stored }
-            else {
-                result = await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
-                if let version, result.modified == version.modified {
-                    await self.thumbnails.keepPhotoMetadata(result, for: url, stamp: version)
-                }
-            }
-            guard self.infoURL == url else { return }
-            self.slowReadTask?.cancel()
-            self.metadata = result
-            self.metadataPending = false
-            self.updateInfoPanel(force: true)
-        }
-        slowReadTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, let self, self.infoURL == url, self.metadata == nil else { return }
-            self.metadataPending = true
-            self.updateInfoPanel(force: true)
-        }
-    }
-
-    /// The file's size and modification date, the cache's key with its path; nil for what cannot be read (a vanished
-    /// file: the read then says so).
-    nonisolated private static func fileStamp(_ url: URL) -> (size: Int?, modified: Date?) {
-        if ArchivePath.split(url) != nil {
-            let stamp = try? ArchiveReader.shared.stamp(url)
-            return (stamp?.size, stamp?.modified)
-        }
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        return (values?.fileSize, values?.contentModificationDate)
     }
 
     /// The frame counter and the 0.5 s timer run while the panel is open and the window can be seen (not closed,
