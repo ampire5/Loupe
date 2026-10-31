@@ -1,6 +1,6 @@
 # Circle crop implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add circle-based rectangular framing and per-class clipping protection with shift before outzoom.
 
@@ -31,38 +31,38 @@ SmartZoom panel/profile editor. Detection remains shared and independent of comp
 
 **Files:** CompositionOptions.swift (new extraction), SmartComposition.swift; CircleCompositionTests.swift.
 **Interfaces:** `SubjectFraming.composition(_:kind:options:imageSize:)`; options for radius/class overrides and protection.
-- [ ] Write failing tests for pixel-radius geometry, overrides, parsing and profile round trips; watch RED.
-- [ ] Implement validated options and circle support; pass actual image sizes through all composition call sites.
-- [ ] Run focused composition/profile tests and record results.
+- [x] Write failing tests for pixel-radius geometry, overrides, parsing and profile round trips; watch RED.
+- [x] Implement validated options and circle support; pass actual image sizes through all composition call sites.
+- [x] Run focused composition/profile tests and record results.
 
 ### Task 2: Protected framing solver
 
 **Files:** SubjectComposition+Protection.swift (new), SmartComposition.swift; CircleProtectionTests.swift.
 **Interfaces:** `SubjectComposition.resolve(_:autoZoom:size:preferredCenter:)` returns transform and adjustment reason.
-- [ ] Write failing tests for shift without scale loss, minimum outzoom, per-edge limits, scope, padding and Keep zoom.
-- [ ] Implement feasible centre projection, soft-margin fallback and protection diagnostics; preserve transform wrapper.
-- [ ] Run geometry tests, including deterministic randomized constraints and invalid/source-edge cases.
+- [x] Write failing tests for shift without scale loss, minimum outzoom, per-edge limits, scope, padding and Keep zoom.
+- [x] Implement feasible centre projection, soft-margin fallback and protection diagnostics; preserve transform wrapper.
+- [x] Run geometry tests, including deterministic randomized constraints and invalid/source-edge cases.
 
 ### Task 3: Session integration and stable browsing
 
 **Files:** BrowseFraming.swift, ViewerSession.swift, ViewerSession+Status.swift, ViewerWindowController.swift, SubjectOverlay.swift.
 **Interfaces:** stable previous centre from BrowseFraming; result note passed to the existing panel snapshot.
-- [ ] Write failing tests for stable consecutive targets, current-photo protection and profile/manual-input boundaries.
-- [ ] Integrate resolution and diagnostics, accurate overlays and protected kinds already present in shared analysis.
-- [ ] Run browsing/session/overlay tests.
+- [x] Write failing tests for stable consecutive targets, current-photo protection and profile/manual-input boundaries.
+- [x] Integrate resolution and diagnostics, accurate overlays and protected kinds already present in shared analysis.
+- [x] Run browsing/session/overlay tests.
 
 ### Task 4: Profile editor and quick controls
 
 **Files:** DetectorProfileEditor.swift, SmartZoomPanel.swift, DetectorProfileDraft.swift; relevant LoupeTests.
 **Interfaces:** existing edit/save callbacks carry validated CompositionOptions keys.
-- [ ] Write failing draft/editor action tests for class radius/cut/padding, invalid edits and explicit Off/inheritance.
-- [ ] Add global controls and class detail editing using native controls, retained views and existing glass treatment.
-- [ ] Verify live edits, profile save/reopen and folder overrides with neutral fixtures.
+- [x] Write failing draft/editor action tests for class radius/cut/padding, invalid edits and explicit Off/inheritance.
+- [x] Add global controls and class detail editing using native controls, retained views and existing glass treatment.
+- [x] Verify live edits, profile save/reopen and folder overrides with neutral fixtures.
 
 ### Task 5: Verification and delivery
 
 **Files:** README/configuration docs, docs/architecture.md if ownership changes.
-- [ ] Document controls and per-edge semantics with neutral examples.
+- [x] Document controls and per-edge semantics with neutral examples.
 - [ ] Run ordinary repository tests, focused UI checks, kits check and diff/privacy inspection.
 - [ ] Request a fresh whole-branch review; fix material findings with regression tests and repeat relevant checks.
 - [ ] Leave the completed work on circle-crop; report validations and any limitations, without pushing or merging.
