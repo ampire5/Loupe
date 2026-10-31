@@ -13,7 +13,7 @@ public struct CompositionOptions: Equatable, Sendable {
     public var circleRadius = 1.0
     public var circleRadii: [SubjectKind: Double] = [:]
     /// 1 disables protection explicitly; otherwise 0...0.49 is the allowed cut on each edge.
-    public var maxCrop: [SubjectKind: Double] = [.face: 0]
+    public var maxCrop: [SubjectKind: Double] = [:]
     public var protectionMargin = 0.0
     public var protectionMargins: [SubjectKind: Double] = [:]
     public var protectionScope = ProtectionScope.all
@@ -86,13 +86,13 @@ public struct CompositionOptions: Equatable, Sendable {
     }
 
     public func cropLimit(for kind: SubjectKind) -> Double? {
-        let value = maxCrop[kind] ?? (SubjectFraming.framesHead(kind) ? maxCrop[.face] : nil)
+        let value = maxCrop[kind] ?? (SubjectFraming.framesHead(kind) ? (maxCrop[.face] ?? 0) : nil)
         guard let value, value.isFinite, (0...0.49).contains(value) else { return nil }
         return value
     }
 
     public func protectionPadding(for kind: SubjectKind) -> Double {
-        let value = protectionMargins[kind] ?? protectionMargin
+        let value = protectionMargins[kind] ?? (SubjectFraming.framesHead(kind) ? protectionMargins[.face] : nil) ?? protectionMargin
         return value.isFinite ? min(max(value, 0), 0.5) : 0
     }
 

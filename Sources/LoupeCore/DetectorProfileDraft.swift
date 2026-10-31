@@ -7,6 +7,37 @@ public struct DetectorProfileDraft: Equatable, Sendable {
     public var size = 0.6
     public var composition = CompositionOptions()
     public init(name: String, chain: [SubjectKind]) { self.name = name; self.chain = chain }
+    public enum ClassField { case radius, crop, padding }
+    public func classValue(for kind: SubjectKind, field: ClassField) -> String {
+        let value: Double?
+        switch field {
+        case .radius: value = composition.circleRadii[kind]
+        case .crop: value = composition.maxCrop[kind]
+        case .padding: value = composition.protectionMargins[kind]
+        }
+        guard let value else { return "Default" }
+        if field == .crop && value == 1 { return "Off" }
+        return String(format: "%g%%", value * 100)
+    }
+    /// Editor entries are percentages, including bare numbers; Default removes an override, Off is explicit.
+    @discardableResult public mutating func setClassValue(_ text: String, for kind: SubjectKind, field: ClassField) -> Bool {
+        guard !kind.isCombination else { return false }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: ",", with: ".")
+        var values: [SubjectKind: Double]
+        let key: String
+        switch field {
+        case .radius: values = composition.circleRadii; key = "circle-radii"
+        case .crop: values = composition.maxCrop; key = "max-crop"
+        case .padding: values = composition.protectionMargins; key = "protection-margins"
+        }
+        if ["", "default", "inherit"].contains(text) { values.removeValue(forKey: kind) }
+        else if field == .crop && text == "off" { values[kind] = 1 }
+        else {
+            guard let value = DetectorSetup.share(text.hasSuffix("%") ? text : text + "%"), value.isFinite else { return false }
+            values[kind] = value
+        }
+        return composition.set(key, CompositionOptions.text(values, allowsOff: field == .crop)) == true
+    }
     public enum Invalid: String, Error, LocalizedError {
         case name = "Use a profile name without brackets, comments or line breaks."
         case exists = "A profile with this name already exists."

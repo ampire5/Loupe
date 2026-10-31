@@ -93,7 +93,7 @@ extension SubjectFraming {
                                         panOverflow: options.panOverflow, objects: objects)
         result.support = validRect(union)
         result.circles = circles
-        let protectedKinds = options.protectionScope == .selected ? kind.parts : Array(Set(boxes.kinds + Array(options.maxCrop.keys)))
+        let protectedKinds = options.protectionScope == .selected ? kind.parts : Array(Set(boxes.kinds)).sorted { $0.rawValue < $1.rawValue }
         for protectedKind in protectedKinds {
             guard let cut = options.cropLimit(for: protectedKind) else { continue }
             let padding = options.protectionPadding(for: protectedKind)

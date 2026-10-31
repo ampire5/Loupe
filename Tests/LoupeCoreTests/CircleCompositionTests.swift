@@ -67,4 +67,40 @@ import Testing
             #expect(options == before)
         }
     }
+
+    @Test func inheritedFaceProtectionSurvivesEmptyClassOverrides() {
+        var options = CompositionOptions()
+        #expect(options.set("max-crop", "") == true)
+        #expect(options.cropLimit(for: .face) == 0)
+        #expect(options.set("max-crop", "face:off") == true)
+        #expect(options.cropLimit(for: .face) == nil)
+    }
+
+    @Test func protectionRegionOrderDoesNotInvalidateAnUnchangedOverlay() throws {
+        let boxes = SubjectBoxes(faces: [.init(x: 0.1, y: 0.1, width: 0.1, height: 0.1)], people: [],
+                                 objects: [.init(x: 0.4, y: 0.4, width: 0.2, height: 0.2)], saliency: [])
+        var options = CompositionOptions(); options.maxCrop[.object] = 0
+        let reference = try #require(SubjectFraming.composition(boxes, kind: .object, options: options, imageSize: .init(width: 1000, height: 1000)))
+        for _ in 0..<30 {
+            let next = try #require(SubjectFraming.composition(boxes, kind: .object, options: options, imageSize: .init(width: 1000, height: 1000)))
+            #expect(next == reference)
+        }
+    }
+
+    @Test func folderOverridesCarryAllCirclePoliciesWithoutChangingOtherProfiles() {
+        let policies = ["circle-radius": "75%", "circle-radii": "object:125%", "max-crop": "face:off,object:5%",
+                        "protection-margin": "4%", "protection-margins": "object:8%", "protection-scope": "selected", "steady-framing": "no"]
+        let encoded = Config.smartZoomOptionsText(["vision": policies, "other": ["circle-radius": "150%"]])
+        let store = FolderSettings(database: nil)
+        let folder = URL(fileURLWithPath: "/photos/portrait")
+        store.set("smart-zoom-options", encoded, for: folder)
+        var config = Config()
+        for (key,value) in store.values(for: folder) { #expect(config.set(key, value) == .ok) }
+        let options = ZoomRules(config: config).composition
+        #expect(options.circleRadius == 0.75 && options.circleRadii[.object] == 1.25)
+        #expect(options.cropLimit(for: .face) == nil && options.cropLimit(for: .object) == 0.05)
+        #expect(options.protectionPadding(for: .object) == 0.08)
+        #expect(options.protectionScope == .selected && !options.steadyFraming)
+        #expect(config.smartZoomOptions["other"]?["circle-radius"] == "150%")
+    }
 }
