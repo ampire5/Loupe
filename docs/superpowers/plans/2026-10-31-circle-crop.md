@@ -63,6 +63,6 @@ SmartZoom panel/profile editor. Detection remains shared and independent of comp
 
 **Files:** README/configuration docs, docs/architecture.md if ownership changes.
 - [x] Document controls and per-edge semantics with neutral examples.
-- [ ] Run ordinary repository tests, focused UI checks, kits check and diff/privacy inspection.
-- [ ] Request a fresh whole-branch review; fix material findings with regression tests and repeat relevant checks.
-- [ ] Leave the completed work on circle-crop; report validations and any limitations, without pushing or merging.
+- [x] Run ordinary repository tests, focused UI checks, kits check and diff/privacy inspection.
+- [x] Request a fresh whole-branch review; fix material findings with regression tests and repeat relevant checks.
+- [x] Leave the completed work on circle-crop; report validations and any limitations, without pushing or merging.

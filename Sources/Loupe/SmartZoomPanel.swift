@@ -154,7 +154,8 @@ import LoupeCore
         if model.titleOfSelectedItem != modelTitle { model.removeAllItems(); model.addItem(withTitle: modelTitle.isEmpty ? "Choose a model…" : modelTitle) }
         model.isEnabled = !next.modelLoading
         browseModel.isEnabled = !next.modelLoading
-        editProfileButton.isEnabled = next.canEditProfile
+        editProfileButton.isEnabled = next.canEditProfile || next.profile == "Vision"
+        editProfileButton.title = next.profile == "Vision" ? "Edit Vision settings…" : "Edit profile…"
         modelNote.stringValue = next.modelNote
         modelNote.isHidden = next.modelNote.isEmpty
         let wanted = next.groups

@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 import LoupeCore
+import LoupeRender
 @testable import Loupe
 
 @Suite(.serialized) @MainActor struct DetectorFramingEditorTests {
@@ -79,5 +80,48 @@ import LoupeCore
         #expect(options.set(change.0, change.1) == true && options.circleRadius == 0.75)
         panel.setVisible(false)
         let before = calls; panel.refresh(); #expect(calls == before)
+    }
+
+    @Test func visionClassPoliciesAreEditableWithoutInstallingAModel() throws {
+        _ = NSApplication.shared
+        let preferences = Settings.detectorPreferences
+        let previousMode = preferences.object(forKey: SmartZoomState.preferenceKey)
+        let previousProfile = preferences.object(forKey: ZoomKeys.lastProfileKey)
+        defer {
+            if let previousMode { preferences.set(previousMode, forKey: SmartZoomState.preferenceKey) }
+            else { preferences.removeObject(forKey: SmartZoomState.preferenceKey) }
+            if let previousProfile { preferences.set(previousProfile, forKey: ZoomKeys.lastProfileKey) }
+            else { preferences.removeObject(forKey: ZoomKeys.lastProfileKey) }
+        }
+        let thumbnails = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
+        let controller = ViewerWindowController(cache: ImageCache(loader: MetalPyramidLoader()), thumbnails: thumbnails,
+            thumbnailsReady: nil, positions: FolderPositions(database: nil), folderSettings: FolderSettings(database: nil), recent: nil)
+        defer { controller.window?.close() }
+        controller.session.smartZoom.select(.off)
+        controller.turnDetectorOff(nil)
+        controller.session.smartZoom.select(.off)
+        #expect(controller.session.zoomRules(URL(fileURLWithPath: "/Demo/photo.jpg")).detector == nil)
+        #expect(!Settings.shared.config.detectorSetup.detects)
+        let window = try #require(controller.window)
+        let item = try #require(window.toolbar?.items.first { $0.itemIdentifier.rawValue == "viewer.smartZoom" })
+        #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
+        let root = try #require(window.contentView); root.layoutSubtreeIfNeeded()
+        let editButton = try #require(descendants(root).compactMap { $0 as? NSButton }.first {
+            $0.title == "Edit profile…" || $0.title == "Edit Vision settings…"
+        })
+        #expect(editButton.isEnabled)
+        editButton.performClick(nil)
+        controller.session.smartZoom.select(.off)
+        let sheet = try #require(window.attachedSheet?.contentView)
+        sheet.layoutSubtreeIfNeeded()
+        let table = try #require(descendants(sheet).first { $0.identifier?.rawValue == "profile.categories" } as? NSTableView)
+        edit(try field("crop", row: 0, table: table), "off")
+        edit(try field("radius", row: 0, table: table), "125")
+        try #require(descendants(sheet).compactMap { $0 as? NSButton }.first { $0.title == "Apply to tab" }).performClick(nil)
+        let rules = controller.session.zoomRules(URL(fileURLWithPath: "/Demo/photo.jpg"))
+        #expect(rules.detector == nil)
+        #expect(rules.composition.cropLimit(for: .face) == nil)
+        #expect(rules.composition.circleRadii[.face] == 1.25)
+        #expect(controller.session.smartZoom.mode == .off)
     }
 }

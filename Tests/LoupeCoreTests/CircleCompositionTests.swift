@@ -103,4 +103,24 @@ import Testing
         #expect(options.protectionScope == .selected && !options.steadyFraming)
         #expect(config.smartZoomOptions["other"]?["circle-radius"] == "150%")
     }
+    @Test func visionEditorOverridesPreserveOtherProfilesAndManualMode() throws {
+        var config = Config()
+        config.smartZoomOptions = ["other": ["circle-radius": "150%"]]
+        var draft = DetectorProfileDraft(name: "Vision", chain: [.face, .person])
+        draft.composition.maxCrop[.face] = 1
+        draft.composition.circleRadii[.face] = 1.25
+        let values = try draft.visionOverrides(in: config, mode: .off)
+        let (updated, rejected) = config.applying(values)
+        #expect(rejected.isEmpty)
+        #expect(updated.smartZoomMode == .off && updated.subjectTarget == [.face, .person])
+        #expect(updated.smartZoomOptions["other"] == config.smartZoomOptions["other"])
+        let rules = ZoomRules(config: updated)
+        #expect(rules.composition.cropLimit(for: .face) == nil)
+        #expect(rules.composition.circleRadii[.face] == 1.25)
+        draft.chain = []
+        #expect(throws: DetectorProfileDraft.Invalid.empty) { try draft.visionOverrides(in: config, mode: .off) }
+        draft.chain = [SubjectKind(rawValue: "cat")!]
+        #expect(throws: DetectorProfileDraft.Invalid.category) { try draft.visionOverrides(in: config, mode: .pan) }
+    }
+
 }

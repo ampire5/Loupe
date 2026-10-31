@@ -199,7 +199,14 @@ import LoupeRender
     var subjectBoxes: (URL) -> SubjectBoxes? = { _ in nil }
     /// Zoom to Subject is on (smart zoom spec §3): a step opens the next photo framed on its subject, or at Fit until
     /// its subjects are in. Any other zoom command or a gesture turns it off (`ViewerView`).
-    var smartZoom = SmartZoomState()
+    var smartZoom = SmartZoomState() {
+        didSet {
+            if smartZoom.mode != oldValue.mode {
+                browse.forgetLeft()
+                browseStep = nil
+            }
+        }
+    }
     var smartZoomRevision: UInt64 = 0
     var manualZoomPhoto: URL?
     func noteManualZoom() { manualZoomPhoto = entry?.url }
@@ -1195,6 +1202,9 @@ import LoupeRender
     private func transform(showing url: URL, size: CGSize, over base: ViewTransform? = nil) -> ViewTransform {
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
+        if smartZoom.mode != .off, let from = entry?.url, from != url {
+            leaveForBrowse(from, to: url, view: current)
+        }
         if smartZoom.mode != .frame, let saved = restored(url, size: size, over: current) {
             // Retained scale is a starting view; active SmartZoom still owns the point of interest.
             guard url != laidOut else { return saved }
@@ -1207,7 +1217,6 @@ import LoupeRender
                                           imageSize: size, rules: rules, subject: arrival == .switched ? subjectBoxes(url) : nil)
         guard arrival != .laidOut else { return shown }
         guard smartZoom.mode != .off else { return shown }
-        if smartZoom.mode == .frame, let from = entry?.url, from != url { leaveForBrowse(from, to: url, view: current) }
         return subjectBoxes(url).flatMap { smartFraming(url, shown: shown, boxes: $0) }
             ?? (smartZoom.mode == .frame ? shown.withMode(.fit) : shown)
     }

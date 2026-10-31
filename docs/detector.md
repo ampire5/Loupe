@@ -37,7 +37,8 @@ starts no photo analysis. Catalog enumeration and model loading run off-main; th
 ## Profile editor
 
 In the SmartZoom Slot panel, use **New profile…** to create a profile or **Edit profile…** to change the selected one.
-The system Vision fallback is not an editable custom profile.
+For the built-in Vision fallback, use **Edit Vision settings…** and **Apply to tab**; no custom model is required.
+Use **Save SmartZoom for folder** to retain those overrides for the folder. Vision itself remains a built-in profile.
 
 Select categories from your configured model mappings, then **Add** a priority rule. Select multiple model categories
 to require them together. Vision categories are individual fallback rules. Select a rule to replace or remove it;

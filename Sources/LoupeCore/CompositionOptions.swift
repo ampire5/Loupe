@@ -117,4 +117,3 @@ public struct CompositionOptions: Equatable, Sendable {
         }.joined(separator: ",")
     }
 }
-

@@ -3133,9 +3133,10 @@ import UniformTypeIdentifiers
     private func openProfileEditor(creating: Bool) {
         if let editor = profileEditor { editor.window?.makeKeyAndOrderFront(nil); return }
         let rules = ZoomRules(config: effectiveConfig)
-        guard creating || rules.detector != nil, let window else { return }
+        guard let window else { return }
+        let applyingToTab = !creating && rules.detector == nil
         let setup = effectiveConfig.detectorSetup
-        var name = rules.detector?.name ?? "custom"
+        var name = rules.detector?.name ?? (applyingToTab ? "Vision" : "custom")
         if creating {
             name = "custom"; var suffix = 2
             while setup.modes.contains(where: { $0.name == name }) { name = "custom-\(suffix)"; suffix += 1 }
@@ -3143,13 +3144,24 @@ import UniformTypeIdentifiers
         var draft = DetectorProfileDraft(name: name, chain: creating ? [] : rules.chain)
         draft.size = rules.subjectSize; draft.composition = rules.composition
         var categories = [SubjectKind]()
-        for kind in setup.kinds + SubjectKind.vision where !categories.contains(kind) { categories.append(kind) }
-        let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating)
+        for kind in (applyingToTab ? SubjectKind.vision : setup.kinds + SubjectKind.vision) where !categories.contains(kind) { categories.append(kind) }
+        let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating, applyingToTab: applyingToTab)
         profileEditor = editor
         folderSlots?.setSmartZoomEditing(true)
         editor.didClose = { [weak self] in self?.profileEditor = nil; self?.folderSlots?.setSmartZoomEditing(false) }
         editor.save = { [weak self] draft, completion in
             guard let self, !smartZoomSaveInFlight else { completion(.failure(CocoaError(.userCancelled))); return }
+            if applyingToTab {
+                do {
+                    let values = try draft.visionOverrides(in: effectiveConfig, mode: session.smartZoom.mode)
+                    session.browse.forgetSizes()
+                    setTabZoom(values)
+                    viewerView.frameSubjectNow()
+                    folderSlots?.refreshSmartZoom()
+                    completion(.success(()))
+                } catch { completion(.failure(error)) }
+                return
+            }
             smartZoomSaveInFlight = true
             Task { [weak self] in
                 do {

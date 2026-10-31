@@ -19,13 +19,13 @@ import LoupeCore
     var save: ((DetectorProfileDraft, @escaping (Result<Void, Error>) -> Void) -> Void)?
     var didClose: (() -> Void)?
 
-    init(draft: DetectorProfileDraft, categories: [SubjectKind], creating: Bool) {
+    init(draft: DetectorProfileDraft, categories: [SubjectKind], creating: Bool, applyingToTab: Bool = false) {
         self.draft = draft; self.categories = categories; self.creating = creating
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 880, height: 740),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.minSize = .init(width: 880, height: 640)
         window.isReleasedWhenClosed = false; window.autorecalculatesKeyViewLoop = true
-        window.title = creating ? "New SmartZoom profile" : "Edit SmartZoom profile"
+        window.title = applyingToTab ? "Vision framing — this tab" : creating ? "New SmartZoom profile" : "Edit SmartZoom profile"
         window.appearance = NSAppearance(named: .darkAqua)
         super.init(window: window)
         let body = ProfileEditorDocument(); body.orientation = .vertical; body.alignment = .leading; body.spacing = 10
@@ -39,6 +39,7 @@ import LoupeCore
         nameField.placeholderString = "Profile name"; nameField.identifier = .init("profile.name")
         body.addArrangedSubview(row([label("Name"), nameField]))
         nameField.widthAnchor.constraint(equalToConstant: 570).isActive = true
+        if applyingToTab { body.addArrangedSubview(label("Changes apply to this tab. Use Save SmartZoom for folder to remember them.")) }
         body.addArrangedSubview(label("Select categories to build a rule. All model categories in a group are required; Vision categories are individual fallback rules."))
         let left = column(), right = column()
         left.addArrangedSubview(label("Categories and framing")); right.addArrangedSubview(label("Priority rules — first complete group wins"))
@@ -84,7 +85,7 @@ import LoupeCore
         overflow.selectedSegment = draft.composition.panOverflow == .fit ? 0 : 1
         body.addArrangedSubview(normalize); body.addArrangedSubview(overflow)
         note.font = .systemFont(ofSize: 11); note.textColor = .systemOrange; note.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(note)
-        saveButton.title = creating ? "Create profile" : "Save profile"
+        saveButton.title = applyingToTab ? "Apply to tab" : creating ? "Create profile" : "Save profile"
         saveButton.target = self; saveButton.action = #selector(saveClicked); saveButton.keyEquivalent = "\r"
         cancelButton.target = self; cancelButton.action = #selector(cancelClicked); cancelButton.keyEquivalent = "\u{1b}"
         let footer = row([cancelButton,saveButton]); footer.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(footer)
