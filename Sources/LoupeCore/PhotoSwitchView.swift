@@ -102,7 +102,9 @@ public enum PhotoSwitchView {
     /// else `fallbackCentre`.
     public static func subjectCentre(_ boxes: SubjectBoxes?, rules: ZoomRules, imageSize: CGSize,
                                      viewSize: CGSize) -> CGPoint {
-        boxes.flatMap { SubjectFraming.centre($0, chain: rules.chain) }
+        boxes.flatMap { boxes in
+            rules.chain.lazy.compactMap { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: imageSize)?.desiredCenter }.first
+        }
             ?? fallbackCentre(imageSize: imageSize, viewSize: viewSize)
     }
 

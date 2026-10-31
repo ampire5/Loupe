@@ -3053,8 +3053,13 @@ import UniformTypeIdentifiers
             let selected = session.browse.chain(rules.chain).first { groups.contains($0) }
             var note = boxes == nil ? (session.smartZoom.mode == .off ? "Choose Pan only or Auto framing to analyse subjects" : "Looking for subjects…") : selected.map { "Group: \($0.title)" } ?? "No complete group found"
             if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition, imageSize: self.session.transform.imageSize) {
-                let t = c.transform(session.transform, autoZoom: true, size: rules.subjectSize)
-                if t.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
+                let resolved = c.resolve(session.transform, autoZoom: session.smartZoom.mode == .frame, size: rules.subjectSize)
+                if resolved.transform.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
+                if session.smartZoom.mode != .off {
+                    let adjustment = session.smartFramingNote.flatMap { $0.photo == self.session.entry?.url ? $0.text : nil }
+                        ?? resolved.adjustment.note
+                    if let adjustment { note += "\n" + adjustment }
+                }
             }
             if let preferred = session.browse.followed, !groups.contains(preferred) {
                 note += "\nPreferred: \(preferred.title) (not found); temporary fallback: \(selected?.title ?? "none")"

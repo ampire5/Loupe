@@ -212,6 +212,7 @@ import LoupeRender
     /// Framing while browsing (`step-zoom=subject`): how big each kind of subject was shown and the photo left
     /// (`BrowseFraming`), so the next photo shows its subject as big, a burst its view as it was.
     var browse = BrowseFraming()
+    var smartFramingNote: (photo: URL, text: String)?
     /// The step `browse` was last told about, so a step planned again (a finer level, the cache asking) is not one more.
     private var browseStep: (from: URL, to: URL)?
 
@@ -237,8 +238,10 @@ import LoupeRender
         let chain = browse.chain(rules.chain)
         guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: shown.imageSize) != nil }),
               let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: shown.imageSize) else { return nil }
-        let framed = c.transform(shown, autoZoom: smartZoom.mode == .frame,
-                                 size: rules.subjectSize)
+        let resolved = c.resolve(shown, autoZoom: smartZoom.mode == .frame, size: rules.subjectSize,
+                                 preferredCenter: browse.stableCenter(for: c, kind: kind, in: shown, options: rules.composition))
+        smartFramingNote = resolved.adjustment.note.map { (url, $0) }
+        let framed = resolved.transform
         if smartZoom.mode == .frame { browse.framed = (url, framed); manualZoomPhoto = nil }
         return framed
     }
