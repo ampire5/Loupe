@@ -39,11 +39,11 @@ import Testing
         let kind = SubjectKind(rawValue: "apple+cup")!
         var options = CompositionOptions()
         options.margin = 0
-        let c = try #require(SubjectFraming.composition(boxes, kind: kind, options: options))
+        let c = try #require(SubjectFraming.composition(boxes, kind: kind, options: options, imageSize: .init(width: 1000, height: 1000)))
         #expect(abs(c.desiredCenter.x - 0.5) < 1e-9)
         options.normalization = .object
         options.panOverflow = .keep
-        let d = try #require(SubjectFraming.composition(boxes, kind: kind, options: options))
+        let d = try #require(SubjectFraming.composition(boxes, kind: kind, options: options, imageSize: .init(width: 1000, height: 1000)))
         #expect(abs(d.desiredCenter.x - 1.25 / 3) < 1e-9)
         let t = ViewTransform(imageSize: .init(width: 1000, height: 1000), viewSize: .init(width: 600, height: 600), mode: .actual(1))
         let pan = d.transform(t, autoZoom: false, size: 1)
@@ -67,7 +67,7 @@ import Testing
         #expect(warnings.isEmpty)
         let options = try #require(setup.mode("portrait")?.composition)
         #expect(options.maxZoom == 0.75 && options.margin == 0.04 && options.weights[.face] == 1.25)
-        let c = try #require(SubjectFraming.composition(.init(faces: [.init(x: 0.4, y: 0.4, width: 0.2, height: 0.2)], people: [], objects: [], saliency: []), kind: .face, options: options))
+        let c = try #require(SubjectFraming.composition(.init(faces: [.init(x: 0.4, y: 0.4, width: 0.2, height: 0.2)], people: [], objects: [], saliency: []), kind: .face, options: options, imageSize: .init(width: 1000, height: 1000)))
         let t = ViewTransform(imageSize: .init(width: 100, height: 100), viewSize: .init(width: 1000, height: 1000))
         #expect(c.transform(t, autoZoom: true, size: 0.8).scale == t.fitScale)
     }
@@ -158,12 +158,12 @@ import Testing
     let boxes = SubjectBoxes(faces: [], people: [], objects: objects, saliency: [])
     let t = ViewTransform(imageSize: .init(width: 2000, height: 1000), viewSize: .init(width: 500, height: 500), mode: .actual(1))
     var options = CompositionOptions(); options.margin = 0
-    let fitting = try #require(SubjectFraming.composition(boxes, kind: .object, options: options))
+    let fitting = try #require(SubjectFraming.composition(boxes, kind: .object, options: options, imageSize: .init(width: 2000, height: 1000)))
     let fit = fitting.transform(t, autoZoom: false, size: 0.6)
-    #expect(abs(fit.scale - 500.0 / 1800) < 1e-9)
+    #expect(abs(fit.scale - 500.0 / 1700) < 1e-9)
     #expect(fit.scale >= t.fitScale)
     #expect(options.set("pan-overflow", "keep") == true)
-    let keeping = try #require(SubjectFraming.composition(boxes, kind: .object, options: options))
+    let keeping = try #require(SubjectFraming.composition(boxes, kind: .object, options: options, imageSize: .init(width: 2000, height: 1000)))
     let kept = keeping.transform(t, autoZoom: false, size: 0.6)
     #expect(kept.scale == t.scale)
     #expect(objects.contains { kept.visibleRect.intersects(CGRect(x: $0.minX * 2000, y: $0.minY * 1000, width: $0.width * 2000, height: $0.height * 1000)) })

@@ -1856,7 +1856,7 @@ import QuartzCore
         let now = zoomBase
         if cycleGroup {
             let rules = session.zoomRules(url)
-            let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
+            let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: now.imageSize) != nil }
             guard !kinds.isEmpty else { onToast?("No groups detected"); onSmartZoomChanged?(); return }
             do {
                 let current = session.browse.chain(rules.chain).first { kinds.contains($0) }

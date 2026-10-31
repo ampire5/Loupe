@@ -49,8 +49,8 @@ public enum PhotoSwitchView {
     /// view, centred on it as near as the photo's edges let it (`ViewTransform.clamped`); nil when no kind of
     /// `rules.chain` was found.
     public static func subjectTransform(_ t: ViewTransform, boxes: SubjectBoxes, rules: ZoomRules) -> ViewTransform? {
-        guard let kind = rules.chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }),
-              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) else { return nil }
+        guard let kind = rules.chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: t.imageSize) != nil }),
+              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: t.imageSize) else { return nil }
         return c.transform(t, autoZoom: true, size: rules.subjectSize)
     }
 

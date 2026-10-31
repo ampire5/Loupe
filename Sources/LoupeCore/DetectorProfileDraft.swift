@@ -34,7 +34,8 @@ public struct DetectorProfileDraft: Equatable, Sendable {
             guard seen.insert(group.parts.map(\.rawValue).sorted().joined(separator: "+")).inserted else { throw Invalid.duplicate }
         }
         guard size.isFinite, (0.2...1).contains(size), composition.maxZoom.isFinite, (0.25...4).contains(composition.maxZoom),
-              composition.margin.isFinite, (0...1).contains(composition.margin),
+              composition.margin.isFinite, (0...1).contains(composition.margin), composition.isValid,
+              Set(composition.circleRadii.keys).union(composition.maxCrop.keys).union(composition.protectionMargins.keys).allSatisfy({ known.contains($0) && !$0.isCombination }),
               composition.weights.allSatisfy({ !$0.key.isCombination && known.contains($0.key) && $0.value.isFinite && (0.25...4).contains($0.value) }) else { throw Invalid.range }
         var values = composition.values
         values["size"] = "\(size * 100)%"

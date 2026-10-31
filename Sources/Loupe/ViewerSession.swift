@@ -235,8 +235,8 @@ import LoupeRender
         let rules = zoomRules(url)
         browse.useProfile(rules.detector?.name ?? "vision")
         let chain = browse.chain(rules.chain)
-        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }),
-              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) else { return nil }
+        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: shown.imageSize) != nil }),
+              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: shown.imageSize) else { return nil }
         let framed = c.transform(shown, autoZoom: smartZoom.mode == .frame,
                                  size: rules.subjectSize)
         if smartZoom.mode == .frame { browse.framed = (url, framed); manualZoomPhoto = nil }

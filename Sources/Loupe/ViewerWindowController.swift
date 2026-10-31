@@ -1094,7 +1094,7 @@ import UniformTypeIdentifiers
         let rules = ZoomRules(config: effectiveConfig)
         let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
         let groups = boxes.map { boxes in rules.stepKinds.filter {
-            SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
+            SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) != nil
         } } ?? []
         return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
                      groups: groups, selectedGroup: session.browse.followed)
@@ -1963,7 +1963,7 @@ import UniformTypeIdentifiers
         return .init(boxes: boxes, chain: chain, note: boxes == nil ? "Looking for subjects…" : nil,
                      mode: rules.detector?.name,
                      composition: boxes.flatMap { b in
-                         chain.lazy.compactMap { SubjectFraming.composition(b, kind: $0, options: rules.composition) }.first
+                         chain.lazy.compactMap { SubjectFraming.composition(b, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) }.first
                      })
     }
 
@@ -3049,10 +3049,10 @@ import UniformTypeIdentifiers
                 kinds: [], options: .init(), size: 0.6, note: "No photo", showsBoxes: false) }
             let rules = ZoomRules(config: effectiveConfig)
             let boxes = session.entry.flatMap { self.session.subjectBoxes($0.url) }
-            let groups = boxes.map { b in rules.chain.filter { SubjectFraming.composition(b, kind: $0, options: rules.composition) != nil } } ?? []
+            let groups = boxes.map { b in rules.chain.filter { SubjectFraming.composition(b, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) != nil } } ?? []
             let selected = session.browse.chain(rules.chain).first { groups.contains($0) }
             var note = boxes == nil ? (session.smartZoom.mode == .off ? "Choose Pan only or Auto framing to analyse subjects" : "Looking for subjects…") : selected.map { "Group: \($0.title)" } ?? "No complete group found"
-            if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition) {
+            if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition, imageSize: self.session.transform.imageSize) {
                 let t = c.transform(session.transform, autoZoom: true, size: rules.subjectSize)
                 if t.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
             }

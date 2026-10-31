@@ -123,7 +123,7 @@ public struct BrowseFraming: Equatable, Sendable {
         let chosen: Target?
         if let options {
             chosen = self.chain(chain).lazy.compactMap { kind -> Target? in
-                SubjectFraming.composition(boxes, kind: kind, options: options).map { Target(kind: kind, frame: $0.frame, guessed: false) }
+                SubjectFraming.composition(boxes, kind: kind, options: options, imageSize: view.imageSize).map { Target(kind: kind, frame: $0.frame, guessed: false) }
             }.first
         } else { chosen = target(boxes, chain: chain, imageSize: view.imageSize) }
         guard let target = chosen else {
@@ -167,7 +167,7 @@ public struct BrowseFraming: Equatable, Sendable {
                                        maxZoom: rules.composition.maxZoom)
             return c.transform(shown, autoZoom: true, size: size(of: target.kind, rules: rules))
         }
-        guard let c = SubjectFraming.composition(boxes, kind: target.kind, options: rules.composition) else { return nil }
+        guard let c = SubjectFraming.composition(boxes, kind: target.kind, options: rules.composition, imageSize: shown.imageSize) else { return nil }
         return c.transform(shown, autoZoom: true, size: size(of: target.kind, rules: rules))
     }
 
