@@ -17,6 +17,10 @@ public struct SubjectComposition: Equatable, Sendable {
     /// The desired center projected onto the range preserving every selected box where it fits.
     /// An oversized axis keeps the weighted center; photo bounds always take precedence.
     public func transform(_ t: ViewTransform, autoZoom: Bool, size: Double) -> ViewTransform {
+        resolve(t, autoZoom: autoZoom, size: size).transform
+    }
+
+    func proposedTransform(_ t: ViewTransform, autoZoom: Bool, size: Double) -> ViewTransform {
         guard t.imageSize.width > 0, t.imageSize.height > 0, t.viewSize.width > 0, t.viewSize.height > 0 else { return t }
         var result = t
         if autoZoom {
@@ -25,12 +29,6 @@ public struct SubjectComposition: Equatable, Sendable {
                         t.viewSize.height * q / (frame.height * t.imageSize.height), maxZoom)
             // Fit is the useful lower bound, even when a tiny source exceeds the native cap at Fit.
             result = s <= t.fitScale ? t.withMode(.fit) : t.withMode(.actual(s))
-        }
-        if !autoZoom && panOverflow == .fit {
-            let fitGroup = min(t.viewSize.width / (frame.width * t.imageSize.width),
-                               t.viewSize.height / (frame.height * t.imageSize.height))
-            // Pan never zooms in. Only an oversized group can reduce the retained scale.
-            if fitGroup < t.scale { result = t.withMode(.actual(min(t.scale, max(t.fitScale, fitGroup)))) }
         }
         func project(_ target: Double, _ lo: Double, _ hi: Double, _ window: Double) -> Double {
             guard window < 1 else { return 0.5 }
@@ -95,6 +93,16 @@ extension SubjectFraming {
                                         panOverflow: options.panOverflow, objects: objects)
         result.support = validRect(union)
         result.circles = circles
+        let protectedKinds = options.protectionScope == .selected ? kind.parts : Array(Set(boxes.kinds + Array(options.maxCrop.keys)))
+        for protectedKind in protectedKinds {
+            guard let cut = options.cropLimit(for: protectedKind) else { continue }
+            let padding = options.protectionPadding(for: protectedKind)
+            for raw in boxes.boxes(protectedKind).compactMap(validRect) {
+                guard let padded = validRect(raw.insetBy(dx: -raw.width * padding, dy: -raw.height * padding)) else { continue }
+                let required = padded.insetBy(dx: padded.width * cut, dy: padded.height * cut)
+                result.protectedRegions.append(.init(kind: protectedKind, rect: required))
+            }
+        }
         return result
     }
 }
