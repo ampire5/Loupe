@@ -2454,7 +2454,8 @@ import UniformTypeIdentifiers
     private func layoutFolderSlots() {
         guard let container = window?.contentView else { return }
         folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
-        folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - viewerView.frame.maxY),
+        let top = statsBar.isHidden ? viewerView.frame.maxY : min(viewerView.frame.maxY, statsBar.frame.minY)
+        folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - top),
                             bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
     }
     @objc func toggleLeftSlot(_ sender: Any?) { folderSlots?.toggle(.left) }
@@ -2534,6 +2535,7 @@ import UniformTypeIdentifiers
         pillsAtScreenTop.isActive = false
         (isFullScreen ? viewerAtScreenTop : viewerAtTop).isActive = true
         (isFullScreen ? pillsAtScreenTop : pillsAtTop).isActive = true
+        window?.contentView?.needsLayout = true   // Slot headers follow status visibility even without a resize.
     }
 
     // MARK: Info panel (M4a spec §3, InfoPanelKit)
