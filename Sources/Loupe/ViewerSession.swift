@@ -199,7 +199,14 @@ import LoupeRender
     var subjectBoxes: (URL) -> SubjectBoxes? = { _ in nil }
     /// Zoom to Subject is on (smart zoom spec §3): a step opens the next photo framed on its subject, or at Fit until
     /// its subjects are in. Any other zoom command or a gesture turns it off (`ViewerView`).
-    var smartZoom = SmartZoomState()
+    var smartZoom = SmartZoomState() {
+        didSet {
+            if smartZoom.mode != oldValue.mode {
+                browse.forgetLeft()
+                browseStep = nil
+            }
+        }
+    }
     var smartZoomRevision: UInt64 = 0
     var manualZoomPhoto: URL?
     func noteManualZoom() { manualZoomPhoto = entry?.url }
@@ -212,6 +219,7 @@ import LoupeRender
     /// Framing while browsing (`step-zoom=subject`): how big each kind of subject was shown and the photo left
     /// (`BrowseFraming`), so the next photo shows its subject as big, a burst its view as it was.
     var browse = BrowseFraming()
+    var smartFramingNote: (photo: URL, text: String)?
     /// The step `browse` was last told about, so a step planned again (a finer level, the cache asking) is not one more.
     private var browseStep: (from: URL, to: URL)?
 
@@ -235,10 +243,12 @@ import LoupeRender
         let rules = zoomRules(url)
         browse.useProfile(rules.detector?.name ?? "vision")
         let chain = browse.chain(rules.chain)
-        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }),
-              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) else { return nil }
-        let framed = c.transform(shown, autoZoom: smartZoom.mode == .frame,
-                                 size: rules.subjectSize)
+        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: shown.imageSize) != nil }),
+              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: shown.imageSize) else { return nil }
+        let resolved = c.resolve(shown, autoZoom: smartZoom.mode == .frame, size: rules.subjectSize,
+                                 preferredCenter: browse.stableCenter(for: c, kind: kind, in: shown, options: rules.composition))
+        smartFramingNote = resolved.adjustment.note.map { (url, $0) }
+        let framed = resolved.transform
         if smartZoom.mode == .frame { browse.framed = (url, framed); manualZoomPhoto = nil }
         return framed
     }
@@ -1192,6 +1202,9 @@ import LoupeRender
     private func transform(showing url: URL, size: CGSize, over base: ViewTransform? = nil) -> ViewTransform {
         let current = base ?? judgedTransform
         let rules = zoomRules(url)
+        if smartZoom.mode != .off, let from = entry?.url, from != url {
+            leaveForBrowse(from, to: url, view: current)
+        }
         if smartZoom.mode != .frame, let saved = restored(url, size: size, over: current) {
             // Retained scale is a starting view; active SmartZoom still owns the point of interest.
             guard url != laidOut else { return saved }
@@ -1204,7 +1217,6 @@ import LoupeRender
                                           imageSize: size, rules: rules, subject: arrival == .switched ? subjectBoxes(url) : nil)
         guard arrival != .laidOut else { return shown }
         guard smartZoom.mode != .off else { return shown }
-        if smartZoom.mode == .frame, let from = entry?.url, from != url { leaveForBrowse(from, to: url, view: current) }
         return subjectBoxes(url).flatMap { smartFraming(url, shown: shown, boxes: $0) }
             ?? (smartZoom.mode == .frame ? shown.withMode(.fit) : shown)
     }

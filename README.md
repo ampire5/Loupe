@@ -120,6 +120,10 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 
 SmartZoom frames detected subjects using Vision or a compatible local Core ML model you supply. Use the toolbar panel to choose a model, create or edit composition profiles, and switch between Manual, Pan and Auto. Profile and model choices survive relaunch. Loupe includes no model weights; see [Custom detector](docs/detector.md) for controls and neutral configuration examples.
 
+Adjustable circles around subjects determine the rectangular crop. Per-class cut limits protect important objects:
+framing shifts first, then reduces zoom only when necessary. Faces are protected by default; profiles can override
+radius, protection padding and cut allowance for each class.
+
 ### Folder panels
 
 While viewing a photo, bring the pointer to the right edge or press ⌃⌘→ for the neighbouring folders. The wheel, trackpad and visible scrollbar only browse folders; click or Return opens the selected folder. The open photo stays unchanged while browsing. Escape returns the selection to the open folder. The capsule pins the panel beside the photo or lets it float over it. Left and bottom slots use ⌃⌘← and ⌃⌘↓.

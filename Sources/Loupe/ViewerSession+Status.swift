@@ -55,7 +55,7 @@ extension ViewerSession {
             let zoom = StatsLine.modeText(zoomTarget ?? transform, carry: rules.carry)
             let boxes = subjectBoxes(shown.url)
             let group = boxes.flatMap { boxes in
-                browse.chain(rules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
+                browse.chain(rules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: transform.imageSize) != nil }
             }
             status.zoomDetails?.group = group?.title ?? (smartZoom.mode == .off
                 ? (browse.followed?.title ?? rules.chain.first?.title ?? "—")
@@ -87,7 +87,7 @@ extension ViewerSession {
         let rules = zoomRules(url)
         guard !subjectZoom, rules.stepZoom == .subject, let boxes = subjectBoxes(url) else { return nil }
         for kind in browse.chain(rules.chain) {
-            if let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) {
+            if let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: transform.imageSize) {
                 return (kind.title, BrowseFraming.size(zoomTarget ?? transform, frame: c.frame))
             }
         }

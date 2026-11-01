@@ -198,6 +198,8 @@ import LoupeCore
                 case .found: (Self.color(mark.kind), 1, mark.kind == .saliency ? [4, 3] : [])
                 case .chosen: (Self.color(mark.kind), 2.5, [])
                 case .head: (Self.color(mark.kind), 1, [3, 3])
+                case .circle: (Self.color(mark.kind), 1.5, [])
+                case .protection: (.systemOrange, 1.5, [2, 3])
                 case .frame: (.white, 1.5, [8, 4])
                 }
                 strokes.append(strokePair(color: only ?? color, width: width, dash: dash))
@@ -259,7 +261,8 @@ import LoupeCore
         var stroke = 0, label = 0, cross = 0
         for (overlay, _) in overlays() {
             for mark in overlay.marks where stroke < strokes.count {
-                let path = CGPath(rect: rect(mark.rect), transform: nil)
+                let path = mark.role == .circle ? CGPath(ellipseIn: rect(mark.rect), transform: nil)
+                                               : CGPath(rect: rect(mark.rect), transform: nil)
                 strokes[stroke].under.path = path
                 strokes[stroke].over.path = path
                 stroke += 1

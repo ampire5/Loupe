@@ -5,7 +5,7 @@ import CoreGraphics
 /// the frame with its margin and its centre: the point `step-pan=subject`, `zoom-anchor=subject` and Zoom to Subject
 /// aim at (`SubjectFraming`).
 public struct SubjectOverlay: Equatable, Sendable {
-    public enum Role: Sendable { case found, chosen, head, frame }
+    public enum Role: Sendable { case found, chosen, head, circle, protection, frame }
 
     public struct Mark: Equatable, Sendable {
         /// Nil for the frame.
@@ -61,6 +61,10 @@ public struct SubjectOverlay: Equatable, Sendable {
             if chosen == .face { marks += boxes.faces.map { Mark(kind: .face, role: .head, rect: view(SubjectFraming.head($0))) } }
         }
         if let guessedHead { marks.append(Mark(kind: .face, role: .head, rect: view(guessedHead))) }
+        if let composition {
+            marks += composition.circles.map { Mark(kind: $0.kind, role: .circle, rect: view($0.rect)) }
+            marks += composition.protectedRegions.map { Mark(kind: $0.kind, role: .protection, rect: view($0.rect)) }
+        }
         let f = view(guessedHead ?? frame)
         marks.append(Mark(kind: nil, role: .frame, rect: f))
         if let composition {

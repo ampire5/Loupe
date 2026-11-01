@@ -1765,8 +1765,9 @@ import QuartzCore
         case .pointer: return pointer
         case .center: return CGPoint(x: t.viewSize.width / 2, y: t.viewSize.height / 2)
         case .subject:
-            guard let boxes = session.subjectBoxes(url), let frame = SubjectFraming.frame(boxes, chain: rules.chain) else { return pointer }
-            return t.viewPoint(forImage: CGPoint(x: frame.midX * t.imageSize.width, y: frame.midY * t.imageSize.height))
+            guard let boxes = session.subjectBoxes(url),
+                  let composition = rules.chain.lazy.compactMap({ SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: t.imageSize) }).first else { return pointer }
+            return t.viewPoint(forImage: CGPoint(x: composition.desiredCenter.x * t.imageSize.width, y: composition.desiredCenter.y * t.imageSize.height))
         }
     }
 
@@ -1776,9 +1777,9 @@ import QuartzCore
         guard Settings.shared.config.zoomAnchorCenter, let url = session.entry?.url else { return nil }
         let rules = session.zoomRules(url)
         guard rules.anchor == .subject, let boxes = session.subjectBoxes(url),
-              let frame = SubjectFraming.frame(boxes, chain: rules.chain),
+              let composition = rules.chain.lazy.compactMap({ SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: t.imageSize) }).first,
               let framed = PhotoSwitchView.subjectTransform(t, boxes: boxes, rules: rules) else { return nil }
-        let image = CGPoint(x: frame.midX * t.imageSize.width, y: frame.midY * t.imageSize.height)
+        let image = CGPoint(x: composition.desiredCenter.x * t.imageSize.width, y: composition.desiredCenter.y * t.imageSize.height)
         return Centring(image: image, start: t.viewPoint(forImage: image), startScale: t.scale, target: framed.scale)
     }
 
@@ -1856,7 +1857,7 @@ import QuartzCore
         let now = zoomBase
         if cycleGroup {
             let rules = session.zoomRules(url)
-            let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }
+            let kinds = rules.stepKinds.filter { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: now.imageSize) != nil }
             guard !kinds.isEmpty else { onToast?("No groups detected"); onSmartZoomChanged?(); return }
             do {
                 let current = session.browse.chain(rules.chain).first { kinds.contains($0) }

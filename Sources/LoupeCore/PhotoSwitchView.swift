@@ -49,8 +49,8 @@ public enum PhotoSwitchView {
     /// view, centred on it as near as the photo's edges let it (`ViewTransform.clamped`); nil when no kind of
     /// `rules.chain` was found.
     public static func subjectTransform(_ t: ViewTransform, boxes: SubjectBoxes, rules: ZoomRules) -> ViewTransform? {
-        guard let kind = rules.chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil }),
-              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition) else { return nil }
+        guard let kind = rules.chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: t.imageSize) != nil }),
+              let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: t.imageSize) else { return nil }
         return c.transform(t, autoZoom: true, size: rules.subjectSize)
     }
 
@@ -102,7 +102,9 @@ public enum PhotoSwitchView {
     /// else `fallbackCentre`.
     public static func subjectCentre(_ boxes: SubjectBoxes?, rules: ZoomRules, imageSize: CGSize,
                                      viewSize: CGSize) -> CGPoint {
-        boxes.flatMap { SubjectFraming.centre($0, chain: rules.chain) }
+        boxes.flatMap { boxes in
+            rules.chain.lazy.compactMap { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: imageSize)?.desiredCenter }.first
+        }
             ?? fallbackCentre(imageSize: imageSize, viewSize: viewSize)
     }
 

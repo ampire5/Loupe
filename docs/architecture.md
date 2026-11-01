@@ -42,6 +42,10 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
    panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
 5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.
+6. Shared subject detections → `CompositionOptions` and `SubjectFraming.composition` → physical circle support and
+   protected regions → `SubjectComposition.resolve` → feasible pan before minimum outzoom. `BrowseFraming` owns
+   cross-photo centre memory; current-photo constraints always win. The profile editor owns only its draft;
+   `DetectorProfileFiles` serializes profile writes, and tab/folder options use the existing config layering.
 
 ## Threads, cancellation and persistence
 
@@ -69,6 +73,7 @@ See [kit release workflow](kits.md); change kits on the app's branch name and co
 |---|---|---|
 | Window/tab routing | `Sources/Loupe/WindowRegistry.swift` | `Tests/LoupeTests`, session/tab core tests |
 | Navigation, zoom, spread | `Sources/Loupe/ViewerSession.swift`, `Sources/LoupeCore/ViewTransform.swift` | `Tests/LoupeCoreTests`, relevant viewer tests |
+| SmartZoom composition/profiles | `CompositionOptions.swift`, `SmartComposition.swift`, `SubjectComposition+Protection.swift`, `DetectorProfileEditor.swift` | circle composition/protection/browsing and native editor tests |
 | Decode/cache scheduling | `Sources/LoupeCore/ImageCache.swift`, `Sources/LoupeCore/ThumbnailStore.swift` | cache tests and `docs/bench` |
 | Browser inspector | `Sources/LoupeCore/BrowserInspectorLoader.swift`, `Sources/LoupeInspector` | `Tests/LoupeInspectorTests`, `LoupeBench inspector` |
 | Viewer metadata | `Sources/Loupe/ViewerMetadataLoader.swift` | `Tests/LoupeTests/ViewerMetadataLoaderTests.swift` |

@@ -70,7 +70,7 @@ public struct BrowseFraming: Equatable, Sendable {
                                     rules: ZoomRules) -> (kind: SubjectKind, index: Int, count: Int)? {
         let kinds = PhotoSwitchView.subjectSteps(t, boxes: boxes, rules: rules).map(\.kind)
         guard !kinds.isEmpty else { return nil }
-        let now = target(boxes, chain: rules.chain, imageSize: t.imageSize)
+        let now = target(boxes, chain: rules.chain, imageSize: t.imageSize, options: rules.composition)
         let next = now.flatMap { n in n.guessed ? nil : kinds.firstIndex(of: n.kind) }.map { ($0 + 1) % kinds.count } ?? 0
         followed = kinds[next]
         // The kind followed now is framed at subject-size (the mode's under the detector), not at the size it happened
@@ -92,10 +92,11 @@ public struct BrowseFraming: Equatable, Sendable {
 
     /// What `boxes`' framing looks at under `chain` (the kind followed first): the chain's first kind found; a head guessed on the people when a
     /// face was being followed (`sizes` has one), the chain puts faces first and none was found.
-    public func target(_ boxes: SubjectBoxes, chain: [SubjectKind], imageSize: CGSize) -> Target? {
+    public func target(_ boxes: SubjectBoxes, chain: [SubjectKind], imageSize: CGSize,
+                       options: CompositionOptions = .init()) -> Target? {
         let chain = self.chain(chain)
-        guard let kind = chain.first(where: { !boxes.boxes($0).isEmpty }),
-              let frame = SubjectFraming.frame(boxes, chain: [kind]) else { return nil }
+        guard let kind = chain.first(where: { SubjectFraming.composition(boxes, kind: $0, options: options, imageSize: imageSize) != nil }),
+              let frame = SubjectFraming.composition(boxes, kind: kind, options: options, imageSize: imageSize)?.frame else { return nil }
         if kind != .face, sizes[.face] != nil, let face = chain.firstIndex(of: .face), face < chain.firstIndex(of: kind)!,
            let head = Self.guessedHead(boxes.people, imageSize: imageSize) {
             return Target(kind: .face, frame: head, guessed: true)
@@ -123,7 +124,7 @@ public struct BrowseFraming: Equatable, Sendable {
         let chosen: Target?
         if let options {
             chosen = self.chain(chain).lazy.compactMap { kind -> Target? in
-                SubjectFraming.composition(boxes, kind: kind, options: options).map { Target(kind: kind, frame: $0.frame, guessed: false) }
+                SubjectFraming.composition(boxes, kind: kind, options: options, imageSize: view.imageSize).map { Target(kind: kind, frame: $0.frame, guessed: false) }
             }.first
         } else { chosen = target(boxes, chain: chain, imageSize: view.imageSize) }
         guard let target = chosen else {
@@ -161,14 +162,25 @@ public struct BrowseFraming: Equatable, Sendable {
     /// about where it was there (`steadyShift`, `steadyScale`); else the target at its size, panned by
     /// `SubjectFraming.pan`. Nil when nothing of the chain was found.
     public func frame(_ shown: ViewTransform, boxes: SubjectBoxes, rules: ZoomRules) -> ViewTransform? {
-        guard let target = target(boxes, chain: rules.chain, imageSize: shown.imageSize) else { return nil }
+        guard let target = target(boxes, chain: rules.chain, imageSize: shown.imageSize, options: rules.composition) else { return nil }
         if target.guessed {
             let c = SubjectComposition(frame: target.frame, desiredCenter: CGPoint(x: target.frame.midX, y: target.frame.midY),
                                        maxZoom: rules.composition.maxZoom)
             return c.transform(shown, autoZoom: true, size: size(of: target.kind, rules: rules))
         }
-        guard let c = SubjectFraming.composition(boxes, kind: target.kind, options: rules.composition) else { return nil }
-        return c.transform(shown, autoZoom: true, size: size(of: target.kind, rules: rules))
+        guard let c = SubjectFraming.composition(boxes, kind: target.kind, options: rules.composition, imageSize: shown.imageSize) else { return nil }
+        return c.resolve(shown, autoZoom: true, size: size(of: target.kind, rules: rules),
+                         preferredCenter: stableCenter(for: c, kind: target.kind, in: shown, options: rules.composition)).transform
+    }
+
+    /// A burst may reuse its preceding centre, but never its constraints: protection is resolved on this photo.
+    public func stableCenter(for composition: SubjectComposition, kind: SubjectKind, in view: ViewTransform,
+                             options: CompositionOptions) -> CGPoint? {
+        guard options.steadyFraming, let left, left.view.viewSize == view.viewSize,
+              view.imageSize.width > 0, left.view.imageSize.width > 0,
+              abs(left.view.imageSize.height / left.view.imageSize.width - view.imageSize.height / view.imageSize.width) < 1e-9,
+              Self.steady(left.target, Target(kind: kind, frame: composition.frame, guessed: false)) else { return nil }
+        return left.view.clamped.center
     }
 
     /// The same subject about in the same place: the same kind, its frame's centre and size close.
@@ -185,7 +197,7 @@ public struct BrowseFraming: Equatable, Sendable {
     /// The status bar's name for a view under framing while browsing: what it looks at and how big that is on screen
     /// ("Face 60 %"; a head guessed on a person reads "Head"). Nil when nothing of the chain was found.
     public func indicator(_ t: ViewTransform, boxes: SubjectBoxes, rules: ZoomRules) -> (name: String, size: Double)? {
-        guard let target = target(boxes, chain: rules.chain, imageSize: t.imageSize) else { return nil }
+        guard let target = target(boxes, chain: rules.chain, imageSize: t.imageSize, options: rules.composition) else { return nil }
         return (target.guessed ? "Head" : target.kind.title, Self.size(t, frame: target.frame))
     }
 }

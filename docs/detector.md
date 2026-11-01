@@ -37,7 +37,8 @@ starts no photo analysis. Catalog enumeration and model loading run off-main; th
 ## Profile editor
 
 In the SmartZoom Slot panel, use **New profile…** to create a profile or **Edit profile…** to change the selected one.
-The system Vision fallback is not an editable custom profile.
+For the built-in Vision fallback, use **Edit Vision settings…** and **Apply to tab**; no custom model is required.
+Use **Save SmartZoom for folder** to retain those overrides for the folder. Vision itself remains a built-in profile.
 
 Select categories from your configured model mappings, then **Add** a priority rule. Select multiple model categories
 to require them together. Vision categories are individual fallback rules. Select a rule to replace or remove it;
@@ -46,6 +47,27 @@ to require them together. Vision categories are individual fallback rules. Selec
 Each category has a weight from 0.25 to 4. **Weight per type** shares that weight among instances of the same type;
 **Weight per object** gives it to each instance. Adjust target size, maximum auto zoom, margin and Pan overflow in
 the same editor. Categories come from your local model configuration; the editor does not invent detector labels.
+
+**Circle radius** controls the circle at each box's centre: 100% is the largest circle inscribed in the box, measured
+in oriented image pixels. The selected circles form one enclosing rectangle. Smaller radii give a tighter crop;
+larger radii include more context. A category's **Radius** overrides the profile setting; **Default** inherits it.
+Existing face-to-head expansion applies before the circle is measured.
+
+**Max cut** limits the crop independently on every edge of every object of that category. `0%` retains its complete
+detected box, `5%` permits up to 5% of its width at each horizontal edge and 5% of its height at each vertical edge.
+**Off** explicitly disables protection; **Default** protects Vision faces and configured head classes at 0% and
+leaves other classes unrestricted. Select a category to edit its **Protection padding**, which grows the protected
+box before applying the cut allowance. It cannot restore content absent from the source photo.
+
+**Protect all found** applies these policies even to classes outside the chosen group. **Protect selected group**
+only protects that group's classes. Framing first tries a shift at the desired scale, sacrificing ordinary group
+margin if necessary; only an impossible fit reduces zoom, by the smallest required amount. Pan with **Keep zoom**
+retains scale and reports when full protection is impossible. Manual gestures remain unrestricted.
+
+**Keep similar photos steady** reuses the preceding centre for near-identical targets, while checking the new
+photo's protection constraints. The panel explains protection shifts and zoom reductions. **Show detections and
+frame** also draws circles and the required protected regions. Global controls apply immediately in the Slot panel;
+class changes use the profile editor's Save/Cancel workflow.
 
 **Create profile / Save profile** writes the draft to your private `detector.conf`, selects the profile and preserves
 Manual/Pan/Auto. **Cancel** leaves the file unchanged. Loupe keeps a backup before the first editor write and reports
@@ -63,6 +85,10 @@ mode = play
 score = 0.5
 margin = 8%
 max-zoom = 100%
+circle-radius = 100%
+protection-margin = 0%
+protection-scope = all
+steady-framing = yes
 
 [classes]
 CAT_FACE = cat
@@ -75,6 +101,9 @@ size = 65%
 weights = dog:1.25, ball:1
 weight-normalization = class
 pan-overflow = fit
+circle-radii = dog:125%,ball:75%
+max-crop = face:0%,cat:5%,dog:off
+protection-margins = cat:8%
 
 [pets]
 chain = cat+dog, cat, dog, face, person
@@ -82,10 +111,14 @@ size = 70%
 ```
 
 The first complete group in the chain wins. A `+` group requires every named type and includes all instances of those
-types; distance does not reject it. The selected rectangles form one union. Weights affect the desired centre, while
-full visibility, photo bounds and scale limits constrain the result. Auto never goes below Fit. Pan only never zooms
+types; distance does not reject it. Their circles form one rectangular frame. Weights affect the desired centre,
+while circle support, per-class protection, photo bounds and scale limits constrain the result. Auto never goes below Fit. Pan only never zooms
 in; `pan-overflow=fit` reduces scale when necessary to fit the group, while `keep` preserves scale and keeps an object
 visible if the weighted centre lands in empty space.
 
 Legacy `reach` and `min-frame` are accepted for configuration compatibility but do not reject complete groups or
 control the new composition. Changing a profile does not need inference again; changing a model or class mapping does.
+
+Radius factors accept 25–200%, protection padding 0–50%, and maximum cut 0–49% per edge or `off`. Per-class maps replace
+their inherited map when specified; an empty map removes overrides and restores built-in class defaults. The same
+options are retained by tab/folder SmartZoom overrides and **Save to profile**.

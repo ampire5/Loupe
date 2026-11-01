@@ -34,6 +34,8 @@ import LoupeCore
     private let weights = NSStackView()
     private let normalize = NSSegmentedControl(labels: ["Per type", "Per object"], trackingMode: .selectOne, target: nil, action: nil)
     private let showBoxes = NSButton(checkboxWithTitle: "Show detections and frame", target: nil, action: nil)
+    private let protection = NSSegmentedControl(labels: ["Protect all found", "Selected group"], trackingMode: .selectOne, target: nil, action: nil)
+    private let steady = NSButton(checkboxWithTitle: "Keep similar photos steady", target: nil, action: nil)
     private var controls: [String: SmartZoomSlider] = [:]
     private var weightRows: [SubjectKind: SmartZoomSlider] = [:]
     private var groupButtons: [SubjectKind: SmartZoomButton] = [:]
@@ -96,7 +98,11 @@ import LoupeCore
         addSlider("max-zoom", title: "Maximum auto zoom", range: 25...400, step: 25)
         addSlider("size", title: "Target size", range: 20...100, step: 1)
         addSlider("margin", title: "Margin", range: 0...100, step: 1)
-        let explanation = label("Pan only never zooms in. If the group does not fit, choose zoom out or keep zoom. Auto framing never goes below Fit.", size: 11)
+        addSlider("circle-radius", title: "Circle radius", range: 25...200, step: 1)
+        addSlider("protection-margin", title: "Protection padding", range: 0...50, step: 1)
+        body.addArrangedSubview(protection); protection.target = self; protection.action = #selector(protectionChanged)
+        body.addArrangedSubview(steady); steady.target = self; steady.action = #selector(steadyChanged)
+        let explanation = label("100% radius is the inscribed circle. Faces are protected by default. Shift comes before zoom out; class limits are in Edit profile. Pan never zooms in, and Keep zoom may prevent full protection.", size: 11)
         body.addArrangedSubview(explanation)
         let disclosure = SmartZoomButton("Type weights ▸") { [weak self] button in
             guard let self else { return }; weightsExpanded.toggle(); weights.isHidden = !weightsExpanded
@@ -130,6 +136,7 @@ import LoupeCore
             self?.edit?(key, "\(value)%")
         }
         controls[key] = row; body.addArrangedSubview(row)
+        row.identifier = .init("smartzoom." + key)
         row.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -28).isActive = true
     }
     func setProfileEditing(_ editing: Bool) { editingProfile = editing; interactionChanged?() }
@@ -147,7 +154,8 @@ import LoupeCore
         if model.titleOfSelectedItem != modelTitle { model.removeAllItems(); model.addItem(withTitle: modelTitle.isEmpty ? "Choose a model…" : modelTitle) }
         model.isEnabled = !next.modelLoading
         browseModel.isEnabled = !next.modelLoading
-        editProfileButton.isEnabled = next.canEditProfile
+        editProfileButton.isEnabled = next.canEditProfile || next.profile == "Vision"
+        editProfileButton.title = next.profile == "Vision" ? "Edit Vision settings…" : "Edit profile…"
         modelNote.stringValue = next.modelNote
         modelNote.isHidden = next.modelNote.isEmpty
         let wanted = next.groups
@@ -165,6 +173,10 @@ import LoupeCore
         controls["max-zoom"]?.set(next.options.maxZoom * 100)
         controls["size"]?.set(next.size * 100)
         controls["margin"]?.set(next.options.margin * 100)
+        controls["circle-radius"]?.set(next.options.circleRadius * 100)
+        controls["protection-margin"]?.set(next.options.protectionMargin * 100)
+        protection.selectedSegment = next.options.protectionScope == .all ? 0 : 1
+        steady.state = next.options.steadyFraming ? .on : .off
         overflow.selectedSegment = next.options.panOverflow == .fit ? 0 : 1
         normalize.selectedSegment = next.options.normalization == .class ? 0 : 1
         showBoxes.state = next.showsBoxes ? .on : .off
@@ -172,6 +184,8 @@ import LoupeCore
         refreshWeights()
     }
     @objc private func overflowChanged() { edit?("pan-overflow", overflow.selectedSegment == 0 ? "fit" : "keep") }
+    @objc private func protectionChanged() { edit?("protection-scope", protection.selectedSegment == 0 ? "all" : "selected") }
+    @objc private func steadyChanged() { edit?("steady-framing", steady.state == .on ? "yes" : "no") }
 
     private func refreshWeights() {
         guard visible, weightsExpanded, let snapshot else { return }

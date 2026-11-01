@@ -1094,7 +1094,7 @@ import UniformTypeIdentifiers
         let rules = ZoomRules(config: effectiveConfig)
         let boxes = session.entry.flatMap { session.subjectBoxes($0.url) }
         let groups = boxes.map { boxes in rules.stepKinds.filter {
-            SubjectFraming.composition(boxes, kind: $0, options: rules.composition) != nil
+            SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) != nil
         } } ?? []
         return .init(profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name),
                      groups: groups, selectedGroup: session.browse.followed)
@@ -1963,7 +1963,7 @@ import UniformTypeIdentifiers
         return .init(boxes: boxes, chain: chain, note: boxes == nil ? "Looking for subjects…" : nil,
                      mode: rules.detector?.name,
                      composition: boxes.flatMap { b in
-                         chain.lazy.compactMap { SubjectFraming.composition(b, kind: $0, options: rules.composition) }.first
+                         chain.lazy.compactMap { SubjectFraming.composition(b, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) }.first
                      })
     }
 
@@ -2454,7 +2454,8 @@ import UniformTypeIdentifiers
     private func layoutFolderSlots() {
         guard let container = window?.contentView else { return }
         folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
-        folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - viewerView.frame.maxY),
+        let top = statsBar.isHidden ? viewerView.frame.maxY : min(viewerView.frame.maxY, statsBar.frame.minY)
+        folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - top),
                             bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
     }
     @objc func toggleLeftSlot(_ sender: Any?) { folderSlots?.toggle(.left) }
@@ -2534,6 +2535,7 @@ import UniformTypeIdentifiers
         pillsAtScreenTop.isActive = false
         (isFullScreen ? viewerAtScreenTop : viewerAtTop).isActive = true
         (isFullScreen ? pillsAtScreenTop : pillsAtTop).isActive = true
+        window?.contentView?.needsLayout = true   // Slot headers follow status visibility even without a resize.
     }
 
     // MARK: Info panel (M4a spec §3, InfoPanelKit)
@@ -3049,12 +3051,17 @@ import UniformTypeIdentifiers
                 kinds: [], options: .init(), size: 0.6, note: "No photo", showsBoxes: false) }
             let rules = ZoomRules(config: effectiveConfig)
             let boxes = session.entry.flatMap { self.session.subjectBoxes($0.url) }
-            let groups = boxes.map { b in rules.chain.filter { SubjectFraming.composition(b, kind: $0, options: rules.composition) != nil } } ?? []
+            let groups = boxes.map { b in rules.chain.filter { SubjectFraming.composition(b, kind: $0, options: rules.composition, imageSize: self.session.transform.imageSize) != nil } } ?? []
             let selected = session.browse.chain(rules.chain).first { groups.contains($0) }
             var note = boxes == nil ? (session.smartZoom.mode == .off ? "Choose Pan only or Auto framing to analyse subjects" : "Looking for subjects…") : selected.map { "Group: \($0.title)" } ?? "No complete group found"
-            if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition) {
-                let t = c.transform(session.transform, autoZoom: true, size: rules.subjectSize)
-                if t.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
+            if let boxes, let selected, let c = SubjectFraming.composition(boxes, kind: selected, options: rules.composition, imageSize: self.session.transform.imageSize) {
+                let resolved = c.resolve(session.transform, autoZoom: session.smartZoom.mode == .frame, size: rules.subjectSize)
+                if resolved.transform.scale >= rules.composition.maxZoom - 1e-9 { note += " · Zoom limit reached" }
+                if session.smartZoom.mode != .off {
+                    let adjustment = session.smartFramingNote.flatMap { $0.photo == self.session.entry?.url ? $0.text : nil }
+                        ?? resolved.adjustment.note
+                    if let adjustment { note += "\n" + adjustment }
+                }
             }
             if let preferred = session.browse.followed, !groups.contains(preferred) {
                 note += "\nPreferred: \(preferred.title) (not found); temporary fallback: \(selected?.title ?? "none")"
@@ -3128,9 +3135,10 @@ import UniformTypeIdentifiers
     private func openProfileEditor(creating: Bool) {
         if let editor = profileEditor { editor.window?.makeKeyAndOrderFront(nil); return }
         let rules = ZoomRules(config: effectiveConfig)
-        guard creating || rules.detector != nil, let window else { return }
+        guard let window else { return }
+        let applyingToTab = !creating && rules.detector == nil
         let setup = effectiveConfig.detectorSetup
-        var name = rules.detector?.name ?? "custom"
+        var name = rules.detector?.name ?? (applyingToTab ? "Vision" : "custom")
         if creating {
             name = "custom"; var suffix = 2
             while setup.modes.contains(where: { $0.name == name }) { name = "custom-\(suffix)"; suffix += 1 }
@@ -3138,13 +3146,24 @@ import UniformTypeIdentifiers
         var draft = DetectorProfileDraft(name: name, chain: creating ? [] : rules.chain)
         draft.size = rules.subjectSize; draft.composition = rules.composition
         var categories = [SubjectKind]()
-        for kind in setup.kinds + SubjectKind.vision where !categories.contains(kind) { categories.append(kind) }
-        let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating)
+        for kind in (applyingToTab ? SubjectKind.vision : setup.kinds + SubjectKind.vision) where !categories.contains(kind) { categories.append(kind) }
+        let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating, applyingToTab: applyingToTab)
         profileEditor = editor
         folderSlots?.setSmartZoomEditing(true)
         editor.didClose = { [weak self] in self?.profileEditor = nil; self?.folderSlots?.setSmartZoomEditing(false) }
         editor.save = { [weak self] draft, completion in
             guard let self, !smartZoomSaveInFlight else { completion(.failure(CocoaError(.userCancelled))); return }
+            if applyingToTab {
+                do {
+                    let values = try draft.visionOverrides(in: effectiveConfig, mode: session.smartZoom.mode)
+                    session.browse.forgetSizes()
+                    setTabZoom(values)
+                    viewerView.frameSubjectNow()
+                    folderSlots?.refreshSmartZoom()
+                    completion(.success(()))
+                } catch { completion(.failure(error)) }
+                return
+            }
             smartZoomSaveInFlight = true
             Task { [weak self] in
                 do {
