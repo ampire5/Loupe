@@ -16,7 +16,7 @@ let package = Package(
         .package(url: "https://github.com/ampire5/StashKit.git", from: "0.2.0"),
         // The Logitech mouse goes through MouseService (a local mirror in .swiftpm/configuration/mirrors.json while
         // working on both).
-        .package(url: "https://github.com/ampire5/MouseService.git", from: "0.2.0"),
+        .package(url: "https://github.com/ampire5/MouseService.git", from: "0.3.0"),
     ],
     targets: [
         .systemLibrary(name: "CTurboJPEG", pkgConfig: "libturbojpeg", providers: [.brew(["jpeg-turbo"])]),
