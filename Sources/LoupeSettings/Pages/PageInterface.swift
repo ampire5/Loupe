@@ -50,6 +50,12 @@ extension SettingsPanel {
             ], symbol: "arrow.up.backward.and.arrow.down.forward",
                     description: "The viewer's toolbar when a window goes full screen. ⌥⌘T still switches it for "
                         + "the time in full screen. Default As you left it."),
+            .choice("fullscreen-tabs", "Tabs", [
+                (word: "shown", title: "Always visible"), (word: "auto", title: "Auto-hide with toolbar"),
+            ], symbol: "rectangle.topthird.inset.filled",
+                    description: "Always visible keeps the upper toolbar and tab bar expanded while tabs are shown, "
+                        + "so they stay in place for switching. Auto-hide reveals both together at the screen edge. "
+                        + "B temporarily switches pinning. Default Always visible."),
         ]),
         SettingsSection("Toasts", rows: [
             .choice("toast-position", "Position", Self.toastPositions, symbol: "align.horizontal.center",

@@ -71,6 +71,11 @@ public enum FullScreenToolbar: String, Sendable {
     case remember, shown, hidden
 }
 
+/// Native tabs stay reachable in a stable header, or auto-hide together with the toolbar.
+public enum FullScreenTabs: String, Sendable {
+    case shown, auto
+}
+
 /// `open-in`: where a file that no open tab shows yet goes. `tab` (the default): a new tab in the front viewer window;
 /// `window`: a new window; `replace`: the current tab shows it, as before tabs.
 public enum OpenIn: String, Sendable {
@@ -494,6 +499,8 @@ public struct Config: Equatable, Sendable {
     public var statsBarWithToolbar = false
     /// `fullscreen-toolbar`: the viewer's toolbar in full screen (`FullScreenToolbar`).
     public var fullScreenToolbar = FullScreenToolbar.remember
+    /// `fullscreen-tabs`: keep the native header stable while tabs are shown, or hide it as one block.
+    public var fullScreenTabs = FullScreenTabs.shown
     /// `stats-modified`: the photo's modification date in the stats bar.
     public var statsModified = true
     /// `stats-bar-autohide`: the stats bar fades out by itself after `stats-bar-hide-delay` and comes back with a photo.
@@ -695,7 +702,7 @@ public struct Config: Equatable, Sendable {
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
                               "appearance", "home-tab", "home-start", "home-sidebar", "home-path-bar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set",
-                              "fullscreen-toolbar", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
+                              "fullscreen-toolbar", "fullscreen-tabs", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
 
     /// The scaling filters a folder may set for itself. `pixel-art` and `pyramid-filter` stay global.
@@ -852,6 +859,7 @@ public struct Config: Equatable, Sendable {
         case "toast-position": return toastPosition.rawValue
         case "stats-bar-with-toolbar": return statsBarWithToolbar ? "yes" : "no"
         case "fullscreen-toolbar": return fullScreenToolbar.rawValue
+        case "fullscreen-tabs": return fullScreenTabs.rawValue
         case "stats-modified": return statsModified ? "yes" : "no"
         case "stats-bar-autohide": return statsBarAutohide ? "yes" : "no"
         case "stats-bar-hide-delay": return String(statsBarHideDelayMilliseconds)
@@ -1188,6 +1196,8 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { statsBarWithToolbar = v } else { return .badValue }
         case "fullscreen-toolbar":
             if let v = FullScreenToolbar(rawValue: value.lowercased()) { fullScreenToolbar = v } else { return .badValue }
+        case "fullscreen-tabs":
+            if let v = FullScreenTabs(rawValue: value.lowercased()) { fullScreenTabs = v } else { return .badValue }
         case "stats-modified":
             if let v = Self.bool(value) { statsModified = v } else { return .badValue }
         case "stats-bar-autohide":

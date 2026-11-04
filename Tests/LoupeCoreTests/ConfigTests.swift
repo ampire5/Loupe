@@ -13,6 +13,14 @@ import Foundation
     #expect(parsed == c && warnings.isEmpty)
 }
 
+@Test func fullScreenTabsDefaultToShownAndCanAutoHide() {
+    #expect(Config().text(forKey: "fullscreen-tabs") == "shown")
+    let (config, warnings) = Config.parse("fullscreen-tabs=auto")
+    #expect(warnings.isEmpty)
+    #expect(config.text(forKey: "fullscreen-tabs") == "auto")
+    #expect(!Config.parse("fullscreen-tabs=hidden").1.isEmpty)
+}
+
 @Test func missingFileGivesDefaultsWithoutWarningsAndIsNotCreated() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("loupe-config-\(UUID().uuidString)")
     let url = dir.appendingPathComponent("loupe.conf")
@@ -653,9 +661,9 @@ import Foundation
     let (retired, retiredWarnings) = Config.parse("stats-toast=no\nstats-bar-clear=yes")
     #expect(retired == defaults && retiredWarnings.count == 2)
     // Near the end, just before app-icon.
-    #expect(Array(Config.keys.suffix(15)) == [
+    #expect(Array(Config.keys.suffix(16)) == [
         "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position",
-        "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set", "fullscreen-toolbar",
+        "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set", "fullscreen-toolbar", "fullscreen-tabs",
         "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay", "app-icon",
     ])
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
@@ -1204,7 +1212,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
     "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
-    "fullscreen-toolbar": ("shown", "sliding"), "stats-modified": ("no", "perhaps"),
+    "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("auto", "hidden"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
     "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("sf", "tabler"),
     "app-icon": ("profile", "two words"),

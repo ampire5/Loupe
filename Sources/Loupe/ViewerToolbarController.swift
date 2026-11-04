@@ -74,11 +74,11 @@ import LoupeCore
         (.vibranceSwitch, "drop.halffull", "Vibrance", .toggleVibrance),
     ]
 
-    /// The status takes available space between Back and the secondary controls. Global centring would force it
-    /// into overflow beside the traffic lights at small widths, even when its compact form fits the toolbar.
+    /// AppKit centres the status relative to the window when space allows;
+    /// its compact layout and visibility priority handle narrower windows.
     private static let order: [NSToolbarItem.Identifier] = [
         Item.back, .navigation, .zoom, .zoomSet, .zoomModes, .smartZoom, .keepZoom, .zoomMenu,
-    ].map(\.identifier) + [.flexibleSpace, Item.status.identifier, .flexibleSpace] + [
+    ].map(\.identifier) + [Item.status.identifier, .flexibleSpace] + [
         Item.autoColour, .strength, .vibranceSwitch, .vibrance, .strip, .stats, .scaling,
     ].map(\.identifier)
 
@@ -90,7 +90,7 @@ import LoupeCore
         nsToolbar.displayMode = .iconOnly
         nsToolbar.allowsUserCustomization = false
         nsToolbar.autosavesConfiguration = false
-        nsToolbar.centeredItemIdentifiers = []
+        nsToolbar.centeredItemIdentifiers = [Item.status.identifier]
         statusView.choices = actions.statusChoices
         statusView.onAction = { action in
             switch action {

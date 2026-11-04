@@ -26,6 +26,11 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
   active session. A native tab is a separate window/controller/session.
 - `ViewerWindowController` owns the AppKit view hierarchy, source adapters, panel presentation and one
   `ViewerSession`. `ViewerView` handles input/visual motion; `RenderLoop` owns the render thread.
+- `WindowToolbarController` retains the native toolbar and applies the native bottom tab accessory's fullscreen
+  minimum height. `ViewerWindowController` reconciles `fullscreen-tabs`, the temporary B override and stats layout
+  on native tab layout, selection and settings changes. Shown tabs keep the whole header stable; auto mode hides
+  tabs and toolbar together. Layout requests coalesce into one deferred main-queue update, skipped after close or
+  fullscreen exit, to avoid mutating AppKit chrome during layout. This adds no polling or recurring timers.
 - `ViewerSession` owns playlist, displayed cache entries, transform, spread and navigation intent. Loading and
   residency belong to the shared cache. `close()` stops watchers/tasks and unregisters its cache/thumbnail requests.
 - `ViewerMetadataLoader` owns the viewer info panel's selected file, stat/result and read/pending task lifetime.

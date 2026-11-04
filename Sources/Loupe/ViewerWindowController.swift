@@ -138,7 +138,13 @@ import UniformTypeIdentifiers
     }
     private let windowedToolbarReveal = WindowToolbarRevealController(hideDelay: Chrome.Motion.duration(Chrome.Motion.hide))
     private var toolbarPinnedOverride: Bool?
-    private var viewerToolbarPinned: Bool { toolbarPinnedOverride ?? (!isFullScreen && windowToolbar) }
+    private var lastLayoutToolbarPinned: Bool?
+    private var toolbarLayoutReconcileScheduled = false
+    private var appliedFullScreenTabs = Settings.shared.config.fullScreenTabs
+    private var fullScreenTabsPinned: Bool {
+        fullScreenToolbar && Settings.shared.config.fullScreenTabs == .shown && window?.tabGroup?.isTabBarVisible == true
+    }
+    private var viewerToolbarPinned: Bool { toolbarPinnedOverride ?? (isFullScreen ? fullScreenTabsPinned : windowToolbar) }
     private var toolbarWanted: Bool { viewerToolbarPinned || (isFullScreen ? fullScreenToolbar : windowToolbar) }
     /// What the window's toolbar was last told, so the system's slide-in in full screen is not pinned by telling it again.
     private var toolbarWasWanted = true
@@ -421,7 +427,11 @@ import UniformTypeIdentifiers
             self?.layoutFolderSlots()
         }
         // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
-        container.onLayout = { [weak self] in self?.infoPanel.place(); self?.layoutFolderSlots() }
+        container.onLayout = { [weak self] in
+            guard let self else { return }
+            self.infoPanel.place(); self.layoutFolderSlots()
+            self.scheduleToolbarLayoutReconciliation()
+        }
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
@@ -445,6 +455,7 @@ import UniformTypeIdentifiers
         observe(NSWindow.didBecomeKeyNotification) {
             $0.session.isKeyWindow = true
             $0.syncFullScreen()   // a tab moved into or out of a full-screen window
+            $0.applyFullScreenToolbar()
             $0.applyToolbarVisibility()   // `⌥⌘T` in another window or tab since this one was in front
         }
         observe(NSWindow.didResignKeyNotification) {
@@ -467,6 +478,11 @@ import UniformTypeIdentifiers
                 self?.updateEffectiveConfig()
                 self?.session.setFitUpscale(Settings.shared.config.fitUpscale)
                 self?.statsBar.apply(Settings.shared.config)
+                if let self, self.appliedFullScreenTabs != Settings.shared.config.fullScreenTabs {
+                    self.appliedFullScreenTabs = Settings.shared.config.fullScreenTabs
+                    self.toolbarPinnedOverride = nil
+                    self.applyFullScreenToolbar()
+                }
                 self?.updateStatus()
                 self?.applyStatsLayout()
                 self?.applyToastPosition()
@@ -638,10 +654,11 @@ import UniformTypeIdentifiers
     /// toolbar's autohiding policy, keeping AppKit in charge of its host and reveal.
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposed: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        // Delegate can run before willEnter sets isFullScreen: only an explicit
-        // B pin carries into full screen, not legacy windowed toolbar visibility.
-        let pinned = toolbarPinnedOverride == true
+        // Delegate can run before willEnter sets isFullScreen. Use the tab policy
+        // or explicit B override, rather than legacy windowed toolbar visibility.
+        let pinned = toolbarPinnedOverride ?? fullScreenTabsPinned
         let autohiding = (!isShowingHome && !pinned) || !windowToolbarController.supportsFullScreenAutohiding
+        windowToolbarController.setFullScreenTabBarAutohiding(autohiding, in: window)
         windowToolbarController.prepareForFullScreen(autohiding: autohiding)
         return autohiding ? proposed.union(.autoHideToolbar) : proposed.subtracting(.autoHideToolbar)
     }
@@ -2270,6 +2287,7 @@ import UniformTypeIdentifiers
             applyFullScreenToolbar()
         } else {
             windowToolbarController.resetFullScreenAutohiding()
+            if let window { windowToolbarController.setFullScreenTabBarAutohiding(false, in: window) }
             if !isShowingHome { windowToolbarController.toolbar.isVisible = windowToolbar }
             toolbarWasWanted = windowToolbar
         }
@@ -2494,15 +2512,40 @@ import UniformTypeIdentifiers
         }
     }
 
+    /// Tab geometry can change without a fullscreen transition. AppKit forbids
+    /// changing toolbar hierarchy during layout, so coalesce into one deferred
+    /// reconciliation. Closing/exiting before it runs makes it a no-op.
+    private func scheduleToolbarLayoutReconciliation() {
+        guard isFullScreen, !isClosed, !toolbarLayoutReconcileScheduled, let window else { return }
+        if let selected = window.tabGroup?.selectedWindow, selected !== window { return }
+        toolbarLayoutReconcileScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.toolbarLayoutReconcileScheduled = false
+            guard self.isFullScreen, !self.isClosed, let window = self.window else { return }
+            if let selected = window.tabGroup?.selectedWindow, selected !== window { return }
+            let pinned = self.viewerToolbarPinned
+            if self.lastLayoutToolbarPinned != pinned {
+                self.lastLayoutToolbarPinned = pinned
+                self.applyStatsLayout()
+            }
+            self.applyFullScreenToolbar()
+        }
+    }
+
     private func applyFullScreenToolbar() {
-        guard !isClosed, isFullScreen, let toolbar = window?.toolbar else { return }
+        guard !isClosed, isFullScreen, let window, let toolbar = window.toolbar else { return }
+        if let selected = window.tabGroup?.selectedWindow, selected !== window { return }
         let enabled = isShowingHome || viewerToolbarPinned || fullScreenToolbar
-        if toolbar.isVisible != enabled { toolbar.isVisible = enabled }
+        windowToolbarController.setFullScreenTabBarAutohiding(!isShowingHome && !viewerToolbarPinned, in: window)
         // willEnterFullScreen arrives before the native host is ready. didEnter
         // applies the policy again once AppKit has finished creating that host.
-        if !isEnteringFullScreen, window?.styleMask.contains(.fullScreen) == true {
+        if !isEnteringFullScreen, window.styleMask.contains(.fullScreen) {
             windowToolbarController.setFullScreenAutohiding(!isShowingHome && !viewerToolbarPinned)
         }
+        // Enabling native auto-hide may itself set isVisible=true. Apply the
+        // explicit toolbar command last so a pinned-to-hidden transition wins.
+        if toolbar.isVisible != enabled { toolbar.isVisible = enabled }
     }
 
     /// The stats bar (`I`) floats over the picture and reserves no room, always at the top: windowed under the toolbar, in

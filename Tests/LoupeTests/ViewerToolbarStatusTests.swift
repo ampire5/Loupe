@@ -1,21 +1,21 @@
 import AppKit
+import HomeChrome
 import HomeScreenModel
 import LoupeCore
 import Testing
 @testable import Loupe
 
 @Suite(.serialized) @MainActor struct ViewerToolbarStatusTests {
-    @Test func statusUsesNativeToolbarAppearanceWithoutAnExtraGlassSurface() {
+    @Test func statusKeepsRoundedProCameraGlassAndReadableText() throws {
         _ = NSApplication.shared
         let view = ViewerToolbarStatusView()
         view.update(sample())
-        #expect(view.appearance == nil)
-        #expect(!descendants(view).contains { $0 is NSVisualEffectView })
-        if #available(macOS 26.0, *) {
-            #expect(!descendants(view).contains { $0 is NSGlassEffectView })
-        }
+        let glass = try #require(descendants(view).compactMap { $0 as? ChromeGlass }.first)
+        #expect(glass.style == .overMedia(.light))
+        #expect(glass.cornerRadius == 12)
+        #expect(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
         let title = descendants(view).compactMap { $0 as? NSTextField }.first { $0.stringValue == "Portrait_001.jpg" }
-        #expect(title?.textColor == .labelColor)
+        #expect(title?.textColor == ProCameraStyle.primary)
     }
 
     private func toolbar() -> ViewerToolbarController {
@@ -268,6 +268,10 @@ import Testing
             #expect(view.frame.width <= view.preferredWidth + 1)
             #expect(controller.nsToolbar.visibleItems?.contains { $0 === item } == true, "Window width \(width)")
             #expect(view.window === window, "Window width \(width)")
+            if width >= 3000 {
+                let rect = view.convert(view.bounds, to: nil)
+                #expect(abs(rect.midX - width / 2) < 2, "Summary must be centred in a \(width) pt window: \(rect)")
+            }
             if width == 1800 {
                 #expect(controller.nsToolbar.visibleItems?.contains { $0.itemIdentifier.rawValue == "viewer.vibrance" } == true,
                     "Status must compress before the Vibrance slider disappears at this width")

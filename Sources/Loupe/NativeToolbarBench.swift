@@ -21,6 +21,8 @@ import LoupeRender
         let savedPreferences = Dictionary(uniqueKeysWithValues: preferenceKeys.compactMap { key in
             UserDefaults.standard.object(forKey: key).map { (key, $0) }
         })
+        UserDefaults.standard.set(true, forKey: "viewerToolbar")
+        UserDefaults.standard.set(true, forKey: "fullScreenToolbar")
         let detectorSuite = "loupe.native-toolbar-bench.\(ProcessInfo.processInfo.processIdentifier)"
         setenv("LOUPE_DETECTOR_PREFERENCES_SUITE", detectorSuite, 1)
         setenv("LOUPE_CONFIG_DIR", scratch.path, 1)
@@ -75,6 +77,10 @@ import LoupeRender
         let viewerToolbar = window.toolbar
         func nativeHost(_ toolbar: NSToolbar?) -> NSWindow? {
             toolbar?.items.compactMap(\.view).compactMap(\.window).first
+        }
+        func backButton(in view: NSView) -> NSView? {
+            if view.toolTip == "Back" || view.toolTip?.hasPrefix("Back to ") == true { return view }
+            return view.subviews.lazy.compactMap { backButton(in: $0) }.first
         }
         check("viewer hosted by native full-screen window", nativeHost(viewerToolbar) != nil && nativeHost(viewerToolbar) !== window)
         UserDefaults.standard.set(true, forKey: "fullScreenStatus")
@@ -131,6 +137,16 @@ import LoupeRender
             }
             check("round \(round): viewer toolbar restored and enabled", window.toolbar === viewerToolbar && viewerToolbar?.isVisible == true)
             check("round \(round): viewer reattached to native full-screen window", nativeHost(viewerToolbar) != nil && nativeHost(viewerToolbar) !== window)
+            // Attachment precedes AppKit's native titlebar animation. Inspect
+            // the settled frame, not its intermediate presentation offset.
+            try? await Task.sleep(for: .milliseconds(300))
+            if let root = nativeHost(viewerToolbar)?.contentView?.superview, let back = backButton(in: root) {
+                let rect = back.convert(back.bounds, to: nil)
+                report.append("round \(round): Back frame \(rect)")
+                check("round \(round): viewer has no parked sidebar gutter", rect.minX < 100)
+            } else {
+                check("round \(round): viewer Back button is attached", false)
+            }
             check("round \(round): native auto-hide retained", app.currentSystemPresentationOptions.contains(.autoHideToolbar))
             report.append(String(format: "round %d Home CPU %.3f ms; viewer CPU %.3f ms", round, homeCPU, returnCPU))
             try? await Task.sleep(for: .milliseconds(100))
@@ -229,6 +245,83 @@ import LoupeRender
             try? await Task.sleep(for: .milliseconds(300))
         }
         _ = Settings.shared.saveAsDefault(["fullscreen-toolbar": originalFullScreenPolicy])
+        let recentController = ViewerWindowController(cache: cache, thumbnails: thumbs, thumbnailsReady: nil,
+            positions: FolderPositions(database: nil), folderSettings: FolderSettings(database: nil), recent: nil)
+        let recentWindow = recentController.window!
+        recentController.showHome(tab: .recent)
+        controller.toggleToolbarPin()
+        window.addTabbedWindow(recentWindow, ordered: .above)
+        recentWindow.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        window.tabGroup?.selectedWindow = window
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        if let root = window.contentView?.superview, let back = backButton(in: root) {
+            let rect = back.convert(back.bounds, to: nil)
+            report.append("viewer beside Recent tab: Back frame \(rect)")
+            check("viewer beside Recent tab has no sidebar gutter", rect.minX < 100)
+        } else { check("tabbed viewer Back button is attached", false) }
+        entered = false; exited = false
+        window.toggleFullScreen(nil)
+        for _ in 0..<250 {
+            if entered { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        window.tabGroup?.selectedWindow = recentWindow
+        recentWindow.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        window.tabGroup?.selectedWindow = window
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        if let root = nativeHost(viewerToolbar)?.contentView?.superview, let back = backButton(in: root) {
+            let rect = back.convert(back.bounds, to: nil)
+            report.append("full-screen viewer beside Recent tab: Back frame \(rect)")
+            check("full-screen viewer beside Recent tab has no sidebar gutter", rect.minX < 100)
+        } else { check("full-screen tabbed viewer Back button is attached", false) }
+        let originalTabPolicy = Settings.shared.config.fullScreenTabs.rawValue
+        _ = Settings.shared.saveAsDefault(["fullscreen-tabs": "auto"])
+        _ = Settings.shared.saveAsDefault(["fullscreen-tabs": "shown"])
+        try? await Task.sleep(for: .milliseconds(300))
+        check("shown tabs keep the native header stable", (window.contentView?.safeAreaInsets.top ?? 0) > 0 && viewerToolbar?.isVisible == true)
+        check("shown tab header suppresses duplicate stats", statusBar?.isHidden == true)
+        if let view = viewerToolbar?.items.first(where: { $0.itemIdentifier.rawValue == "viewer.status" })?.view,
+           let host = view.window {
+            let rect = view.convert(view.bounds, to: nil)
+            check("summary is centred in the full-screen header", abs(rect.midX - host.frame.width / 2) < 2)
+        } else { check("centred full-screen summary is attached", false) }
+        let tabAccessories = window.titlebarAccessoryViewControllers.filter { $0.layoutAttribute == .bottom }
+        check("shown tabs retain their native visible height", !tabAccessories.isEmpty && tabAccessories.allSatisfy { $0.fullScreenMinHeight == $0.view.frame.height })
+        controller.toggleViewerToolbar(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        report.append("tabbed shortcut hide: toolbar=\(viewerToolbar?.isVisible.description ?? "nil") inset=\(window.contentView?.safeAreaInsets.top ?? -1) minima=\(tabAccessories.map(\.fullScreenMinHeight)) current=\(window.titlebarAccessoryViewControllers.map(\.fullScreenMinHeight))")
+        check("toolbar shortcut overrides shown tabs", viewerToolbar?.isVisible == false && window.contentView?.safeAreaInsets.top == 0)
+        controller.toggleViewerToolbar(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("toolbar shortcut restores shown tabs", viewerToolbar?.isVisible == true && (window.contentView?.safeAreaInsets.top ?? 0) > 0)
+        controller.toggleToolbarPin()
+        try? await Task.sleep(for: .milliseconds(300))
+        check("B temporarily auto-hides a shown tab header", window.contentView?.safeAreaInsets.top == 0 && tabAccessories.allSatisfy { $0.fullScreenMinHeight == 0 })
+        _ = Settings.shared.saveAsDefault(["fullscreen-tabs": "auto"])
+        try? await Task.sleep(for: .milliseconds(300))
+        check("auto tabs share the toolbar reveal policy", window.contentView?.safeAreaInsets.top == 0 && tabAccessories.allSatisfy { $0.fullScreenMinHeight == 0 })
+        window.tabGroup?.selectedWindow = recentWindow
+        recentWindow.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("auto viewer can switch to the pinned Recent tab", (recentWindow.contentView?.safeAreaInsets.top ?? 0) > 0)
+        window.tabGroup?.selectedWindow = window
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("return from Recent restores viewer auto-hide", window.contentView?.safeAreaInsets.top == 0)
+        _ = Settings.shared.saveAsDefault(["fullscreen-tabs": "shown"])
+        try? await Task.sleep(for: .milliseconds(300))
+        check("changing tab policy restores the stable header live", (window.contentView?.safeAreaInsets.top ?? 0) > 0 && tabAccessories.allSatisfy { $0.fullScreenMinHeight == $0.view.frame.height })
+        _ = Settings.shared.saveAsDefault(["fullscreen-tabs": originalTabPolicy])
+        window.toggleFullScreen(nil)
+        for _ in 0..<250 {
+            if exited { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        recentWindow.close()
         center.removeObserver(enter); center.removeObserver(leave)
         let text = report.joined(separator: "\n") + "\n"
         await Task.detached(priority: .utility) {

@@ -30,6 +30,16 @@ import AppKit
 
     func resetFullScreenAutohiding() { fullScreenAutohiding = nil }
 
+    /// Loupe's only bottom titlebar accessory is AppKit's native tab bar.
+    /// A nonzero minimum would leave it independently visible while the toolbar
+    /// slides over it. In auto mode both must reveal and hide as one header.
+    func setFullScreenTabBarAutohiding(_ enabled: Bool, in window: NSWindow) {
+        for accessory in window.titlebarAccessoryViewControllers where accessory.layoutAttribute == .bottom {
+            let height: CGFloat = enabled ? 0 : accessory.view.frame.height
+            if accessory.fullScreenMinHeight != height { accessory.fullScreenMinHeight = height }
+        }
+    }
+
     override init() {
         super.init()
         toolbar.delegate = self

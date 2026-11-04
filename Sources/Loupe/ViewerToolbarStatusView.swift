@@ -20,7 +20,7 @@ struct ViewerStatusChoices {
     static let height: CGFloat = 46
     var onAction: ((ViewerStatusAction) -> Void)?
     var choices: (() -> ViewerStatusChoices)?
-    private let content = NSView()
+    private let glass = ChromeGlass(style: .overMedia(.light), cornerRadius: 12)
     private let titleLabel = NSTextField(labelWithString: "Loupe")
     private let folderLabel = NSTextField(labelWithString: "")
     let positionButton = NSButton(title: "—", target: nil, action: nil)
@@ -52,20 +52,19 @@ struct ViewerStatusChoices {
         super.init(frame: frameRect)
         // NSToolbar owns this view's frame. A self-width constraint becomes its fitting minimum on macOS 26.
         translatesAutoresizingMaskIntoConstraints = false
-        // The native toolbar owns the material and appearance. Keep controls on
-        // a plain content view instead of stacking a second glass surface.
-        content.frame = bounds
-        content.autoresizingMask = [.width, .height]
-        addSubview(content)
+        appearance = NSAppearance(named: .darkAqua)
+        glass.frame = bounds
+        glass.autoresizingMask = [.width, .height]
+        addSubview(glass)
         for label in [titleLabel, folderLabel, noExposure, profileLabel, groupLabel, zoomLabel, modeLabel] + exposureLabels {
             label.font = .systemFont(ofSize: 11)
-            label.textColor = .labelColor
+            label.textColor = ProCameraStyle.primary
             label.lineBreakMode = .byTruncatingMiddle
             label.maximumNumberOfLines = 1
-            content.addSubview(label)
+            glass.contentView.addSubview(label)
         }
         titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        for label in [folderLabel, profileLabel, groupLabel, zoomLabel, modeLabel] { label.textColor = .secondaryLabelColor }
+        for label in [folderLabel, profileLabel, groupLabel, zoomLabel, modeLabel] { label.textColor = ProCameraStyle.secondary }
         configure(positionButton, "Photo position", #selector(positionClicked))
         configure(previous, "Previous photo", #selector(previousClicked), symbol: "chevron.left")
         configure(next, "Next photo", #selector(nextClicked), symbol: "chevron.right")
@@ -78,17 +77,17 @@ struct ViewerStatusChoices {
         zoomButton.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         for value in [modeButton, profileButton, groupButton] { value.font = .systemFont(ofSize: 12, weight: .medium) }
         for caption in [zoomLabel, modeLabel, profileLabel, groupLabel] {
-            caption.textColor = .secondaryLabelColor
+            caption.textColor = .white.withAlphaComponent(0.55)
             caption.stringValue = caption.stringValue.uppercased()
         }
         for divider in dividers {
             divider.wantsLayer = true
-            divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
-            content.addSubview(divider)
+            divider.layer?.backgroundColor = ProCameraStyle.separator.cgColor
+            glass.contentView.addSubview(divider)
         }
         progress.wantsLayer = true
-        progress.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        content.addSubview(progress)
+        progress.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        glass.contentView.addSubview(progress)
         heightAnchor.constraint(equalToConstant: Self.height).isActive = true
         toolTip = "Current photo, EXIF and zoom controls"
     }
@@ -98,17 +97,6 @@ struct ViewerStatusChoices {
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: Self.height) }
 
-    private static func color(_ tone: ImageStatus.Tone) -> NSColor {
-        switch tone {
-        case .normal: .labelColor
-        case .quiet: .secondaryLabelColor
-        case .adjusted: .controlAccentColor
-        case .good: .systemGreen
-        case .caution: .systemOrange
-        case .warning: .systemRed
-        }
-    }
-
     private func configure(_ button: NSButton, _ label: String, _ action: Selector, symbol: String? = nil) {
         button.target = self
         button.action = action
@@ -116,7 +104,7 @@ struct ViewerStatusChoices {
         button.bezelStyle = .inline
         button.font = .systemFont(ofSize: 11)
         button.alignment = .left
-        button.contentTintColor = .labelColor
+        button.contentTintColor = ProCameraStyle.primary
         button.cell?.lineBreakMode = .byTruncatingTail
         button.cell?.wraps = false
         button.setAccessibilityLabel(label)
@@ -125,7 +113,7 @@ struct ViewerStatusChoices {
             button.image = Icons.symbol(symbol, pointSize: 11, description: label)
             button.imagePosition = .imageOnly
         }
-        content.addSubview(button)
+        glass.contentView.addSubview(button)
     }
 
     override func viewDidMoveToWindow() {
@@ -141,10 +129,10 @@ struct ViewerStatusChoices {
         if !new.pending.contains(.exposure) || exposure == nil { exposure = new.facts.first { $0.kind == .exposure } }
         zoomDetails = new.zoomDetails
         set(titleLabel, new.title.isEmpty ? "Loupe" : new.title)
-        titleLabel.textColor = Self.color(new.titleTone)
+        titleLabel.textColor = ProCameraStyle.color(new.titleTone, monochrome: false)
         // A root-volume display-name lookup would perform synchronous I/O. The pure path label suffices here.
         set(folderLabel, new.note ?? new.folder.map { StatsLine.folderName(of: $0, volumeName: nil) } ?? "")
-        folderLabel.textColor = Self.color(new.note == nil ? .quiet : new.noteTone)
+        folderLabel.textColor = ProCameraStyle.color(new.note == nil ? .quiet : new.noteTone, monochrome: false)
         folderLabel.toolTip = new.note ?? new.folder?.path
         set(positionButton, new.value(.position) ?? "—")
         let metadata = [ImageStatus.Kind.size, .megapixels, .format, .fileSize]
@@ -155,7 +143,7 @@ struct ViewerStatusChoices {
         let parts = exposure?.parts.map(\.text) ?? []
         for i in exposureLabels.indices {
             set(exposureLabels[i], i < parts.count ? parts[i] : "")
-            exposureLabels[i].textColor = new.stale ? .secondaryLabelColor : .labelColor
+            exposureLabels[i].textColor = new.stale ? ProCameraStyle.secondary : ProCameraStyle.primary
         }
         set(noExposure, exposure.map { $0.parts.isEmpty ? $0.value : "" }
             ?? (new.photo == nil ? "—" : (new.pending.contains(.exposure) || (metadata.isEmpty && new.titleTone != .warning)) ? "Reading EXIF…" : "No EXIF"))
@@ -203,7 +191,7 @@ struct ViewerStatusChoices {
         return (ceil(file), ceil(capture), ceil(zoom))
     }
 
-    /// NSToolbar may compress below this, but extra window space belongs outside the information content.
+    /// NSToolbar may compress below this, but extra window space belongs outside the glass surface.
     var preferredWidth: CGFloat {
         let sections = preferredSections
         return sections.file + sections.capture + sections.zoom
@@ -212,7 +200,7 @@ struct ViewerStatusChoices {
     override func layout() {
         super.layout()
         let width = min(bounds.width, preferredWidth)
-        content.frame = NSRect(x: 0, y: 0, width: width, height: Self.height)
+        glass.frame = NSRect(x: 0, y: 0, width: width, height: Self.height)
         for label in exposureLabels { label.isHidden = exposure?.parts.isEmpty != false || label.stringValue.isEmpty }
         if width < 270 { layoutMinimal(width: width); return }
         let compact = width < 430
@@ -233,7 +221,7 @@ struct ViewerStatusChoices {
             divider.frame = NSRect(x: x, y: 6, width: 1, height: 34)
         }
         let top: CGFloat = 24, bottom: CGFloat = 5, row: CGFloat = 17
-        // The plain content view is unflipped; both rows use its coordinates.
+        // ChromeGlass's content is unflipped. Both rows are placed explicitly in its coordinates.
         for view in [titleLabel, folderLabel, positionButton, previous, next] { view.isHidden = fileCollapsed }
         compactInfo.isHidden = !fileCollapsed
         compactInfo.frame = NSRect(x: 2, y: 7, width: 20, height: 32)
