@@ -9,14 +9,14 @@ let package = Package(
         .executable(name: "LoupeBench", targets: ["LoupeBench"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.12.0"),
-        .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.1.0"),
+        .package(url: "https://github.com/ampire5/HomeScreenKit.git", from: "0.13.0"),
+        .package(url: "https://github.com/ampire5/InfoPanelKit.git", from: "0.2.0"),
         .package(url: "https://github.com/ampire5/LogiHIDPP.git", from: "0.1.0"),
-        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.6.0"),
-        .package(url: "https://github.com/ampire5/StashKit.git", from: "0.2.0"),
+        .package(url: "https://github.com/ampire5/SettingsKit.git", from: "0.8.0"),
+        .package(url: "https://github.com/ampire5/StashKit.git", from: "0.3.0"),
         // The Logitech mouse goes through MouseService (a local mirror in .swiftpm/configuration/mirrors.json while
         // working on both).
-        .package(url: "https://github.com/ampire5/MouseService.git", from: "0.2.0"),
+        .package(url: "https://github.com/ampire5/MouseService.git", from: "0.3.0"),
     ],
     targets: [
         .systemLibrary(name: "CTurboJPEG", pkgConfig: "libturbojpeg", providers: [.brew(["jpeg-turbo"])]),
