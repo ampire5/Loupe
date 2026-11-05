@@ -77,7 +77,8 @@ import Testing
         let rows = InputMap.rows(lines: [])
         let keys = rows.filter { !$0.isMouse }
         #expect(keys.first?.input == "?")
-        #expect(keys.map(\.input).filter { $0 == "→" || $0 == "Space" || $0 == "PgDn" }.count == 3)
+        let nextPageInputs = keys.map(\.input).filter { $0 == "→" || $0 == "Space" || $0 == "PgDn" }
+        #expect(nextPageInputs.count == 3)
         #expect(rows.allSatisfy { $0.source == .builtIn })
         // Keys first, then buttons.
         #expect(rows.firstIndex(where: \.isMouse)! == keys.count)

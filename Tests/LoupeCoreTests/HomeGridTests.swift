@@ -35,7 +35,7 @@ import Synchronization
         let gate = BlockingGate()
         let started = Mutex(0)
         let holders = (0..<2).map { _ in
-            Task {
+            Task { @Sendable in
                 await checks.value(within: .seconds(30)) {
                     started.withLock { $0 += 1 }
                     gate.wait()
