@@ -53,7 +53,11 @@ for url in urls:
         notes.append(f"{name}: fetch failed, origin as last fetched")
     main = "origin/main"
     if version is not None:
-        tagged = git(repo, "rev-parse", f"{version}^{{commit}}")
+        tagged = None
+        for tag in (version, f"v{version}"):
+            tagged = git(repo, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
+            if tagged is not None:
+                break
         if tagged is None:
             problems.append(f"{name}: the pinned version {version} is not a tag of the kit")
         elif tagged != revision:
@@ -61,8 +65,8 @@ for url in urls:
     if revision and not is_ancestor(repo, revision, main):
         problems.append(f"{name}: the pinned {revision[:7]} is not on the kit's {main} (a branch build?)")
     elif revision:
-        newest = git(repo, "describe", "--tags", "--abbrev=0", "--match", "[0-9]*", main) or version
-        if newest != version:
+        newest = git(repo, "describe", "--tags", "--abbrev=0", "--match", "[0-9]*", "--match", "v[0-9]*", main) or version
+        if newest and newest.removeprefix("v") != version:
             notes.append(f"{name}: {newest} is released, Loupe pins {version}")
         later = git(repo, "log", "--oneline", f"{newest}..{main}", "--", "Sources", "Package.swift")
         if later:

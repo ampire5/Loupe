@@ -5,7 +5,8 @@ beside Loupe (`../<Kit>`). Package.swift takes each from a released tag (`from:`
 commit, and CI builds exactly those pins. Locally a kit can be in `swift package edit` mode (`Packages/<Kit>` → the
 clone), so Loupe builds against the kit's working copy; SwiftPM then writes Package.resolved without that kit's pin.
 
-`scripts/kits-check.py` checks all of it: run it before a branch is merged and before a build is handed over.
+`scripts/kits-check.py` checks this workflow, accepting numeric and `v`-prefixed release tags and verifying the exact
+pinned commit. Run it before a branch is merged and before a build is handed over.
 
 ## While a branch is open
 
@@ -27,3 +28,5 @@ clone), so Loupe builds against the kit's working copy; SwiftPM then writes Pack
 
 A kit is never released from a branch, and Loupe never pins a kit's branch or an untagged revision: `main` of Loupe
 must build from the tags alone.
+
+Test the checker with `python3 scripts/test-kits-check.py` (temporary local Git fixtures; no network needed).
