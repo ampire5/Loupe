@@ -2,6 +2,7 @@ import CHeif
 import Darwin
 import Dispatch
 import Foundation
+import Synchronization
 import LoupeCore
 
 /// The libheif decode paths under test for HEIC and AVIF: the whole image, and only the tiles
@@ -61,17 +62,16 @@ enum HeifBench {
                 return try decodeWhole(handle)
             }
             let plan = TilePlan(tiling, regionWidth: regionWidth, regionHeight: regionHeight)
-            let options = heif_decoding_options_alloc()
-            defer { heif_decoding_options_free(options) }
-            options?.pointee.num_codec_threads = codecThreads
-
             // Each worker opens its own context on the same bytes: libheif serialises tile decodes
             // that share a context (measured: durations stack up behind one another), so a shared
             // handle would give no parallelism. Opening the file is cheap next to decoding.
-            let lock = NSLock()
-            var firstError: Error?
+            let firstError = Mutex<(any Error)?>(nil)
             let workers = min(tileThreads, plan.count)
             DispatchQueue.concurrentPerform(iterations: workers) { worker in
+                // Each worker owns its C options until its synchronous decoding loop finishes.
+                let options = heif_decoding_options_alloc()
+                defer { heif_decoding_options_free(options) }
+                options?.pointee.num_codec_threads = codecThreads
                 do {
                     try withPrimaryHandle(data, poolThreads: 0) { handle in
                         var index = worker
@@ -87,12 +87,10 @@ enum HeifBench {
                         }
                     }
                 } catch {
-                    lock.lock()
-                    if firstError == nil { firstError = error }
-                    lock.unlock()
+                    firstError.withLock { if $0 == nil { $0 = error } }
                 }
             }
-            if let firstError { throw firstError }
+            if let error = firstError.withLock({ $0 }) { throw error }
             return plan.decodedSize
         }
     }

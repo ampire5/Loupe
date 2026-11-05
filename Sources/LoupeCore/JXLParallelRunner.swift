@@ -24,8 +24,17 @@ final class JXLParallelRunner: @unchecked Sendable {
     var opaque: UnsafeMutableRawPointer { Unmanaged.passUnretained(self).toOpaque() }
 
     /// The next item of a run to hand out.
-    private final class Cursor {
+    private final class Cursor: Sendable {
         let next = Atomic<Int>(0)
+    }
+
+    /// libjxl explicitly permits parallel calls on this opaque context for distinct values. concurrentPerform
+    /// joins all workers before `run` returns, so C owns the pointee for the entire immutable callback bridge.
+    /// Keep this narrow wrapper until imported C callback contracts can express that lifetime and Sendability.
+    private struct Work: @unchecked Sendable {
+        let pointer: UnsafeMutableRawPointer?
+        let body: JxlParallelRunFunction
+        func perform(_ value: UInt32, worker: Int) { body(pointer, value, worker) }
     }
 
     /// The `JxlParallelRunner` function of `JxlDecoderSetParallelRunner`: `initialize` with the workers it will use,
@@ -42,11 +51,12 @@ final class JXLParallelRunner: @unchecked Sendable {
             return JXL_PARALLEL_RET_SUCCESS
         }
         let cursor = Cursor()
+        let context = Work(pointer: work, body: body)
         DispatchQueue.concurrentPerform(iterations: workers) { worker in
             while true {
                 let item = cursor.next.add(1, ordering: .relaxed).oldValue
                 if item >= count { return }
-                body(work, start + UInt32(item), worker)
+                context.perform(start + UInt32(item), worker: worker)
             }
         }
         return JXL_PARALLEL_RET_SUCCESS

@@ -189,7 +189,7 @@ enum SettingsBench {
     }
 
     /// A picture of `window` (`screencapture -l`, without its shadow) at `url`.
-    private static func shoot(_ window: NSWindow, to url: URL) {
+    @MainActor private static func shoot(_ window: NSWindow, to url: URL) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

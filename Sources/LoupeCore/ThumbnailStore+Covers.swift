@@ -19,7 +19,8 @@ extension ThumbnailStore {
            let stored = perform("cover", { try $0.thumbnail(row.id) }) ?? nil {
             return await Self.offActor { ThumbnailMaker.decodeFillCell(stored.jpeg, side: maxPixel) }
         }
-        try? await coverLimit.acquireSlot(forCurrent: false, rank: Self.readPriority)
+        do { try await coverLimit.acquireSlot(forCurrent: false, rank: Self.readPriority) }
+        catch { return nil }
         defer { coverLimit.releaseSlot(forCurrent: false) }
         let recipe = Recipe(url: url, listedStamp: stamp, maxSide: thumbSize, reader: reader,
                             decodeLimit: decodeLimit, decoder: decoder, cachedBytes: cachedBytes,

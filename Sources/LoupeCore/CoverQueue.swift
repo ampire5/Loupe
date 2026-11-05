@@ -125,7 +125,7 @@ public actor CoverQueue {
     /// now": the card is tried again after `retryDelay`, twice that after the next "not now", and so on up to
     /// `maxRetryDelay`, while it stays wanted.
     public func want(_ ids: [String], visible: Int, ahead: [String] = [], client: Int = 0,
-                     isNetwork: (String) -> Bool, work: @escaping @Sendable (String) async -> Bool) {
+                     isNetwork: @Sendable (String) -> Bool, work: @escaping @Sendable (String) async -> Bool) {
         let keys = Set((ids + ahead).map { Key(client: client, id: $0) })
         func gone(_ key: Key) -> Bool { key.client == client && !keys.contains(key) }
         for (key, job) in running where gone(key) {

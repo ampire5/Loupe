@@ -87,5 +87,5 @@ private func waitForWaiter(_ traffic: FrameTraffic) async {
     #expect(waited >= 0.05 && waited < 1)
     #expect(traffic.inFlight == 1 && traffic.waiting == 0)
     frame.commit()
-    frame.waitUntilCompleted()
+    await frame.completed()
 }

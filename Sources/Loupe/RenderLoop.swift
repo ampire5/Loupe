@@ -171,7 +171,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// lock-protected store plus, when the link is paused, one block queued on the render thread's run loop to resume it.
     func update(pages: RenderPages, transform: ViewTransform) {
         let now = CACurrentMediaTime()
-        let wake: CFRunLoop? = state.withLock { s in
+        // Only the retained run-loop handle leaves the lock. CFRunLoopPerformBlock/WakeUp support cross-thread
+        // control; rendering remains on its own thread. Use checked locking when CFRunLoop gains Sendable in the SDK.
+        let wake: CFRunLoop? = state.withLockUnchecked { s in
             guard !s.stopped else { return nil }
             s.inputPhase.recordInput(at: now)
             s.pages = pages
@@ -210,7 +212,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// and they are drawn at once, not a refresh later (`retagIfNeeded`). Only the background is drawn meanwhile, in
     /// the space it would have next to the photo anyway. Any thread.
     func expectColorSpace(_ space: CGColorSpace?) {
-        let wake: CFRunLoop? = state.withLock { s in
+        // Only the retained run-loop handle leaves the lock. CFRunLoopPerformBlock/WakeUp support cross-thread
+        // control; rendering remains on its own thread. Use checked locking when CFRunLoop gains Sendable in the SDK.
+        let wake: CFRunLoop? = state.withLockUnchecked { s in
             guard !s.stopped, s.expected != space else { return nil }
             s.expected = space
             guard s.pages.leadImage == nil else { return nil }   // ignored while an image is drawn: no new frame
@@ -246,7 +250,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
 
     /// `change`, but when `body` returns false (nothing changed) no new generation and no wake-up.
     private func changeIfNeeded(_ body: (inout Snapshot) -> Bool) {
-        let wake: CFRunLoop? = state.withLock { s in
+        // Only the retained run-loop handle leaves the lock. CFRunLoopPerformBlock/WakeUp support cross-thread
+        // control; rendering remains on its own thread. Use checked locking when CFRunLoop gains Sendable in the SDK.
+        let wake: CFRunLoop? = state.withLockUnchecked { s in
             guard !s.stopped, body(&s) else { return nil }
             s.generation += 1
             guard s.paused, !s.wakeQueued, let runLoop = s.runLoop else { return nil }
@@ -318,7 +324,8 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     /// thread exits. Does not wait for that: a frame in flight finishes first on the render thread, which never waits
     /// for main. Any thread; a second call does nothing.
     func stop() {
-        let runLoop: CFRunLoop? = state.withLock { s in
+        // Cross-thread run-loop control only; no renderer or display-link state escapes the render thread.
+        let runLoop: CFRunLoop? = state.withLockUnchecked { s in
             guard !s.stopped else { return nil }
             s.stopped = true
             s.pages = .none

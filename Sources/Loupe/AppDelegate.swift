@@ -349,10 +349,10 @@ import UniformTypeIdentifiers
         handOverObserver = DistributedNotificationCenter.default().addObserver(
             forName: Self.openFileNotification, object: nil, queue: .main
         ) { [weak self] note in
+            let paths = note.userInfo?["paths"] as? [String] ?? []
             MainActor.assumeIsolated {
                 guard let self, !self.isSecondary, let front = self.registry.current ?? self.registry.controllers.last else { return }
                 // Any process can post this name, so only absolute paths to existing files and folders are opened.
-                let paths = note.userInfo?["paths"] as? [String] ?? []
                 DebugLog.log("single instance: hand-over received paths=\(paths.isEmpty ? "none" : paths.joined(separator: ", "))")
                 let urls = paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }.filter {
                     let values = try? $0.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])

@@ -311,11 +311,11 @@ enum RenderBench {
                           colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!) throws -> DecodedImage {
         let bytesPerRow = DecodedImage.bytesPerRow(width: size.width)
         let buffer = try PageAlignedBuffer(minimumLength: bytesPerRow * size.height)
-        let base = buffer.bytes.assumingMemoryBound(to: UInt8.self)
         let period: Float = 2048
         DispatchQueue.concurrentPerform(iterations: size.height) { y in
             let qy = Float(y).truncatingRemainder(dividingBy: period) - period / 2
-            let row = base + y * bytesPerRow
+            // concurrentPerform joins before publication, and each iteration owns a disjoint row.
+            let row = buffer.bytes.assumingMemoryBound(to: UInt8.self) + y * bytesPerRow
             for x in 0..<size.width {
                 let qx = Float(x).truncatingRemainder(dividingBy: period) - period / 2
                 let v = 0.5 + 0.5 * cos(Float.pi * (qx * qx + qy * qy) / period)

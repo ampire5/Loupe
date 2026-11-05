@@ -9,7 +9,7 @@ private let files = (1...6).map { URL(fileURLWithPath: "/f/\($0).jpg") }
 private let folder = files[0].deletingLastPathComponent()
 private let on = SpreadRules(on: true, options: SpreadOptions(shift: false, rightToLeft: false, landscapeAlone: true))
 /// A folder seen for the first time: the thumbnail store knows no aspect yet.
-private let noAspects: ([URL]) -> [Double?] = { _ in [] }
+private let noAspects: @Sendable ([URL]) -> [Double?] = { _ in [] }
 
 /// A window on a photo of a fresh folder, two pages off, its view landscape (an iMac's 16:9 window).
 private func freshFolder(at index: Int = 0) -> SpreadState {

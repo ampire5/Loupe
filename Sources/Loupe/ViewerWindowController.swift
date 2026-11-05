@@ -817,11 +817,11 @@ import UniformTypeIdentifiers
         stashPicks.cancel()
         restoredTab = nil
         session.entersFromOutside = true
-        session.openFolder(url) { [weak self] entered in
+        session.openFolder(url, completion: { [weak self] entered in
             guard !entered, let self else { return }
             self.restoreBrowserAt = (url, nil)
             self.showHome(tab: .folders)
-        }
+        })
     }
 
     // MARK: Sessions (Home spec §2.6)

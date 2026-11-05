@@ -4,7 +4,7 @@ import HomeScreenModel
 @testable import LoupeCore
 
 private let origin = URL(fileURLWithPath: "/photos/a/1.jpg")
-private let none: (URL, [URL]) -> URL? = { _, _ in nil }
+private let none: @Sendable (URL, [URL]) -> URL? = { _, _ in nil }
 
 private func target(_ files: [String]) -> FolderTarget {
     let dir = URL(fileURLWithPath: "/photos/b")

@@ -303,9 +303,11 @@ private func stripeStats(_ frame: Frame) -> (blueOff: Int, greenSpread: Int) {
         commands.commit()
         fourthEncoded.signal()
     }.start()
-    #expect(fourthEncoded.wait(timeout: .now() + 0.3) == .timedOut)
+    let beforeRelease = await waitForFrameEncoding(fourthEncoded, timeout: 0.3)
+    #expect(beforeRelease == .timedOut)
     gate.signaledValue = 1
-    #expect(fourthEncoded.wait(timeout: .now() + 10) == .success)
+    let afterRelease = await waitForFrameEncoding(fourthEncoded, timeout: 10)
+    #expect(afterRelease == .success)
     let frame = Frame(bytes: try await TestImages.readTexture(target), width: 640)
     #expect(same(frame.px(320, 200), TestImages.pattern(550, 350)))
 }
@@ -354,4 +356,14 @@ private func stripeStats(_ frame: Frame) -> (blueOff: Int, greenSpread: Int) {
         if p - q > 1 { jumps += 1 }
     }
     #expect(nonMonotonic == 0 && jumps == 0)
+}
+
+/// This test intentionally waits for another native/GPU thread. Keep that wait off the cooperative executor;
+/// a dedicated waiter also cannot be starved by the CPU-reference tests occupying GCD's global workers.
+private func waitForFrameEncoding(_ signal: DispatchSemaphore, timeout: Double) async -> DispatchTimeoutResult {
+    await withCheckedContinuation { continuation in
+        Thread.detachNewThread {
+            continuation.resume(returning: signal.wait(timeout: .now() + timeout))
+        }
+    }
 }

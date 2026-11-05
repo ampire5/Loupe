@@ -77,3 +77,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
 }
 
 func atLeast(_ goal: CacheGoal, _ state: CacheGoal?) -> Bool { state.map { $0 >= goal } ?? false }
+
+// Snapshot entry identities inside the cache actor; mutable CacheEntry objects never cross into a test task.
+extension ImageCache {
+    func cachedURLsForTesting() -> Set<URL> { Set(entries.keys) }
+}

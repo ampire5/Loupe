@@ -108,7 +108,7 @@ import Testing
         let check = RecentReachability(paths: ["/p/a", "/p/gone", "/p/slow"]) { _ in
             ["/p/a": true, "/p/gone": false, "/p/slow": Bool?.none]
         }
-        #expect(await check.unreachable == ["/p/gone"])
+        #expect(await check.unreachable == ["/p/gone", "/p/slow"])
         #expect(await check.answers["/p/a"] == .some(true))
     }
 
@@ -132,15 +132,24 @@ import Testing
         #expect(BrowserPlaces.available(important: nil, plain: nil) == nil)
     }
 
+    @Test func placesFreeSpaceReturnsAvailableValues() async {
+        let quick = URL(fileURLWithPath: "/Volumes/quick")
+        let space = await BrowserPlaces.freeSpace(of: [quick], timeout: .seconds(30)) { _ in 1_000 }
+        #expect(space == [quick: 1_000])
+    }
+
     @Test func placesFreeSpaceTimesOut() async {
-        let quick = URL(fileURLWithPath: "/Volumes/quick"), hung = URL(fileURLWithPath: "/Volumes/hung")
+        let hung = URL(fileURLWithPath: "/Volumes/hung")
+        let gate = BlockingGate()
+        defer { gate.open() }
         let start = ContinuousClock.now
-        let space = await BrowserPlaces.freeSpace(of: [quick, hung], timeout: .milliseconds(200)) { url in
-            if url == hung { Thread.sleep(forTimeInterval: 6) }
+        let space = await BrowserPlaces.freeSpace(of: [hung], timeout: .milliseconds(200)) { _ in
+            gate.wait()
             return 1_000
         }
-        // Well under the hung volume's 6 s, with room for a test run that keeps the thread pool busy.
+        // A deadline may expire while awaiting admission or during the blocking query. Either way it
+        // must return unknown without waiting for the gate; returning fast values is checked separately.
         #expect(ContinuousClock.now - start < .seconds(4))
-        #expect(space == [quick: 1_000])
+        #expect(space.isEmpty)
     }
 }

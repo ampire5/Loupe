@@ -379,6 +379,8 @@ import LoupeRender
     init(cache: ImageCache<MetalPyramidLoader>, thumbnails: ThumbnailStore, thumbnailsReady: Task<Void, Never>? = nil,
          positions: FolderPositions, navigator: FolderNavigator = FolderNavigator(),
          photosLibrary: any PhotosLibraryAccess = PhotosLibrary.shared) {
+        sessionID = Self.nextID
+        Self.nextID += 1
         self.cache = cache
         self.thumbnails = thumbnails
         self.positions = positions
@@ -398,10 +400,8 @@ import LoupeRender
         // A thumbnail the corrector waits for (spec §3.1: the file is never read for an analysis).
         thumbnailObserver = NotificationCenter.default.addObserver(forName: .thumbnailChanged, object: nil,
                                                                    queue: .main) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let url = note.object as? URL else { return }
-                self?.colorCorrector.thumbnailArrived(url)
-            }
+            guard let url = note.object as? URL else { return }
+            MainActor.assumeIsolated { self?.colorCorrector.thumbnailArrived(url) }
         }
         watcher.onChange = { [weak self] isPoll in self?.rereadFolder(isPoll ? .idle : .event) }
         stripAspects.onChange = { [weak self] in self?.stripAspectsChanged() }
@@ -420,10 +420,7 @@ import LoupeRender
 
     /// Never reused, unlike an object's address: a closed session's `unregister` may still be on its way when the
     /// next session is made, and must not remove that one. Above `CacheSessionID.solo` (0).
-    private let sessionID: Int = {
-        defer { ViewerSession.nextID += 1 }
-        return ViewerSession.nextID
-    }()
+    private let sessionID: Int
     private static var nextID = 1
     /// Numbers every activation sent (`setActivity`), so the cache can tell a stale one from another session's chain.
     private static var nextActivation: UInt64 = 1

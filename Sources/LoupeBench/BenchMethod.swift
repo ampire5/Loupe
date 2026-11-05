@@ -28,15 +28,15 @@ extension ImageFormat {
 
 /// One decode method under test: which formats it accepts, how to run it, and how its table row
 /// is labelled for a given file (so e.g. progressive and baseline JPEGs are not averaged together).
-struct BenchMethod {
+struct BenchMethod: Sendable {
     /// Formats this method can decode; the harness skips other files without counting a failure.
     var formats: Set<ImageFormat>
-    var decode: (Data) throws -> PixelSize
+    var decode: @Sendable (Data) throws -> PixelSize
     /// Row label for `name` on this file. Runs outside the timed region.
-    var label: (_ name: String, _ data: Data) -> String = { name, _ in name }
+    var label: @Sendable (_ name: String, _ data: Data) -> String = { name, _ in name }
 
     /// Finer filter than `formats` (e.g. progressive JPEGs only); false skips the file without a failure.
-    var isApplicable: (Data) -> Bool = { _ in true }
+    var isApplicable: @Sendable (Data) -> Bool = { _ in true }
 
     /// True when the harness should run this method on `data`.
     func accepts(_ data: Data) -> Bool {

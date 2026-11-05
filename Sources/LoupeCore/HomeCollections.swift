@@ -135,17 +135,22 @@ public enum HomeCollections {
 /// and the covers wait for it, so a share that does not answer is never read for a cover.
 public final class RecentReachability: Sendable {
     private let task: Task<[String: Bool?], Never>
+    private let paths: Set<String>
 
     public init(paths: [String], check: @escaping @Sendable ([String]) async -> [String: Bool?]) {
+        self.paths = Set(paths)
         task = Task { await check(paths) }
     }
 
     /// True, false, or nil for a path that did not answer in time.
     public var answers: [String: Bool?] { get async { await task.value } }
 
-    /// The paths found gone.
+    /// Paths unavailable for cover reads: missing, timed out, or omitted by a cancelled check.
     public var unreachable: Set<String> {
-        get async { Set(await answers.compactMap { $0.value == .some(false) ? $0.key : nil }) }
+        get async {
+            let answers = await answers
+            return Set(paths.filter { answers[$0] != .some(true) })
+        }
     }
 
     public func cancel() { task.cancel() }

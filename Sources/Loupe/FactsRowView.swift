@@ -45,7 +45,7 @@ import LoupeCore
     private static let cellInset: CGFloat = 8
     private static let hairlineSpace: CGFloat = 1
 
-    private struct Slot {
+    @MainActor private struct Slot {
         let kind: ImageStatus.Kind
         let label = NSTextField(labelWithString: "")
         let hairline = NSView()

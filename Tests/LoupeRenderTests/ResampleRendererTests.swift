@@ -406,7 +406,7 @@ import Testing
         pass.colorAttachments[0].storeAction = .store
         try #require(commands.makeRenderCommandEncoder(descriptor: pass)).endEncoding()
         commands.commit()
-        commands.waitUntilCompleted()
+        await commands.completed()
         let b = try await Self.render(image, t, renderer: r)
         var diff = 0
         for i in 0..<a.count where a[i] != b[i] { diff += 1 }

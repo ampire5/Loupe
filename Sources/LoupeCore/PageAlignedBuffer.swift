@@ -48,4 +48,4 @@ public final class PageAlignedBuffer: @unchecked Sendable {
 }
 
 /// `MAP_FAILED` (a C cast Swift does not import).
-private let mapFailed = UnsafeMutableRawPointer(bitPattern: -1)!
+private var mapFailed: UnsafeMutableRawPointer { UnsafeMutableRawPointer(bitPattern: -1)! }

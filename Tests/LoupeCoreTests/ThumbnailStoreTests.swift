@@ -1224,7 +1224,8 @@ final class Locked<T>: @unchecked Sendable {
         await store.setRequest(window: 1, request(old), stamps: reader.stamps)
         #expect(await eventually { reader.reads.count == 2 })
 
-        let switching = Task { await store.setRequest(window: 1, request(new), stamps: reader.stamps) }
+        let newRequest = request(new)
+        let switching = Task { await store.setRequest(window: 1, newRequest, stamps: reader.stamps) }
         #expect(await eventually { Set(reader.cancelled) == Set(old[..<2]) })   // while the new folder is still being located
         try await Task.sleep(for: .milliseconds(20))
         #expect(reader.readCount(old[2]) == 0)

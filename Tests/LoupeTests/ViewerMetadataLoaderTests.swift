@@ -41,13 +41,21 @@ import Testing
     }
 
     @Test func quickCompletionCancelsDelayedPending() async {
+        let probe = MetadataProbe()
+        let delay = PendingDelaySignal()
         let loader = ViewerMetadataLoader(pendingDelay: .milliseconds(20), stamp: { _ in (42, nil) },
-                                           read: { _, _ in Self.metadata("Ready") })
+                                           read: { url, _ in await probe.read(url) },
+                                           pendingSleep: { _ in await delay.wait() })
         var pendingWasShown = false
         loader.onChange = { _ in pendingWasShown = pendingWasShown || loader.isPending }
         loader.select(a)
+        #expect(await wait { let reading = await probe.count; let sleeping = await delay.isWaiting; return reading == 1 && sleeping })
+        await probe.finish(0, camera: "Ready")
         #expect(await wait { loader.metadata != nil })
-        try? await Task.sleep(for: .milliseconds(40))
+        // Fire the delayed callback only after completion, without assuming an idle machine can schedule two tasks
+        // within 20 ms. It must not publish even if the clock implementation returns after cancellation.
+        await delay.fire()
+        for _ in 0..<20 { await Task.yield() }
         #expect(!pendingWasShown)
         #expect(!loader.isPending)
         loader.onChange = nil
@@ -159,4 +167,13 @@ private actor StampProbe {
         return await withCheckedContinuation { continuation = $0 }
     }
     func finish() { continuation?.resume(returning: (42, nil)); continuation = nil }
+}
+
+private actor PendingDelaySignal {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isWaiting = false
+    func wait() async {
+        await withCheckedContinuation { continuation = $0; isWaiting = true }
+    }
+    func fire() { continuation?.resume(); continuation = nil }
 }

@@ -18,13 +18,16 @@ import LoupeCore
     private let stamp: StatReader
     private let read: Reader
     private let pendingDelay: Duration
+    private let pendingSleep: @Sendable (Duration) async throws -> Void
     private var readTask: Task<Void, Never>?
     private var pendingTask: Task<Void, Never>?
     /// Shared across windows and created only when a viewer panel first asks for metadata.
     private static let cache = PhotoMetadataCache()
 
-    init(pendingDelay: Duration = .seconds(1), stamp: @escaping StatReader, read: @escaping Reader) {
+    init(pendingDelay: Duration = .seconds(1), stamp: @escaping StatReader, read: @escaping Reader,
+         pendingSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.pendingDelay = pendingDelay
+        self.pendingSleep = pendingSleep
         self.stamp = stamp
         self.read = read
     }
@@ -66,9 +69,9 @@ import LoupeCore
             self.isPending = false
             self.onChange?(true)
         }
-        let delay = pendingDelay
+        let delay = pendingDelay, sleep = pendingSleep
         pendingTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
+            try? await sleep(delay)
             guard !Task.isCancelled, let self, self.url == url, self.metadata == nil else { return }
             self.pendingTask = nil
             self.isPending = true

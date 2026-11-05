@@ -150,8 +150,8 @@ extension Notification.Name {
         watcher.onChange = { [weak self] _ in self?.watchChanges?.yield() }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
+            guard let url = note.object as? URL else { return }
             MainActor.assumeIsolated {
-                guard let url = note.object as? URL else { return }
                 self?.progressMayHaveChanged()
                 self?.thumbnailChanged(url)
             }
@@ -160,10 +160,8 @@ extension Notification.Name {
             MainActor.assumeIsolated { self?.progressMayHaveChanged() }
         })
         observers.append(center.addObserver(forName: .coverVolumeAnswered, object: nil, queue: .main) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let volume = note.object as? String else { return }
-                self?.shareAnswered(volume)
-            }
+            guard let volume = note.object as? String else { return }
+            MainActor.assumeIsolated { self?.shareAnswered(volume) }
         })
         observers.append(center.addObserver(forName: .settingsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {

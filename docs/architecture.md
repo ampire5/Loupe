@@ -54,12 +54,20 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
 
 ## Threads, cancellation and persistence
 
+The package uses Swift 6 language mode without blanket default actor isolation.
 `ViewerSession` and AppKit coordination run on the main actor. `ImageCache`, `ThumbnailStore` and
 `PhotoMetadataCache` isolate shared state in actors. `FileReader` and `DecodePool` bound I/O/decoding. Thumbnail
 activity follows foreground cache work; keep the existing foreground/background priority relationship.
 `RenderLoop` passes locked snapshots to its own thread, pauses the display link at rest and stops it on close.
+The model cache owns loading, preflight and inference on one utility serial queue; only Sendable detection
+values and booleans leave it. Vision/CoreML model references never escape the queue.
 Metadata stat work is utility work; synchronous filesystem reads do not belong in a main-actor callback.
 Navigation uses cancellation plus request identity checks because a cancelled filesystem/decode call may finish.
+Home reachability and free-space checks share a utility `DecodePool`, capped at four calls and half the physical
+cores. Their async deadlines cancel pending admission without waiting for a blocked kernel call; that call retains
+its slot and path reservation until it actually returns. Reachability submits only a bounded batch of task waiters
+and treats missing or timed-out answers as unavailable for cover reads. A cancelled cover that never acquired its
+limiter slot does not release one.
 
 `StateDatabase` backs positions, folder settings, recent folders, sessions and file viewing history. Thumbnail
 catalog data is owned by `ThumbnailStore`. `Settings` and config stores handle user configuration; panel/window

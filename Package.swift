@@ -57,5 +57,5 @@ let package = Package(
         .testTarget(name: "LoupeInspectorTests", dependencies: ["LoupeInspector", "LoupeCore", .product(name: "HomeScreenModel", package: "HomeScreenKit")]),
         .testTarget(name: "LoupeTests", dependencies: ["Loupe", "LoupeCore", "LoupeRender", .product(name: "HomeScreenKit", package: "HomeScreenKit")]),
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

@@ -30,7 +30,7 @@ import LoupeCore
             }
     }
 
-    deinit { if let historyObserver { NotificationCenter.default.removeObserver(historyObserver) } }
+    isolated deinit { if let historyObserver { NotificationCenter.default.removeObserver(historyObserver) } }
 
     /// The browser both halves draw into.
     weak var view: HomeBrowserView? {

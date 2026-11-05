@@ -226,10 +226,8 @@ extension Notification.Name {
         view.onBackingChange = { [weak self] in self?.reloadAll() }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let url = note.object as? URL else { return }
-                self?.thumbnailChanged(url)
-            }
+            guard let url = note.object as? URL else { return }
+            MainActor.assumeIsolated { self?.thumbnailChanged(url) }
         })
         observers.append(center.addObserver(forName: .thumbnailsCleared, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadAll() }
@@ -504,7 +502,7 @@ extension Notification.Name {
         DebugLog.log("strip hide")
         // Hidden once the fade ends (or at once without one): its tracking areas stop too, so no arrow cursor
         // over an invisible strip.
-        let finishHide = { [weak self] in
+        let finishHide: @MainActor @Sendable () -> Void = { [weak self] in
             guard let self, !self.isShown else { return }
             self.view.isHidden = true
         }

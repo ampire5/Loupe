@@ -108,7 +108,7 @@ public enum ImageIODecoder {
     /// No decoded copy kept with the image or source (spec M2 §11.3): every image and thumbnail here is drawn once
     /// into our own buffer. (The ~548 MB per 147 MP HEIC the replay saw retained was our freed malloc'd frame, fixed
     /// by mapping `PageAlignedBuffer`; this flag alone did not change it, it only rules out a cached second copy.)
-    private static let noCache = [kCGImageSourceShouldCache: false] as CFDictionary
+    private static var noCache: CFDictionary { [kCGImageSourceShouldCache: false] as CFDictionary }
 
     /// Decodes the first image at full size straight into a page-aligned BGRA buffer. The draw is
     /// what decodes, and ImageIO is told not to cache a second copy of the pixels.

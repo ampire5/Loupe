@@ -284,7 +284,7 @@ struct ImageCacheSessionsTests {
         #expect(rig.readsSoFar == reads)
         #expect(rig.decodesSoFar == decodes)
         #expect(await rig.state(a[3]) == .full)
-        #expect(await rig.cache.entries.keys.allSatisfy { a.contains($0) })
+        #expect(await rig.cache.cachedURLsForTesting().allSatisfy { a.contains($0) })
         #expect(a.allSatisfy { rig.reader.readCount($0) <= 1 })
 
         // A photo both list, rewritten: B's activation reads it again, and both hear of it.
@@ -339,7 +339,7 @@ struct ImageCacheSessionsTests {
 
         await rig.cache.unregister(sessionA)
         #expect(await rig.settle())
-        #expect(await rig.cache.entries.keys.allSatisfy { b.contains($0) })
+        #expect(await rig.cache.cachedURLsForTesting().allSatisfy { b.contains($0) })
         let files = await b.asyncReduce(0) { total, url in
             total + ((await rig.cache.inspect([url])[0]?.hasBytes ?? false) ? url.lastPathComponent.utf8.count : 0)
         }

@@ -435,7 +435,8 @@ private final class FakeListing: @unchecked Sendable {
             queued.set()
             return true
         }
-        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
+        let taskLocation = loc("/photos/f")
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: taskLocation, maxPixel: 64) }
         try? await Task.sleep(for: .milliseconds(200))
         #expect(reader.reads.isEmpty)
         #expect(!queued.isSet)
@@ -456,7 +457,8 @@ private final class FakeListing: @unchecked Sendable {
         let gate = reader.hold(first)
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
-        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
+        let taskLocation = loc("/photos/f")
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: taskLocation, maxPixel: 64) }
         #expect(await eventually { reader.reads.contains(first) })
         await store.setViewerActivity(.current)
         #expect(await eventually { reader.cancelled.contains(first) })
@@ -700,18 +702,18 @@ private final class FakeListing: @unchecked Sendable {
 
     /// Fix round 2: a local disk that hangs is limited too (generously): its cover is "not now" after the local time
     /// limit, so it gives the local lane's queue place back.
-    @Test func hungLocalDiskTimesOut() async {
+    @Test(.timeLimit(.minutes(1))) func hungLocalDiskTimesOut() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
         let hang = DispatchSemaphore(value: 0)
+        defer { hang.signal() }
         let store = store(ThumbReader(), dir: dir)
         await store.setCoverListing({ _, _, _ in
             hang.wait()
             return CoverNames(files: [], folders: [])
         }, localTimeout: .milliseconds(100))
-        let start = ContinuousClock.now
         #expect(await store.folderCover(URL(fileURLWithPath: "/usb/f"), archive: false, in: loc("/usb/f"), maxPixel: 64) == nil)
-        #expect(ContinuousClock.now - start < .seconds(2))
+        // The caller returned while the native listing is still blocked on the unopened gate.
         let lane = CoverLane(network: false, resolving: false)
         #expect(store.coverThreads.count(lane) == 1)
         hang.signal()
@@ -808,7 +810,8 @@ private final class FakeListing: @unchecked Sendable {
         }
         let store = store(reader, dir: dir)
         await store.setCoverListing(hung)
-        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64) }
+        let taskLocation = loc("/photos/f")
+        let task = Task { await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: taskLocation, maxPixel: 64) }
         // Cancelled once its listing runs (a loaded machine may open the catalog first for longer than any sleep).
         #expect(await eventually { started.isSet })
         task.cancel()
@@ -1098,7 +1101,8 @@ private final class HangingStat: @unchecked Sendable {
         photos(reader, in: "/net/f", names)
         listing.set("/net/f", files: names.map { .init(name: $0, date: Self.day(1), size: 100) }, folders: ["sub"])
         let store = store(reader, dir: dir)
-        await store.setCoverListing(dated: listing.lister)
+        // This checks summary semantics, not deadline scheduling; dedicated hung-share tests cover short timeouts.
+        await store.setCoverListing(dated: listing.lister, networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in true }
         let card = try #require(await store.folderCard(URL(fileURLWithPath: "/net/f"), archive: false,
                                                        in: loc("/net/f", network: true), maxPixel: 64,
@@ -1698,8 +1702,9 @@ private final class HangingStat: @unchecked Sendable {
             return CoverListing(names: CoverNames(files: ["a.jpg", "b.jpg"], folders: []))
         }, networkTimeout: .seconds(30))
         await store.setCoverVolumes { _ in true }
+        let taskLocation = loc("/net/f")
         let task = Task {
-            await store.folderCard(URL(fileURLWithPath: "/net/f"), archive: false, in: loc("/net/f"), maxPixel: 64,
+            await store.folderCard(URL(fileURLWithPath: "/net/f"), archive: false, in: taskLocation, maxPixel: 64,
                                    modified: Self.day)
         }
         #expect(await eventually { started.isSet })
@@ -1874,7 +1879,8 @@ final class LockedErrors: @unchecked Sendable {
         }, localTimeout: .seconds(30))
         let folder = URL(fileURLWithPath: "/p/f")
         #expect(await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64)?.summaryPending == true)
-        let task = Task { await store.folderCard(folder, archive: false, in: loc("/p/f"), maxPixel: 64) }
+        let taskLocation = loc("/p/f")
+        let task = Task { await store.folderCard(folder, archive: false, in: taskLocation, maxPixel: 64) }
         #expect(await eventually { started.isSet })
         task.cancel()
         _ = await task.value
@@ -2097,8 +2103,9 @@ final class LockedErrors: @unchecked Sendable {
         let queue = CoverQueue(listingLimit: 2, networkListingLimit: 1, resumeDelay: .zero,
                                retryDelay: .milliseconds(5), maxRetryDelay: .milliseconds(20))
         let cards = LockedCards()
+        let location = loc("/net/f")
         await queue.want(["/net/f"], visible: 1, isNetwork: { _ in true }) { id in
-            guard let card = await store.folderCard(URL(fileURLWithPath: id), archive: false, in: loc(id),
+            guard let card = await store.folderCard(URL(fileURLWithPath: id), archive: false, in: location,
                                                     maxPixel: 64) else { return false }
             cards.add(card)
             return !card.summaryPending
@@ -2262,9 +2269,10 @@ final class LockedErrors: @unchecked Sendable {
             calls.add()
             return CoverListing(names: CoverNames(files: [], folders: []))
         }, networkTimeout: .seconds(30))
+        let taskLocation = loc("/net/x")
         let task = Task { () -> FolderCard? in
             withUnsafeCurrentTask { $0?.cancel() }
-            return await store.folderCard(URL(fileURLWithPath: "/net/x"), archive: false, in: loc("/net/x"),
+            return await store.folderCard(URL(fileURLWithPath: "/net/x"), archive: false, in: taskLocation,
                                           maxPixel: 64)
         }
         _ = await task.value
@@ -2704,5 +2712,25 @@ final class LockedErrors: @unchecked Sendable {
         await store.volumeAnswered(URL(fileURLWithPath: "/net/shown"), in: location)
         let back = try #require(await card())
         #expect(back.images.count == 2)
+    }
+}
+
+@Suite struct CoverCancellationTests {
+    @Test func cancelledCoverDoesNotReleaseAnUnacquiredSlot() async {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let url = URL(fileURLWithPath: "/photos/cancelled-cover.jpg")
+        reader.add(url, TestJPEGs.gradient(width: 40, height: 30))
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                                   locate: { _ in nil }, idleDelay: .zero)
+        let limiter = await store.coverLimit
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await store.cover(url, maxPixel: 32)
+        }
+        _ = await task.value
+        #expect(limiter.runningCount == 0)
+        #expect(reader.readCount(url) == 0)
     }
 }

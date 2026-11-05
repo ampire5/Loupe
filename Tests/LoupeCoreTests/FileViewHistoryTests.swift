@@ -9,7 +9,8 @@ import Testing
         let database = try StateDatabase(directory: dir)
         let history = FileViewHistory(database: database)
         let url = URL(fileURLWithPath: "/Examples/cat.jpg")
-        let receipt = try #require(history.presentation(for: url, client: UUID(), retry: {}))
+        let receiptCandidate = history.presentation(for: url, client: UUID(), retry: {})
+        let receipt = try #require(receiptCandidate)
         #expect(await history.lastViewed([url]).isEmpty)
         receipt.presented(at: nil)
         #expect(await history.lastViewed([url]).isEmpty)
@@ -23,11 +24,13 @@ import Testing
         ThumbnailDatabase.removeFiles(in: cacheDirectory)
         let reopened = FileViewHistory(database: try StateDatabase(directory: dir))
         #expect(await reopened.lastViewed([url])[url] == date)
-        let newer = try #require(reopened.presentation(for: url, client: UUID(), retry: {}))
+        let newerCandidate = reopened.presentation(for: url, client: UUID(), retry: {})
+        let newer = try #require(newerCandidate)
         newer.presented(at: date.addingTimeInterval(10))
         reopened.flush()
         #expect(await reopened.lastViewed([url])[url] == date.addingTimeInterval(10))
-        let lateOld = try #require(reopened.presentation(for: url, client: UUID(), retry: {}))
+        let lateOldCandidate = reopened.presentation(for: url, client: UUID(), retry: {})
+        let lateOld = try #require(lateOldCandidate)
         lateOld.presented(at: date)
         reopened.flush()
         #expect(await reopened.lastViewed([url])[url] == date.addingTimeInterval(10))
@@ -49,11 +52,13 @@ import Testing
         let source = URL(string: "photos://asset/example")!
         let date = Date(timeIntervalSince1970: 1234)
         for url in [old, source] {
-            let receipt = try #require(history.presentation(for: url, client: UUID(), retry: {}))
+            let receiptCandidate = history.presentation(for: url, client: UUID(), retry: {})
+            let receipt = try #require(receiptCandidate)
             receipt.presented(at: date)
         }
         history.flush()
-        let delayed = try #require(history.presentation(for: old, client: UUID(), retry: {}))
+        let delayedCandidate = history.presentation(for: old, client: UUID(), retry: {})
+        let delayed = try #require(delayedCandidate)
         history.movePaths(from: old, to: new)
         history.flush()
         delayed.presented(at: date.addingTimeInterval(1))
@@ -76,7 +81,8 @@ import Testing
         let gate = FileViewVisibility()
         let date = Date(timeIntervalSince1970: 1234)
         gate.setVisible(true, at: date.addingTimeInterval(-1))
-        let pair = try #require(history.presentations(for: [a, b], client: UUID(), visibility: gate, retry: {}))
+        let pairCandidate = history.presentations(for: [a, b], client: UUID(), visibility: gate, retry: {})
+        let pair = try #require(pairCandidate)
         gate.setVisible(false, at: date.addingTimeInterval(1))
         pair[0].presented(at: date.addingTimeInterval(2))
         #expect(await history.lastViewed([a]).isEmpty)
@@ -105,7 +111,8 @@ private final class HistoryNotifications: @unchecked Sendable {
         defer { NotificationCenter.default.removeObserver(observer) }
         let first = Date(timeIntervalSince1970: 1234), later = first.addingTimeInterval(10)
         for date in [first, later, first] {
-            let receipt = try #require(history.presentation(for: url, client: UUID(), retry: {}))
+            let receiptCandidate = history.presentation(for: url, client: UUID(), retry: {})
+            let receipt = try #require(receiptCandidate)
             receipt.presented(at: date)
             history.flush()
         }
@@ -118,7 +125,8 @@ private final class HistoryNotifications: @unchecked Sendable {
 @Suite struct FileViewRetryBudgetTests {
     @Test func presentationRetriesStopAtTheBudgetOrFirstConfirmedFrame() throws {
         let history = FileViewHistory(database: nil)
-        let receipt = try #require(history.presentation(for: URL(fileURLWithPath: "/Examples/cat.jpg"), client: UUID(), retry: {}))
+        let receiptCandidate = history.presentation(for: URL(fileURLWithPath: "/Examples/cat.jpg"), client: UUID(), retry: {})
+        let receipt = try #require(receiptCandidate)
         for _ in 0..<16 { #expect(receipt.requestPresentationRetry()) }
         #expect(!receipt.requestPresentationRetry())
         receipt.presented(at: Date())

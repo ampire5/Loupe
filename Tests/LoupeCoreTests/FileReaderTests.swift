@@ -209,8 +209,9 @@ private func readError(_ op: () async throws -> some Sendable) async -> Error? {
 
 @Test(.timeLimit(.minutes(1))) func stuckThreadsAreReplaced() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["a", "b", "c", "d", "e"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["a", "b", "c", "d", "e"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     gates.block("a.bin"); gates.block("c.bin")
     defer { gates.releaseAll() }
@@ -404,8 +405,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// One thread, held by the first read: queued jobs start lowest priority value first, FIFO among equals.
 @Test(.timeLimit(.minutes(1))) func priorityOrder() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["a", "p5", "p1", "p3", "p1b"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["a", "p5", "p1", "p3", "p1b"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     gates.block("a.bin")
     defer { gates.releaseAll() }
@@ -430,8 +432,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// A queued read whose priority box is moved ahead starts before the ones it now outranks; a running one is unaffected.
 @Test(.timeLimit(.minutes(1))) func movedPriorityReordersQueuedJob() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["a", "b", "c", "d"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["a", "b", "c", "d"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     gates.block("a.bin")
     defer { gates.releaseAll() }
@@ -461,8 +464,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// two of them stuck, the viewer's reads still start at once, and a third background read waits.
 @Test(.timeLimit(.minutes(1))) func backgroundReadsLeaveTheViewerTwoThreads() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["bg1", "bg2", "bg3", "v1", "v2"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["bg1", "bg2", "bg3", "v1", "v2"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     for name in ["bg1", "bg2", "bg3"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
@@ -501,13 +505,14 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// A current read does not wait (fix round 1, I1): with the viewer's two full it takes an idle thread of the pool.
 @Test(.timeLimit(.minutes(1))) func viewerReadsUseTwoThreads() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["v1", "v2", "v3", "v4", "bg"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["v1", "v2", "v3", "v4", "bg"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     for name in ["v1", "v2"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
     let reader = FileReader(threads: 4, timeout: .seconds(10), isLocal: { _ in false }, chunkReader: gates.reader)
-    func current() -> ReadPriority { let p = ReadPriority(0); p.isCurrent = true; return p }
+    @Sendable func current() -> ReadPriority { let p = ReadPriority(0); p.isCurrent = true; return p }
     // Held: a neighbour in a chunk (an ex-current read still running after a second step, say), then a current read
     // (the neighbour, mid-chunk, cannot pause for it).
     let neighbour = Task { try await reader.read(urls["v2"]!, priority: ReadPriority(2)) }
@@ -538,8 +543,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// background value) is still the viewer's, and runs at once while two background reads hold their threads.
 @Test(.timeLimit(.minutes(1))) func unplannedViewerReadIsNotBackground() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["bg1", "bg2", "bg3", "v"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["bg1", "bg2", "bg3", "v"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     for name in ["bg1", "bg2", "bg3"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
@@ -600,8 +606,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// blocked in a read, the second waits, and the current photo's read still gets a thread and its first chunk.
 @Test(.timeLimit(.minutes(1))) func currentReadGetsTheReservedThread() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["n1", "n2", "cur"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["n1", "n2", "cur"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     for name in ["n1", "n2"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
@@ -716,8 +723,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// then the thumbnails'.
 @Test(.timeLimit(.minutes(1))) func keepReadQueuesBehindForeground() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["a", "bg", "keep", "fg", "cur"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["a", "bg", "keep", "fg", "cur"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     gates.block("a.bin")
     defer { gates.releaseAll() }
@@ -748,8 +756,9 @@ private func waitQueued(_ reader: FileReader, _ count: Int) async throws {
 /// A keep read runs in the viewer's share: with the thumbnails' threads held, it still starts at once.
 @Test(.timeLimit(.minutes(1))) func keepReadsUseViewerShare() async throws {
     let files = try TempFiles()
-    var urls: [String: URL] = [:]
-    for name in ["bg1", "bg2", "keep"] { urls[name] = try files.make("\(name).bin", size: mib / 4).0 }
+    let urls = try Dictionary(uniqueKeysWithValues: ["bg1", "bg2", "keep"].map { name in
+        (name, try files.make("\(name).bin", size: mib / 4).0)
+    })
     let gates = Gates()
     for name in ["bg1", "bg2"] { gates.block("\(name).bin") }
     defer { gates.releaseAll() }
