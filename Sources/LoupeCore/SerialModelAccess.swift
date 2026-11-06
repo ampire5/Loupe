@@ -11,8 +11,9 @@ final class SerialModelAccess<Model>: @unchecked Sendable {
 
     init(load: @escaping @Sendable (String) -> Model?) { self.load = load }
 
-    func withModel<Result: Sendable>(_ path: String, operation: (Model) -> Result) -> Result? {
+    func withModel<Result: Sendable>(_ path: String, shouldContinue: () -> Bool = { true }, operation: (Model) -> Result) -> Result? {
         queue.sync {
+            guard shouldContinue() else { return nil }
             let model: Model?
             if let index = loaded.firstIndex(where: { $0.path == path }) {
                 let item = loaded.remove(at: index)
@@ -23,7 +24,7 @@ final class SerialModelAccess<Model>: @unchecked Sendable {
                 loaded.append((path, model))
                 if loaded.count > 2 { loaded.removeFirst(loaded.count - 2) }
             }
-            guard let model else { return nil }
+            guard shouldContinue(), let model else { return nil }
             return operation(model)
         }
     }

@@ -569,6 +569,7 @@ import UniformTypeIdentifiers
         folderSlots?.close()
         viewerView.teardown()
         strip.close()
+        subjects.keepOnly([])
         session.close()
     }
 

@@ -15,6 +15,27 @@ private final class NeutralModel {
 }
 
 @Suite struct SerialModelAccessTests {
+    @Test func cancelledAnalysisDoesNotLoadOrUseAModel() {
+        let loads = Mutex(0)
+        let access = SerialModelAccess<NeutralModel> { _ in
+            loads.withLock { $0 += 1 }
+            return NeutralModel()
+        }
+        let result = access.withModel("neutral", shouldContinue: { false }) { _ in true }
+        #expect(result == nil)
+        #expect(loads.withLock { $0 } == 0)
+    }
+
+    @Test func cancellationDuringModelLoadingSkipsInference() {
+        let cancelled = Mutex(false)
+        let access = SerialModelAccess<NeutralModel> { _ in
+            cancelled.withLock { $0 = true }
+            return NeutralModel()
+        }
+        let result = access.withModel("neutral", shouldContinue: { !cancelled.withLock { $0 } }) { _ in true }
+        #expect(result == nil)
+    }
+
     @Test func preflightAndWindowInferenceNeverUseTheSameModelTogether() async {
         let loads = Mutex(0)
         let access = SerialModelAccess<NeutralModel> { _ in

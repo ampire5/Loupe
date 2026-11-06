@@ -41,8 +41,9 @@ public enum ModelDetector {
 
     /// The boxes on `image` (rects normalised top-left, as `SubjectBoxes`), where `setup.look` says, `people` being
     /// Vision's; nil when the model cannot be loaded or Vision fails. Blocks: call it off the main thread.
-    public static func detections(in image: CGImage, people: [CGRect], setup: DetectorSetup) -> [SubjectBoxes.Detection]? {
-        models.withModel(setup.model) { model -> [SubjectBoxes.Detection]? in
+    public static func detections(in image: CGImage, people: [CGRect], setup: DetectorSetup,
+                                  shouldContinue: () -> Bool = { true }) -> [SubjectBoxes.Detection]? {
+        models.withModel(setup.model, shouldContinue: shouldContinue) { model -> [SubjectBoxes.Detection]? in
             let names = Dictionary(setup.classes.map { ($0.label, $0.kind) }, uniquingKeysWith: { a, _ in a })
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
             var found: [SubjectBoxes.Detection] = []
@@ -52,6 +53,7 @@ public enum ModelDetector {
                 return CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
             }
             for region in (setup.lookWhole ? [nil] : []) + crops {
+                guard shouldContinue() else { return nil }
                 let request = VNCoreMLRequest(model: model)
                 request.imageCropAndScaleOption = .scaleFit
                 if let region { request.regionOfInterest = region }

@@ -9,7 +9,9 @@ import Vision
 /// its space.
 public enum SubjectDetector {
     /// Nil when Vision failed (a transient error is not a photo without subjects: nothing is stored for it).
-    public static func boxes(from image: CGImage, chain: [SubjectKind], detector: DetectorSetup? = nil) -> SubjectBoxes? {
+    public static func boxes(from image: CGImage, chain: [SubjectKind], detector: DetectorSetup? = nil,
+                             shouldContinue: () -> Bool = { true }) -> SubjectBoxes? {
+        guard shouldContinue() else { return nil }
         let custom = detector != nil && chain.contains { $0.isCustom }
         var boxes = SubjectBoxes(faces: [], people: [], objects: [], saliency: [],
                                  searched: chain.filter { custom || !$0.isCustom })
@@ -31,17 +33,19 @@ public enum SubjectDetector {
             boxes.objects = (animals.results ?? []).map { normalised($0.boundingBox) }
             boxes.saliency = (saliency.results?.first).flatMap(hotSpot).map { [$0] } ?? []
         }
+        guard shouldContinue() else { return nil }
         // The things in front: only when the chain gets as far as `object` with nothing found before it.
         if let object = chain.firstIndex(of: .object),
            chain[..<object].allSatisfy({ boxes.boxes($0).isEmpty }), boxes.objects.isEmpty {
             boxes.objects = foreground(handler)
         }
+        guard shouldContinue() else { return nil }
         if custom, let detector {
-            guard let found = ModelDetector.detections(in: image, people: boxes.people, setup: detector) else { return nil }
+            guard let found = ModelDetector.detections(in: image, people: boxes.people, setup: detector, shouldContinue: shouldContinue) else { return nil }
             boxes.detections = found
             if !chain.contains(.person) { boxes.people = [] }
         }
-        return boxes
+        return shouldContinue() ? boxes : nil
     }
 
     /// Vision's normalised rect (origin bottom-left, y up) in the photo's space (origin top-left, y down).

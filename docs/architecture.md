@@ -61,6 +61,10 @@ activity follows foreground cache work; keep the existing foreground/background 
 `RenderLoop` passes locked snapshots to its own thread, pauses the display link at rest and stops it on close.
 The model cache owns loading, preflight and inference on one utility serial queue; only Sendable detection
 values and booleans leave it. Vision/CoreML model references never escape the queue.
+Clearing a window’s `SubjectFinder` queue (Manual mode or close) invalidates running requests and crops as well as
+queued photos. Generation checks suppress stale callbacks, skip work after catalog/proxy reads and stop between
+Vision stages and model crops, including before loading a model after waiting for its serial queue. A Vision call
+already executing can finish; no subsequent stage starts for that request.
 Metadata stat work is utility work; synchronous filesystem reads do not belong in a main-actor callback.
 Navigation uses cancellation plus request identity checks because a cancelled filesystem/decode call may finish.
 Home reachability and free-space checks share a utility `DecodePool`, capped at four calls and half the physical

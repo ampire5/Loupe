@@ -67,6 +67,8 @@ final class SubjectFinder: @unchecked Sendable {
         /// The photo being analysed, and the asks that came for it meanwhile.
         var runningURL: URL?
         var runningID: String?
+        var generation = 0
+        var runningGeneration: Int?
         var runningDone: [@MainActor (SubjectBoxes?) -> Void] = []
     }
     private let state = OSAllocatedUnfairLock(uncheckedState: State())
@@ -85,17 +87,22 @@ final class SubjectFinder: @unchecked Sendable {
     /// for what `image` holds come back at once (`done` on main); else the photo waits in the queue.
     func request(_ url: URL, image: TiledImage, orientation: ImageOrientation, applied: Bool,
                  setup: DetectorSetup, ahead: Bool, urgent: Bool = false, done: @escaping @MainActor (SubjectBoxes?) -> Void) {
+        let generation = state.withLockUnchecked { $0.generation }
         guard let side = Self.side(image) else { return }
         if let known = Self.boxes(for: url, applied: applied, setup: setup),
            known.proxySide >= min(Self.minimumProxy, side) {
-            DispatchQueue.main.async { done(known) }
+            DispatchQueue.main.async { [self] in
+                guard isCurrent(generation) else { return }
+                done(known)
+            }
             return
         }
         let job = Job(url: url, image: image, orientation: orientation, applied: applied, setup: setup, ahead: ahead,
                       urgent: urgent, done: [done])
         // The photo being analysed now: this ask waits for that answer.
         let joined = state.withLockUnchecked { s -> Bool in
-            guard s.runningURL == url && s.runningID == setup.analysisID else { s.queue.ask(job, ahead: ahead); return false }
+            guard s.generation == generation else { return true }
+            guard s.runningGeneration == generation, s.runningURL == url && s.runningID == setup.analysisID else { s.queue.ask(job, ahead: ahead); return false }
             s.runningDone.append(done)
             return true
         }
@@ -114,19 +121,23 @@ final class SubjectFinder: @unchecked Sendable {
         work.async { [self] in
             guard cropGeneration.withLock({ $0 }) == generation else { return }
             let t0 = CACurrentMediaTime()
+            let isCurrent = { [self] in cropGeneration.withLock { $0 } == generation }
             let oriented = orientation.orientedSize(image.grid.imageSize)
             let size = CGSize(width: oriented.width, height: oriented.height)
             let proxy = SubjectCrop.proxySize(region, imageSize: size, side: Self.proxySide)
             let transform = SubjectCrop.proxyTransform(region, imageSize: size, proxy: proxy)
             var boxes = drawProxy(image, orientation: orientation, transform: transform,
                                   width: Int(proxy.width), height: Int(proxy.height))
-                .flatMap { SubjectDetector.boxes(from: $0, chain: Self.searched(setup), detector: setup.detects ? setup : nil) }
+                .flatMap { SubjectDetector.boxes(from: $0, chain: Self.searched(setup), detector: setup.detects ? setup : nil, shouldContinue: isCurrent) }
             boxes?.analysisID = setup.analysisID
             boxes?.proxySide = Int(max(proxy.width, proxy.height))
             let result = boxes.map { SubjectCrop.inPhoto($0, region: region) }
             DebugLog.log(String(format: "subjects crop %.2f×%.2f: %.0f ms", region.width, region.height,
                                 (CACurrentMediaTime() - t0) * 1000))
-            DispatchQueue.main.async { done(result) }
+            DispatchQueue.main.async {
+                guard isCurrent() else { return }
+                done(result)
+            }
         }
     }
 
@@ -137,29 +148,41 @@ final class SubjectFinder: @unchecked Sendable {
         if !busy { next() }
     }
 
-    /// Drops the waiting photos not in `urls` (a step left them behind, the analysis was turned off).
+    /// Drops waiting photos not in `urls`. An empty set also invalidates running analysis, crops and callbacks.
     func keepOnly(_ urls: Set<URL>) {
-        state.withLockUnchecked { $0.queue.keepOnly(urls) }
+        state.withLockUnchecked { s in
+            s.queue.keepOnly(urls)
+            if urls.isEmpty {
+                s.generation += 1
+                s.runningDone = []
+            }
+        }
+        if urls.isEmpty { cropGeneration.withLock { $0 += 1 } }
+    }
+
+    private func isCurrent(_ generation: Int) -> Bool {
+        state.withLockUnchecked { $0.generation == generation }
     }
 
     /// Starts the next job unless one runs, the foreground is busy or nothing waits.
     private func next() {
-        guard let job = state.withLockUnchecked({ s -> Job? in
+        guard let (job, generation) = state.withLockUnchecked({ s -> (Job, Int)? in
             guard let job = s.queue.take() else { return nil }
             s.runningURL = job.url
             s.runningID = job.setup.analysisID
-            return job
+            s.runningGeneration = s.generation
+            return (job, s.generation)
         }) else { return }
         Task.detached(priority: job.urgent ? .userInitiated : .utility) { [self] in
             let t0 = CACurrentMediaTime()
             var boxes = await stored(job.url)
             let fromCatalog = boxes != nil && boxes?.analysisID == job.setup.analysisID && boxes?.searched == Self.searched(job.setup) && boxes?.applied == job.applied
-            if !fromCatalog {
+            if !fromCatalog, isCurrent(generation) {
                 boxes = await withCheckedContinuation { continuation in
-                    work.async(qos: job.urgent ? .userInitiated : .utility) { continuation.resume(returning: self.analyse(job)) }
+                    work.async(qos: job.urgent ? .userInitiated : .utility) { continuation.resume(returning: self.analyse(job, shouldContinue: { self.isCurrent(generation) })) }
                 }
             }
-            if let boxes {
+            if let boxes, isCurrent(generation) {
                 Self.memory.withLock { m in
                     m.removeAll { $0.url == job.url && $0.boxes.analysisID == job.setup.analysisID }
                     m.append((job.url, boxes))
@@ -174,10 +197,13 @@ final class SubjectFinder: @unchecked Sendable {
                                 fromCatalog ? "catalog" : boxes.map { "\($0.proxySide) px" } ?? "failed"))
             let result = boxes
             let done = state.withLockUnchecked { s -> [@MainActor (SubjectBoxes?) -> Void] in
-                defer { s.runningURL = nil; s.runningID = nil; s.runningDone = []; s.queue.finish() }
-                return job.done + s.runningDone
+                defer { s.runningURL = nil; s.runningID = nil; s.runningGeneration = nil; s.runningDone = []; s.queue.finish() }
+                return s.generation == generation ? job.done + s.runningDone : []
             }
-            await MainActor.run { for d in done { d(result) } }
+            await MainActor.run {
+                guard isCurrent(generation) else { return }
+                for d in done { d(result) }
+            }
             next()
         }
     }
@@ -195,15 +221,15 @@ final class SubjectFinder: @unchecked Sendable {
     }
 
     /// The proxy drawn and looked at; nil when it cannot be drawn or Vision failed.
-    private func analyse(_ job: Job) -> SubjectBoxes? {
-        guard let side = Self.side(job.image) else { return nil }
+    private func analyse(_ job: Job, shouldContinue: () -> Bool) -> SubjectBoxes? {
+        guard shouldContinue(), let side = Self.side(job.image) else { return nil }
         let oriented = job.orientation.orientedSize(job.image.grid.imageSize)
         let k = min(1, Double(side) / Double(max(oriented.width, oriented.height)))
         let w = max(1, Int((Double(oriented.width) * k).rounded())), h = max(1, Int((Double(oriented.height) * k).rounded()))
         let transform = ViewTransform(imageSize: CGSize(width: oriented.width, height: oriented.height),
                                       viewSize: CGSize(width: w, height: h))
         guard let cg = drawProxy(job.image, orientation: job.orientation, transform: transform, width: w, height: h),
-              var boxes = SubjectDetector.boxes(from: cg, chain: Self.searched(job.setup), detector: job.setup.detects ? job.setup : nil) else { return nil }
+              var boxes = SubjectDetector.boxes(from: cg, chain: Self.searched(job.setup), detector: job.setup.detects ? job.setup : nil, shouldContinue: shouldContinue) else { return nil }
         boxes.analysisID = job.setup.analysisID
         boxes.applied = job.applied
         boxes.proxySide = max(w, h)
