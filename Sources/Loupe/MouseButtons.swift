@@ -102,6 +102,7 @@ import LoupeCore
     /// `t` on NSEvent's clock (`systemUptime`). A right button the recogniser holds that is up in fact (its release was
     /// lost: let go over another app's window, a drag that ended outside) is released first, so it chords nothing.
     func press(_ b: MouseButton, at t: TimeInterval) {
+        target()?.resetScrollGesture()
         if b != .right, gestures.rightHeld, pressedButtons() & 2 == 0 {
             DebugLog.log("mouse buttons: right button up without a release, released")
             dispatch(gestures.release(.right, at: t), at: t)
@@ -188,16 +189,19 @@ import LoupeCore
     /// A horizontal-only event (the side wheel, a sideways swipe) is never a held button's: it goes on (right + side
     /// wheel still steps folders while the panel is held) and leaves the press alive. Momentum is the exception: the
     /// tail of an absorbed gesture stays absorbed whichever way it happens to point.
-    func wheel(_ event: NSEvent) -> Bool {
-        let precise = event.hasPreciseScrollingDeltas
-        let dy = precise ? event.scrollingDeltaY : event.deltaY
-        let momentum = !event.momentumPhase.isEmpty
-        if !momentum, dy == 0, (precise ? event.scrollingDeltaX : event.deltaX) != 0 { return false }
+    func wheel(_ event: NSEvent, delta: GestureAxisLock.Delta? = nil) -> Bool {
         dropLostReleases()
-        let r = gestures.wheel(dy: dy, precise: precise, momentum: momentum, at: event.timestamp)
+        if gestures.rightDragOwnsInput { return true }
+        let precise = event.hasPreciseScrollingDeltas
+        let dy = precise ? (delta?.y ?? event.scrollingDeltaY) : (delta?.y == 0 ? 0 : event.deltaY)
+        let momentum = !event.momentumPhase.isEmpty
+        if !momentum, dy == 0, (delta?.x ?? (precise ? event.scrollingDeltaX : event.deltaX)) != 0 { return false }
+        let r = gestures.wheel(dy: dy, precise: precise, momentum: momentum, at: event.timestamp, began: event.phase.contains(.began))
         dispatch(r.fires, at: event.timestamp)
         return r.consumed
     }
+
+    func claimRightDrag() { gestures.claimRightDrag() }
 
     /// The thumb wheel turned by `delta` units of `stepsPerRevolution` per turn (right = positive). False when no held
     /// button takes it: the viewer's `thumb-wheel-zoom` may.
@@ -245,6 +249,7 @@ import LoupeCore
 
     /// Forgets every press in flight and the wheel absorption: the app lost focus or the window went away mid-press.
     func cancelAll() {
+        target()?.resetScrollGesture()
         gestures.cancelAll()
         appKitFilter.reset()
         rearm()

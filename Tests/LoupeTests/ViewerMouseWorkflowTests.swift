@@ -63,17 +63,20 @@ import Testing
         let revision = session.smartZoomRevision
         view.rightMouseDown(with: try event(.rightMouseDown, y: 300, at: 0))
         #expect(session.smartZoomRevision == revision)
-        view.rightMouseDragged(with: try event(.rightMouseDragged, y: 400, at: 0.1))
+        view.rightMouseDragged(with: try event(.rightMouseDragged, y: 320, at: 0.1))
         #expect(session.transform.scale != start)
         #expect(session.smartZoomRevision > revision)
         #expect(session.smartZoom.mode == .frame)
         let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
             wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0))
         _ = buttons.wheel(try #require(NSEvent(cgEvent: cg)))
+        let horizontal = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
+            wheelCount: 2, wheel1: 0, wheel2: 1, wheel3: 0))
+        #expect(buttons.wheel(try #require(NSEvent(cgEvent: horizontal))))
         let afterWheel = session.transform.scale
-        view.rightMouseDragged(with: try event(.rightMouseDragged, y: 500, at: 0.2))
-        #expect(session.transform.scale == afterWheel)
-        view.rightMouseUp(with: try event(.rightMouseUp, y: 500, at: 0.3))
+        view.rightMouseDragged(with: try event(.rightMouseDragged, y: 340, at: 0.2))
+        #expect(session.transform.scale != afterWheel)
+        view.rightMouseUp(with: try event(.rightMouseUp, y: 340, at: 0.3))
     }
 
     @Test func rightModifierAndColourWheelDoNotCancelPendingSmartZoom() throws {

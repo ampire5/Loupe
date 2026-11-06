@@ -546,3 +546,43 @@ import Testing
     }
 }
 
+
+@Suite struct MiddleClickScrollProtectionTests {
+    @Test func phaseOnlyAndTinyPreciseWheelPreserveMiddleClick() {
+        var g = ButtonGestures(kinds: [.middle: [.tap, .wheel]], longPress: 0.4, moveStep: 20)
+        _ = g.press(.middle, at: 1)
+        #expect(g.wheel(dy: 0, precise: true, momentum: false, at: 1.01).fires.isEmpty)
+        #expect(g.wheel(dy: 0.2, precise: true, momentum: false, at: 1.02).fires.isEmpty)
+        #expect(g.release(.middle, at: 1.1) == [.init(button: .middle, kind: .tap, steps: 1)])
+    }
+    @Test func rightDragKeepsOwnershipWhenWheelArrives() {
+        var g = ButtonGestures(kinds: [.right: [.wheel]], longPress: 0.4, moveStep: 20)
+        _ = g.press(.right, at: 1)
+        _ = g.move(dx: 0, dy: 20)
+        let wheel = g.wheel(dy: 1, precise: false, momentum: false, at: 1.1)
+        #expect(wheel.consumed && wheel.fires.isEmpty)
+        #expect(!g.rightZoomSuppressed)
+    }
+}
+
+extension MiddleClickScrollProtectionTests {
+    @Test func freshGestureDoesNotInheritReleasedButtonsAbsorption() {
+        var g = ButtonGestures(kinds: [.middle: [.tap, .wheel]], longPress: 0.4, moveStep: 20)
+        _ = g.press(.middle, at: 1)
+        #expect(!g.wheel(dy: 1, precise: false, momentum: false, at: 1.01).fires.isEmpty)
+        #expect(g.release(.middle, at: 1.02).isEmpty)
+        #expect(g.wheel(dy: 10, precise: true, momentum: true, at: 1.03).consumed)
+        #expect(!g.wheel(dy: 10, precise: true, momentum: false, at: 1.04, began: true).consumed)
+    }
+}
+
+extension MiddleClickScrollProtectionTests {
+    @Test func phaselessGestureAfterMomentumDropsReleasedAbsorption() {
+        var g = ButtonGestures(kinds: [.middle: [.tap, .wheel]], longPress: 0.4, moveStep: 20)
+        _ = g.press(.middle, at: 1)
+        _ = g.wheel(dy: 1, precise: false, momentum: false, at: 1.01)
+        _ = g.release(.middle, at: 1.02)
+        _ = g.wheel(dy: 10, precise: true, momentum: true, at: 1.03)
+        #expect(!g.wheel(dy: 10, precise: true, momentum: false, at: 1.04).consumed)
+    }
+}
