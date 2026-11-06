@@ -6,7 +6,7 @@ import Testing
         ButtonGestures(kinds: [.right: [.wheel], .panel: [.tap, .wheel, .withRight, .withRightWheel],
             .gesture: [.tap, .withRight], .back: [.tap, .withRight]], longPress: 0.4, moveStep: 20)
     }
-    @Test func rightDragRemainsAvailableUntilModifierInputIsUsed() {
+    @Test func rightDragOwnsThePressAndWheelCannotTakeOver() {
         var g = make()
         _ = g.press(.right, at: 0)
         #expect(!g.rightZoomSuppressed)
@@ -14,7 +14,7 @@ import Testing
         #expect(g.rightDragged)
         #expect(!g.rightZoomSuppressed)
         #expect(g.wheel(dy: 1, precise: false, momentum: false, at: 0.1).consumed)
-        #expect(g.rightZoomSuppressed)
+        #expect(!g.rightZoomSuppressed)
         _ = g.release(.right, at: 0.2)
         _ = g.press(.right, at: 1)
         #expect(!g.rightZoomSuppressed)

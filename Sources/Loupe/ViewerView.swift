@@ -106,6 +106,10 @@ import QuartzCore
     private var rmbZoom: RMBZoom?
     private var rmbPress: CGPoint?
     private var rmbDragging = false
+    private var rmbAxis = GestureAxisLock()
+    private var scrollAxis = GestureAxisLock()
+    private var scrollButtons = 0
+    private var scrollModifiers: NSEvent.ModifierFlags = []
     /// Zoom stops for the right-button zoom in progress, made at the press.
     private var rmbStops: ZoomStopGesture?
     /// Release velocity of the right-button zoom (doublings/s), and where the drag ended (cumulative travel, points).
@@ -373,8 +377,28 @@ import QuartzCore
     /// the speed the photos show at instead of skipping them.
     /// First of all, a mouse button held with a `+WHEEL` binding (and the tail of its scroll) takes the wheel
     /// (`MouseButtons`): nothing then pans, zooms or steps.
+    func resetScrollGesture() { scrollAxis.reset() }
+
+    private func lockedScrollDelta(_ event: NSEvent) -> GestureAxisLock.Delta {
+        let buttons = NSEvent.pressedMouseButtons
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if buttons != scrollButtons || modifiers != scrollModifiers {
+            scrollAxis.reset()
+            scrollButtons = buttons
+            scrollModifiers = modifiers
+        }
+        guard event.hasPreciseScrollingDeltas || buttons != 0 else {
+            scrollAxis.reset()
+            return .init(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
+        }
+        return scrollAxis.filter(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
+                                 precise: event.hasPreciseScrollingDeltas, momentum: !event.momentumPhase.isEmpty,
+                                 began: event.phase.contains(.began), phased: !event.phase.isEmpty, at: event.timestamp)
+    }
+
     override func scrollWheel(with event: NSEvent) {
-        if MouseButtons.shared.wheel(event) {
+        let scroll = lockedScrollDelta(event)
+        if MouseButtons.shared.wheel(event, delta: scroll) {
             if MouseButtons.shared.rightZoomSuppressed { endRMBZoom() }
             if dragPoint == nil { releaseRubber() }   // a stretch of the fingers' gesture goes back, as for a folder step
             return
@@ -393,7 +417,7 @@ import QuartzCore
             coast = nil                   // the momentum ends a glide, but not a spring of the fingers' gesture
             zoomCoast = nil
         }
-        if folderScrollConsumed(event) {
+        if folderScrollConsumed(event, delta: scroll) {
             releaseRubber()   // the held-button gesture never pans: a stretch it caught goes back
             return
         }
@@ -410,7 +434,7 @@ import QuartzCore
             }
             DebugLog.log("scroll pan \(event.scrollingDeltaX), \(event.scrollingDeltaY)\(momentum.isEmpty ? "" : " momentum")")
             let k = backing
-            let delta = CGVector(dx: event.scrollingDeltaX * k, dy: event.scrollingDeltaY * k)
+            let delta = CGVector(dx: scroll.x * k, dy: scroll.y * k)
             if !momentum.isEmpty {
                 // Every momentum event, an empty one too, so the next one's speed is over the gap from this one.
                 let moved = rubber.momentum(delta, at: event.timestamp, on: session.transform)
@@ -428,7 +452,7 @@ import QuartzCore
             if fingersOff { releaseRubber() } else if rubber.isAnimating { ensureInertiaLink() }
             return
         }
-        let dy = event.scrollingDeltaY
+        let dy = scroll.y
         guard dy != 0 else { return }
         let down = Settings.shared.config.wheelDirection.isNext(deltaY: dy,
                                                                 invertedFromDevice: event.isDirectionInvertedFromDevice)
@@ -490,14 +514,14 @@ import QuartzCore
     /// True when the event belongs to the held-button folder gesture (it then must not pan or step photos).
     /// A press that the strip owns (a scrub, a resize of its top edge) is not the gesture's held button: a step
     /// would replace the playlist under the scrub.
-    private func folderScrollConsumed(_ event: NSEvent) -> Bool {
+    private func folderScrollConsumed(_ event: NSEvent, delta: GestureAxisLock.Delta) -> Bool {
         let config = Settings.shared.config
         guard config.folderScrollGesture, !isStripPressed() else { return false }
         let precise = event.hasPreciseScrollingDeltas
         // Fingers and notches by `folder-scroll-direction` (`FolderScrollDirection.factor`).
         let k = config.folderScrollDirection.factor(precise: precise, invertedFromDevice: event.isDirectionInvertedFromDevice)
         let momentum = ScrollPhase(rawValue: event.momentumPhase.rawValue)
-        let outcome = folderScroll.event(dx: k * event.scrollingDeltaX, dy: k * event.scrollingDeltaY, precise: precise,
+        let outcome = folderScroll.event(dx: k * delta.x, dy: k * delta.y, precise: precise,
                                          momentum: !momentum.isEmpty, began: event.phase.contains(.began),
                                          held: heldButtons, threshold: config.folderScrollThreshold,
                                          repeatAfter: Double(config.folderScrollRepeatMilliseconds) / 1000,
@@ -562,9 +586,10 @@ import QuartzCore
     /// step or a three-finger swipe already used (the click let go while the fingers swipe or coast on), nor with
     /// three fingers down. Nothing pans here.
     func stripScrollIsSpent(_ event: NSEvent) -> Bool {
-        if MouseButtons.shared.wheel(event) { return true }   // a held button's wheel binding takes it
+        let scroll = lockedScrollDelta(event)
+        if MouseButtons.shared.wheel(event, delta: scroll) { return true }   // a held button's wheel binding takes it
         stopInertiaAtZoomTarget()   // the strip scrubs photos
-        if folderScrollConsumed(event) { return true }
+        if folderScrollConsumed(event, delta: scroll) { return true }
         let t = session.transform
         let free = scrollGuard.scroll(phase: ScrollPhase(rawValue: event.phase.rawValue),
                                       momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
@@ -840,6 +865,7 @@ import QuartzCore
     private var pressPoint: CGPoint?
 
     override func mouseDown(with event: NSEvent) {
+        resetScrollGesture()
         invalidateSmartZoomRequest()
         stopInertia(catching: true)
         window?.makeFirstResponder(self)
@@ -1304,6 +1330,7 @@ import QuartzCore
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     override func rightMouseDown(with event: NSEvent) {
+        resetScrollGesture()
         DebugLog.log("mouse button 1 down")
         MouseButtons.shared.press(.right, at: event.timestamp)   // the first button of a chord (`MBTN_RIGHT+…`)
         // A modifier by itself does not cancel or freeze pending composition.
@@ -1333,6 +1360,7 @@ import QuartzCore
         rmbVelocity.reset()
         rmbDy = 0
         rmbStops = ZoomStopGesture(transform: session.transform, stops: config.zoomStops, rubber: config.zoomRubberBand)
+        rmbAxis.reset()
         rmbPress = pointer
         rmbCentring = subjectCentring(session.transform)
         rmbDragging = false
@@ -1365,7 +1393,9 @@ import QuartzCore
         let k = backing
         if !rmbDragging {
             // Below the slop it is still a click: do nothing, so a shaky click never changes the zoom.
-            guard hypot(p.x - press.x, p.y - press.y) / k >= RMBZoom.clickSlopPoints else { return }
+            let delta = rmbAxis.project(x: (p.x - press.x) / k, y: (p.y - press.y) / k)
+            guard rmbAxis.axis == .vertical, abs(delta.y) >= RMBZoom.clickSlopPoints else { return }
+            MouseButtons.shared.claimRightDrag()
             rmbDragging = true
             invalidateSmartZoomRequest()
             session.subjectZoom = false

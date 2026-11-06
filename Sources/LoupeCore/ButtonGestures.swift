@@ -48,6 +48,7 @@ public struct ButtonGestures: Sendable {
         var rightChord = false
         var dead = false
         var wheelUsed = false
+        var wheelIntent = 0.0
         var wheel = 0.0
         var thumb = 0.0
         var moveX = 0.0
@@ -63,17 +64,20 @@ public struct ButtonGestures: Sendable {
     /// Wheel events keep being swallowed after a release that ended a scroll (see `wheel`).
     private var absorbing = false
     private var lastAbsorbed = 0.0
+    private var lastWheelWasMomentum = false
     /// The right button is down, as far as its presses and releases say (a release lost while the app was in the
     /// background leaves it set: the caller checks the real buttons).
     public private(set) var rightHeld = false
     private var rightMoveX = 0.0
     private var rightMoveY = 0.0
     private var rightMoved = false
+    private var rightPointerOwns = false
 
     /// After a right+X chord, until right is released: the right-button drag must not zoom.
     public private(set) var rightZoomSuppressed = false
     /// The right button moved at least `cancelPoints` on either axis since its press; sticky until it is released.
     public var rightDragged: Bool { rightHeld && rightMoved }
+    public var rightDragOwnsInput: Bool { rightHeld && rightPointerOwns }
 
     /// `longPress` in seconds, `moveStep` in points.
     public init(kinds: [MouseButton: Set<PressKind>], longPress: Double, moveStep: Double, tapOnRelease: Set<MouseButton> = []) {
@@ -123,7 +127,7 @@ public struct ButtonGestures: Sendable {
     public mutating func press(_ b: MouseButton, at t: Double) -> [Fire] {
         if b == .right {
             if !rightHeld {
-                rightHeld = true; rightMoveX = 0; rightMoveY = 0; rightMoved = false
+                rightHeld = true; rightMoveX = 0; rightMoveY = 0; rightMoved = false; rightPointerOwns = false
                 rightZoomSuppressed = false
                 if has(.right, .wheel) {
                     sequence += 1
@@ -226,9 +230,18 @@ public struct ButtonGestures: Sendable {
     /// spec §12.2), as travel past `driftPoints` does: back + wheel only scrolls the photos, it does not also step the
     /// stats on release. The event is not consumed for that.
     public mutating func wheel(dy: Double, precise: Bool, momentum: Bool,
-                               at t: Double) -> (fires: [Fire], consumed: Bool) {
+                               at t: Double, began: Bool = false) -> (fires: [Fire], consumed: Bool) {
+        if !momentum, began || lastWheelWasMomentum { absorbing = false }
+        lastWheelWasMomentum = momentum
+        // The pointer already owns this right press; wheel noise cannot switch zoom into navigation.
+        if rightHeld, rightPointerOwns { return ([], true) }
+        var middleIntent = true
+        if presses[.middle] != nil, !momentum, !presses[.middle]!.wheelUsed {
+            presses[.middle]!.wheelIntent += dy
+            middleIntent = abs(presses[.middle]!.wheelIntent) >= (precise ? Self.preciseWheelPoints : 1)
+        }
         if !momentum, dy != 0 {
-            for b in Array(presses.keys) where !has(b, activeKind(.wheel, for: b)) { presses[b]!.cancelled = true }
+            for b in Array(presses.keys) where !has(b, activeKind(.wheel, for: b)) && (b != .middle || middleIntent) { presses[b]!.cancelled = true }
         }
         guard let b = target(.wheel) else {
             if rightHeld, presses[.right]?.dead == true {
@@ -240,18 +253,29 @@ public struct ButtonGestures: Sendable {
             lastAbsorbed = t
             return ([], true)
         }
+        if b == .middle, !middleIntent, !momentum { return ([], true) }
         // The momentum of a scroll that began before the press is eaten but leaves the press alive: a tap or a long
         // press made while a scroll still coasts must fire.
-        if !momentum { presses[b]!.cancelled = true; presses[b]!.wheelUsed = true; if rightHeld { rightZoomSuppressed = true } }
+        if !momentum, dy != 0 { presses[b]!.cancelled = true; presses[b]!.wheelUsed = true; if rightHeld { rightZoomSuppressed = true } }
         let kind = activeKind(.wheel, for: b)
         absorbing = true
         lastAbsorbed = t
         guard dy != 0, !momentum else { return ([], true) }
         if !precise { return ([fire(b, kind, dy > 0 ? 1 : -1)], true) }
-        presses[b]!.wheel += dy
+        if b == .middle, presses[b]!.wheel == 0, presses[b]!.wheelIntent != 0 {
+            presses[b]!.wheel += presses[b]!.wheelIntent
+            presses[b]!.wheelIntent = 0
+        } else {
+            presses[b]!.wheel += dy
+        }
         let steps = Int((presses[b]!.wheel / Self.preciseWheelPoints).rounded(.towardZero))
         presses[b]!.wheel -= Double(steps) * Self.preciseWheelPoints
         return (steps == 0 ? [] : [fire(b, kind, steps)], true)
+    }
+
+    /// The view has crossed the zoom's click slop, including synthetic events without pointer deltas.
+    public mutating func claimRightDrag() {
+        if rightHeld, !rightZoomSuppressed { rightPointerOwns = true }
     }
 
     /// A held button takes the thumb wheel (it has a `+MX_THUMB` binding); otherwise the wheel is free for
@@ -279,7 +303,10 @@ public struct ButtonGestures: Sendable {
         if rightHeld {
             rightMoveX += dx
             rightMoveY += dy
-            if max(abs(rightMoveX), abs(rightMoveY)) >= Self.cancelPoints { rightMoved = true }
+            if max(abs(rightMoveX), abs(rightMoveY)) >= Self.cancelPoints {
+                rightMoved = true
+                if !rightZoomSuppressed { rightPointerOwns = true }
+            }
         }
         for b in Array(presses.keys) {
             presses[b]!.moveX += dx
@@ -302,10 +329,12 @@ public struct ButtonGestures: Sendable {
     public mutating func cancelAll() {
         presses = [:]
         absorbing = false
+        lastWheelWasMomentum = false
         rightHeld = false
         rightMoveX = 0
         rightMoveY = 0
         rightMoved = false
+        rightPointerOwns = false
         rightZoomSuppressed = false
     }
 }

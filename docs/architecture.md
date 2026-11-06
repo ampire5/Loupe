@@ -99,3 +99,12 @@ See [kit release workflow](kits.md); change kits on the app's branch name and co
 Use `scripts/test.sh` for everyday tests and `scripts/test.sh full` before merging renderer/transform changes;
 see [testing policy](testing.md). Run `python3 scripts/kits-check.py --no-fetch` after local dependency work.
 UI performance requires real-window CPU measurements; a model-only microbench cannot establish window latency.
+
+## Gesture ownership
+
+`GestureAxisLock` in Core fixes the first intentional scroll axis through momentum; a new non-momentum
+begin resets it immediately. Phase-less scrolling re-arms after a 0.25 s gap. Loupe's `ViewerView` filters deltas
+before button/folder/pan routing; FrameScrub's `GestureRouter` filters before command routing. Pointer right-drag
+zoom and right-button scrolling keep their first owner until release. Button recognition ignores zero deltas;
+middle-button scrolling must cross a wheel step (12 precise points or one notched unit) before cancelling a click.
+State is local to the existing input owners; no polling, new queues or dependencies are introduced.
