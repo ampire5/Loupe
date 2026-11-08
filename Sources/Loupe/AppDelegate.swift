@@ -66,7 +66,7 @@ import UniformTypeIdentifiers
         }
         // The Dock icon (~10 ms for an alternate's .icns) waits until the window is up.
         Settings.shared.reload(applyingIcon: false)
-        Icons.set = Icons.Set(rawValue: Settings.shared.config.iconSet.rawValue) ?? .lucide   // before the first icon
+        Icons.set = Icons.Set(rawValue: Settings.shared.config.iconSet.rawValue) ?? .sf   // before the first icon
         stateDatabase = Self.openStateDatabase()
         positions = FolderPositions(database: stateDatabase)
         recent = RecentStore(database: stateDatabase)

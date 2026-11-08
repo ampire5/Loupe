@@ -512,7 +512,7 @@ public struct Config: Equatable, Sendable {
     /// `stats-monochrome`: the stats bar in white and grey, without the yellow of the parameters.
     public var statsMonochrome = false
     /// `icon-set`: the line icons, Lucide or SF Symbols (read at launch).
-    public var iconSet = IconSet.lucide
+    public var iconSet = IconSet.sf
 
     /// `background`: the colour around the picture.
     public var background = BackgroundColor.default

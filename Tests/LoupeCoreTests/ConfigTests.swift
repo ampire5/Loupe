@@ -7,6 +7,7 @@ import Foundation
 
 @Test func configDefaults() {
     let c = Config()
+    #expect(c.iconSet == .sf)
     #expect(c.zoomStops == [.fitWidth, .fitHeight, .percent(100)])
     #expect(c.zoomStopHaptics)
     let (parsed, warnings) = Config.parse("")
@@ -1218,7 +1219,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
     "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("auto", "hidden"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
-    "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("sf", "tabler"),
+    "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("lucide", "tabler"),
     "app-icon": ("profile", "two words"),
     "auto-color": ("yes", "maybe"), "auto-color-method": ("apple-luma", "oil"), "auto-color-strength": ("0.5", "1.5"),
     "auto-color-filters": ("curve", "curve,red"), "auto-color-vibrance-gain": ("2", "5"),
