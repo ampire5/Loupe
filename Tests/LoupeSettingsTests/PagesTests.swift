@@ -23,14 +23,20 @@ struct PagesTests {
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
                                     "key-bindings", "performance", "stash", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 159)
+        #expect(Config.keys.count == 169)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys).union(ConfigSettingsStore.thumbnailKeys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
+    }
+
+    @Test func metalLimiterHasNoSettingsRows() {
+        #expect(row("metalfx-antiring") == nil)
+        #expect(row("metalfx-antiring-strength") == nil)
     }
 
     /// Spec §5: the sections of each page, in order.
     @Test func sectionsAsInTheSpec() {
         let sections = Dictionary(uniqueKeysWithValues: SettingsPanel.pages().map { ($0.id, $0.sections.map(\.title)) })
+        #expect(sections["quality"] == ["Scaling", "Debanding", "Grain", "Transparency"])
         #expect(sections["colour"] == ["Auto Colour", "Vibrance"])
         #expect(sections["strip"] == ["Strip", "Thumbnails", "Prepare ahead"])
         #expect(sections["interface"] == ["Stats Bar", "Full Screen", "Toasts", "Two Pages"])
@@ -179,6 +185,7 @@ struct PagesTests {
         #expect(set("upscale") == Set(UpscaleFilter.cycle.map(\.text)))
         #expect(set("upscale-high") == Set(UpscaleFilter.cycle.map(\.text)))
         #expect(set("downscale") == Set(DownscaleFilter.cycle.map(\.text)))
+        #expect(set("deband") == Set(DebandMode.allCases.map(\.rawValue)))
         #expect(set("pyramid-filter") == ["lanczos3", "box"])
         #expect(set("transparency") == Set(TransparencyMode.allCases.map(\.rawValue)))
         #expect(set("default-zoom-mode").isSuperset(of: ["fit", "fit-width", "fit-height", "fill", "100%"]))

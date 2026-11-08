@@ -54,6 +54,10 @@ enum RenderBench {
         let nearest: Bool
         /// `lanczos-antiring` for the magnifying frames.
         var antiringing = false
+        var grain = GrainStyle.off
+        var grainSize: Double = 1.25
+        var grainStage = GrainStage.before
+        var deband = DebandMode.off
 
         static let all: [Filter] = [
             Filter(name: "lanczos3", upscale: .kernel(.lanczos3), downscale: .kernel(.lanczos3), nearest: false),
@@ -61,11 +65,23 @@ enum RenderBench {
             Filter(name: "mitchell", upscale: .kernel(.mitchell), downscale: .kernel(.mitchell), nearest: false),
             Filter(name: "catmull-rom", upscale: .kernel(.catmullRom), downscale: .kernel(.catmullRom), nearest: false),
             Filter(name: "bilinear", upscale: .bilinear, downscale: .bilinear, nearest: false),
+            Filter(name: "bilinear+grain-fine", upscale: .bilinear, downscale: .bilinear, nearest: false, grain: .fine),
+            Filter(name: "bilinear+grain-fine-source1", upscale: .bilinear, downscale: .bilinear, nearest: false,
+                   grain: .fine, grainSize: 1),
             Filter(name: "metalfx", upscale: .metalfx, downscale: nil, nearest: false),   // magnifying only
+            Filter(name: "metalfx+grain-fine-source1", upscale: .metalfx, downscale: nil, nearest: false,
+                   grain: .fine, grainSize: 1),
+            Filter(name: "metalfx+grain-fine-after", upscale: .metalfx, downscale: nil, nearest: false,
+                   grain: .fine, grainStage: .after),
             Filter(name: "ewa-lanczos", upscale: .ewaLanczos, downscale: nil, nearest: false),   // magnifying only
             Filter(name: "ewa-lanczos+antiring", upscale: .ewaLanczos, downscale: nil, nearest: false, antiringing: true),
             Filter(name: "nearest (800 % only)", upscale: nil, downscale: nil, nearest: true),
-        ]
+        ] + GrainStyle.allCases.filter { $0 != .off }.map {
+            Filter(name: "metalfx+grain-\($0.rawValue)", upscale: .metalfx, downscale: nil,
+                   nearest: false, grain: $0)
+        } + DebandMode.allCases.filter { $0 != .off }.map {
+            Filter(name: "metalfx+deband-\($0.rawValue)", upscale: .metalfx, downscale: nil, nearest: false, deband: $0)
+        }
     }
 
     /// A column of a table: the scale and what it is (upscale columns run on every image, downscale ones are
@@ -224,6 +240,7 @@ enum RenderBench {
         print("| filter | " + titles.joined(separator: " | ") + " |")
         print("|---|" + usable.map { _ in "---|" }.joined())
         var levels: [String] = []
+        var debandNotes:[String]=[]
         for filter in filters {
             var cells: [String] = []
             for column in usable {
@@ -239,6 +256,8 @@ enum RenderBench {
                     guard let down = filter.downscale else { cells.append("—"); continue }
                     settings = ResampleSettings(downscale: down, antiringing: false, pixelArtPercent: 0)
                 }
+                settings.grain = GrainSettings(style: filter.grain, amount: 2, size: filter.grainSize, stage: filter.grainStage)
+                settings.deband = DebandSettings(mode:filter.deband)
                 renderer.resample = settings
                 let transform = ViewTransform(imageSize: imageSize, viewSize: view,
                                               mode: column.fit ? .fit : .actual(column.scale))
@@ -249,13 +268,20 @@ enum RenderBench {
                     fail("\(filter.name) at \(column.title) would draw \(mode), not the filter under test")
                 }
                 if filter.name == filters[0].name { levels.append("\(column.title): level \(level), m \(String(format: "%.2f", m))") }
-                let times = measure(renderer, image, transform, orientation, target, frames: frames)
+                let dispatches=renderer.debandDispatchCount
+                let measured = measure(renderer, image, transform, orientation, target, frames: frames)
+                let times=measured.gpu
+                if filter.deband != .off {
+                    guard renderer.lastDebandApplied, renderer.drawnMode == .metalfx else { fail("Debanding/FP16 MetalFX did not run") }
+                    debandNotes.append(String(format:"%@ %@: first GPU %.2f ms; first encode wall %.2f ms; cleanup %.1f MiB; MetalFX %.1f MiB; cleanup dispatches %d",filter.name,column.title,measured.firstGPU,measured.firstEncodeWall,Double(renderer.debandAllocatedBytes)/1048576,Double(renderer.metalFXAllocatedBytes)/1048576,renderer.debandDispatchCount-dispatches))
+                }
                 if renderer.lastColorLUT != (color != nil) { fail("\(filter.name) at \(column.title): the cube was not drawn") }
                 cells.append(String(format: "%.2f / %.2f", median(times), percentile(times, 0.9)))
             }
             print("| \(filter.name) | " + cells.joined(separator: " | ") + " |")
         }
         print("\nlevel and m per column: " + levels.joined(separator: "; "))
+        for note in debandNotes { print(note) }
         if partial { print("\n\\* the image does not fill the view at this scale") }
         print()
     }
@@ -264,8 +290,8 @@ enum RenderBench {
     private static func modeMatches(_ mode: ResampleMode, filter: Filter, magnify: Bool) -> Bool {
         switch mode {
         case .nearest: return filter.nearest
-        case .bilinear: return filter.name == "bilinear"
-        case .metalfx: return magnify && filter.name == "metalfx"
+        case .bilinear: return magnify ? filter.upscale == .bilinear : filter.downscale == .bilinear
+        case .metalfx: return magnify && filter.name.hasPrefix("metalfx")
         case .ewaLanczos: return magnify && filter.name.hasPrefix("ewa-lanczos")
         case .kernel(let kernel, let upscale):
             return upscale == magnify && !filter.nearest && filter.name == kernel.rawValue
@@ -278,20 +304,25 @@ enum RenderBench {
     }
 
     /// GPU milliseconds of each of `frames` frames after the warm-up, one command buffer at a time.
+    private struct Measurement { var gpu:[Double]; var firstGPU:Double; var firstEncodeWall:Double }
     private static func measure(_ renderer: TileRenderer, _ image: TiledImage, _ transform: ViewTransform,
-                                _ orientation: ImageOrientation, _ target: MTLTexture, frames: Int) -> [Double] {
+                                _ orientation: ImageOrientation, _ target: MTLTexture, frames: Int) -> Measurement {
         let queue = MetalContext.shared.queue
         var times: [Double] = []
+        var firstGPU=0.0,firstEncodeWall=0.0
         for i in 0..<(warmup + frames) {
             guard let commands = queue.makeCommandBuffer() else { fail("no command buffer") }
+            let encodeStart=ProcessInfo.processInfo.systemUptime
             renderer.encode(image: image, transform: transform, orientation: orientation, into: commands,
                             target: target)
+            if i==0 { firstEncodeWall=(ProcessInfo.processInfo.systemUptime-encodeStart)*1000 }
             commands.commit()
             commands.waitUntilCompleted()
             if let error = commands.error { fail("GPU error: \(error)") }
+            if i==0 { firstGPU=(commands.gpuEndTime-commands.gpuStartTime)*1000 }
             if i >= warmup { times.append((commands.gpuEndTime - commands.gpuStartTime) * 1000) }
         }
-        return times
+        return Measurement(gpu:times,firstGPU:firstGPU,firstEncodeWall:firstEncodeWall)
     }
 
     private static func makeTarget(_ size: PixelSize) -> MTLTexture {

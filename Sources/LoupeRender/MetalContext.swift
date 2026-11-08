@@ -48,7 +48,14 @@ public final class MetalContext: @unchecked Sendable {
     private var resamplePipelines: [ResampleKey: MTLComputePipelineState] = [:]
     private var metalFXPipelines: [MetalFXKey: MTLRenderPipelineState] = [:]
     private var ewaPipelineStates: [EWAKey: MTLComputePipelineState] = [:]
+    private let debandLock=NSLock()
+    private var debandFunctionState: MTLFunction?
+    private var debandState: MTLComputePipelineState?
     private var convertCubeState: MTLComputePipelineState?
+    let emptyGrain: MTLTexture
+    private let grainLock = NSLock()
+    private var grainTemplates: [GrainStyle: MTLTexture] = [:]
+    private var unavailableGrain: Set<GrainStyle> = []
     /// `curveTables(for:)`, oldest first; at most `curveTableLimit` curves.
     private var curveTables: [ColorCurve: CurveTables] = [:]
     private var curveOrder: [ColorCurve] = []
@@ -106,6 +113,15 @@ public final class MetalContext: @unchecked Sendable {
         self.device = device
         self.queue = queue
         self.uploadQueue = uploadQueue
+        let empty = MTLTextureDescriptor()
+        empty.textureType = .type2DArray; empty.pixelFormat = .r16Float
+        empty.width = 1; empty.height = 1; empty.arrayLength = 1
+        empty.storageMode = .shared; empty.usage = .shaderRead
+        guard let zero = device.makeTexture(descriptor: empty) else { fatalError("Metal: no empty grain texture") }
+        var value = Float16(0)
+        zero.replace(region: MTLRegionMake2D(0,0,1,1), mipmapLevel: 0, slice: 0,
+                     withBytes: &value, bytesPerRow: 2, bytesPerImage: 2)
+        emptyGrain = zero
         supportsMetalFX = MTLFXSpatialScalerDescriptor.supportsDevice(device)
         supportsEWA = device.supports32BitFloatFiltering
         supportsSRGBWrites = device.supportsFamily(.apple2)
@@ -147,7 +163,44 @@ public final class MetalContext: @unchecked Sendable {
         return state
     }
 
+    var debandFunction: MTLFunction {
+        debandLock.lock(); defer { debandLock.unlock() }
+        if let function=debandFunctionState { return function }
+        let options=MTLCompileOptions()
+        options.languageVersion = .version3_2
+        options.mathMode = .safe
+        do {
+            let library=try device.makeLibrary(source:DebandKernels.librarySource,options:options)
+            guard let function=library.makeFunction(name:"debandTiles") else { fatalError("Missing debandTiles") }
+            debandFunctionState=function
+            return function
+        } catch { fatalError("Deband shader compilation failed: \(error)") }
+    }
+    var deband: MTLComputePipelineState {
+        let function=debandFunction
+        debandLock.lock(); defer { debandLock.unlock() }
+        if let state=debandState { return state }
+        do {
+            let state=try device.makeComputePipelineState(function:function)
+            debandState=state
+            return state
+        } catch { fatalError("Deband pipeline creation failed: \(error)") }
+    }
+
     // MARK: Colour curve (M3b spec §4)
+
+    /// Render-thread preparation only. Failures are cached, and off needs no file I/O.
+    func grainTemplate(_ style: GrainStyle) -> MTLTexture? {
+        guard style != .off else { return nil }
+        grainLock.lock(); defer { grainLock.unlock() }
+        if let texture = grainTemplates[style] { return texture }
+        guard !unavailableGrain.contains(style) else { return nil }
+        guard let texture = DisplayGrain.load(style, device: device) else {
+            unavailableGrain.insert(style); return nil
+        }
+        grainTemplates[style] = texture
+        return texture
+    }
 
     /// The GPU tables of `curve`, made on first use and shared by every photo with that curve; nil when the inverse
     /// table's texture cannot be allocated. Thread-safe.
@@ -267,11 +320,12 @@ public final class MetalContext: @unchecked Sendable {
     /// level into the scaler's input). `alpha`: the pass's `HAS_ALPHA` variant; `curveTable`: the `CURVE_TABLE` variant
     /// of the final pass (the compose pass has none: it writes the scaler's `_srgb` input). `colorLUT`: the frame has a
     /// colour cube, which the pass that composites samples (Shaders, metalfxFragment): the final pass of an opaque photo,
-    /// the compose pass of one with alpha; the other pass's variant is its plain one. Thread-safe.
+    /// the compose pass of one with alpha. The alpha final pass also binds it to reconstruct the first checker
+    /// source for anti-ringing; its already corrected scaler output is never corrected twice. Thread-safe.
     public func metalFXPipeline(pixelFormat: MTLPixelFormat, compose: Bool = false, alpha: Bool = false,
                                 curveTable: Bool = false, colorLUT: Bool = false) -> MTLRenderPipelineState {
         let key = MetalFXKey(pixelFormat: pixelFormat, compose: compose, alpha: alpha, curveTable: curveTable && !compose,
-                             colorLUT: colorLUT && compose == alpha)
+                             colorLUT: colorLUT && (!compose || alpha))
         lock.lock()
         defer { lock.unlock() }
         if let cached = metalFXPipelines[key] { return cached }

@@ -24,6 +24,12 @@ extension Notification.Name {
 /// with `config-warnings`, into every window (`ConfigWarningsOverlay`).
 @MainActor final class Settings: NSObject, NSMenuItemValidation, NSMenuDelegate {
     static let shared = Settings()
+    /// Native key checks use an isolated suite for the remembered grain choice.
+    static let grainPreferences: UserDefaults = {
+        if let suite = ProcessInfo.processInfo.environment["LOUPE_GRAIN_PREFERENCES_SUITE"],
+           let preferences = UserDefaults(suiteName: suite) { return preferences }
+        return .standard
+    }()
     /// Benchmarks isolate remembered detector choices from the user's application preferences.
     static let detectorPreferences: UserDefaults = {
         if let suite = ProcessInfo.processInfo.environment["LOUPE_DETECTOR_PREFERENCES_SUITE"],
@@ -120,6 +126,10 @@ extension Notification.Name {
         SubjectFraming.detector = DetectorFraming(detector)
         let previous = config
         config = loaded
+        GrainToggle.remember(config.grain, preferences: Self.grainPreferences)
+        if config.deband != .off, Self.grainPreferences.string(forKey: "deband.lastEnabledMode") != config.deband.rawValue {
+            Self.grainPreferences.set(config.deband.rawValue, forKey: "deband.lastEnabledMode")
+        }
         let (lines, inputWarnings) = Self.loadInput(from: inputFileURL)
         inputMap = InputMap(lines: lines)
         let found = configWarnings + HardwareAdvice.warnings(for: loaded, on: .current) + inputWarnings
@@ -149,6 +159,10 @@ extension Notification.Name {
     }
 
     private func pushToAllStrips() {
+        GrainToggle.remember(config.grain, preferences: Self.grainPreferences)
+        if config.deband != .off, Self.grainPreferences.string(forKey: "deband.lastEnabledMode") != config.deband.rawValue {
+            Self.grainPreferences.set(config.deband.rawValue, forKey: "deband.lastEnabledMode")
+        }
         for strip in strips.allObjects { strip.apply(config) }
         NotificationCenter.default.post(name: .settingsChanged, object: nil)
     }
@@ -448,13 +462,14 @@ extension Notification.Name {
         menu.delegate = self
         let keys: [(String, KeyAction)] = [
             ("Next Filter", .cycleFilter), ("Save Filters as Default", .saveFilters),
+            ("Debanding", .toggleDeband), ("Save Debanding as Default", .saveDeband),
             ("Anti-ringing for This Folder", .toggleAntiring), ("Save Anti-ringing as Default", .saveAntiring),
         ]
         for (title, action) in keys { menu.addItem(.viewerKey(title, action)) }
         menu.addItem(.separator())
         // The sections go here (`menuNeedsUpdate`), after the first separator.
         menu.addItem(.separator())
-        let antiring = menu.addItem(withTitle: "Anti-ringing", action: #selector(toggleAntiring(_:)), keyEquivalent: "")
+        let antiring = menu.addItem(withTitle: "Lanczos Anti-ringing", action: #selector(toggleAntiring(_:)), keyEquivalent: "")
         antiring.target = self
         menu.addItem(.separator())
         func submenu(_ title: String, key: String) {
@@ -497,6 +512,8 @@ extension Notification.Name {
         methodItem.submenu = method
         menu.addItem(methodItem)
         menu.addItem(.viewerKey("Vibrance", .toggleVibrance))
+        menu.addItem(.viewerKey("Grain", .toggleGrain))
+        menu.addItem(.viewerKey("Save Grain as Default", .saveGrain))
         menu.addItem(.separator())
         menu.addItem(.viewerKey("Save Auto Colour as Default", .saveAutoColor))
         menu.addItem(.viewerKey("Save Vibrance as Default", .saveVibrance))
@@ -535,12 +552,16 @@ extension Notification.Name {
                 switch (item.representedObject as? String).flatMap(KeyAction.init(rawValue:)) {
                 case .toggleAutoColor: item.state = config.autoColor ? .on : .off
                 case .toggleVibrance: item.state = config.vibrance ? .on : .off
+                case .toggleGrain: item.state = config.grain != .off ? .on : .off
                 default: break
                 }
             }
             return
         }
         if menu is ScalingTopMenu {
+            for item in menu.items where item.representedObject as? String == KeyAction.toggleDeband.rawValue {
+                item.state = (viewer?.effectiveConfig ?? config).deband != .off ? .on : .off
+            }
             for item in menu.items where item.tag == Self.scalingSectionTag { menu.removeItem(item) }
             guard var index = menu.items.firstIndex(where: \.isSeparatorItem) else { return }
             index += 1
@@ -602,7 +623,7 @@ extension Notification.Name {
             // The checkmark is loupe.conf's; the main window's folder value, when it has one, is named in the title.
             let viewer = NSApp.mainWindow?.windowController as? ViewerWindowController
             item.title = viewer?.folderValueText(forKey: ScalingKeys.antiringKey)
-                .map { "Anti-ringing (this folder: \($0))" } ?? "Anti-ringing"
+                .map { "Lanczos Anti-ringing (this folder: \($0))" } ?? "Lanczos Anti-ringing"
         default: break
         }
         return true

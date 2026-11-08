@@ -59,6 +59,59 @@ The package uses Swift 6 language mode without blanket default actor isolation.
 `PhotoMetadataCache` isolate shared state in actors. `FileReader` and `DecodePool` bound I/O/decoding. Thumbnail
 activity follows foreground cache work; keep the existing foreground/background priority relationship.
 `RenderLoop` passes locked snapshots to its own thread, pauses the display link at rest and stops it on close.
+A / Shift-A control the existing Lanczos limiter and its default. MetalFX uses the system spatial scaler
+without an additional anti-ringing stage. Retired experimental MetalFX-limiter config and folder keys
+are ignored when reading old state; they are absent from the schema, UI and render snapshots.
+`DebandSettings` adds opt-in pre-scaling cleanup in `DebandCache`/`DebandKernels`. The render-thread cache
+holds at most two weakly source-keyed FP16 tile windows of the selected resident level, within 1/32 of physical
+RAM capped at 1 GiB. The visible input plus reconstruction padding is filtered; a fitting image can occupy the
+complete level, but no pyramid is duplicated. Global tile coordinates and compact columns/slice offsets preserve
+sampler, apron and EXIF geometry. The original remains immutable. Cache hits reuse cleanup across final colour/grain
+changes; settings, source or coverage changes invalidate/replace bounded entries. Source reads use encoded views
+where available, with linear-light unpremultiplication for alpha. Double recomputes its first-pass neighborhood;
+Reference samples immutable originals with at most four iterations. No history, worker queue or timer is added.
+Inactive/empty frames release cleanup caches. Allocation/budget failure keeps the original and emits one scoped
+notice through RenderLoop's main-actor callback to the viewer toast. Completed/in-flight GPU buffers retain
+resources normally; the cache budget is retained storage, not a process peak-memory guarantee.
+Deband's private shader library and pipeline compile only on first active use on the render thread. MSL transfer
+functions are shared with the normal library. Its buffer ABI is 64 bytes. Resample/compose reuse their former
+padding for compact slice offsets without changing strides. MetalFX chooses encoded FP16 perceptual input/output
+only for a cleaned frame, retaining sub-code values without changing processing mode. The compose pass encodes;
+the final pass decodes each sampled texel before bilinear mixing. Limiting references the actual FP16 composed
+input (half-rounding encoded values when reconstructing the first checker). Off keeps the original RGB8 path.
+Reference adaptation provenance and LGPL license live in `third_party/libplacebo` and are copied into the app.
+`MetalFXSource` supplies source geometry for final grain positioning and alpha coverage; its 16-byte
+uniform also selects FP16 output decoding for debanding. No luminance limiter or image-profile luma
+cache is retained. Grain remains fused into the final output shader.
+`EffectFolderKeys` groups deband and grain modes with their parameters. N/J toggle the current
+folder through `FolderSettings`, with the normal nearest-parent inheritance and asynchronous DB
+persistence. Shift-N/Shift-J call the existing viewer `saveAsDefault` path for all parameters of the
+effect: explicit values in other folders stay intact; redundant current-folder entries are removed
+only when their inherited replacement matches. A failed save leaves folder entries intact.
+Last non-off modes live as private metadata in the same bounded folder entries/DB batches; config
+layering, folder override UI and default saving exclude that metadata. No schema or timer is added.
+SmartZoom target stepping uses Option-N/Option-Shift-N. Menu checkmarks follow the active folder.
+The app wires `ConfigSettingsStore` Quality filter editors to merged folder values and a folder-write
+callback. Controls read the effective mode/parameters (including parent inheritance), write only the
+current folder, and leave saved defaults untouched. With no photo they edit the defaults. Own-only
+values remain separate for removable override notes. Folder/viewer changes refresh both editor values
+and notes via a scoped settings-store notification; opening Settings refreshes cached editor values.
+Explicit Shift commands still save the complete effective parameter group through the normal default path.
+`GrainSettings` (including `grain-stage=before|after`, default before) travels in the resampling snapshot.
+Before-upscale grain is a discrete field in original stored image
+coordinates, independently bilinear-filtered into each output path using full source extent and level geometry.
+It moves/zooms with the photo, independent of resident pyramid level; MetalFX never receives it as input.
+Minification uses a fixed four-stratum filter and attenuates unresolved noise, keeping cost bounded.
+Its radius approaches zero at 100% and is computed once per frame in `grainState`, then passed in the 40-byte grain uniforms.
+After-upscale grain instead samples immutable banks in physical output pixels; its size/phase stay fixed through
+zoom, pan and viewport clipping. Both stages use the same final output overlay, alpha coverage and color order.
+J preserves the stage; neither stage feeds noise into MetalFX or allocates another pass/viewport buffer.
+All output shaders apply this nonadaptive monochrome grain
+after color correction, weighted by source alpha, before output-curve encoding. The immutable White/Fine/Soft/AV1/
+Particles banks are prepared lazily on the render thread and cached by `MetalContext` behind a separate grain lock,
+so file I/O never holds the pipeline-cache lock. Missing banks are cached as unavailable and leave the image intact.
+Banks and their provenance/license are SwiftPM resources copied into the app by `make-app.sh`. Off binds only a
+small zero texture; enabled grain has no masks, temporal seeds, full-screen intermediates, worker or recurring work.
 The model cache owns loading, preflight and inference on one utility serial queue; only Sendable detection
 values and booleans leave it. Vision/CoreML model references never escape the queue.
 Clearing a window’s `SubjectFinder` queue (Manual mode or close) invalidates running requests and crops as well as

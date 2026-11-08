@@ -602,6 +602,17 @@ public struct Config: Equatable, Sendable {
     /// `lanczos-antiring`: clamp Lanczos upscaling to the range of its neighbourhood (less ringing, a bit softer).
     public var lanczosAntiring = false
 
+    public var deband = DebandMode.off
+    public var debandStrength = 0.5
+    public var debandThreshold = 9.0
+    public var debandRadius = 24.0
+    public var debandIterations = 1
+    public var debandTextureProtection = 1.0
+    public var grain = GrainStyle.off
+    public var grainAmount = 0.65
+    public var grainSize = 1.0
+    public var grainStage = GrainStage.before
+
     /// `pixel-art`: zoom in percent from which the picture is drawn nearest-neighbour; 0 is off.
     public var pixelArtPercent = 800
 
@@ -685,6 +696,8 @@ public struct Config: Equatable, Sendable {
                               "transparency", "checker-size", "checker-colors",
                               "upscale", "upscale-high", "upscale-high-from", "downscale", "lanczos-antiring", "pixel-art",
                               "pyramid-filter", "exif-orientation",
+                              "deband", "deband-strength", "deband-threshold", "deband-radius", "deband-iterations", "deband-texture-protection",
+                              "grain", "grain-stage", "grain-amount", "grain-size",
                               "auto-color", "auto-color-method", "auto-color-strength", "auto-color-filters",
                               "auto-color-vibrance-gain", "auto-color-threshold", "auto-color-full", "auto-color-fade",
                               "vibrance", "vibrance-amount",
@@ -706,10 +719,10 @@ public struct Config: Equatable, Sendable {
                               "app-icon"]
 
     /// The scaling filters a folder may set for itself. `pixel-art` and `pyramid-filter` stay global.
-    public static let scalingFolderKeys = ["downscale", "upscale", "upscale-high", "lanczos-antiring"]
-    /// The colour keys a folder may set for itself (M3c spec §2.4); the filters, gain, threshold, ramp and fade stay global.
+    public static let scalingFolderKeys = ["downscale", "upscale", "upscale-high", "lanczos-antiring"] + EffectFolderKeys.keys(.deband)
+    /// The colour and grain keys a folder may set for itself; colour-conversion filters, gain, ramp and fade stay global.
     public static let colorFolderKeys = ["auto-color", "auto-color-method", "auto-color-strength", "vibrance",
-                                         "vibrance-amount"]
+                                         "vibrance-amount"] + EffectFolderKeys.keys(.grain)
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
     public static let zoomFolderKeys = ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode", "zoom-anchor",
                                         "subject-target"]
@@ -732,6 +745,7 @@ public struct Config: Equatable, Sendable {
         var config = self
         var rejected: [String] = []
         for key in values.keys.sorted() where !Self.homeFolderKeys.contains(key) {
+            if key == "metalfx-antiring" || key == "metalfx-antiring-strength" { continue }
             let value = values[key]!
             if !Self.folderKeys.contains(key) || config.set(key, value) != .ok { rejected.append("\(key)=\(value)") }
         }
@@ -898,6 +912,16 @@ public struct Config: Equatable, Sendable {
         case "upscale-high-from": return String(upscaleHighPercent)
         case "downscale": return downscale.text
         case "lanczos-antiring": return lanczosAntiring ? "yes" : "no"
+        case "deband": return deband.rawValue
+        case "deband-strength": return formatNumber(debandStrength)
+        case "deband-threshold": return formatNumber(debandThreshold)
+        case "deband-radius": return formatNumber(debandRadius)
+        case "deband-iterations": return String(debandIterations)
+        case "deband-texture-protection": return formatNumber(debandTextureProtection)
+        case "grain": return grain.rawValue
+        case "grain-amount": return formatNumber(grainAmount)
+        case "grain-stage": return grainStage.rawValue
+        case "grain-size": return formatNumber(grainSize)
         case "pixel-art": return String(pixelArtPercent)
         case "pyramid-filter": return pyramidFilter.rawValue
         case "exif-orientation": return exifOrientation ? "yes" : "no"
@@ -1274,6 +1298,28 @@ public struct Config: Equatable, Sendable {
             if let v = DownscaleFilter(text: value) { downscale = v } else { return .badValue }
         case "lanczos-antiring":
             if let v = Self.bool(value) { lanczosAntiring = v } else { return .badValue }
+        case "metalfx-antiring", "metalfx-antiring-strength":
+            break // Retired experimental settings: read old files without warnings.
+        case "deband":
+            if let v = DebandMode(rawValue: value.lowercased()) { deband = v } else { return .badValue }
+        case "deband-strength":
+            if let v = Double(value), (0...1).contains(v) { debandStrength = v } else { return .badValue }
+        case "deband-threshold":
+            if let v = Double(value), (0.1...32).contains(v) { debandThreshold = v } else { return .badValue }
+        case "deband-radius":
+            if let v = Double(value), (1...64).contains(v) { debandRadius = v } else { return .badValue }
+        case "deband-iterations":
+            if let v = Int(value), (1...4).contains(v) { debandIterations = v } else { return .badValue }
+        case "deband-texture-protection":
+            if let v = Double(value), (0...1).contains(v) { debandTextureProtection = v } else { return .badValue }
+        case "grain":
+            if let v = GrainStyle(rawValue: value.lowercased()) { grain = v } else { return .badValue }
+        case "grain-stage":
+            if let v = GrainStage(rawValue: value.lowercased()) { grainStage = v } else { return .badValue }
+        case "grain-amount":
+            if let v = Double(value), (0...3).contains(v) { grainAmount = v } else { return .badValue }
+        case "grain-size":
+            if let v = Double(value), (0.5...4).contains(v) { grainSize = v } else { return .badValue }
         case "pixel-art":
             if let v = Int(value), v == 0 || (100...6400).contains(v) { pixelArtPercent = v } else { return .badValue }
         case "pyramid-filter":

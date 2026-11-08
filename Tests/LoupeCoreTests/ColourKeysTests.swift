@@ -20,8 +20,8 @@ import Testing
 @Test func colourKeyLists() {
     #expect(ColourKeys.autoKeys == ["auto-color", "auto-color-method", "auto-color-strength"])
     #expect(ColourKeys.vibranceKeys == ["vibrance", "vibrance-amount"])
-    // Both lists are folder keys, and together they are the five Reset Folder Colour clears.
-    #expect(Set(ColourKeys.autoKeys + ColourKeys.vibranceKeys) == Set(Config.colorFolderKeys))
+    // Colour correction and grain together form the Reset Folder Colour keys.
+    #expect(Set(ColourKeys.autoKeys + ColourKeys.vibranceKeys + EffectFolderKeys.keys(.grain)) == Set(Config.colorFolderKeys))
 }
 
 @Test func colourToasts() {

@@ -75,8 +75,8 @@ public enum InputConfTemplate {
     # Shift+m previous-detector-mode                 # previous SmartZoom profile
     # Alt+s toggle-smart-zoom                       # Manual / SmartZoom; preserves view and profile
     # Alt+Shift+m save-detector-size                          # the size on screen as the mode's size (detector.conf)
-    # n next-target                                 # next detected group
-    # Shift+n previous-target                        # previous detected group
+    # Alt+n next-target                                 # next detected group
+    # Alt+Shift+n previous-target                        # previous detected group
     # b toggle-toolbar-pin                           # pinned toolbar (stats hidden) / auto-hide, also in full screen
     # G toggle-subjects                             # show what Vision found: the subjects, the frame, its centre
     # Alt+Shift+g toggle-step-zoom                  # apply Auto (legacy mouse/key alias)
@@ -115,6 +115,10 @@ public enum InputConfTemplate {
     # C save-auto-color                             # save auto colour as default
     # v toggle-vibrance                             # vibrance in this folder, on/off
     # V save-vibrance                               # save vibrance as default
+    # j toggle-grain                                # folder grain on/off; restore the last enabled style
+    # J save-grain                                  # save grain and parameters as default
+    # n toggle-deband                               # folder debanding on/off
+    # N save-deband                                 # save debanding and parameters as default
 
     # ── View ──────────────────────────────────────────────────────────────────────────────────────────
     # f toggle-full-screen                          # full screen

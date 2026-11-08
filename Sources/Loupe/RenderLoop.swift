@@ -77,6 +77,7 @@ struct RenderPages: @unchecked Sendable {
 /// is touched only on the render thread, so the main thread never waits for the GPU or a drawable.
 /// `stop` ends that thread when the window closes.
 final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
+    @MainActor var onEffectWarning: ((String) -> Void)?
     /// What the main thread wants on screen, swapped atomically. `generation` counts updates, so the
     /// render thread can tell "changed since my last frame" without comparing images or transforms.
     private struct Snapshot: @unchecked Sendable {   // TiledImage is Sendable; CFRunLoop is safe to pass
@@ -341,6 +342,9 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
     private func run() {
         renderer = TileRenderer(context: context, pixelFormat: layer.pixelFormat)
         renderer?.log = { DebugLog.log($0) }
+        renderer?.effectWarning = { [weak self] message in
+            Task { @MainActor [weak self] in self?.onEffectWarning?(message) }
+        }
         let link = CAMetalDisplayLink(metalLayer: layer)
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         if let latency = RenderTuning.current.frameLatency { link.preferredFrameLatency = Float(latency) }

@@ -115,10 +115,10 @@ import Foundation
         #expect(set == Config(), "\(bad)")
     }
 
-    // Right after `exif-orientation`, in this order.
-    let exif = try #require(Config.keys.firstIndex(of: "exif-orientation"))
-    #expect(Array(Config.keys[(exif + 1)...(exif + 10)]) == keys)
-    #expect(Config.keys[exif + 11] == "strip-window")
+    // Right after the global grain controls, in this order.
+    let grain = try #require(Config.keys.firstIndex(of: "grain-size"))
+    #expect(Array(Config.keys[(grain + 1)...(grain + 10)]) == keys)
+    #expect(Config.keys[grain + 11] == "strip-window")
 
     // The five folder keys, and `applying` takes them (and no others of these).
     let folder = ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"]

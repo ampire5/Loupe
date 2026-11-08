@@ -20,6 +20,32 @@ public final class TileRenderer {
     /// The resampling keys of loupe.conf; each frame picks its path from them (`ResampleSettings.mode`). Like
     /// `background`, set before `encode`: the next frame uses the new filter.
     public var resample = ResampleSettings()
+    private let debandCache = DebandCache()
+    public var debandAllocatedBytes: Int { debandCache.allocatedBytes }
+    public var debandDispatchCount: Int { debandCache.dispatches }
+    public var metalFXAllocatedBytes: Int { metalFX?.allocatedBytes ?? 0 }
+    public private(set) var lastDebandApplied = false
+    public var effectWarning: (@Sendable (String) -> Void)?
+    private final class DebandFailure {
+        weak var source: AnyObject?
+        let message: String
+        init(_ source:MTLTexture,_ message:String) { self.source=source; self.message=message }
+    }
+    private var debandFailures:[DebandFailure]=[]
+
+
+    func grainState(_ frame: LevelFrame) -> (GrainParams, MTLTexture) {
+        let settings = resample.grain
+        guard settings.active, let texture = context.grainTemplate(settings.style) else {
+            return (GrainParams(), context.emptyGrain)
+        }
+        let footprint: Float = settings.stage == .before ? Float(1/frame.transform.drawnScale) : 1
+        // One uniform radius per frame, rather than a square root per output pixel.
+        let radius: Float = footprint > 1 ? sqrt(footprint*footprint-1)*0.25 : 0
+        return (GrainParams(amount: Float(min(settings.amount,3)), size: Float(min(max(settings.size,0.5),4)), filterRadius: radius,
+                            sourceSize: SIMD2(Float(frame.grid.imageSize.width),Float(frame.grid.imageSize.height)),
+                            levelFactor: Float(frame.factor), sourceFootprint: footprint, stage: settings.stage == .after ? 1 : 0), texture)
+    }
 
     /// What shows through the transparent pixels of a photo with alpha (`TiledImage.hasAlpha`, M3b spec §3): the
     /// checkerboard or a colour, already in linear light. Set like `background`; photos without alpha ignore it.
@@ -47,6 +73,7 @@ public final class TileRenderer {
     /// What the last `encode` drew (for tests): its path, as really drawn (a MetalFX or EWA fallback is Lanczos-3), and
     /// pyramid level; nil when it drew no image.
     private(set) var lastMode: ResampleMode?
+    public var drawnMode: ResampleMode? { lastMode }
     private(set) var lastLevel: Int?
     /// Whether the last `encode` drew with a `HAS_ALPHA` pipeline (for tests).
     private(set) var lastHasAlpha = false
@@ -54,7 +81,6 @@ public final class TileRenderer {
     private(set) var lastCurveTable = false
     /// Whether the last `encode` drew an image through its colour cube, with a `COLOR_LUT` pipeline (tests, stats).
     public private(set) var lastColorLUT = false
-
     /// Whether MetalFX frames go through the scaler: the GPU's support, which tests turn off to reach the fallback.
     var metalFXSupported: Bool
     /// The MetalFX scaler and its two view-size textures while frames use MetalFX; released by the first frame that
@@ -62,6 +88,7 @@ public final class TileRenderer {
     var metalFX: MetalFXStage?
     /// The view size whose scaler or textures could not be made: its frames draw Lanczos-3 without retrying every
     /// frame, until the size changes.
+    var metalFXFailedHighPrecision = false
     var metalFXFailedSize: SIMD2<Int>?
     /// Tests: making the scaler and textures fails, to reach that fallback.
     var failMetalFXStage = false
@@ -179,6 +206,8 @@ public final class TileRenderer {
     public func encode(image: TiledImage?, transform: ViewTransform, orientation: ImageOrientation = .up,
                        into commandBuffer: MTLCommandBuffer, target: MTLTexture,
                        viewport: CGRect? = nil, clears: Bool = true) {
+        lastDebandApplied = false
+        if !resample.deband.active || image == nil { debandCache.clear(); debandFailures.removeAll() }
         lastMode = nil
         lastLevel = nil
         lastHasAlpha = false
@@ -200,6 +229,22 @@ public final class TileRenderer {
         guard let image, var frame = LevelFrame(image: image, transform: transform, orientation: orientation) else {
             if clears { encodeTiles(nil, nearest: false, commandBuffer: commandBuffer, target: target) }
             return
+        }
+        if resample.deband.active {
+            let source=frame.view
+            if let cleaned = debandCache.prepare(frame, settings:resample.deband, context:context, commandBuffer:commandBuffer) {
+                frame = cleaned
+                lastDebandApplied = true
+                debandFailures.removeAll { $0.source == nil || $0.source === (source as AnyObject) }
+            } else if let failure = debandCache.failure {
+                debandFailures.removeAll { $0.source == nil }
+                if !debandFailures.contains(where: { $0.source === (frame.view as AnyObject) && $0.message == failure }) {
+                    if debandFailures.count==2 { debandFailures.removeFirst() }
+                    debandFailures.append(DebandFailure(frame.view,failure))
+                    log?(failure)
+                    effectWarning?(failure)
+                }
+            }
         }
         if conversion != nil { frame.dropCurve() }   // drawn into the layer's space, whose curve is sRGB's
         var target = target
@@ -384,11 +429,11 @@ public final class TileRenderer {
         // lanczos-antiring is a Lanczos option (spec §5), EWA Lanczos included; the separable shader applies it only
         // when magnifying, EWA only ever magnifies.
         let antiringing = resample.antiringing && (kernel == nil || kernel == .lanczos3 || kernel == .lanczos2)
-        var params = ResampleParams(levelToViewScale: frame.levelToView, levelToViewOffset: frame.offset - shift,
+        var params = ResampleParams(levelToViewScale: frame.levelToView, sliceOffset:frame.sliceOffset, levelToViewOffset: frame.offset - shift,
                                     levelSize: SIMD2(UInt32(size.width), UInt32(size.height)),
                                     extent: frame.orientedExtent,
                                     viewSize: SIMD2(UInt32(w), UInt32(h)),
-                                    columns: UInt32(frame.grid.columns(frame.level)),
+                                    columns: UInt32(frame.columns),
                                     antiringing: antiringing ? 1 : 0, background: background(for: target),
                                     orient: frame.orient, shift: frame.shift, origin: SIMD2(UInt32(x0), UInt32(y0)))
         if let cut = region.cut {
@@ -411,6 +456,9 @@ public final class TileRenderer {
         encoder.setTexture(target, index: 1)
         if table { encoder.setTexture(frame.inverseCurve, index: 3) }
         encoder.setBytes(&params, length: MemoryLayout<ResampleParams>.stride, index: 0)
+        var (grain, grainTexture) = grainState(frame)
+        encoder.setBytes(&grain, length: MemoryLayout<GrainParams>.stride, index: 4)
+        encoder.setTexture(grainTexture, index: 6)
         if frame.hasAlpha {
             var backdrop = transparencyParams(frame)
             backdrop.anchor -= shift
@@ -467,7 +515,7 @@ public final class TileRenderer {
             instances.append(TileInstance(contentOrigin: SIMD2(Float(content.x), Float(content.y)),
                                           contentSize: SIMD2(Float(width), Float(height)),
                                           slotOrigin: SIMD2(Float(slot.x), Float(slot.y)),
-                                          slice: UInt32(grid.slice(of: tile))))
+                                          slice: UInt32(tile.row*frame.columns+tile.column)-frame.sliceOffset))
         }
         guard !instances.isEmpty else { return }
 
@@ -513,6 +561,9 @@ public final class TileRenderer {
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<TileUniforms>.stride, index: 1)
         if nearest { encoder.setFragmentBytes(&uniforms, length: MemoryLayout<TileUniforms>.stride, index: 0) }
         encoder.setFragmentTexture(frame.view, index: 0)
+        var (grain, grainTexture) = grainState(frame)
+        encoder.setFragmentBytes(&grain, length: MemoryLayout<GrainParams>.stride, index: 3)
+        encoder.setFragmentTexture(grainTexture, index: 6)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instances.count)
     }
 
@@ -610,7 +661,10 @@ struct LevelFrame {
     let orientation: ImageOrientation
     let level: Int
     /// The level's `bgra8Unorm_srgb` view: reads and samples return linear light (premultiplied, with `hasAlpha`).
-    let view: MTLTexture
+    var view: MTLTexture
+    var columns: Int
+    var sliceOffset: UInt32 = 0
+    var debanded = false
     /// `TiledImage.hasAlpha` as of the views: the frame takes the `HAS_ALPHA` pipelines.
     let hasAlpha: Bool
     /// The photo's transfer curve and, for a `.table` one, its inverse table: the frame takes the `CURVE_TABLE`
@@ -649,6 +703,7 @@ struct LevelFrame {
         self.orientation = orientation
         self.level = level
         self.view = view
+        self.columns = grid.columns(level)
         self.hasAlpha = hasAlpha
         curve = tables?.curve ?? .srgb
         inverseCurve = tables?.inverse

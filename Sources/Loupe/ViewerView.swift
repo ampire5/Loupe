@@ -74,6 +74,9 @@ import QuartzCore
     /// `c`, `⇧C`, `v`, `⇧V` pressed (`toggleAutoColor`, `saveAutoColor`, `toggleVibrance`, `saveVibrance`); the window
     /// controller owns the folder's colour values.
     var onColourKey: ((KeyAction) -> Bool)?
+    /// Global output grain; the controller owns persistence and its OSD.
+    var onRendererWarning: ((String) -> Void)?
+    var onEffectKey: ((KeyAction) -> Bool)?
     /// `l`, `⇧L` pressed (`toggleKeepZoom`, `saveKeepZoom`); the window controller owns the folder's zoom values.
     var onZoomKey: ((KeyAction) -> Bool)?
     /// `p`, `⇧P` pressed (`cyclePanIndicators`, `savePanIndicators`); the window controller tells `Settings` and toasts.
@@ -196,6 +199,7 @@ import QuartzCore
         subjectOverlayView.frame = bounds
         addSubview(subjectOverlayView)
         renderLoop = RenderLoop(layer: metalLayer)
+        renderLoop.onEffectWarning = { [weak self] in self?.onRendererWarning?($0) }
         setBackground(Settings.shared.config.background)
         setResampling(resampling)
         setTransparency(TransparencySettings(config: Settings.shared.config))
@@ -1760,6 +1764,7 @@ import QuartzCore
         case .toggleSubjects: onToggleSubjects?()
         case .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring: return onScalingKey?(action) ?? false
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
+        case .toggleGrain, .saveGrain, .toggleDeband, .saveDeband: return onEffectKey?(action) ?? false
         case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry, .rememberZoom:
             return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false

@@ -54,6 +54,24 @@
 /// background, as before. A frame without a cube, or with the shared identity cube fully shown, uses the variant
 /// without it, which is the code of before. MetalFX corrects in the pass that composites (see there).
 enum Shaders {
+    static let colorTransferSource = #"""
+    // Exact piecewise sRGB encode (IEC 61966-2-1), not a 1/2.2 power; clamps to 0...1.
+    static float3 linearToSRGB(float3 c) {
+        c = saturate(c);
+        float3 lo = c * 12.92;
+        float3 hi = 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+        return select(hi, lo, c <= 0.0031308);
+    }
+
+    // Its inverse, exact too (to an ulp: the divisions are multiplications by the reciprocals, since in safe math a
+    // division is a real one; the two in here made colorCube 0.25-0.3 ms dearer on a 6K Lanczos-3 frame).
+    static float3 srgbToLinear(float3 e) {
+        float3 lo = e * (1.0 / 12.92);
+        float3 hi = pow(e * (1.0 / 1.055) + 0.055 / 1.055, 2.4);
+        return select(hi, lo, e <= 0.04045);
+    }
+    """#
+
     static let source = """
     #include <metal_stdlib>
     using namespace metal;
@@ -116,21 +134,9 @@ enum Shaders {
                       inverse.sample(kCurveLerp, u.b).x, 1.0);
     }
 
-    // Exact piecewise sRGB encode (IEC 61966-2-1), not a 1/2.2 power; clamps to 0...1.
-    static float3 linearToSRGB(float3 c) {
-        c = saturate(c);
-        float3 lo = c * 12.92;
-        float3 hi = 1.055 * pow(c, 1.0 / 2.4) - 0.055;
-        return select(hi, lo, c <= 0.0031308);
-    }
+    \(colorTransferSource)
 
-    // Its inverse, exact too (to an ulp: the divisions are multiplications by the reciprocals, since in safe math a
-    // division is a real one; the two in here made colorCube 0.25-0.3 ms dearer on a 6K Lanczos-3 frame).
-    static float3 srgbToLinear(float3 e) {
-        float3 lo = e * (1.0 / 12.92);
-        float3 hi = pow(e * (1.0 / 1.055) + 0.055 / 1.055, 2.4);
-        return select(hi, lo, e <= 0.04045);
-    }
+    \(DisplayGrain.source)
 
     // COLOR_LUT (index 4): the frame has a colour cube (see the header): every output path passes its filtered colour
     // through colorCube before the backdrop and encodeOutput. Undefined means false.
@@ -410,14 +416,16 @@ enum Shaders {
                                  texture1d<float, access::sample> inverse [[texture(3), function_constant(kCurveTable)]],
                                  texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                                  texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
-                                 constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]])
+                                 constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]],
+        texture2d_array<float, access::sample> grainTexture [[texture(6)]],
+        constant GrainParams& grain [[buffer(3)]])
     {
         constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
         // Keep the bilinear footprint inside the level: beyond the edge the apron is uninitialised.
         float2 p = clamp(in.levelPos, float2(0.5), in.levelSize - 0.5);
         float4 c = colorCube(slots.sample(s, p - in.slotOrigin, in.slice), lut, from, cube);
-        if (kAlpha) return encodeOutput(composite(c, t, in.position.xy), inverse);
-        return encodeOutput(c, inverse);
+        if (kAlpha) return encodeOutput(displayGrain(composite(c,t,in.position.xy),c.a,in.levelPos,in.position.xy,grainTexture,grain),inverse);
+        return encodeOutput(displayGrain(c,1.f,in.levelPos,in.position.xy,grainTexture,grain),inverse);
     }
 
     // The pixel-art path (M3a spec §3.4): each level px is one hard block of view px. The level px is chosen in
@@ -437,7 +445,9 @@ enum Shaders {
                                                                                    function_constant(kCurveTable)]],
                                         texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                                         texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
-                                        constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]])
+                                        constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]],
+        texture2d_array<float, access::sample> grainTexture [[texture(6)]],
+        constant GrainParams& grain [[buffer(3)]])
     {
         constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::nearest);
         float2 f = fract(u.shift);
@@ -455,8 +465,8 @@ enum Shaders {
         float2 p = orientedToStored(u.orient, u.shift, k + grid + 0.5);
         p = clamp(p, float2(0.5), in.levelSize - 0.5);
         float4 c = colorCube(slots.sample(s, p - in.slotOrigin, in.slice), lut, from, cube);
-        if (kAlpha) return encodeOutput(composite(c, t, in.position.xy), inverse);
-        return encodeOutput(c, inverse);
+        if (kAlpha) return encodeOutput(displayGrain(composite(c,t,in.position.xy),c.a,in.levelPos,in.position.xy,grainTexture,grain),inverse);
+        return encodeOutput(displayGrain(c,1.f,in.levelPos,in.position.xy,grainTexture,grain),inverse);
     }
 
     // ---- resample -------------------------------------------------------------------------
@@ -495,7 +505,7 @@ enum Shaders {
 
     struct ResampleParams {
         float levelToViewScale;        // m: view px per level px
-        float pad0;
+        uint sliceOffset;
         float2 levelToViewOffset;      // view px of oriented level px 0
         uint2 levelSize;               // stored
         float2 extent;                 // the image's oriented extent in level px (its view rect: offset + extent·m)
@@ -537,7 +547,7 @@ enum Shaders {
         int2 q = clamp(int2(x, y), int2(0), int2(p.levelSize) - 1);
         int row = q.y / int(kTileSize);
         int2 texel = clamp(q - int2(col, row) * int(kTileSize) + int(kApron), int2(0), int2(kSlotSize - 1));
-        return slots.sample(kTexel, float2(texel) + 0.5, uint(row) * p.columns + uint(col));
+        return slots.sample(kTexel, float2(texel) + 0.5, uint(row) * p.columns + uint(col) - p.sliceOffset);
     }
 
     //   slots [[texture(0)]]: the level's bgra8Unorm_srgb view (fetches return linear light).
@@ -554,7 +564,9 @@ enum Shaders {
                          texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                          texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
                          constant ColorLUTParams& cube [[buffer(3), function_constant(kColorLUT)]],
-                         uint2 tid [[thread_position_in_threadgroup]],
+                         texture2d_array<float, access::sample> grainTexture [[texture(6)]],
+                            constant GrainParams& grain [[buffer(4)]],
+                            uint2 tid [[thread_position_in_threadgroup]],
                          uint2 tg [[threadgroup_position_in_grid]])
     {
         threadgroup float wH[kGroup][kMaxTaps], wV[kGroup][kMaxTaps];
@@ -616,7 +628,7 @@ enum Shaders {
         int rows = min(abs(bV[kGroup - 1] - bV[0]) + RESAMPLE_TAPS, kGroupRows);
         int bx = bH[tid.x];
         int2 last = int2(p.levelSize) - 1;
-        int col = clamp((bx + RESAMPLE_TAPS / 2 - 1) / int(kTileSize), 0, int(p.columns) - 1);
+        int col = clamp((bx + RESAMPLE_TAPS / 2 - 1) / int(kTileSize), 0, int((p.levelSize.x+kTileSize-1u)/kTileSize) - 1);
         int slotX = int(kApron) - col * int(kTileSize);   // slot x of level x is x + slotX
         // The column's weights in registers, read from threadgroup memory once rather than at every tap of every row:
         // with them in threadgroup memory the 6K Lanczos-3 reducing frame cost 0.3–0.5 ms more through sample() and
@@ -626,7 +638,7 @@ enum Shaders {
         for (int r = int(tid.y); r < rows; r += kGroup) {
             int y = clamp(row0 + r, 0, last.y);
             int row = y / int(kTileSize);
-            uint slice = uint(row) * p.columns + uint(col);
+            uint slice = uint(row) * p.columns + uint(col) - p.sliceOffset;
             float sy = float(y - row * int(kTileSize) + int(kApron)) + 0.5;
             float4 acc = 0.0;
             for (int t = 0; t < RESAMPLE_TAPS; t++) {
@@ -658,10 +670,10 @@ enum Shaders {
         }
         acc = colorCube(acc, lut, from, cube);
         if (kAlpha) {
-            out.write(encodeOutput(composite(acc, t, centre), inverse), gid + p.origin);
+            out.write(encodeOutput(displayGrain(composite(acc,t,centre),acc.a,orientedToStored(p.orient,p.shift,(centre-p.levelToViewOffset)/m),centre+float2(p.origin),grainTexture,grain),inverse), gid + p.origin);
             return;
         }
-        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid + p.origin);   // opaque
+        out.write(encodeOutput(displayGrain(float4(acc.rgb,1.f),1.f,orientedToStored(p.orient,p.shift,(centre-p.levelToViewOffset)/m),centre+float2(p.origin),grainTexture,grain),inverse), gid + p.origin);   // opaque
     }
 
     // ---- resampleEWA / ewaWeightProbe -----------------------------------------------------
@@ -707,6 +719,8 @@ enum Shaders {
                             texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                             texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
                             constant ColorLUTParams& cube [[buffer(3), function_constant(kColorLUT)]],
+                            texture2d_array<float, access::sample> grainTexture [[texture(6)]],
+                            constant GrainParams& grain [[buffer(4)]],
                             uint2 tid [[thread_position_in_threadgroup]],
                             uint2 tg [[threadgroup_position_in_grid]])
     {
@@ -747,7 +761,7 @@ enum Shaders {
             int2 q = clamp(base + local, int2(0), last);
             int2 tile = q / int(kTileSize);
             float2 texel = float2(q - tile * int(kTileSize) + int(kApron)) + 0.5;
-            float4 c = slots.sample(kTexel, texel, uint(tile.y) * p.columns + uint(tile.x));
+            float4 c = slots.sample(kTexel, texel, uint(tile.y) * p.columns + uint(tile.x) - p.sliceOffset);
             texels[local.y][local.x] = kAlpha ? half4(c) : half4(half3(c.rgb), 1.0h);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -811,10 +825,10 @@ enum Shaders {
         }
         acc = colorCube(acc, lut, from, cube);
         if (kAlpha) {
-            out.write(encodeOutput(composite(acc, t, centre), inverse), gid + p.origin);
+            out.write(encodeOutput(displayGrain(composite(acc,t,centre),acc.a,orientedToStored(p.orient,p.shift,(centre-p.levelToViewOffset)/m),centre+float2(p.origin),grainTexture,grain),inverse), gid + p.origin);
             return;
         }
-        out.write(encodeOutput(float4(acc.rgb, 1.0), inverse), gid + p.origin);   // opaque
+        out.write(encodeOutput(displayGrain(float4(acc.rgb,1.f),1.f,orientedToStored(p.orient,p.shift,(centre-p.levelToViewOffset)/m),centre+float2(p.origin),grainTexture,grain),inverse), gid + p.origin);   // opaque
     }
 
     // Tests: the weight resampleEWA uses at r2[i] (level px^2, below cutoff2), as it looks it up.
@@ -869,7 +883,7 @@ enum Shaders {
         int2 origin;      // oriented level px of input texel (0, 0)
         uint2 levelSize;  // stored
         uint columns;     // tile columns of the level (slice = row * columns + column)
-        uint pad0;
+        uint sliceOffset;
         int2 shift;       // stored level px: levelSize - 1 on a mirrored axis
         int4 orient;      // ImageOrientation.matrix
     };
@@ -901,6 +915,7 @@ enum Shaders {
     fragment float4 metalfxComposeFragment(MetalFXVarying in [[stage_in]],
                                            texture2d_array<float, access::read> slots [[texture(0)]],
                                            constant MetalFXComposeParams& p [[buffer(0)]],
+                                           constant uint& highPrecision [[buffer(6)]],
                                            constant TransparencyParams& t [[buffer(1), function_constant(kAlpha)]],
                                            texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                                            texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
@@ -911,10 +926,13 @@ enum Shaders {
         int2 q = clamp(s, int2(0), int2(p.levelSize) - 1);
         int2 tile = q / int(kTileSize);
         uint2 texel = uint2(q - tile * int(kTileSize) + int(kApron));
-        float4 c = colorCube(slots.read(texel, uint(tile.y) * p.columns + uint(tile.x)), lut, from, cube);
-        if (kAlpha) return float4(c.rgb + (1.0 - c.a) * t.first.rgb, 1.0);
+        float4 c = colorCube(slots.read(texel, uint(tile.y) * p.columns + uint(tile.x) - p.sliceOffset), lut, from, cube);
+        if (kAlpha) c=float4(c.rgb + (1.0 - c.a) * t.first.rgb, 1.0);
+        if(highPrecision!=0u)c=float4(linearToSRGB(c.rgb),c.a);
         return c;
     }
+
+    \(MetalFXSource.source)
 
     //   upscaled [[texture(0)]]: the scaler's bgra8Unorm_srgb output (samples return linear light).
     //   p [[buffer(0)]]: MetalFXParams. With HAS_ALPHA (upscaled: the run over the first colour): upscaledSecond
@@ -922,6 +940,19 @@ enum Shaders {
     //   With CURVE_TABLE (the target is the drawable's bgra8Unorm view): inverse [[texture(3)]], as resample.
     //   With COLOR_LUT, which MetalContext gives this pass only without HAS_ALPHA (see above), the sample goes through the
     //   cube: lut [[texture(4)]], from [[texture(5)]], cube [[buffer(2)]].
+    // FP16 MetalFX uses the same perceptual processing as the original path.
+    // Decode each encoded texel before bilinear interpolation, matching an sRGB
+    // texture sample while retaining sub-code precision.
+    static float3 metalfxLinearOutput(texture2d<float,access::sample> tex,float2 pixel) {
+        float2 p=pixel-.5f,f=fract(p);
+        int2 b=int2(floor(p)),last=int2(tex.get_width(),tex.get_height())-1;
+        float3 a=srgbToLinear(saturate(tex.read(uint2(clamp(b,int2(0),last))).rgb));
+        float3 c=srgbToLinear(saturate(tex.read(uint2(clamp(b+int2(1,0),int2(0),last))).rgb));
+        float3 d=srgbToLinear(saturate(tex.read(uint2(clamp(b+int2(0,1),int2(0),last))).rgb));
+        float3 e=srgbToLinear(saturate(tex.read(uint2(clamp(b+int2(1,1),int2(0),last))).rgb));
+        return mix(mix(a,c,f.x),mix(d,e,f.x),f.y);
+    }
+
     fragment float4 metalfxFragment(MetalFXVarying in [[stage_in]],
                                     texture2d<float, access::sample> upscaled [[texture(0)]],
                                     texture2d<float, access::sample> upscaledSecond [[texture(1), function_constant(kAlpha)]],
@@ -930,16 +961,29 @@ enum Shaders {
                                     texture1d<float, access::sample> inverse [[texture(3), function_constant(kCurveTable)]],
                                     texture3d<float, access::sample> lut [[texture(4), function_constant(kColorLUT)]],
                                     texture3d<float, access::sample> from [[texture(5), function_constant(kColorLUT)]],
-                                    constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]])
+                                    constant ColorLUTParams& cube [[buffer(2), function_constant(kColorLUT)]],
+        texture2d_array<float, access::sample> grainTexture [[texture(6)]],
+        constant GrainParams& grain [[buffer(3)]],
+        texture2d_array<float,access::read> sourceSlots [[texture(2)]],
+        constant MetalFXSourceParams& sourceInfo [[buffer(4)]],
+        constant MetalFXComposeParams& sourceParams [[buffer(5)]])
     {
         float2 v = in.position.xy;   // the pixel centre, view px, y down
         if (any(v < p.imageMin) || any(v >= p.imageMax)) return p.background;
         constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
         float2 o = v * p.viewToOutputScale + p.viewToOutputOffset;
-        if (kAlpha && secondCell(t, v)) {
-            return encodeOutput(colorCube(float4(upscaledSecond.sample(s, o).rgb, 1.0), lut, from, cube), inverse);
-        }
-        return encodeOutput(colorCube(float4(upscaled.sample(s, o).rgb, 1.0), lut, from, cube), inverse);
+        bool second=kAlpha && secondCell(t,v);
+        float4 c;
+        if(sourceInfo.highPrecision!=0)c=float4(second?metalfxLinearOutput(upscaledSecond,o):metalfxLinearOutput(upscaled,o),1.f);
+        else c=second?float4(upscaledSecond.sample(s,o).rgb,1.f):float4(upscaled.sample(s,o).rgb,1.f);
+        float2 sourcePosition=o*float2(sourceInfo.contentSize)/float2(upscaled.get_width(),upscaled.get_height())-.5f;
+        if(!kAlpha)c=colorCube(c,lut,from,cube);
+        float coverage=1.f;
+        if(kAlpha && grain.amount>0.f)coverage=metalfxCoverage(sourceSlots,sourcePosition,sourceParams,sourceInfo);
+        float2 j=float2(sourceParams.origin)+sourcePosition;
+        float2 grainPosition=float2(sourceParams.orient.x*j.x+sourceParams.orient.y*j.y,
+                                    sourceParams.orient.z*j.x+sourceParams.orient.w*j.y)+float2(sourceParams.shift)+.5f;
+        return encodeOutput(displayGrain(c,coverage,grainPosition,v,grainTexture,grain),inverse);
     }
 
     // ---- convertCube ----------------------------------------------------------------------

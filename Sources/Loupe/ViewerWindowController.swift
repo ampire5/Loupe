@@ -348,6 +348,8 @@ import UniformTypeIdentifiers
         viewerView.onToggleCheatSheet = { [weak self] in self?.toggleCheatSheet() }
         viewerView.onScalingKey = { [weak self] in self?.scalingKey($0) ?? false }
         viewerView.onColourKey = { [weak self] in self?.colourKey($0) ?? false }
+        viewerView.onRendererWarning = { [weak self] in self?.toast.show($0) }
+        viewerView.onEffectKey = { [weak self] in self?.effectKey($0) ?? false }
         viewerView.onZoomKey = { [weak self] in self?.zoomKey($0) ?? false }
         viewerView.onSpreadKey = { [weak self] in self?.spreadKey($0) ?? false }
         viewerView.onPointerPageChanged = { [weak self] in self?.updateInfoPanel() }
@@ -2874,6 +2876,25 @@ import UniformTypeIdentifiers
             saveAsDefault([ScalingKeys.antiringKey], from: folder)
         default:
             break
+        }
+        return true
+    }
+
+    /// N/J remember only this folder; Shift saves all parameters through the usual default path.
+    private func effectKey(_ action: KeyAction) -> Bool {
+        guard let folder, let entry = session.entry, entry.url == session.playlist?.current else { return false }
+        let effect: DisplayEffect = action == .toggleDeband || action == .saveDeband ? .deband : .grain
+        if action == .saveDeband || action == .saveGrain {
+            saveAsDefault(EffectFolderKeys.keys(effect), from: folder)
+        } else {
+            let key = EffectFolderKeys.modeKey(effect)
+            let global = Settings.shared.config.text(forKey: key)
+            let fallback = global != "off" ? global : Settings.grainPreferences.string(forKey:
+                effect == .grain ? GrainToggle.lastStyleKey : "deband.lastEnabledMode")
+            let remembered = folderSettings.rememberedEffectMode(key, for: folder) ?? fallback
+            let value = EffectFolderKeys.toggled(effect, config: effectiveConfig, remembered: remembered)
+            folderSettings.setEffectMode(key, value, remembering: effectiveConfig.text(forKey: key), for: folder)
+            toast.show(ScalingKeys.toast(key: key, setForFolder: value))
         }
         return true
     }

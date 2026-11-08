@@ -2,9 +2,9 @@ import Foundation
 import LoupeCore
 import SettingsKit
 
-/// The settings window's store over `loupe.conf`. Reads come from the app's live `Config`; a write edits the file in
-/// place (comments and order kept, `ConfigText`) and asks the app to reload. The app's reload then calls
-/// `configDidReload(from:)`, so a write from the window and an edit in a text editor are announced the same way.
+/// Settings over the live Config. Quality filter controls read/edit the current folder when the app
+/// supplies a folder editor; without a photo, and for other controls, writes update loupe.conf.
+/// File writes keep comments/order and reload; folder writes use the app's bounded persistence path.
 @MainActor
 public final class ConfigSettingsStore: SettingsStore {
     private let fileURL: URL
@@ -12,6 +12,10 @@ public final class ConfigSettingsStore: SettingsStore {
     private let reload: () -> Void
     private let folder: () -> (url: URL, values: [String: String])?
     private let clearFolder: (String, URL) -> Void
+    private let mergedFolderValues: ((URL) -> [String: String])?
+    private let editFolder: ((String, String, URL) -> Void)?
+    /// Quality controls edit the shown folder; their defaults are saved explicitly by the viewer commands.
+    public static let folderFilterKeys = Config.scalingFolderKeys + EffectFolderKeys.keys(.grain)
     private let profile: MachineProfile
     private let defaults: UserDefaults
     public static let thumbnailKeys: Set<String> = ["thumbnail-format", "thumbnail-quality"]
@@ -19,10 +23,13 @@ public final class ConfigSettingsStore: SettingsStore {
     /// `current` is the app's live config; `reload` re-reads the file into it (and calls `configDidReload(from:)`).
     /// `folder` is the main viewer window's folder and the values it records for itself (nil without a window or a
     /// photo); `clearFolder` drops one key from a folder's values (spec §4.3). `profile` is the Mac the notes judge
-    /// the written values against.
+    /// the written values against. `folderValues` includes inherited values for filter editors;
+    /// `folder` stays own-only for the removable override note. `editFolder` enables folder editing.
     public init(fileURL: URL, current: @escaping () -> Config, reload: @escaping () -> Void,
                 folder: @escaping () -> (url: URL, values: [String: String])? = { nil },
                 clearFolder: @escaping (String, URL) -> Void = { _, _ in },
+                folderValues: ((URL) -> [String: String])? = nil,
+                editFolder: ((String, String, URL) -> Void)? = nil,
                 profile: MachineProfile = .current, defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.fileURL = fileURL
@@ -30,6 +37,8 @@ public final class ConfigSettingsStore: SettingsStore {
         self.reload = reload
         self.folder = folder
         self.clearFolder = clearFolder
+        self.mergedFolderValues = folderValues
+        self.editFolder = editFolder
         self.profile = profile
     }
 
@@ -48,7 +57,19 @@ public final class ConfigSettingsStore: SettingsStore {
     public func value(forKey key: String) -> String? {
         if key == "thumbnail-format" { return defaults.string(forKey: key).flatMap(ThumbnailEncoding.Format.init(rawValue:))?.rawValue ?? "jpeg" }
         if key == "thumbnail-quality" { return String(Int((ThumbnailEncoding.configured(defaults).quality * 100).rounded())) }
-        return current().text(forKey: key)
+        var config = current()
+        if editFolder != nil, Self.folderFilterKeys.contains(key), let folder = folder(),
+           let value = (mergedFolderValues?(folder.url) ?? folder.values)[key] {
+            _ = config.set(key, value)
+        }
+        return config.text(forKey: key)
+    }
+
+    /// Refresh actual editor values as well as override notes after a viewer/folder switch or hotkey.
+    public func folderContextDidChange() {
+        guard editFolder != nil else { return }
+        NotificationCenter.default.post(name: .settingsStoreDidChange, object: self,
+                                        userInfo: ["keys": Self.folderFilterKeys])
     }
 
     public func defaultValue(forKey key: String) -> String {
@@ -95,6 +116,17 @@ public final class ConfigSettingsStore: SettingsStore {
             guard validate(value, forKey: key) == nil else { throw NSError(domain: "LoupeSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid thumbnail setting"]) }
             if key == "thumbnail-quality" { defaults.set(Int(value), forKey: key) }
             else { defaults.set(value, forKey: key) }
+            NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": [key]])
+            return
+        }
+        if let editFolder, Self.folderFilterKeys.contains(key), let folder = folder() {
+            guard validate(value, forKey: key) == nil else {
+                throw NSError(domain: "LoupeSettings", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Not a valid filter setting"])
+            }
+            let parsed = Config.parse("\(key)=\(value)").0
+            guard let canonical = parsed.text(forKey: key) else { return }
+            editFolder(key, canonical, folder.url)
             NotificationCenter.default.post(name: .settingsStoreDidChange, object: self, userInfo: ["keys": [key]])
             return
         }

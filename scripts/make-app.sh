@@ -24,6 +24,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 built=$(swift build -c release --triple "$DEPS_TRIPLE" --show-bin-path)/Loupe
 cp "$built" "$app/Contents/MacOS/Loupe"
+# Immutable grain pattern banks and their provenance/license accompany the render module.
+grain_bundle="$(dirname "$built")/Loupe_LoupeRender.bundle"
+[[ -d "$grain_bundle" ]] || { echo "error: missing grain resource bundle" >&2; exit 1; }
+cp -R "$grain_bundle" "$app/Contents/Resources/"
+mkdir -p "$app/Contents/Resources/Licenses/libplacebo"
+cp third_party/libplacebo/LICENSE third_party/libplacebo/SOURCE "$app/Contents/Resources/Licenses/libplacebo/"
 # The symbols go to build/Loupe.dSYM, for symbolicating crash reports, not into the app (~5 MB less).
 rm -rf build/Loupe.dSYM
 dsymutil "$built" -o build/Loupe.dSYM >/dev/null 2>&1 || echo "warning: no build/Loupe.dSYM (dsymutil failed)" >&2

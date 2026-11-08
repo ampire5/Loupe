@@ -31,7 +31,7 @@ extension SettingsPanel {
                 .choice("downscale", "Downscale filter", filters, symbol: "minus.magnifyingglass",
                         description: "Fit of large photos and zoom below 100 %. Lanczos-3 removes moiré and jaggies; "
                             + "Bilinear is the cheapest. Default Lanczos-3."),
-                .toggle("lanczos-antiring", "Anti-ringing", symbol: "circle.dotted",
+                .toggle("lanczos-antiring", "Lanczos anti-ringing", symbol: "circle.dotted",
                         description: "Lanczos upscaling stays within its four nearest pixels: less halo, slightly "
                             + "softer; +0.2–0.3 ms GPU per 6K frame. A toggles it for the folder. Default off."),
             ]),
@@ -48,6 +48,45 @@ extension SettingsPanel {
                         description: "Photos, previews and the strip as shot (portraits upright); off: as stored in "
                             + "the file. Default on."),
             ]),
+        ]),
+        SettingsSection("Debanding", rows: [
+            .choice("deband", "Filter", [("off", "Off"), ("single", "Four samples"), ("double", "Two passes"),
+                                        ("adaptive", "Adaptive"), ("reference", "Reference (libplacebo)"), ("window", "Adaptive window")],
+                    symbol: "line.3.horizontal.decrease.circle",
+                    description: "Smooths colour bands before scaling. Single and Double use fixed sampling; Adaptive "
+                        + "protects texture, Reference uses stochastic sampling, and Window averages a wider area. "
+                        + "Strong filtering can remove fine detail. N toggles it for this folder; Shift-N saves the current mode and parameters as defaults. Default off."),
+            .number("deband-strength", "Strength", step: 0.1, symbol: "dial.low.fill",
+                    description: "Blend with the original photo, 0–1. Higher values remove more banding and may soften detail. "
+                        + "0 bypasses the filter. Default 0.5."),
+            .number("deband-threshold", "Threshold", step: 0.5, symbol: "line.3.horizontal.decrease",
+                    description: "Allowed colour difference in 8-bit levels, 0.1–32. Applies to Adaptive, Reference and Window; "
+                        + "Single and Double derive it from Strength. Default 9."),
+            .number("deband-radius", "Radius", unit: "px", step: 1, symbol: "circle.dashed.inset.filled",
+                    description: "Sampling radius in input pixels before scaling, 1–64. Applies to Adaptive, Reference and Window; "
+                        + "Single and Double derive it from Strength. Default 24."),
+            .number("deband-iterations", "Iterations", step: 1, symbol: "repeat.circle",
+                    description: "Reference sampling iterations, 1–4. More iterations may smooth more detail and cost more GPU. "
+                        + "Other filters use fixed sampling. Default 1."),
+            .number("deband-texture-protection", "Texture protection", step: 0.1, symbol: "shield.lefthalf.filled",
+                    description: "Protects texture in Adaptive and Window, 0–1. Higher values preserve more fine detail. "
+                        + "Single, Double and Reference do not use this control. Default 1."),
+        ]),
+        SettingsSection("Grain", rows: [
+            .choice("grain", "Pattern", [("off", "Off"), ("white", "White"), ("fine", "Fine"), ("soft", "Soft"),
+                                        ("av1", "AV1"), ("particles", "Particles")], symbol: "aqi.low",
+                    description: "Uniform monochrome grain after colour correction. White is uncorrelated; Fine and Soft "
+                        + "have increasing softness, AV1 has correlated texture, Particles has a film-like pattern. "
+                        + "J toggles the last pattern for this folder; Shift-J saves the current pattern and parameters as defaults. The application stage is preserved. "
+                        + "Stable while viewing, without animation. Default off."),
+            .choice("grain-stage", "Apply", [("before", "Before upscale"), ("after", "After upscale")],
+                    symbol: "square.2.layers.3d.bottom.filled",
+                    description: "Before upscale: grain follows the photo and is scaled independently. After upscale: "
+                        + "grain uses fixed screen pixels. MetalFX never processes grain in either mode. Default before upscale."),
+            .number("grain-amount", "Strength", step: 0.1, symbol: "aqi.medium",
+                    description: "Approximate grain strength in 8-bit colour levels, 0–3. Default 0.65."),
+            .number("grain-size", "Size", unit: "px", step: 0.25, symbol: "aqi.high",
+                    description: "0.5–4; default 1. Before upscale: original photo pixels. After upscale: physical screen pixels."),
         ]),
         SettingsSection("Transparency", rows: [
             .choice("transparency", "Behind transparent pixels", [

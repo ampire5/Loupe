@@ -243,3 +243,58 @@ struct ConfigSettingsStoreTests {
         #expect(values == ["downscale": "mitchell"])
     }
 }
+
+@MainActor
+@Test func qualityEditsReachTheShownFolderInsteadOfHiddenDefaults() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LoupeQualityEdits-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appendingPathComponent("loupe.conf")
+    let original = "deband=off\ngrain=off\nupscale=metalfx\n"
+    try original.write(to: file, atomically: true, encoding: .utf8)
+    let defaults = Config.parse(original).0
+    let folders = FolderSettings(database: nil)
+    let parent = URL(fileURLWithPath: "/photos")
+    let folder = parent.appendingPathComponent("gradients")
+    let other = URL(fileURLWithPath: "/other")
+    var activeFolder = folder
+    folders.set("deband", "window", for: parent)
+    folders.set("deband-threshold", "17", for: parent)
+    folders.set("grain", "particles", for: folder)
+    let store = ConfigSettingsStore(fileURL: file, current: { defaults }, reload: {},
+        folder: { (activeFolder, folders.ownValues(for: activeFolder)) },
+        clearFolder: { key, url in folders.clear([key], for: url) },
+        folderValues: { folders.values(for: $0) },
+        editFolder: { key, value, url in folders.set(key, value, for: url) })
+    let model = SettingsModel(store: store)
+    model.register(SettingsPanel.pages())
+    #expect(store.value(forKey: "deband") == "window")
+    #expect(store.value(forKey: "deband-threshold") == "17")
+    for (key, value) in [("deband", "reference"), ("deband-threshold", "11"), ("deband-radius", "37"),
+                          ("grain", "soft"), ("grain-stage", "after"), ("grain-amount", "1.6"),
+                          ("upscale", "bilinear"), ("lanczos-antiring", "yes")] {
+        let before = ResampleSettings(config: defaults.applying(folders.values(for: folder)).config)
+        try store.setValue(value, forKey: key)
+        #expect(ResampleSettings(config: defaults.applying(folders.values(for: folder)).config) != before)
+        #expect(store.value(forKey: key) == value)
+        #expect(model.value(key) == value)
+        #expect(defaults.applying(folders.values(for: folder)).config.text(forKey: key) == value)
+    }
+    #expect(try String(contentsOf: file, encoding: .utf8) == original)
+    #expect(folders.values(for: other).isEmpty)
+    #expect(folders.ownValues(for: parent)["deband"] == "window")
+    store.clearFolderOverride(forKey: "deband")
+    #expect(store.value(forKey: "deband") == "window")
+    var rejected = false
+    do { try store.setValue("999", forKey: "deband-radius") } catch { rejected = true }
+    #expect(rejected)
+    #expect(store.value(forKey: "deband-radius") == "37")
+    activeFolder = other
+    store.folderContextDidChange()
+    #expect(model.value("deband") == "off")
+    #expect(model.value("upscale") == "metalfx")
+    activeFolder = folder
+    store.folderContextDidChange()
+    #expect(model.value("deband") == "window")
+    #expect(model.value("deband-radius") == "37")
+}

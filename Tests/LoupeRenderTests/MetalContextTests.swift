@@ -308,7 +308,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
     let resample = try #require(resampleReflection?.bindings.first { $0.name == "p" } as? MTLBufferBinding)
     #expect(resample.index == 0)
     #expect(resample.bufferDataSize == MemoryLayout<ResampleParams>.stride)
-    #expect(members(resample) == ["levelToViewScale": 0, "pad0": 4, "levelToViewOffset": 8, "levelSize": 16, "extent": 24,
+    #expect(members(resample) == ["levelToViewScale": 0, "sliceOffset": 4, "levelToViewOffset": 8, "levelSize": 16, "extent": 24,
                                   "viewSize": 32, "columns": 40, "antiringing": 44, "background": 48, "orient": 64,
                                   "shift": 80, "origin": 88, "cut": 96])
 
@@ -334,7 +334,7 @@ private func drawTile(_ c: MetalContext, slots: MTLTexture, instance: TileInstan
                                              reflection: &composeReflection)
     let composeParams = try #require(composeReflection?.fragmentBindings.first { $0.name == "p" } as? MTLBufferBinding)
     #expect(composeParams.index == 0 && composeParams.bufferDataSize == MemoryLayout<MetalFXComposeParams>.stride)
-    #expect(members(composeParams) == ["origin": 0, "levelSize": 8, "columns": 16, "pad0": 20, "shift": 24,
+    #expect(members(composeParams) == ["origin": 0, "levelSize": 8, "columns": 16, "sliceOffset": 20, "shift": 24,
                                        "orient": 32])
 
     var uploadReflection: MTLComputePipelineReflection?

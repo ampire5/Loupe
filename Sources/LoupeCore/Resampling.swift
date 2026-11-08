@@ -116,24 +116,31 @@ public struct ResampleSettings: Equatable, Sendable {
     public var downscale: DownscaleFilter = .kernel(.lanczos3)
     /// `lanczos-antiring`: clamp Lanczos upscaling to the range of its neighbourhood (spec §3.2).
     public var antiringing = false
+    public var grain = GrainSettings()
+    public var deband = DebandSettings()
     /// `pixel-art`: zoom threshold in percent from which level 0 is drawn nearest-neighbour; 0 is off.
     public var pixelArtPercent = 400
 
     public init(upscale: UpscaleFilter = .kernel(.lanczos3), upscaleHigh: UpscaleFilter = .kernel(.mitchell),
                 upscaleHighPercent: Int = 300, downscale: DownscaleFilter = .kernel(.lanczos3),
-                antiringing: Bool = false, pixelArtPercent: Int = 400) {
+                antiringing: Bool = false, pixelArtPercent: Int = 400,
+                grain: GrainSettings = GrainSettings(), deband: DebandSettings = DebandSettings()) {
         self.upscale = upscale
         self.upscaleHigh = upscaleHigh
         self.upscaleHighPercent = upscaleHighPercent
         self.downscale = downscale
         self.antiringing = antiringing
+        self.grain = grain
+        self.deband = deband
         self.pixelArtPercent = pixelArtPercent
     }
 
     public init(config: Config) {
         self.init(upscale: config.upscale, upscaleHigh: config.upscaleHigh, upscaleHighPercent: config.upscaleHighPercent,
                   downscale: config.downscale,
-                  antiringing: config.lanczosAntiring, pixelArtPercent: config.pixelArtPercent)
+                  antiringing: config.lanczosAntiring, pixelArtPercent: config.pixelArtPercent,
+                  grain: GrainSettings(config: config),
+                  deband: DebandSettings(config: config))
     }
 }
 

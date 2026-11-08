@@ -27,7 +27,7 @@ let package = Package(
                                                  .product(name: "HomeScreenModel", package: "HomeScreenKit"),
                                                  .product(name: "FilmstripModel", package: "HomeScreenKit"),
                                                  .product(name: "SlotModel", package: "HomeScreenKit")]),
-        .target(name: "LoupeRender", dependencies: ["LoupeCore"]),
+        .target(name: "LoupeRender", dependencies: ["LoupeCore"], resources: [.copy("Resources/GrainTemplates")]),
         .target(name: "LoupeSettings", dependencies: ["LoupeCore", .product(name: "SettingsKit", package: "SettingsKit"),
                                                      .product(name: "LogiHIDPP", package: "LogiHIDPP"),
                                                      .product(name: "StashKit", package: "StashKit")]),

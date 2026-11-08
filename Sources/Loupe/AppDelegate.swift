@@ -459,7 +459,15 @@ import UniformTypeIdentifiers
                 fileURL: settings.fileURL, current: { Settings.shared.config }, reload: { Settings.shared.reload() },
                 folder: { [weak self] in self?.settingsFolder() },
                 // `clear` announces itself (`.folderSettingsChanged`, Settings.folderSettings).
-                clearFolder: { [weak self] key, url in self?.folderSettings?.clear([key], for: url) })
+                clearFolder: { [weak self] key, url in self?.folderSettings?.clear([key], for: url) },
+                folderValues: { [weak self] url in self?.folderSettings?.values(for: url) ?? [:] },
+                editFolder: { [weak self] key, value, url in
+                    guard let folders = self?.folderSettings else { return }
+                    if key == "deband" || key == "grain" {
+                        let previous = folders.values(for: url)[key] ?? Settings.shared.config.text(forKey: key)
+                        folders.setEffectMode(key, value, remembering: previous, for: url)
+                    } else { folders.set(key, value, for: url) }
+                })
             observeFolderNotes()
         }
         guard let store = settingsStore else { return }
@@ -474,6 +482,7 @@ import UniformTypeIdentifiers
                                            clearThumbnails: { [weak self] in
                                                await self?.confirmAndClearThumbnails() ?? false
                                            })
+        store.folderContextDidChange()
         SettingsPanel.show(store: store, context: context, page: page)
     }
 
@@ -491,8 +500,11 @@ import UniformTypeIdentifiers
         let names: [Notification.Name] = [.folderSettingsChanged, .viewerFolderChanged, NSWindow.didBecomeMainNotification,
                                           NSWindow.didBecomeKeyNotification]
         for name in names {
-            folderNoteObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { SettingsPanel.refreshFolderOverrides() }
+            folderNoteObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.settingsStore?.folderContextDidChange()
+                    SettingsPanel.refreshFolderOverrides()
+                }
             })
         }
     }

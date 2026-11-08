@@ -3,11 +3,15 @@ import Metal
 import MetalFX
 
 /// The MetalFX path's per-view-size state (M3a spec §3.5): the spatial scaler and its two textures, each the size of
-/// the view (~85 MB on 6K), so the renderer holds them only while frames use MetalFX; and a third, `secondOutput`, only
+/// the view (~85 MB on 6K, twice that for debanded FP16), so the renderer holds them only while frames use MetalFX;
+/// and a third, `secondOutput`, only
 /// while those frames are of a photo with alpha over the checkerboard.
 final class MetalFXStage {
     let width: Int
     let height: Int
+    /// Debanded frames stay in perceptually encoded FP16 through composition and scaling.
+    let highPrecision: Bool
+    var allocatedBytes: Int { input.allocatedSize + output.allocatedSize + (secondOutput?.allocatedSize ?? 0) }
     let scaler: MTLFXSpatialScaler
     /// The level's visible region 1:1 (texel i is level px origin + i), the image's edge pixels repeated around it;
     /// for a photo with alpha composited onto one backdrop colour.
@@ -23,24 +27,29 @@ final class MetalFXStage {
     let drawPass = MTLRenderPassDescriptor()
 
     /// Nil when the scaler or a texture cannot be made.
-    init?(device: MTLDevice, width: Int, height: Int) {
+    init?(device: MTLDevice, width: Int, height: Int, highPrecision: Bool = false) {
         let d = MTLFXSpatialScalerDescriptor()
         d.inputWidth = width
         d.inputHeight = height
         d.outputWidth = width
         d.outputHeight = height
-        d.colorTextureFormat = .bgra8Unorm_srgb
-        d.outputTextureFormat = .bgra8Unorm_srgb
+        let format: MTLPixelFormat = highPrecision ? .rgba16Float : .bgra8Unorm_srgb
+        d.colorTextureFormat = format
+        d.outputTextureFormat = format
+        // Match the original scaler's perceptual edge analysis. FP16 stores the
+        // encoded values explicitly; compose encodes and resolve decodes each tap
+        // before bilinear interpolation, matching sRGB texture filtering.
         d.colorProcessingMode = .perceptual
         guard let scaler = d.makeSpatialScaler(device: device) else { return nil }
-        guard let input = Self.texture(device, width, height, scaler.colorTextureUsage.union(.renderTarget), "metalfx input"),
-              let output = Self.texture(device, width, height, scaler.outputTextureUsage.union(.shaderRead),
+        guard let input = Self.texture(device, width, height, format, scaler.colorTextureUsage.union([.renderTarget, .shaderRead]), "metalfx input"),
+              let output = Self.texture(device, width, height, format, scaler.outputTextureUsage.union([.shaderRead, .renderTarget]),
                                         "metalfx output") else { return nil }
         scaler.colorTexture = input
         scaler.outputTexture = output
         self.device = device
         self.width = width
         self.height = height
+        self.highPrecision = highPrecision
         self.scaler = scaler
         self.input = input
         self.output = output
@@ -56,15 +65,15 @@ final class MetalFXStage {
     /// `secondOutput`, made if it is not there yet; nil when it cannot be made.
     func makeSecondOutput() -> MTLTexture? {
         if secondOutput == nil {
-            secondOutput = Self.texture(device, width, height, scaler.outputTextureUsage.union(.shaderRead),
+            secondOutput = Self.texture(device, width, height, output.pixelFormat, scaler.outputTextureUsage.union([.shaderRead, .renderTarget]),
                                         "metalfx output, second checker colour")
         }
         return secondOutput
     }
 
-    private static func texture(_ device: MTLDevice, _ width: Int, _ height: Int, _ usage: MTLTextureUsage,
+    private static func texture(_ device: MTLDevice, _ width: Int, _ height: Int, _ format: MTLPixelFormat, _ usage: MTLTextureUsage,
                                 _ label: String) -> MTLTexture? {
-        let t = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height,
+        let t = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width, height: height,
                                                          mipmapped: false)
         t.storageMode = .private
         t.usage = usage
@@ -96,11 +105,13 @@ extension TileRenderer {
         let clip = region.writes(target)
         let width = target.width, height = target.height
         guard width > 0, height > 0 else { return true }
-        if metalFX.map({ $0.width != width || $0.height != height }) ?? true {
-            metalFX = nil   // a view-size change: let the old textures go before making the new ones
-            guard metalFXFailedSize != SIMD2(width, height) else { return false }
-            metalFX = failMetalFXStage ? nil : MetalFXStage(device: context.device, width: width, height: height)
+        if metalFX.map({ $0.width != width || $0.height != height || $0.highPrecision != frame.debanded }) ?? true {
+            metalFX = nil   // size or precision changed: release old textures before making the new ones
+            guard metalFXFailedSize != SIMD2(width, height) || metalFXFailedHighPrecision != frame.debanded else { return false }
+            metalFX = failMetalFXStage ? nil : MetalFXStage(device: context.device, width: width, height: height,
+                                                                          highPrecision: frame.debanded)
             metalFXFailedSize = metalFX == nil ? SIMD2(width, height) : nil
+            metalFXFailedHighPrecision = frame.debanded
             metalFXSecondFailedSize = nil   // a new size may fit the second output
             noteMetalFXStage(made: metalFX != nil)
         }
@@ -149,7 +160,7 @@ extension TileRenderer {
         let last = o.translation(storedSize: CGSize(width: size.width - 1, height: size.height - 1))
         var compose = MetalFXComposeParams(origin: SIMD2(Int32(origin.x), Int32(origin.y)),
                                            levelSize: SIMD2(UInt32(size.width), UInt32(size.height)),
-                                           columns: UInt32(frame.grid.columns(frame.level)),
+                                           columns: UInt32(frame.columns), sliceOffset: frame.sliceOffset,
                                            shift: SIMD2(Int32(last.x), Int32(last.y)), orient: frame.orient)
         let backdrop = transparencyParams(frame)
         // One run, or one per checker colour: the compose pass composites onto the run's colour (its `first`), and the
@@ -169,7 +180,7 @@ extension TileRenderer {
                 return false
             }
             composer.label = "metalfx compose"
-            composer.setRenderPipelineState(context.metalFXPipeline(pixelFormat: .bgra8Unorm_srgb, compose: true,
+            composer.setRenderPipelineState(context.metalFXPipeline(pixelFormat: stage.input.pixelFormat, compose: true,
                                                                     alpha: frame.hasAlpha, colorLUT: frame.color != nil))
             if frame.hasAlpha {
                 var colour = runBackdrop
@@ -180,6 +191,8 @@ extension TileRenderer {
             // The content region and a 2-texel margin, in case the scaler's taps reach past it: they get edge pixels too.
             composer.setScissorRect(MTLScissorRect(x: 0, y: 0, width: min(width, content.x + 2),
                                                    height: min(height, content.y + 2)))
+            var highPrecision: UInt32 = stage.highPrecision ? 1 : 0
+            composer.setFragmentBytes(&highPrecision, length: MemoryLayout<UInt32>.stride, index: 6)
             composer.setFragmentTexture(frame.view, index: 0)
             composer.setFragmentBytes(&compose, length: MemoryLayout<MetalFXComposeParams>.stride, index: 0)
             composer.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
@@ -214,10 +227,18 @@ extension TileRenderer {
         encoder.setRenderPipelineState(context.metalFXPipeline(pixelFormat: target.pixelFormat, alpha: frame.hasAlpha,
                                                                curveTable: frame.inverseCurve != nil,
                                                                colorLUT: frame.color != nil))
+        var (grain, grainTexture) = grainState(frame)
+        encoder.setFragmentBytes(&grain, length: MemoryLayout<GrainParams>.stride, index: 3)
+        encoder.setFragmentTexture(grainTexture, index: 6)
+        var sourceInfo = MetalFXSourceParams(contentSize: SIMD2(UInt32(content.x), UInt32(content.y)),
+                                               highPrecision: frame.debanded ? 1 : 0)
+        encoder.setFragmentBytes(&sourceInfo, length: MemoryLayout<MetalFXSourceParams>.stride, index: 4)
+        encoder.setFragmentBytes(&compose, length: MemoryLayout<MetalFXComposeParams>.stride, index: 5)
+        encoder.setFragmentTexture(frame.view, index: 2)
         encoder.setFragmentTexture(stage.output, index: 0)
         if let inverse = frame.inverseCurve { encoder.setFragmentTexture(inverse, index: 3) }
         // An opaque photo is corrected here, after the scaler.
-        if !frame.hasAlpha, let color = frame.color { setFragmentColorCube(color, on: encoder) }
+        if let color = frame.color { setFragmentColorCube(color, on: encoder) }
         encoder.setFragmentBytes(&params, length: MemoryLayout<MetalFXParams>.stride, index: 0)
         if frame.hasAlpha {
             var cells = backdrop

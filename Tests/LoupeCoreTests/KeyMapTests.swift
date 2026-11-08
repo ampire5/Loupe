@@ -3,6 +3,12 @@ import Testing
 
 private let map = KeyMap.standard
 
+@Test func grainHasDedicatedNonrepeatingKey() {
+    #expect(map.action(keyCode: 38, character: "j", modifiers: [], isRepeat: false)?.rawValue == "toggleGrain")
+    #expect(map.action(keyCode: 38, character: "j", modifiers: [], isRepeat: true) == nil)
+    #expect(InputConf.action(named: "toggle-grain")?.rawValue == "toggleGrain")
+}
+
 private func action(_ code: UInt16, _ character: String? = nil, _ modifiers: KeyModifiers = [], repeat isRepeat: Bool = false) -> KeyAction? {
     map.action(keyCode: code, character: character, modifiers: modifiers, isRepeat: isRepeat)
 }
@@ -45,7 +51,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     29: ("0", ")"), 18: ("1", "!"), 19: ("2", "@"), 20: ("3", "#"), 21: ("4", "$"), 82: ("0", "0"), 83: ("1", "1"), 84: ("2", "2"), 85: ("3", "3"),
     86: ("4", "4"), 24: ("=", "+"), 27: ("-", "_"), 69: ("+", "+"), 78: ("-", "-"),
     2: ("d", "D"), 13: ("w", "W"), 4: ("h", "H"), 7: ("x", "X"), 6: ("z", "Z"), 5: ("g", "G"), 46: ("m", "M"), 45: ("n", "N"), 3: ("f", "F"), 34: ("i", "I"), 17: ("t", "T"),
-    11: ("b", "B"), 1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 40: ("k", "K"), 35: ("p", "P"),
+    38: ("j", "J"), 11: ("b", "B"), 1: ("s", "S"), 0: ("a", "A"), 8: ("c", "C"), 9: ("v", "V"), 37: ("l", "L"), 40: ("k", "K"), 35: ("p", "P"),
 ]
 
 /// `label` would fall back to the raw case name in the View section; every action has a title of its own instead.
@@ -95,10 +101,10 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .zoomOut: "-", .panLeft: "⇧←", .panRight: "⇧→", .panUp: "⇧↑", .panDown: "⇧↓", .toggleFullScreen: "F",
         .cycleStats: "I", .toggleStrip: "T", .toggleStripPlacement: "⇧T", .cheatSheet: "?",
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
-        .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
+        .toggleGrain: "J", .saveGrain: "⇧J", .toggleDeband: "N", .saveDeband: "⇧N", .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
         .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
         .toggleSpread: "D", .saveSpread: "⇧D", .shiftSpread: "⌥D",
-        .toggleZoomSet: "G", .cycleSubjectTarget: "⌥G", .cycleDetectorMode: "M", .saveDetectorSize: "⌥⇧M", .previousDetectorMode: "⇧M", .previousTarget: "⇧N", .toggleToolbarPin: "B", .nextTarget: "N", .toggleSubjects: "⇧G", .rememberZoom: "⌥L", .toggleStepZoom: "⌥⇧G", .toggleSmartZoom: "⌥S",
+        .toggleZoomSet: "G", .cycleSubjectTarget: "⌥G", .cycleDetectorMode: "M", .saveDetectorSize: "⌥⇧M", .previousDetectorMode: "⇧M", .previousTarget: "⌥⇧N", .toggleToolbarPin: "B", .nextTarget: "⌥N", .toggleSubjects: "⇧G", .rememberZoom: "⌥L", .toggleStepZoom: "⌥⇧G", .toggleSmartZoom: "⌥S",
         .zoomSubject: "⇧Z", .cycleStepPan: "⌥K", .saveStepPan: "⌥⇧K", .cycleZoomAnchor: "⌥Z", .saveZoomAnchor: "⌥⇧Z",
     ]
     for a in KeyAction.allCases {
@@ -295,13 +301,13 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .fitWidth: ("w", []), .fitHeight: ("h", []), .fill: ("3", []), .toggleFitActual: ("z", []),
         .zoomIn: ("+", []), .zoomOut: ("-", []),
         .cycleFilter: ("s", []), .saveFilters: ("s", .shift), .toggleAntiring: ("a", []), .saveAntiring: ("a", .shift),
-        .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
+        .toggleGrain: ("j", []), .saveGrain: ("j", .shift), .toggleDeband: ("n", []), .saveDeband: ("n", .shift), .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
         .toggleStrip: ("t", []), .toggleStripPlacement: ("t", .shift), .cycleStats: ("i", []), .cheatSheet: ("?", []),
         .toggleKeepZoom: ("l", []), .saveKeepZoom: ("l", .shift),
         .toggleZoomCarry: ("k", []), .saveZoomCarry: ("k", .shift),
         .cyclePanIndicators: ("p", []), .savePanIndicators: ("p", .shift),
         .toggleSpread: ("d", []), .saveSpread: ("d", .shift), .shiftSpread: ("d", .option),
-        .toggleZoomSet: ("g", []), .cycleSubjectTarget: ("g", .option), .cycleDetectorMode: ("m", []), .saveDetectorSize: ("m", [.option, .shift]), .nextTarget: ("n", []), .toggleSubjects: ("g", .shift), .rememberZoom: ("l", .option), .toggleStepZoom: ("g", [.option, .shift]), .toggleSmartZoom: ("s", .option),
+        .toggleZoomSet: ("g", []), .cycleSubjectTarget: ("g", .option), .cycleDetectorMode: ("m", []), .saveDetectorSize: ("m", [.option, .shift]), .nextTarget: ("n", .option), .toggleSubjects: ("g", .shift), .rememberZoom: ("l", .option), .toggleStepZoom: ("g", [.option, .shift]), .toggleSmartZoom: ("s", .option),
         .zoomSubject: ("z", .shift), .cycleStepPan: ("k", .option), .saveStepPan: ("k", [.option, .shift]),
         .cycleZoomAnchor: ("z", .option), .saveZoomAnchor: ("z", [.option, .shift]),
     ]

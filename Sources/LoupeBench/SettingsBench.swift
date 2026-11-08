@@ -20,7 +20,7 @@ import SettingsKit
 enum SettingsBench {
     static func main(_ arguments: [String]) -> Never {
         var rounds = 3, settle = 1500, icons = 85
-        var shots: String?, start: String?
+        var shots: String?, start: String?, editKey: String?
         var args = arguments[...]
         while let arg = args.popFirst() {
             if arg == "--rounds", let n = args.popFirst().flatMap(Int.init), n > 0 { rounds = n; continue }
@@ -28,9 +28,10 @@ enum SettingsBench {
             if arg == "--icons", let n = args.popFirst().flatMap(Int.init), n >= 0 { icons = n; continue }
             if arg == "--shots", let dir = args.popFirst() { shots = dir; continue }
             if arg == "--start", let page = args.popFirst() { start = page; continue }
+            if arg == "--edit-key", let key = args.popFirst() { editKey = key; continue }
             fail("settings: unknown argument \(arg)")
         }
-        MainActor.assumeIsolated { run(rounds: rounds, settle: settle, icons: icons, shots: shots, start: start) }
+        MainActor.assumeIsolated { run(rounds: rounds, settle: settle, icons: icons, shots: shots, start: start, editKey: editKey) }
         exit(0)
     }
 
@@ -62,7 +63,7 @@ enum SettingsBench {
         }
     }
 
-    @MainActor private static func run(rounds: Int, settle: Int, icons: Int, shots: String?, start: String?) {
+    @MainActor private static func run(rounds: Int, settle: Int, icons: Int, shots: String?, start: String?, editKey: String?) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("settings-bench-\(getpid())")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -152,16 +153,40 @@ enum SettingsBench {
 
         // A setting changed elsewhere (a text editor, a key in the viewer) while the window is open: the store
         // announces one key, as the app's reload does. Every page has been opened by now.
+        let key = editKey ?? "mouse-long-press"
+        let editValues: [String]
+        if editKey != nil {
+            guard let page = SettingsPanel.pages().first(where: { $0.keys.contains(key) }) else { fail("--edit-key needs a settings key") }
+            switch key {
+            case "deband": editValues = ["single", "double", "adaptive", "reference", "window", "off"]
+            case "deband-strength": editValues = ["0", "0.5", "1", "0.75"]
+            case "deband-threshold": editValues = ["0.1", "9", "32", "12"]
+            case "deband-radius": editValues = ["1", "24", "64", "32"]
+            case "deband-iterations": editValues = ["1", "2", "4", "3"]
+            case "deband-texture-protection": editValues = ["0", "0.5", "1", "0.75"]
+            case "grain": editValues = ["white", "fine", "soft", "av1", "particles", "off"]
+            case "grain-stage": editValues = ["before", "after", "before", "after"]
+            case "grain-amount": editValues = ["1", "2", "3", "0.65"]
+            case "grain-size": editValues = ["0.5", "1", "2", "1"]
+            default:
+                guard ["yes", "no"].contains(config.text(forKey: key) ?? "") else { fail("--edit-key needs a boolean, debanding or grain key") }
+                editValues = ["yes", "no", "yes", "no"]
+            }
+            SettingsPanel.show(store: store, context: context, page: page.id)
+            spin(settle)
+        } else {
+            editValues = ["500", "400", "500", "400"]
+        }
         var edits: [Double] = []
-        for value in ["500", "400", "500", "400"] {
+        for value in editValues {
             let t0 = threadCPU()
-            config = Config.parse("mouse-long-press=\(value)").0
+            _ = config.set(key, value)
             NotificationCenter.default.post(name: .settingsStoreDidChange, object: store,
-                                            userInfo: ["keys": ["mouse-long-press"]])
+                                            userInfo: ["keys": [key]])
             spin(settle)
             edits.append(threadCPU() - t0)
         }
-        print("one setting changed: " + edits.map { String(format: "%.0f", $0) }.joined(separator: ", ") + " ms")
+        print("one setting changed (\(key)): " + edits.map { String(format: "%.0f", $0) }.joined(separator: ", ") + " ms")
 
         // ⇥ from the search field once around the loop: how many stops, and how many of them on a page that is not
         // open (an ancestor hidden or drawn at opacity 0).

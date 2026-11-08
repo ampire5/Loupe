@@ -1,0 +1,8 @@
+https://github.com/haasn/libplacebo
+Commit: 9fabf6d5057c40089afb020017c6347002b07308
+Adapted: src/shaders/sampling.c, pl_shader_deband
+Metal adaptation: Sources/LoupeRender/ReferenceDebandKernels.swift
+Based on: FrameScrub Sources/FrameScrubCore/ReferenceDebandKernel.swift
+Modified 2026-11-08: deterministic spatial PRNG, tiled Metal reads, straight encoded-color filtering, alpha protection and strength blend; grain remains a separate renderer stage.
+The deterministic PRNG reuses one angle and distance factor across iterations, with radius multiplied by the iteration number. This is reference-style logic, not bit-exact upstream random sampling.
+License: GNU Lesser General Public License 2.1 or later (see LICENSE).

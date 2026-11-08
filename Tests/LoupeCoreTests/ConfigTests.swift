@@ -1193,6 +1193,10 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "checker-colors": ("dark", "#fff"),
     "upscale": ("mitchell", "metalfxx"), "upscale-high": ("ewa-lanczos", "ewa-x"),
     "upscale-high-from": ("500", "50"), "downscale": ("bilinear", "metalfx"), "lanczos-antiring": ("yes", "maybe"),
+    "deband": ("window", "unknown"), "deband-strength": ("0.75", "2"),
+    "deband-threshold": ("12", "0"), "deband-radius": ("32", "65"),
+    "deband-iterations": ("3", "5"), "deband-texture-protection": ("0.5", "2"),
+    "grain": ("fine", "adaptive"), "grain-stage": ("after", "unknown"), "grain-amount": ("2", "4"), "grain-size": ("2", "0"),
     "pixel-art": ("1600", "50"), "pyramid-filter": ("box", "mitchell"), "exif-orientation": ("no", "maybe"),
     "slot-left": ("folders, overlay, glass, mouse-leaves, 400, hidden, at-once", "folders"),
     "slot-right": ("empty, pinned, dark, manual, 480, shown, tongue", "bad, overlay, glass, manual, 400, hidden, at-once"),
@@ -1248,8 +1252,8 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
 }
 
 @Test func folderKeysAreTheScalingFiltersAndColour() {
-    #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"])
-    #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"])
+    #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"] + EffectFolderKeys.keys(.deband))
+    #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"] + EffectFolderKeys.keys(.grain))
     #expect(Config.zoomFolderKeys == ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode",
                                      "zoom-anchor", "subject-target"])
     #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape",

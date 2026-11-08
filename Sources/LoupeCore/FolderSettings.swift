@@ -10,6 +10,8 @@ import Foundation
 public final class FolderSettings: @unchecked Sendable {
     public static let defaultCapacity = 1000
 
+    private static let effectMemoryPrefix = "_last-enabled-effect."
+
     private struct Entry { var values: [String: String]; var tick: Int }
 
     private let database: StateDatabase?
@@ -65,14 +67,14 @@ public final class FolderSettings: @unchecked Sendable {
     }
 
     /// The records along `chain` (nearest first), the nearer one winning per key.
-    private func merged(_ chain: ArraySlice<String>) -> [String: String] {
+    private func merged(_ chain: ArraySlice<String>, includingEffectMemory: Bool = false) -> [String: String] {
         lock.withLock {
             var merged: [String: String] = [:]
             for path in chain {
                 guard let own = entries[path]?.values else { continue }
                 merged.merge(own) { nearer, _ in nearer }
             }
-            return merged
+            return includingEffectMemory ? merged : merged.filter { !$0.key.hasPrefix(Self.effectMemoryPrefix) }
         }
     }
 
@@ -84,7 +86,24 @@ public final class FolderSettings: @unchecked Sendable {
 
     /// Only what `folder` itself records, nothing inherited.
     public func ownValues(for folder: URL) -> [String: String] {
-        lock.withLock { entries[folder.standardizedFileURL.path]?.values ?? [:] }
+        lock.withLock { (entries[folder.standardizedFileURL.path]?.values ?? [:]).filter { !$0.key.hasPrefix(Self.effectMemoryPrefix) } }
+    }
+
+    /// Last selected non-off mode, inherited like the effect itself. Metadata shares the bounded
+    /// folder entry and database batch, but never participates in Config layering or default saving.
+    public func rememberedEffectMode(_ key: String, for folder: URL) -> String? {
+        guard key == "deband" || key == "grain" else { return nil }
+        return merged(Self.chain(of: folder)[...], includingEffectMemory: true)[Self.effectMemoryPrefix + key]
+    }
+
+    public func setEffectMode(_ key: String, _ value: String, remembering previous: String?, for folder: URL) {
+        guard key == "deband" || key == "grain" else { return }
+        change(folder) { values in
+            if let mode = value != "off" ? value : previous, mode != "off" {
+                values[Self.effectMemoryPrefix + key] = mode
+            }
+            values[key] = value
+        }
     }
 
     /// Records `value` for `key` in `folder` (nil removes it). A folder left with no values is forgotten.

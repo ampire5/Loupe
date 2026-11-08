@@ -1,5 +1,17 @@
 import LoupeCore
 
+struct GrainParams {
+    var amount: Float = 0
+    var size: Float = 1
+    var seed: UInt32 = 345678
+    var filterRadius: Float = 0
+    var sourceSize: SIMD2<Float> = .zero
+    var levelFactor: Float = 1
+    var sourceFootprint: Float = 1
+    var stage: UInt32 = 0
+    var pad: UInt32 = 0
+}
+
 // Swift mirrors of the structs in `Shaders.source`. Field order, types and therefore layout must
 // match the MSL declarations exactly (MetalContextTests pins the sizes and offsets): SIMD2 of a
 // 4-byte scalar has the same 8-byte size and alignment as MSL `float2` / `uint2`.
@@ -44,7 +56,7 @@ struct TileUniforms {
 /// levelToViewOffset`, `stored = matrix * oriented + shift`, the same numbers the tile pass gets.
 struct ResampleParams {
     var levelToViewScale: Float          // m: view px per level px
-    var pad0: Float = 0                  // levelToViewOffset aligns to 8
+    var sliceOffset: UInt32 = 0          // compact source-window slice mapping; zero for original levels
     var levelToViewOffset: SIMD2<Float>  // view position of oriented level px 0
     var levelSize: SIMD2<UInt32>         // TileGrid.levelSize of the level being drawn (stored)
     var extent: SIMD2<Float>             // the image's oriented extent in level px (view rect offset + extent * m)
@@ -66,7 +78,7 @@ struct MetalFXComposeParams {
     var origin: SIMD2<Int32>          // oriented level px of input texel (0, 0); negative when the view starts left of it
     var levelSize: SIMD2<UInt32>      // TileGrid.levelSize of the level being drawn (stored)
     var columns: UInt32               // tile columns of the level
-    var pad0: UInt32 = 0
+    var sliceOffset: UInt32 = 0
     var shift: SIMD2<Int32>           // levelSize - 1 on a stored axis the orientation mirrors, else 0
     var orient: SIMD4<Int32>          // ImageOrientation.matrix (a, b, c, d)
 }
@@ -79,6 +91,13 @@ struct MetalFXParams {
     var imageMin: SIMD2<Float>            // the image's view rect: pixels whose centre is outside get the background
     var imageMax: SIMD2<Float>
     var background: SIMD4<Float>          // `TileRenderer.background(for:)`
+}
+
+/// MetalFX source extent and FP16 encoding, fragment buffer 4. 16-byte stride.
+struct MetalFXSourceParams {
+    var contentSize: SIMD2<UInt32>
+    var highPrecision: UInt32
+    var pad: UInt32 = 0
 }
 
 /// The backdrop of a photo with alpha (`HAS_ALPHA` pipelines: fragment buffer 1 of the tile and MetalFX passes, compute

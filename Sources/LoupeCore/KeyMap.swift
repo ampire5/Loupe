@@ -27,6 +27,8 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case panLeft, panRight, panUp, panDown
     case cycleFilter, saveFilters, toggleAntiring, saveAntiring
     case toggleAutoColor, saveAutoColor, toggleVibrance, saveVibrance
+    /// Global output grain; restores the last enabled style.
+    case toggleGrain, saveGrain, toggleDeband, saveDeband
     /// Tabs and windows, as ⌘T, ⌘N, ⌘W and ⌘⇧] / ⌘⇧[ do: no built-in key or button, only `input.conf` lines.
     case newTab, newWindow, closeTab, nextTab, previousTab
     /// File › Open in New Tab / Open in New Window: the Open panel, then a new tab or window whatever `open-in` says.
@@ -178,7 +180,7 @@ public struct KeyMap: Sendable, Equatable {
         .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .zoomSubject, .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor,
         .toggleZoomSet, .screenShare, .fillSubject, .cycleSubjectTarget, .cycleDetectorMode, .saveDetectorSize, .nextTarget, .toggleSubjects, .rememberZoom, .toggleStepZoom, .toggleSmartZoom, .manualZoom,
-        .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance,
+        .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance, .toggleGrain, .saveGrain, .toggleDeband, .saveDeband,
         .toggleStrip, .toggleStripPlacement, .cycleStats, .cheatSheet, .cyclePanIndicators, .savePanIndicators, .toggleInfoPanel,
         .toggleSpread, .saveSpread, .shiftSpread,
     ]
@@ -302,8 +304,12 @@ public struct KeyMap: Sendable, Equatable {
         .panDown: ("Pan down", .zoom),
         .cycleFilter: ("Next scaling filter (this folder)", .scaling),
         .saveFilters: ("Save scaling filters as default", .scaling),
-        .toggleAntiring: ("Anti-ringing on/off (this folder)", .scaling),
-        .saveAntiring: ("Save anti-ringing as default", .scaling),
+        .toggleAntiring: ("Lanczos anti-ringing on/off (this folder)", .scaling),
+        .saveAntiring: ("Save Lanczos anti-ringing as default", .scaling),
+        .toggleGrain: ("Grain on/off (this folder)", .colour),
+        .saveGrain: ("Save grain as default", .colour),
+        .toggleDeband: ("Debanding on/off (this folder)", .scaling),
+        .saveDeband: ("Save debanding as default", .scaling),
         .toggleAutoColor: ("Auto colour on/off (this folder)", .colour),
         .saveAutoColor: ("Save auto colour as default", .colour),
         .toggleVibrance: ("Vibrance on/off (this folder)", .colour),
@@ -412,13 +418,17 @@ public struct KeyMap: Sendable, Equatable {
         KeyBinding(character: "m", modifiers: [.option, .shift], allowsRepeat: false, action: .saveDetectorSize),
         KeyBinding(character: "m", modifiers: .shift, allowsRepeat: false, action: .previousDetectorMode),
         KeyBinding(character: "m", allowsRepeat: false, action: .cycleDetectorMode),
-        KeyBinding(character: "n", modifiers: .shift, allowsRepeat: false, action: .previousTarget),
-        KeyBinding(character: "n", allowsRepeat: false, action: .nextTarget),
+        KeyBinding(character: "n", modifiers: [.option, .shift], allowsRepeat: false, action: .previousTarget),
+        KeyBinding(character: "n", modifiers: .option, allowsRepeat: false, action: .nextTarget),
+        KeyBinding(character: "n", modifiers: .shift, allowsRepeat: false, action: .saveDeband),
+        KeyBinding(character: "n", allowsRepeat: false, action: .toggleDeband),
         KeyBinding(character: "b", allowsRepeat: false, action: .toggleToolbarPin),
         KeyBinding(character: "c", modifiers: .shift, allowsRepeat: false, action: .saveAutoColor),
         KeyBinding(character: "c", allowsRepeat: false, action: .toggleAutoColor),
         KeyBinding(character: "v", modifiers: .shift, allowsRepeat: false, action: .saveVibrance),
         KeyBinding(character: "v", allowsRepeat: false, action: .toggleVibrance),
+        KeyBinding(character: "j", modifiers: .shift, allowsRepeat: false, action: .saveGrain),
+        KeyBinding(character: "j", allowsRepeat: false, action: .toggleGrain),
         KeyBinding(character: "f", allowsRepeat: false, action: .toggleFullScreen),
         KeyBinding(character: "i", allowsRepeat: false, action: .cycleStats),
         // ⇧T first, as plain letters ignore Shift.

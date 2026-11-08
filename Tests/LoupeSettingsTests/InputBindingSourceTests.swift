@@ -123,16 +123,16 @@ struct InputBindingSourceTests {
     }
 
     @Test func removeFileLineCommentsOut() throws {
-        let fixture = try Fixture("f fill   # mine\nj fit\n")
+        let fixture = try Fixture("f fill   # mine\nq fit\n")
         #expect(fixture.row("f")?.source == "input.conf")
         try fixture.source.remove(rowID: "f")
-        #expect(fixture.text == "# f fill   # mine\nj fit\n")
+        #expect(fixture.text == "# f fill   # mine\nq fit\n")
         #expect(fixture.row("f")?.source == "built-in")
         #expect(fixture.row("f")?.action == "Toggle full screen")
         // A file-only input goes away with its line.
-        try fixture.source.restoreBuiltIn(rowID: "j")
-        #expect(fixture.text == "# f fill   # mine\n# j fit\n")
-        #expect(fixture.row("j") == nil)
+        try fixture.source.restoreBuiltIn(rowID: "q")
+        #expect(fixture.text == "# f fill   # mine\n# q fit\n")
+        #expect(fixture.row("q") == nil)
     }
 
     @Test func mouseKindsDisabledWhenInvalid() throws {

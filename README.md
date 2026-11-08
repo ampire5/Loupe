@@ -161,6 +161,14 @@ Letters work by key, not by input language: with a Russian or Greek layout, the 
 
 Pick the resampling filter per folder (`s`, `⇧S` for the default): Lanczos-3 and Lanczos-2 with anti-ringing, Mitchell, Catmull-Rom, EWA Lanczos, bilinear, MetalFX spatial upscaling, and a crisp nearest-neighbour *pixel-art* mode for sprites and screenshots. Downscaling goes through a filtered pyramid, so a 300 MP photo at 20 % stays clean instead of shimmering. The render tests compare every filter pixel by pixel against Core Graphics and a CPU reference.
 
+**Lanczos anti-ringing** is available under Settings → Quality → Scaling. `A` toggles it for the current folder; `Shift+A` saves its default. MetalFX uses the system spatial scaler directly, without an additional anti-ringing filter.
+
+With a photo open, Quality filter controls edit the current folder and show its effective values, including inherited settings. Without a photo, they edit global defaults.
+
+**Debanding** under Quality offers Four samples, Two passes, Adaptive, Reference (libplacebo logic) and Adaptive window. It runs before scaling and is off by default (`deband=off`). Strength, threshold, radius, reference iterations and texture protection are configurable. Radius is in the displayed input level's pixels. Strong settings can soften genuine detail. Cleanup uses a bounded cache of visible source tiles; MetalFX retains FP16 precision while enabled. `N` toggles debanding for the current folder, restoring its selected mode (Adaptive window on first use); `Shift+N` saves the current mode and parameters as defaults for folders without their own values. Grain remains independent. The filters affect display, not the original file.
+
+**Grain** under Quality offers White, Fine, Soft, AV1 and Particles patterns, strength (0–3) and size (0.5–4 pixels). It is off by default (`grain=off`); for example, `grain=fine`, `grain-amount=0.65`, `grain-size=1`. `J` toggles grain for the current folder and restores its last chosen pattern (Fine on first use), preserving the application stage. `Shift+J` saves the current pattern, stage, strength and size as defaults for folders without their own values. Own or inherited folder values take precedence over defaults. `grain-stage=before` (default) creates a source field that moves/grows with the photo and is scaled independently of MetalFX; size is in original photo pixels. `grain-stage=after` creates fixed-size grain in physical screen pixels after upscaling. Both modes overlay grain after color correction in the existing final shader, with no animation, adaptive mask or extra full-screen pass. AV1 denotes a prepared synthesis pattern, not AV1 metadata reconstruction.
+
 Around the picture: a checkerboard behind transparent pixels (or the background colour, black or white), any background colour you like, EXIF orientation on or off, and the strip either over the photo, as a fixed band under it, or not at all.
 
 ### Mouse, trackpad and MX Master
