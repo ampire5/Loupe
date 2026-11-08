@@ -5,6 +5,38 @@ import Testing
 @testable import Loupe
 
 @MainActor @Suite(.serialized) struct ViewerMouseWorkflowTests {
+    @Test func twoFingerPanMovesOnBothAxesFromFirstDeltaThroughMomentum() throws {
+        _ = NSApplication.shared
+        let reader = FileReader(threads: 1)
+        let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: DecodePool(), limits: CacheLimits(config: Config()))
+        let thumbs = ThumbnailStore(directory: nil, reader: reader, thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: cache, thumbnails: thumbs, positions: FolderPositions(database: nil))
+        defer { session.close() }
+        let view = ViewerView(session: session, resampling: ResampleSettings(config: Config()))
+        session.transform = ViewTransform(imageSize: CGSize(width: 1200, height: 1200),
+                                          viewSize: CGSize(width: 600, height: 600)).withMode(.actual(1))
+
+        func scroll(_ x: Int32, _ y: Int32, phase: CGScrollPhase?, appKitPhase: NSEvent.Phase, momentum: NSEvent.Phase = []) throws {
+            let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                          wheelCount: 2, wheel1: y, wheel2: x, wheel3: 0))
+            cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase?.rawValue ?? 0))
+            cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentum == .began ? 1 : 0))
+            let event = try #require(NSEvent(cgEvent: cg))
+            try #require(event.hasPreciseScrollingDeltas)
+            try #require(event.phase == appKitPhase)
+            try #require(event.momentumPhase == momentum)
+            let expected = session.transform.panned(by: CGVector(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY))
+            view.scrollWheel(with: event)
+            #expect(session.transform.center == expected.center)
+        }
+
+        try scroll(1, 2, phase: .began, appKitPhase: .began)
+        try scroll(1, 8, phase: .changed, appKitPhase: .changed)
+        try scroll(8, 1, phase: .changed, appKitPhase: .changed)
+        try scroll(0, 0, phase: .ended, appKitPhase: .ended)
+        try scroll(6, 3, phase: nil, appKitPhase: [], momentum: .began)
+    }
+
     @Test func manualPresetsAndThumbWheelDoNotDisableSmartZoom() {
         _ = NSApplication.shared
         let reader = FileReader(threads: 1)

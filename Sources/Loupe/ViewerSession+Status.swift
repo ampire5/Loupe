@@ -44,24 +44,24 @@ extension ViewerSession {
                 // The first page's facts in reading order, whichever page is current.
                 shown = (otherInfo, other.timings, other.url)
             }
+            let shownRules = shown.url == list.current ? currentRules : zoomRules(shown.url)
             let facts = ImageStatus.facts(index: index, companion: pages?.second, count: list.files.count,
                                           counted: folderCounted, info: shown.info, applyingOrientation: appliesOrientation,
                                           transform: zoomTarget ?? transform,   // a zoom animation's target
-                                          photo: photoFacts[shown.url], carry: zoomRules(list.current).carry,
-                                          subject: subjectZoom, framing: browseIndicator(shown.url),
-                                          detectorMode: zoomRules(list.current).detector?.name)
+                                          photo: photoFacts[shown.url], carry: currentRules.carry,
+                                          subject: subjectZoom, framing: browseIndicator(shown.url, rules: shownRules),
+                                          detectorMode: currentRules.detector?.name)
             // The facts of the photo before stay while the new one loads (the views grey them when the load is felt).
-            let rules = zoomRules(list.current)
-            let zoom = StatsLine.modeText(zoomTarget ?? transform, carry: rules.carry)
+            let zoom = StatsLine.modeText(zoomTarget ?? transform, carry: currentRules.carry)
             let boxes = subjectBoxes(shown.url)
             let group = boxes.flatMap { boxes in
-                browse.chain(rules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: rules.composition, imageSize: transform.imageSize) != nil }
+                browse.chain(currentRules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: currentRules.composition, imageSize: transform.imageSize) != nil }
             }
             status.zoomDetails?.group = group?.title ?? (smartZoom.mode == .off
-                ? (browse.followed?.title ?? rules.chain.first?.title ?? "—")
+                ? (browse.followed?.title ?? currentRules.chain.first?.title ?? "—")
                 : (boxes == nil ? "Analysing…" : "No group"))
             let modeText = smartZoom.mode == .off ? "Manual · \(zoom)"
-                : "SmartZoom · \(smartZoom.mode == .frame ? "Auto" : "Pan") · \(rules.detector?.name ?? "Vision") · \(group?.title ?? (boxes == nil ? "Looking for subjects…" : "No complete group")) · \(zoom)"
+                : "SmartZoom · \(smartZoom.mode == .frame ? "Auto" : "Pan") · \(currentRules.detector?.name ?? "Vision") · \(group?.title ?? (boxes == nil ? "Looking for subjects…" : "No complete group")) · \(zoom)"
             status.facts = facts.map { $0.kind == .zoom ? ImageStatus.Fact(.zoom, modeText, tone: $0.tone) : $0 }
             status.stale = !current
             // Its EXIF is asked when the step is made (for `status.photo`) and is in a moment after the pixels; the photo
@@ -80,11 +80,10 @@ extension ViewerSession {
     }
 
     /// The share of the window the framed target takes on screen (`⇧M`), nil when nothing is framed.
-    func framedSize(_ url: URL) -> Double? { browseIndicator(url)?.size }
+    func framedSize(_ url: URL) -> Double? { browseIndicator(url, rules: zoomRules(url))?.size }
 
     /// Under framing while browsing the zoom is named by what it looks at and how big that is (`BrowseFraming.indicator`).
-    private func browseIndicator(_ url: URL) -> (name: String, size: Double)? {
-        let rules = zoomRules(url)
+    private func browseIndicator(_ url: URL, rules: ZoomRules) -> (name: String, size: Double)? {
         guard !subjectZoom, rules.stepZoom == .subject, let boxes = subjectBoxes(url) else { return nil }
         for kind in browse.chain(rules.chain) {
             if let c = SubjectFraming.composition(boxes, kind: kind, options: rules.composition, imageSize: transform.imageSize) {

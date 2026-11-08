@@ -183,6 +183,8 @@ import LoupeCore
         move(dx: event.deltaX, dy: -event.deltaY)
     }
 
+    var hasWheelContext: Bool { gestures.hasWheelContext }
+
     /// Whether a held button takes this wheel event (the caller must then neither scroll, zoom nor step with it).
     /// `dy` is the vertical delta as AppKit reports it (`scrollingDeltaY`, or `deltaY` for a notch), positive = up, so
     /// the direction follows the system's scrolling setting and any mouse utility, as `wheel-direction=content` does.

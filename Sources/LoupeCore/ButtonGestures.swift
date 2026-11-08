@@ -78,6 +78,8 @@ public struct ButtonGestures: Sendable {
     /// The right button moved at least `cancelPoints` on either axis since its press; sticky until it is released.
     public var rightDragged: Bool { rightHeld && rightMoved }
     public var rightDragOwnsInput: Bool { rightHeld && rightPointerOwns }
+    /// Includes presses delivered by the mouse service and the tail of a consumed scroll.
+    public var hasWheelContext: Bool { rightHeld || !presses.isEmpty || absorbing }
 
     /// `longPress` in seconds, `moveStep` in points.
     public init(kinds: [MouseButton: Set<PressKind>], longPress: Double, moveStep: Double, tapOnRelease: Set<MouseButton> = []) {

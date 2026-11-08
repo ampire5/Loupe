@@ -157,7 +157,8 @@ UI performance requires real-window CPU measurements; a model-only microbench ca
 
 `GestureAxisLock` in Core fixes the first intentional scroll axis through momentum; a new non-momentum
 begin resets it immediately. Phase-less scrolling re-arms after a 0.25 s gap. Loupe's `ViewerView` filters deltas
-before button/folder/pan routing; FrameScrub's `GestureRouter` filters before command routing. Pointer right-drag
+for button and folder gestures. Precise events that reach photo panning use both original deltas from the first
+event through momentum. FrameScrub's `GestureRouter` filters before command routing. Pointer right-drag
 zoom and right-button scrolling keep their first owner until release. Button recognition ignores zero deltas;
 middle-button scrolling must cross a wheel step (12 precise points or one notched unit) before cancelling a click.
 State is local to the existing input owners; no polling, new queues or dependencies are introduced.

@@ -112,7 +112,7 @@ import QuartzCore
     private var rmbAxis = GestureAxisLock()
     private var scrollAxis = GestureAxisLock()
     private var scrollButtons = 0
-    private var scrollModifiers: NSEvent.ModifierFlags = []
+    private var scrollModifiers: NSEvent.ModifierFlags?
     /// Zoom stops for the right-button zoom in progress, made at the press.
     private var rmbStops: ZoomStopGesture?
     /// Release velocity of the right-button zoom (doublings/s), and where the drag ended (cumulative travel, points).
@@ -381,22 +381,27 @@ import QuartzCore
     /// the speed the photos show at instead of skipping them.
     /// First of all, a mouse button held with a `+WHEEL` binding (and the tail of its scroll) takes the wheel
     /// (`MouseButtons`): nothing then pans, zooms or steps.
-    func resetScrollGesture() { scrollAxis.reset() }
+    func resetScrollGesture() {
+        scrollAxis.reset()
+        scrollModifiers = nil
+    }
 
-    private func lockedScrollDelta(_ event: NSEvent) -> GestureAxisLock.Delta {
+    /// Axis locking applies to button gestures. Free scrolling goes straight to pan or photo stepping.
+    private func lockedScrollDelta(_ event: NSEvent) -> GestureAxisLock.Delta? {
         let buttons = NSEvent.pressedMouseButtons
+        let precise = event.hasPreciseScrollingDeltas
+        guard buttons != 0 || (precise && MouseButtons.shared.hasWheelContext) else {
+            if scrollModifiers != nil { resetScrollGesture() }
+            return nil
+        }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if buttons != scrollButtons || modifiers != scrollModifiers {
             scrollAxis.reset()
             scrollButtons = buttons
             scrollModifiers = modifiers
         }
-        guard event.hasPreciseScrollingDeltas || buttons != 0 else {
-            scrollAxis.reset()
-            return .init(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
-        }
         return scrollAxis.filter(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
-                                 precise: event.hasPreciseScrollingDeltas, momentum: !event.momentumPhase.isEmpty,
+                                 precise: precise, momentum: !event.momentumPhase.isEmpty,
                                  began: event.phase.contains(.began), phased: !event.phase.isEmpty, at: event.timestamp)
     }
 
@@ -438,7 +443,7 @@ import QuartzCore
             }
             DebugLog.log("scroll pan \(event.scrollingDeltaX), \(event.scrollingDeltaY)\(momentum.isEmpty ? "" : " momentum")")
             let k = backing
-            let delta = CGVector(dx: scroll.x * k, dy: scroll.y * k)
+            let delta = CGVector(dx: event.scrollingDeltaX * k, dy: event.scrollingDeltaY * k)
             if !momentum.isEmpty {
                 // Every momentum event, an empty one too, so the next one's speed is over the gap from this one.
                 let moved = rubber.momentum(delta, at: event.timestamp, on: session.transform)
@@ -456,7 +461,7 @@ import QuartzCore
             if fingersOff { releaseRubber() } else if rubber.isAnimating { ensureInertiaLink() }
             return
         }
-        let dy = scroll.y
+        let dy = scroll?.y ?? event.scrollingDeltaY
         guard dy != 0 else { return }
         let down = Settings.shared.config.wheelDirection.isNext(deltaY: dy,
                                                                 invertedFromDevice: event.isDirectionInvertedFromDevice)
@@ -518,14 +523,15 @@ import QuartzCore
     /// True when the event belongs to the held-button folder gesture (it then must not pan or step photos).
     /// A press that the strip owns (a scrub, a resize of its top edge) is not the gesture's held button: a step
     /// would replace the playlist under the scrub.
-    private func folderScrollConsumed(_ event: NSEvent, delta: GestureAxisLock.Delta) -> Bool {
+    private func folderScrollConsumed(_ event: NSEvent, delta: GestureAxisLock.Delta?) -> Bool {
         let config = Settings.shared.config
         guard config.folderScrollGesture, !isStripPressed() else { return false }
         let precise = event.hasPreciseScrollingDeltas
         // Fingers and notches by `folder-scroll-direction` (`FolderScrollDirection.factor`).
         let k = config.folderScrollDirection.factor(precise: precise, invertedFromDevice: event.isDirectionInvertedFromDevice)
         let momentum = ScrollPhase(rawValue: event.momentumPhase.rawValue)
-        let outcome = folderScroll.event(dx: k * delta.x, dy: k * delta.y, precise: precise,
+        let outcome = folderScroll.event(dx: k * (delta?.x ?? event.scrollingDeltaX),
+                                         dy: k * (delta?.y ?? event.scrollingDeltaY), precise: precise,
                                          momentum: !momentum.isEmpty, began: event.phase.contains(.began),
                                          held: heldButtons, threshold: config.folderScrollThreshold,
                                          repeatAfter: Double(config.folderScrollRepeatMilliseconds) / 1000,
