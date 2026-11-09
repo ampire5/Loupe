@@ -118,7 +118,7 @@ public final class MetalContext: @unchecked Sendable {
         empty.width = 1; empty.height = 1; empty.arrayLength = 1
         empty.storageMode = .shared; empty.usage = .shaderRead
         guard let zero = device.makeTexture(descriptor: empty) else { fatalError("Metal: no empty grain texture") }
-        var value = Float16(0)
+        var value = Half(0)
         zero.replace(region: MTLRegionMake2D(0,0,1,1), mipmapLevel: 0, slice: 0,
                      withBytes: &value, bytesPerRow: 2, bytesPerImage: 2)
         emptyGrain = zero

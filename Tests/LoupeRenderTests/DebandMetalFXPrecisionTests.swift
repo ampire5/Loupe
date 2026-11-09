@@ -1,3 +1,4 @@
+import LoupeCore
 import Metal
 import MetalFX
 import Testing
@@ -50,17 +51,17 @@ import Testing
         #expect(last > first)
     }
 
-    private static func scale(_ pixel: (Int, Int) -> SIMD3<Float>) async throws -> [Float16] {
+    private static func scale(_ pixel: (Int, Int) -> SIMD3<Float>) async throws -> [Half] {
         let context = MetalContext.shared, device = context.device
         let stage = try #require(MetalFXStage(device: device, width: 64, height: 64, highPrecision: true))
         let uploadDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
                                                                          width: 64, height: 64, mipmapped: false)
         uploadDescriptor.storageMode = .shared
         let upload = try #require(device.makeTexture(descriptor: uploadDescriptor))
-        var pixels = [Float16](repeating: 1, count: 64 * 64 * 4)
+        var pixels = [Half](repeating: 1, count: 64 * 64 * 4)
         for y in 0..<64 { for x in 0..<64 {
             let rgb = pixel(min(x, 31), min(y, 31))
-            for channel in 0..<3 { pixels[(y * 64 + x) * 4 + channel] = Float16(MetalContext.srgbEncode(Double(rgb[channel]))) }
+            for channel in 0..<3 { pixels[(y * 64 + x) * 4 + channel] = Half(MetalContext.srgbEncode(Double(rgb[channel]))) }
         }}
         pixels.withUnsafeBytes {
             upload.replace(region: MTLRegionMake2D(0, 0, 64, 64), mipmapLevel: 0,
@@ -86,6 +87,6 @@ import Testing
             }
             commands.commit()
         }
-        return Array(UnsafeBufferPointer(start: readback.contents().assumingMemoryBound(to: Float16.self), count: pixels.count))
+        return Array(UnsafeBufferPointer(start: readback.contents().assumingMemoryBound(to: Half.self), count: pixels.count))
     }
 }
