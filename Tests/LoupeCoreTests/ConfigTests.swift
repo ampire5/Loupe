@@ -504,7 +504,7 @@ import Foundation
 @Test func stripAndThumbDefaults() {
     let c = Config()
     #expect(c.stripWindow == .over && c.stripHeight == 105 && c.stripHideDelayMilliseconds == 250)
-    #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 8 && c.stripScrollDirection == .reversed)
+    #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 8 && c.stripScrollDirection == .natural)
     #expect(c.stripJumpPreview && c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
 }
@@ -1165,6 +1165,7 @@ import Foundation
 private let keySamples: [String: (valid: String, invalid: String?)] = [
     // Unknown tokens are warned about by `parse`, not refused: the list always takes (spec §8.4).
     "zoom-stops": ("fit-height, 200%", nil),
+    "trackpad-navigation-haptics": ("no", "maybe"), "trackpad-haptic-pattern": ("alignment", "strong"),
     "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
     "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("tick", "stop"),
     "thumb-zoom-invert": ("yes", "maybe"),
@@ -1174,7 +1175,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "rubber-band": ("no", "maybe"), "drag-inertia": ("no", "maybe"), "inertia-deceleration": ("0.99", "0.98"),
     "rmb-zoom-invert": ("yes", "maybe"),
     "zoom-animation": ("300", "1001"), "zoom-rubber-band": ("no", "maybe"), "keep-zoom-position": ("no", "maybe"), "keep-zoom-as": ("scale", "pixels"),
-    "step-pan": ("keep", "middle"), "subject-target": ("person", "cat"), "subject-size": ("80", "101"), "subject-recheck": ("yes", "maybe"), "zoom-anchor-center": ("no", "maybe"), "smart-zoom": ("frame", "unknown"), "smart-zoom-gesture": ("no", "maybe"), "smart-zoom-options": (#"{"vision":{"size":"80%"}}"#, "bad"), "step-zoom": ("subject", "fit"), "subject-pull": ("80", "101"), "zoom-anchor": ("subject", "mouse"), "subject-analysis": ("off", "sometimes"),
+    "step-pan": ("keep", "middle"), "subject-target": ("person", "cat"), "subject-size": ("80", "101"), "subject-recheck": ("yes", "maybe"), "zoom-anchor-center": ("no", "maybe"), "smart-zoom": ("frame", "unknown"), "smart-zoom-gesture": ("yes", "maybe"), "smart-zoom-options": (#"{"vision":{"size":"80%"}}"#, "bad"), "step-zoom": ("subject", "fit"), "subject-pull": ("80", "101"), "zoom-anchor": ("subject", "mouse"), "subject-analysis": ("off", "sometimes"),
     "default-zoom-mode": ("fill", "110"), "fit-upscale": ("no", "maybe"),
     "spread": ("yes", "maybe"), "spread-shift": ("yes", "maybe"), "spread-direction": ("rtl", "up"), "spread-landscape": ("pair", "both"),
     "spread-wide-ratio": ("1.25", "2.1"),
@@ -1203,7 +1204,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "slot-right": ("empty, pinned, dark, manual, 480, shown, tongue", "bad, overlay, glass, manual, 400, hidden, at-once"),
     "slot-bottom": ("folders, overlay, clear, after-choice, 240, hidden, tongue", "empty, unknown, glass, manual, 240, hidden, at-once"),
     "strip-window": ("beside", "wide"), "strip-height": ("120", "10"), "strip-cell-max": ("1", "2"),
-    "strip-corner-radius": ("4", "99"), "strip-scroll-direction": ("natural", "sideways"),
+    "strip-corner-radius": ("4", "99"), "strip-scroll-direction": ("reversed", "sideways"),
     "strip-hide-delay": ("800", "-1"), "strip-fade-in": ("100", "5000"), "strip-fade-out": ("100", "5000"),
     "strip-jump-preview": ("no", "maybe"), "strip-loading-indicator": ("no", "maybe"),
     "thumb-size": ("768", "100"), "thumb-cache-size": ("0", "-5"), "folder-poll": ("2000", "100"), "folder-view-memory": ("no", "maybe"),

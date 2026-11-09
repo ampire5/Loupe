@@ -29,6 +29,15 @@ extension SettingsPanel {
                 + "Mouse Fix and natural scrolling, as in every app; Device: by the wheel's physical turn. Default "
                 + "As content scrolls."),
         ]),
+        SettingsSection("Trackpad", rows: [
+            .toggle("trackpad-navigation-haptics", "Trackpad feedback", symbol: "waveform.path",
+                    description: "A tick for panels, folder changes and boundaries. Requires a Force Touch "
+                        + "trackpad. Zoom stop feedback is set in Zoom & Pan."),
+            .choice("trackpad-haptic-pattern", "Trackpad pulse", [
+                (word: "automatic", title: "Automatic"), (word: "generic", title: "Generic"),
+                (word: "alignment", title: "Alignment"), (word: "level-change", title: "Level change"),
+            ], description: "Compare macOS pulse patterns on the same gesture. Applies to zoom stops too."),
+        ]),
         SettingsSection("Haptics", rows: [
             .toggle("mouse-haptics", "MX Master haptics", symbol: "waveform",
                     description: "The MX Master 4's vibration, through the Bolt receiver, without Logi Options+. "

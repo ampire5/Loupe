@@ -27,8 +27,8 @@ extension SettingsPanel {
                 .choice("strip-scroll-direction", "Scrub direction", [
                     (word: "natural", title: "Natural"), (word: "reversed", title: "Reversed"),
                 ], symbol: "arrow.left.and.right",
-                description: "A two-finger sideways swipe over the strip scrubs through thumbnails, sharp once you "
-                    + "stop. Natural: fingers left go to the next photos, as the three-finger swipe. Default Reversed."),
+                description: "A sideways swipe previews the selection and opens it when the strip stops. "
+                    + "With Natural, swipe left for the next photos. Default Natural."),
             ]),
             SettingsCard([
                 .number("strip-hide-delay", "Hide after", unit: "ms", step: 50, symbol: "hourglass",

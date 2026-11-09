@@ -137,3 +137,20 @@ private func three(_ x: Double, _ y: Double = 0.5) -> [CGPoint] {
     _ = swiped.update(touches: three(0.4), at: 0.05)                  // .next
     #expect(swiped.update(touches: [], at: 0.1) == nil)
 }
+
+@Test func doubleTapNeedsTwoStillSequences() {
+    var gesture = ThreeFingerSwipe()
+    _ = gesture.update(touches: three(0.5), at: 1)
+    #expect(gesture.update(touches: [], at: 1.08) == .tap)
+    _ = gesture.update(touches: three(0.5), at: 1.19)
+    #expect(gesture.update(touches: [], at: 1.25) == .doubleTap)
+
+    _ = gesture.update(touches: three(0.5), at: 2)
+    #expect(gesture.update(touches: [], at: 2.07) == .tap)
+    _ = gesture.update(touches: three(0.5), at: 2.16)
+    #expect(gesture.update(touches: three(0.5, 0.65), at: 2.23) == .up)
+    #expect(gesture.update(touches: three(0.7, 0.5), at: 2.24) == nil)
+    _ = gesture.update(touches: [], at: 2.25)
+    _ = gesture.update(touches: three(0.5), at: 2.3)
+    #expect(gesture.update(touches: [], at: 2.34) == .tap)
+}

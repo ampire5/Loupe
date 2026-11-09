@@ -233,6 +233,18 @@ public struct ViewTransform: Equatable, Sendable {
         return t
     }
 
+    /// Switch between width and height without landing on a visually equivalent scale.
+    public func toggledFitAxis() -> ViewTransform? {
+        let axes: [ZoomMode] = mode == .fitHeight ? [.fitWidth, .fitHeight] : [.fitHeight, .fitWidth]
+        let current = scale
+        let extent = max(imageSize.width, imageSize.height)
+        for axis in axes {
+            let target = withMode(axis)
+            if abs(target.scale - current) * extent >= 0.5 { return target }
+        }
+        return nil
+    }
+
     /// Switches zoom mode, keeping the stored centre untouched. The centre is the *desired*
     /// relative position (spec §7); geometry reads `clamped.center`, so going fit -> 100 % again
     /// returns to where the user was instead of to a centre flattened by the fit view.

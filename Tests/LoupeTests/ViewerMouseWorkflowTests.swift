@@ -16,9 +16,10 @@ import Testing
         session.transform = ViewTransform(imageSize: CGSize(width: 1200, height: 1200),
                                           viewSize: CGSize(width: 600, height: 600)).withMode(.actual(1))
 
-        func scroll(_ x: Int32, _ y: Int32, phase: CGScrollPhase?, appKitPhase: NSEvent.Phase, momentum: NSEvent.Phase = []) throws {
+        func scroll(_ x: Int32, _ y: Int32, phase: CGScrollPhase?, appKitPhase: NSEvent.Phase, momentum: NSEvent.Phase = [], modifiers: CGEventFlags = []) throws {
             let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                                           wheelCount: 2, wheel1: y, wheel2: x, wheel3: 0))
+            cg.flags = modifiers
             cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase?.rawValue ?? 0))
             cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentum == .began ? 1 : 0))
             let event = try #require(NSEvent(cgEvent: cg))
@@ -35,6 +36,40 @@ import Testing
         try scroll(8, 1, phase: .changed, appKitPhase: .changed)
         try scroll(0, 0, phase: .ended, appKitPhase: .ended)
         try scroll(6, 3, phase: nil, appKitPhase: [], momentum: .began)
+        // Holding Command while panning no longer reserves this swipe for tab switching.
+        try scroll(60, 0, phase: .began, appKitPhase: .began, modifiers: .maskCommand)
+    }
+
+    @Test func filmstripScrollMovesTheCandidateBeforeCommittingOnePhoto() throws {
+        _ = NSApplication.shared
+        let reader = FileReader(threads: 1)
+        let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: DecodePool(), limits: CacheLimits(config: Config()))
+        let thumbs = ThumbnailStore(directory: nil, reader: reader, thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: cache, thumbnails: thumbs, positions: FolderPositions(database: nil))
+        let strip = StripController(session: session, store: thumbs)
+        defer { strip.close(); session.close() }
+        strip.view.frame = NSRect(x: 0, y: 0, width: 600, height: 48)
+        strip.apply(Config())
+        let files = (0..<60).map { URL(fileURLWithPath: "/Loupe-gesture-test/\($0).png") }
+        session.openPhotos(files, current: files[30])
+        strip.sessionDidChange()
+        let layout = strip.view.layout
+
+        func scroll(_ phase: CGScrollPhase) throws -> NSEvent {
+            let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                          wheelCount: 2, wheel1: 0, wheel2: 120, wheel3: 0))
+            cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            return try #require(NSEvent(cgEvent: cg))
+        }
+        let first = try scroll(.began), second = try scroll(.changed)
+        let sign = FingerDirection.sign(invertedFromDevice: first.isDirectionInvertedFromDevice)
+        let expected = try #require(layout.item(atBase: layout.centre(of: 30) - sign * (first.scrollingDeltaX + second.scrollingDeltaX)))
+        try #require(expected != 30)
+        strip.view.onStripScroll?(first)
+        strip.view.onStripScroll?(second)
+        #expect(session.playlist?.current == files[30])
+        strip.windowDidResignKey()
+        #expect(session.playlist?.current == files[expected])
     }
 
     @Test func manualPresetsAndThumbWheelDoNotDisableSmartZoom() {

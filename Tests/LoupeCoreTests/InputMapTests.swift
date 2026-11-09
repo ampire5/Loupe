@@ -94,15 +94,14 @@ import Testing
         #expect(rows.contains { $0 == ("Forward (hold)", "New tab") })
     }
 
-    /// No built-in key or mouse button does a tab or window action: ⌘T, ⌘N, ⌘W and ⌘⇧] / ⌘⇧[ stay the menu's. The
-    /// trackpad's click held + two fingers up / down step tabs.
+    /// The menu owns tab and window shortcuts. Trackpad bindings can be assigned in input.conf.
     @Test func tabActionsHaveNoDefaultBinding() {
         let tabs: Set<KeyAction> = [.newTab, .newWindow, .closeTab, .nextTab, .previousTab]
         #expect(KeyMap.standard.bindings.compactMap(\.action).allSatisfy { !tabs.contains($0) })
-        #expect(InputMap.standardMouse.filter { !$0.0.isTrackpad }
+        #expect(InputMap.standardMouse
             .allSatisfy { if case .action(let a) = $0.2 { !tabs.contains(a) } else { true } })
-        #expect(InputMap.standard.mouse(.clickDown, .tap) == .action(.nextTab))
-        #expect(InputMap.standard.mouse(.clickUp, .tap) == .action(.previousTab))
+        #expect(InputMap.standard.mouse(.clickDown, .tap) == nil)
+        #expect(InputMap.standard.mouse(.clickUp, .tap) == nil)
         for a in tabs {
             #expect(InputMap.standard.keys.label(a).keys.isEmpty, "\(a)")
             #expect(KeyMap.standard.menuKey(a) == nil, "\(a)")

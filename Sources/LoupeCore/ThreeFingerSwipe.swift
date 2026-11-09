@@ -5,8 +5,8 @@ import CoreGraphics
 /// the normalised positions (0...1 over the trackpad) of every finger currently touching instead.
 ///
 /// A swipe is exactly three fingers whose mean position moved more than `distance` horizontally since
-/// the third one landed, mostly horizontally (|dx| > 2·|dy|). One gesture gives one `Step`: after
-/// firing it is latched until every finger is lifted, so a long drag never pages through the folder.
+/// the third one landed, mostly horizontally (|dx| > 2·|dy|). The first action locks the axis.
+/// With reversal enabled, horizontal travel can step again only after turning back far enough.
 /// Any change of the finger count before firing drops the baseline: the fingers that arrive or leave
 /// shift the mean without anyone swiping.
 ///
@@ -14,7 +14,7 @@ import CoreGraphics
 /// fingers put down and lifted again within `tapTime` without moving `tapDrift` give `.tap` when the last one lifts
 /// (never more than three on the pad, nothing fired).
 public struct ThreeFingerSwipe: Sendable {
-    public enum Step: Sendable, Equatable { case next, previous, up, down, tap }
+    public enum Step: Sendable, Equatable { case next, previous, up, down, tap, doubleTap }
 
     /// The longest a tap may last, from the third finger landing to the last one lifting, in seconds.
     public static let tapTime = 0.3
@@ -34,15 +34,54 @@ public struct ThreeFingerSwipe: Sendable {
     private var tapStart: Double?
     /// The most fingers on the pad since it was last empty.
     private var most = 0
+    private var lastTap: Double?
+    private let allowsReversal: Bool
+    private var horizontal: HorizontalReversal?
 
-    public init() {}
+    public init(allowsReversal: Bool = false) { self.allowsReversal = allowsReversal }
+
+    public var hasRecognizedSwipe: Bool { latched }
+
+    /// Measure reversal from the farthest point in the last direction. Continuing that way
+    /// or changing only the vertical coordinate never steps again.
+    public struct HorizontalReversal: Sendable {
+        private var step: Step
+        private var extreme: Double
+
+        public init(x: Double, first: Step) {
+            step = first
+            extreme = x
+        }
+
+        public mutating func rebase(x: Double) { extreme = x }
+
+        public mutating func update(x: Double, distance: Double) -> Step? {
+            if step == .next {
+                extreme = min(extreme, x)
+                guard x - extreme >= distance else { return nil }
+                step = .previous
+            } else {
+                extreme = max(extreme, x)
+                guard extreme - x >= distance else { return nil }
+                step = .next
+            }
+            extreme = x
+            return step
+        }
+    }
 
     /// Forgets the baseline and the latch. For when touches stop being delivered without every finger
     /// having been seen lifting (cancelled touches, the window losing key status, moving to another
     /// window): a stale latch would swallow the next swipe, a stale baseline would fire a phantom one.
     public mutating func reset() {
+        lastTap = nil
+        resetSequence()
+    }
+
+    private mutating func resetSequence() {
         baseline = nil
         latched = false
+        horizontal = nil
         tapStart = nil
         most = 0
     }
@@ -50,11 +89,17 @@ public struct ThreeFingerSwipe: Sendable {
     /// Call on every touch event with the positions of all fingers currently touching and the event's time in seconds.
     /// Swiping left (fingers move towards x = 0) is `.next`, right is `.previous`, like Photos; up (towards y = 1) is
     /// `.up`, down `.down`.
-    public mutating func update(touches: [CGPoint], at time: Double = 0) -> Step? {
+    public mutating func update(touches: [CGPoint], at time: Double = 0, doubleTapInterval: Double = 0.3) -> Step? {
         if touches.isEmpty {
             let tap = !latched && most == 3 && tapStart.map { time - $0 <= Self.tapTime } == true
-            reset()
-            return tap ? .tap : nil
+            resetSequence()
+            guard tap else { lastTap = nil; return nil }
+            if let lastTap, time - lastTap <= doubleTapInterval {
+                self.lastTap = nil
+                return .doubleTap
+            }
+            lastTap = time
+            return .tap
         }
         most = max(most, touches.count)
         if most > 3 { tapStart = nil }
@@ -62,8 +107,15 @@ public struct ThreeFingerSwipe: Sendable {
             baseline = nil
             return nil
         }
-        guard !latched else { return nil }
         let mean = CGPoint(x: touches.reduce(0) { $0 + $1.x } / 3, y: touches.reduce(0) { $0 + $1.y } / 3)
+        if latched {
+            if baseline == nil {
+                baseline = mean
+                horizontal?.rebase(x: mean.x)
+                return nil
+            }
+            return horizontal?.update(x: mean.x, distance: Self.distance)
+        }
         guard let start = baseline else {
             baseline = mean
             if most == 3, tapStart == nil, !latched { tapStart = time }
@@ -73,7 +125,9 @@ public struct ThreeFingerSwipe: Sendable {
         if hypot(dx, dy) > Self.tapDrift { tapStart = nil }
         if abs(dx) > Self.distance, abs(dx) > Self.dominance * abs(dy) {
             latched = true
-            return dx < 0 ? .next : .previous
+            let step: Step = dx < 0 ? .next : .previous
+            if allowsReversal { horizontal = HorizontalReversal(x: mean.x, first: step) }
+            return step
         }
         if abs(dy) > Self.distance, abs(dy) > Self.dominance * abs(dx) {
             latched = true
