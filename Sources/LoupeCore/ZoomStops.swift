@@ -56,8 +56,8 @@ public enum ZoomStops {
 }
 
 /// The stops for one continuous pinch, right-button drag or thumb-wheel turn. Feed the cumulative scale
-/// proposed by the input and the event time. Slow motion snaps slightly early and needs more travel
-/// to leave. A flick keeps its excess motion and may cross in one event, still reporting the detent.
+/// proposed by the input and the event time. Slow motion snaps into the detent on approach and stays
+/// there through small reversals. A flick keeps its excess motion and may cross in one event, still reporting the detent.
 /// Untimed input (mouse coast) lands exactly on the first stop.
 public struct ZoomStopGesture: Sendable {
     /// Relative distance within which the start counts as on a stop. Below half `mergeTolerance`, so it
@@ -65,11 +65,12 @@ public struct ZoomStopGesture: Sendable {
     public static let startTolerance = 0.005
 
     // Speeds are in doublings/s, and detent travel is in doublings, independent of the current scale.
-    private static let slowSpeed = 0.5
+    private static let slowSpeed = 1.2
     private static let fastSpeed = 3.0
-    private static let slowTravel = 0.11
+    private static let slowTravel = 0.16
     private static let fastTravel = 0.018
-    private static let captureDistance = 0.012
+    private static let captureDistance = 0.045
+    private static let reverseTravelFraction = 0.35
     private static let reachTolerance = 1e-12
 
     private let stops: [ZoomStopScale]
@@ -81,7 +82,12 @@ public struct ZoomStopGesture: Sendable {
     /// Output = proposed × rebase. Rebase when travel is consumed, so reversing needs no unwind.
     private var rebase = 1.0
     private var resting: ZoomStop?
-    private var hold: (increasing: Bool, remaining: Double)?
+    private struct DetentHold: Sendable {
+        let entryIncreasing: Bool
+        var increasing: Bool
+        var remaining: Double
+    }
+    private var hold: DetentHold?
     private var lastTime: TimeInterval?
     private var velocity: Double?
     var isRestingOnStop: Bool {
@@ -143,13 +149,18 @@ public struct ZoomStopGesture: Sendable {
         let rawWanted = proposedScale * rebase
         var wanted = rawWanted
 
-        if let hold, increasing == hold.increasing {
-            // Spend the remaining fraction of the detent at the current speed. Acceleration can lower
-            // the cost of new input, but cannot release any travel already consumed.
+        if var hold, increasing == hold.increasing || fast != nil {
+            if increasing != hold.increasing {
+                // Backing out is easier than continuing, but small reversals must stay in the pocket.
+                // Changing direction starts fresh so alternating jitter cannot add up to an exit.
+                hold.increasing = increasing
+                hold.remaining = increasing == hold.entryIncreasing ? 1 : Self.reverseTravelFraction
+            }
             let cost = hold.remaining * travel
             let motion = direction * (log2(proposedScale) - log2(previous))
             if motion <= cost + tol {
-                self.hold?.remaining = max(0, hold.remaining - motion / travel)
+                hold.remaining = max(0, hold.remaining - motion / travel)
+                self.hold = hold
                 rebase = current / proposedScale
                 return (current, resting)
             }
@@ -160,11 +171,18 @@ public struct ZoomStopGesture: Sendable {
         let capture = pow(2, Self.captureDistance * (fast.map { 1 - $0 } ?? 0))
         var stop: ZoomStop?
         for offset in stops.indices {
-            let point = stops[increasing ? offset : stops.count - 1 - offset]
+            let index = increasing ? offset : stops.count - 1 - offset
+            let point = stops[index]
             guard point != startStop else { continue }
             let s = point.scale
             let atLimit = limits.map { s <= $0.lowerBound * (1 + tol) || s >= $0.upperBound * (1 - tol) } ?? false
-            let window = atLimit ? 1 : capture
+            var window = atLimit ? 1 : capture
+            if window > 1, offset > 0 {
+                // Close stops each own their side of the logarithmic midpoint.
+                let previousStop = stops[increasing ? index - 1 : index + 1].scale
+                let halfGap = increasing ? (s / previousStop).squareRoot() : (previousStop / s).squareRoot()
+                window = min(window, halfGap)
+            }
             let reached = increasing
                 ? s > current * (1 + tol) && wanted >= s * (1 - tol) / window
                 : s < current * (1 - tol) && wanted <= s * (1 + tol) * window
@@ -180,7 +198,8 @@ public struct ZoomStopGesture: Sendable {
             if overshoot <= travel + tol {
                 wanted = s
                 stop = point.stop
-                hold = (increasing, max(0, 1 - overshoot / travel))
+                hold = DetentHold(entryIncreasing: increasing, increasing: increasing,
+                                  remaining: max(0, 1 - overshoot / travel))
                 break
             }
             wanted = s * pow(2, direction * (overshoot - travel))
