@@ -3,7 +3,7 @@ import Testing
 @testable import LoupeCore
 
 /// `thumb-wheel-zoom`: the MX Master's thumb wheel with no button held zooms smoothly; `thumb-zoom-stops` says whether
-/// a stop only ticks (`tick`) or halts one turn of the wheel (`halt`).
+/// a stop only ticks (`tick`) or resists briefly (`halt`).
 @Suite struct ThumbZoomTests {
     /// Fit = fit height = 1/3, fit width = 1/2, limits 1/12 … 64.
     let base = ViewTransform(imageSize: CGSize(width: 4000, height: 3000), viewSize: CGSize(width: 2000, height: 1000))
@@ -37,14 +37,14 @@ import Testing
         #expect(down.turn(doublings: -0.2).bump == nil)
     }
 
-    @Test func haltStopsOnEachStopForTheTurn() {
+    @Test func oneTurnCanPushThroughAStop() {
         var z = ThumbZoom(transform: at(0.4), stops: stops, mode: .halt)
         let a = z.turn(doublings: 0.5)
         #expect(close(a.scale, 0.5) && a.stop == .fitWidth && a.bump == .stop)
-        let b = z.turn(doublings: 1)     // absorbed: the turn stays on the stop
+        let b = z.turn(doublings: 0.04)  // still held
         #expect(close(b.scale, 0.5) && b.bump == nil)
-        let c = z.turn(doublings: -0.2)  // turning back leaves it at once
-        #expect(close(c.scale, 0.5 * pow(2, -0.2)) && c.stop == nil)
+        let c = z.turn(doublings: 0.12)  // same turn crosses without another pulse
+        #expect(c.scale > 0.5 && c.scale < 0.55 && c.stop == nil && c.bump == nil)
         // A new turn from the stop passes it.
         var next = ThumbZoom(transform: at(0.5), stops: stops, mode: .halt)
         #expect(close(next.turn(doublings: 0.5).scale, 0.5 * pow(2, 0.5)))

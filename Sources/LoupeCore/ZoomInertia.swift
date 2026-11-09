@@ -53,7 +53,8 @@ public struct ZoomCoast: Sendable {
 
 /// A right-button zoom that goes on after release: the drag's `RMBZoom` (press anchor and start transform) and
 /// `ZoomStopGesture` carried over, so the glide pins the same image point and meets the same stops. It ends on the
-/// first stop it lands on (the caller gives the haptic tick for that frame) and at a zoom limit.
+/// first stop it lands on (the caller gives the haptic tick for that frame) and at a zoom limit. A release
+/// on a stop stays there, even if the drag still had velocity.
 public struct RMBZoomCoast: Sendable {
     public let zoom: RMBZoom
     private var stops: ZoomStopGesture
@@ -69,7 +70,7 @@ public struct RMBZoomCoast: Sendable {
         // The glide stops at a zoom limit; it never stretches past one (M4b spec §3).
         self.stops.rubber = false
         self.doublings = doublings
-        coast = ZoomCoast(velocity: velocity)
+        coast = ZoomCoast(velocity: stops.isRestingOnStop ? 0 : velocity)
     }
 
     public var isFinished: Bool { coast.isFinished }

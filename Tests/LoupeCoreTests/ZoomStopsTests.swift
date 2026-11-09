@@ -16,19 +16,30 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     #expect(hit.scale == 1 && hit.hitStop == .percent(100) && g.justHit)
 }
 
-@Test func motionPastTheStopIsAbsorbed() {
+@Test func continuingInOneGesturePushesThroughAndCanReachTheNextStop() {
     var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
-    _ = g.constrain(1.3)
-    let further = g.constrain(3.5)   // past the 200 % stop too: still held at 100 %
-    #expect(further.scale == 1 && further.hitStop == .percent(100))
-    #expect(!g.justHit)              // the hit is reported once, on the way in
+    #expect(g.constrain(1.3).hitStop == .percent(100) && g.justHit)
+    let held = g.constrain(1.3 * 1.04)
+    #expect(held.scale == 1 && held.hitStop == .percent(100) && !g.justHit)
+    let past = g.constrain(1.3 * 1.07)
+    #expect(past.scale > 1 && past.scale < 1.03 && past.hitStop == nil && !g.justHit)
+    #expect(g.constrain(4).hitStop == .percent(200) && g.justHit)
+}
+
+@Test func zoomingOutCanPushThroughAndRecrossAStop() {
+    var g = ZoomStopGesture(startScale: 1.4, stops: [half, one, two])
+    #expect(g.constrain(0.9).hitStop == .percent(100) && g.justHit)
+    #expect(g.constrain(0.88).hitStop == .percent(100) && !g.justHit)
+    let past = g.constrain(0.8)
+    #expect(past.scale < 1 && past.scale > 0.9 && past.hitStop == nil)
+    #expect(g.constrain(1.1).hitStop == .percent(100) && g.justHit)
 }
 
 @Test func reversingLeavesTheStopAtOnceWithoutUnwindingTheOvershoot() {
     var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
     _ = g.constrain(1.3)
-    _ = g.constrain(2.0)             // 2× of absorbed overshoot
-    let back = g.constrain(1.8)      // 10 % back
+    _ = g.constrain(1.35)            // still held
+    let back = g.constrain(1.215)      // 10 % back
     #expect(abs(back.scale - 0.9) < 1e-12 && back.hitStop == nil && !g.justHit)
 }
 
@@ -37,7 +48,7 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     _ = g.constrain(1.3)
     let low = g.constrain(0.4)       // rebased: 0.4 × (1 / 1.3) ≈ 0.31, below 50 %
     #expect(low.scale == 0.5 && low.hitStop == .percent(50) && g.justHit)
-    let lower = g.constrain(0.1)
+    let lower = g.constrain(0.39)
     #expect(lower.scale == 0.5 && lower.hitStop == .percent(50) && !g.justHit)
 }
 
@@ -58,10 +69,16 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     var down = ZoomStopGesture(startScale: 1, stops: [half, one, two])
     let below = down.constrain(0.8)
     #expect(below.scale == 0.8 && below.hitStop == nil)
-    // The start stop stays transparent for the whole gesture, so coming back over it does not stop there.
-    #expect(down.constrain(1.4).scale == 1.4)
+    // Leaving the initial stop re-arms it when the user returns.
+    #expect(down.constrain(1.4).hitStop == .percent(100) && down.justHit)
     let low = down.constrain(0.2)
     #expect(low.scale == 0.5 && low.hitStop == .percent(50))
+}
+
+@Test func aSmallReversalAcrossTheStartStopStillLands() {
+    var g = ZoomStopGesture(startScale: 1, stops: [one])
+    #expect(g.constrain(1.004).hitStop == nil)
+    #expect(g.constrain(0.996).hitStop == .percent(100) && g.justHit)
 }
 
 @Test func startingWithinToleranceOfAStopCountsAsOnIt() {
@@ -170,7 +187,9 @@ private let tall = ViewTransform(imageSize: CGSize(width: 10502, height: 14000),
     #expect(g.constrain(fitH * 0.9).hitStop == nil)
     #expect(g.constrain(fitH * 0.01).scale == tall.scaleLimits.lowerBound)
     let r = g.constrain(fitH * 10)
-    #expect(r.scale == fitW && r.hitStop == .fitWidth)
+    #expect(r.scale == fitH && r.hitStop == .fitHeight)  // the start stop is re-armed
+    let next = g.constrain(fitH * 40)
+    #expect(next.scale == fitW && next.hitStop == .fitWidth)
 }
 
 // MARK: Rounding at a held stop (fix round 1)
@@ -269,11 +288,12 @@ private func small(_ mode: ZoomMode) -> ViewTransform {
     #expect(g.stretch == 1)
 }
 
-@Test func rubberStillStopsAtAStopBelowTheLimit() {
+@Test func rubberDoesNotStretchAtAnInteriorStop() {
     var g = ZoomStopGesture(transform: small(.actual(10)), stops: [.percent(1600)], rubber: true)
     let hit = g.constrain(20)
     #expect(hit.scale == 16 && hit.hitStop == .percent(1600) && g.justHit && g.stretch == 1)
-    #expect(g.constrain(200).scale == 16 && g.stretch == 1)   // absorbed by the stop, as before
+    #expect(g.constrain(20.5).scale == 16 && g.stretch == 1)
+    #expect(g.constrain(22).scale > 16 && g.stretch == 1)
 }
 
 @Test func rubberStretchesPastAStopOnTheLimit() {

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// A zoom stop (spec §8.4): a scale where continuous zoom (pinch, right-button drag) halts, so fit width,
+/// A zoom stop (spec §8.4): a scale where continuous zoom pauses, so fit width,
 /// fit height and 100 % are easy to land on exactly. Listed in `zoom-stops` in loupe.conf.
 public enum ZoomStop: Hashable, Sendable {
     case fitWidth, fitHeight
@@ -55,40 +55,34 @@ public enum ZoomStops {
     }
 }
 
-/// The stop rules for one continuous zoom gesture (pinch: began → ended; right-button drag: press →
-/// release). The caller feeds the scale the gesture alone would give, accumulated from its start, and
-/// shows what comes back:
-///
-/// - crossing a stop clamps exactly on it; going further the same way is absorbed (the overshoot is
-///   discarded, not banked), so reversing leaves the stop at once and zooms normally up to the stop on
-///   the other side, which clamps too. A stop cannot be crossed within one gesture: a new gesture does.
-/// - a gesture that starts on a stop (within `startTolerance`) passes that one stop either way; it is
-///   what the user is trying to leave.
-/// - the zoom limits absorb overshoot the same way, without a hit, so pinching back after hitting a
-///   limit zooms at once. With `rubber` (M4b spec §3) they stretch instead: the scale stays on the limit,
-///   `stretch` says how much further to draw it, and nothing is absorbed, so going back retraces the stretch
-///   and leaves the limit where the gesture first reached it.
-///
-/// Rebasing is multiplicative (zoom is), so after absorbed motion the gesture keeps its feel.
+/// The stops for one continuous pinch, right-button drag or thumb-wheel turn. Feed the cumulative scale
+/// proposed by the input. A crossing lands exactly on the stop and discards that event's overshoot so
+/// even a large event can land. Further travel in the same direction spends a small amount of motion
+/// before leaving; reversing or starting a new gesture can leave immediately.
 public struct ZoomStopGesture: Sendable {
     /// Relative distance within which the start counts as on a stop. Below half `mergeTolerance`, so it
     /// can only ever be on one.
     public static let startTolerance = 0.005
 
-    private let below: ZoomStopScale?
-    private let above: ZoomStopScale?
-    private let limits: ClosedRange<Double>?
-    /// Output = proposed × `rebase`; changed whenever motion is absorbed.
-    private var rebase = 1.0
-    /// `rebase = stop / p` then `p × rebase` can land an ulp short of the stop, so a bound counts as
-    /// reached within this relative distance; otherwise a repeated proposal would slip off a held stop
-    /// to an anonymous scale and the next tiny step would hit it again, with a second tick.
+    /// The same 0.08 doublings in either direction: about 6% extra scale input, or 16 pt at the default RMB speed.
+    private static let pushRatio = pow(2.0, 0.08)
     private static let reachTolerance = 1e-12
+
+    private let stops: [ZoomStopScale]
+    private let limits: ClosedRange<Double>?
+    /// Starting on a stop lets the user leave it; once away, crossing it again gives the normal detent.
+    private var startStop: ZoomStopScale?
     private var current: Double
-    private var lastProposed: Double?
+    private var lastProposed: Double
+    /// Output = proposed × rebase. Rebase when travel is consumed, so reversing needs no unwind.
+    private var rebase = 1.0
     private var resting: ZoomStop?
-    /// True when the last `constrain` moved onto a stop (not when it stayed on one): the moment for
-    /// haptic feedback.
+    private var hold: (increasing: Bool, breakthrough: Double)?
+    var isRestingOnStop: Bool {
+        resting != nil || stops.contains { abs($0.scale - current) <= Self.reachTolerance * current }
+    }
+
+    /// True only on arrival, for a single haptic tick.
     public private(set) var justHit = false
     /// Whether the zoom limits stretch (`zoom-rubber-band`) instead of absorbing. Turning it off drops the
     /// stretch; from then on the gesture behaves as without it (the right-button coast does this).
@@ -101,12 +95,17 @@ public struct ZoomStopGesture: Sendable {
 
     /// `stops` ascending (as `ZoomStops.scales` gives them); `limits` are the zoom limits, if any.
     public init(startScale: Double, stops: [ZoomStopScale], limits: ClosedRange<Double>? = nil, rubber: Bool = false) {
-        func onStart(_ s: ZoomStopScale) -> Bool { abs(s.scale - startScale) <= Self.startTolerance * startScale }
-        below = stops.last { $0.scale < startScale && !onStart($0) }
-        above = stops.first { $0.scale > startScale && !onStart($0) }
+        self.stops = stops
         self.limits = limits
         self.rubber = rubber
         current = startScale
+        lastProposed = startScale
+        // An exact match is already excluded by the strict crossing check. Treat only an approximate
+        // match as a departure in progress.
+        startStop = stops.first {
+            let distance = abs($0.scale - startScale)
+            return distance > Self.reachTolerance * startScale && distance <= Self.startTolerance * startScale
+        }
     }
 
     /// A gesture from `transform` with the configured `stops` and the transform's zoom limits.
@@ -118,26 +117,39 @@ public struct ZoomStopGesture: Sendable {
     /// The scale to show for `proposedScale`, and the stop it rests on (nil between stops). An invalid
     /// proposal (non-positive, NaN) keeps the current scale.
     public mutating func constrain(_ proposedScale: Double) -> (scale: Double, hitStop: ZoomStop?) {
-        guard proposedScale.isFinite, proposedScale > 0 else {
-            justHit = false
-            return (current, resting)
-        }
-        // An unchanged proposal (pinch `.ended` with no magnification, a horizontal-only RMB move) changes
-        // nothing, whatever the rounding.
-        if proposedScale == lastProposed {
-            justHit = false
-            return (current, resting)
-        }
-        lastProposed = proposedScale
-        let wanted = proposedScale * rebase
+        justHit = false
         let tol = Self.reachTolerance
-        var scale = wanted, stop: ZoomStop?
-        if let above, wanted >= above.scale * (1 - tol) {
-            scale = above.scale
-            stop = above.stop
-        } else if let below, wanted <= below.scale * (1 + tol) {
-            scale = below.scale
-            stop = below.stop
+        guard proposedScale.isFinite, proposedScale > 0, proposedScale != lastProposed else {
+            return (current, resting)
+        }
+        // An ulp of input noise must not release and immediately re-arm a held stop.
+        if resting != nil, abs(proposedScale - lastProposed) <= lastProposed * tol {
+            return (current, resting)
+        }
+        let increasing = proposedScale > lastProposed
+        lastProposed = proposedScale
+
+        if let hold {
+            if increasing == hold.increasing {
+                let passed = increasing ? proposedScale > hold.breakthrough * (1 + tol)
+                                        : proposedScale < hold.breakthrough * (1 - tol)
+                if !passed {
+                    rebase = current / proposedScale
+                    return (current, resting)
+                }
+                // Spend only the travel needed to push through; the remainder zooms at the normal rate.
+                rebase = current / hold.breakthrough
+            }
+            self.hold = nil
+        }
+
+        let wanted = proposedScale * rebase
+        let crossed = increasing
+            ? stops.first { $0 != startStop && $0.scale > current * (1 + tol) && wanted >= $0.scale * (1 - tol) }
+            : stops.last { $0 != startStop && $0.scale < current * (1 - tol) && wanted <= $0.scale * (1 + tol) }
+        var scale = wanted
+        if let crossed {
+            scale = crossed.scale
         } else if let limits {
             if wanted >= limits.upperBound * (1 - tol) {
                 scale = limits.upperBound
@@ -145,6 +157,7 @@ public struct ZoomStopGesture: Sendable {
                 scale = limits.lowerBound
             }
         }
+
         // With the rubber band, a scale held on a limit (a stop that sits on one included) stretches instead of
         // absorbing: no rebase, so the stretch is a function of the proposal and the way back is exact.
         stretch = 1
@@ -158,8 +171,21 @@ public struct ZoomStopGesture: Sendable {
                 stretching = true
             }
         }
+        let stop = crossed?.stop ?? (scale == current ? resting : nil)
+        if crossed != nil {
+            let atLimit = limits.map {
+                scale <= $0.lowerBound * (1 + tol) || scale >= $0.upperBound * (1 - tol)
+            } ?? false
+            if !atLimit {
+                hold = (increasing, increasing ? proposedScale * Self.pushRatio : proposedScale / Self.pushRatio)
+            }
+        }
         if scale != wanted && !stretching { rebase = scale / proposedScale }
-        justHit = stop != nil && stop != resting
+        if let startStop, abs(startStop.scale - scale) > Self.startTolerance * scale
+            || (current < startStop.scale) != (scale < startStop.scale) {
+            self.startStop = nil
+        }
+        justHit = crossed != nil
         resting = stop
         current = scale
         return (scale, stop)

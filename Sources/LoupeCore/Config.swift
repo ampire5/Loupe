@@ -298,8 +298,7 @@ public struct Config: Equatable, Sendable {
     public var thumbWheelZoom = true
     /// `thumb-zoom-speed`: doublings of the scale per turn of the thumb wheel (0.25...8).
     public var thumbZoomSpeed = 2.4
-    /// `thumb-zoom-stops`: a `zoom-stops` stop only ticks the mouse (`tick`) or halts the turn (`halt`, as a pinch, the
-    /// default).
+    /// `thumb-zoom-stops`: a `zoom-stops` stop only ticks the mouse (`tick`) or briefly resists the turn (`halt`, default).
     public var thumbZoomStops = ThumbZoomStops.halt
     /// `thumb-zoom-invert`: the thumb wheel's zoom the other way, left = in.
     public var thumbZoomInvert = false

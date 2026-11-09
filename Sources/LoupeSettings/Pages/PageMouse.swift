@@ -81,9 +81,9 @@ extension SettingsPanel {
                         .number("thumb-zoom-speed", "Speed", unit: "×", step: 0.25,
                                 description: "Doublings per turn of the wheel: 2 makes one turn ×4. 0.25–8, default 2.4."),
                         .choice("thumb-zoom-stops", "Zoom stops", [
-                            (word: "tick", title: "Tick"), (word: "halt", title: "Halt"),
+                            (word: "tick", title: "Tick"), (word: "halt", title: "Pause"),
                         ], description: "Tick: the zoom goes through a stop and the mouse ticks (Zoom stop haptic); "
-                            + "Halt: one turn halts on each stop, as a pinch, the next turn goes on. Default Halt."),
+                            + "Pause: the zoom lands on the stop and ticks. Keep turning to push through. Default Pause."),
                         .toggle("thumb-zoom-invert", "Invert",
                                 description: "Left zooms in, right out. Default off."),
                     ]),

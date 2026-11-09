@@ -147,6 +147,26 @@ private func run(_ coast: RMBZoomCoast, hz: Double) -> (transform: ViewTransform
     #expect(abs(back.x - mid.x) < 1e-6 && abs(back.y - mid.y) < 1e-6)
 }
 
+@Test func releasingOnAStopDoesNotStartACoast() {
+    let t0 = start(.actual(0.8))
+    let zoom = RMBZoom(anchor: anchor, transform: t0, pointsPerDoubling: 100)
+    let ended = 0.5
+    var stops = ZoomStopGesture(transform: t0, stops: [.percent(100)])
+    #expect(stops.constrain(zoom.scale(doublings: ended)).hitStop == .percent(100))
+    let coast = RMBZoomCoast(zoom: zoom, stops: stops, doublings: ended, velocity: 8)
+    #expect(coast.isFinished)
+}
+
+@Test func releasingExactlyOnANearStartStopDoesNotCoast() {
+    let t0 = start(.actual(1.004))
+    let zoom = RMBZoom(anchor: anchor, transform: t0, pointsPerDoubling: 100)
+    let ended = log2(1 / t0.scale)
+    var stops = ZoomStopGesture(transform: t0, stops: [.percent(100)])
+    #expect(abs(stops.constrain(zoom.scale(doublings: ended)).scale - 1) < 1e-12)
+    let coast = RMBZoomCoast(zoom: zoom, stops: stops, doublings: ended, velocity: -1)
+    #expect(coast.isFinished)
+}
+
 @Test func zoomCoastKeepsTheAnchorAndMatchesTheClosedForm() {
     let t0 = start()
     let zoom = RMBZoom(anchor: anchor, transform: t0, pointsPerDoubling: 100)

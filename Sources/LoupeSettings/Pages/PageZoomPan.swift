@@ -11,7 +11,7 @@ extension SettingsPanel {
                 .toggle("smart-zoom-gesture", "Double tap applies auto framing", symbol: "hand.tap.fill",
                     description: "Two-finger Smart Zoom tap applies Auto when enabled in macOS. Off restores Fit / 100%."),
                 .text("zoom-stops", "Zoom stops", placeholder: "fit-width,fit-height,100%", symbol: "scope",
-                      description: "Where pinch and right-button zoom pause: fit-width, fit-height and percentages, "
+                      description: "Pinch and right-button zoom pause here; keep moving to push through. Use fit-width, fit-height and percentages, "
                         + "comma-separated; none for no stops. Default fit-width,fit-height,100%."),
                 .toggle("zoom-stop-haptics", "Haptic click at a stop", symbol: "hand.tap",
                         description: "A light trackpad click when the zoom reaches a stop. Default on."),

@@ -162,3 +162,8 @@ event through momentum. FrameScrub's `GestureRouter` filters before command rout
 zoom and right-button scrolling keep their first owner until release. Button recognition ignores zero deltas;
 middle-button scrolling must cross a wheel step (12 precise points or one notched unit) before cancelling a click.
 State is local to the existing input owners; no polling, new queues or dependencies are introduced.
+
+`ZoomStopGesture` resolves continuous zoom stops for right-button drag, pinch and the thumb wheel's Pause
+mode. It reports one haptic event on exact landing and lets continued input spend a little extra travel
+to pass the stop. Reversal is immediate; mouse inertia stops at the first landing and stays idle if the
+drag releases on a stop. The minimum and maximum zoom remain limits, with the existing optional stretch.

@@ -695,7 +695,7 @@ import QuartzCore
     }
 
     /// Pinch zooms around the cursor: the image point under it stays put. One gesture (phase began →
-    /// ended) halts at each zoom stop it reaches; the next gesture goes on past it. If something else
+    /// ended) pauses at each zoom stop it reaches; continuing the pinch pushes through. If something else
     /// changed the transform mid-pinch (a key, a new photo, a resize) the stops are recomputed from there.
     /// With `zoom-rubber-band` a pinch past a zoom limit stretches about the fingers (`ZoomStopGesture.stretch`), and
     /// lifting them springs back to the limit (M4b spec §3).
@@ -1674,7 +1674,7 @@ import QuartzCore
     /// `thumb-wheel-zoom`: the MX Master's thumb wheel with no button held zooms at the pointer, `delta` wheel units of
     /// `stepsPerRevolution` per turn (the package's sign: left = positive on the MX Master 4), right = in unless
     /// `thumb-zoom-invert`, by `thumb-zoom-speed` doublings per turn, at once (no animation, as a pinch). A turn of the wheel (`began`) is a new gesture, as is one after something else changed the transform;
-    /// `thumb-zoom-stops` says whether a stop halts the turn or only ticks. The mouse answers as for `zoom-step`.
+    /// `thumb-zoom-stops` says whether a stop briefly resists the turn or only ticks. The mouse answers as for `zoom-step`.
     func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool) {
         session.noteManualZoom()
         invalidateSmartZoomRequest()

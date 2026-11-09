@@ -1,8 +1,7 @@
 import Foundation
 
 /// `thumb-zoom-stops`: what the thumb-wheel zoom does at a `zoom-stops` stop. `tick`: it goes through, the mouse ticks
-/// (`haptic-zoom-stop`); `halt` (the default): one turn of the wheel halts on each stop, as a pinch does, and the
-/// next turn goes on past it.
+/// (`haptic-zoom-stop`); `halt` (the default): it lands exactly on each stop, then continued turning pushes through.
 public enum ThumbZoomStops: String, CaseIterable, Sendable {
     case tick, halt
 }
