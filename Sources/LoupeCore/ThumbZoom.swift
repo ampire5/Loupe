@@ -21,11 +21,11 @@ public struct ThumbZoom: Sendable {
     private var current: Double
     private var atLimit: Bool
 
-    public init(transform: ViewTransform, stops: [ZoomStop], mode: ThumbZoomStops) {
-        self.mode = mode
+    public init(transform: ViewTransform, stops: [ZoomStop], mode: ThumbZoomStops, fixed: Bool = false) {
+        self.mode = fixed ? .halt : mode
         self.stops = ZoomStops.scales(of: stops, for: transform)
         limits = transform.scaleLimits
-        halting = ZoomStopGesture(startScale: transform.scale, stops: self.stops, limits: limits)
+        halting = ZoomStopGesture(startScale: transform.scale, stops: self.stops, limits: limits, fixed: fixed)
         proposed = transform.scale
         current = transform.scale
         atLimit = Self.onLimit(transform.scale, limits)

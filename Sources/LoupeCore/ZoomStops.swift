@@ -32,6 +32,26 @@ public struct ZoomStopScale: Equatable, Sendable {
     }
 }
 
+public enum ZoomStopMode: String, CaseIterable, Sendable {
+    case fixed, adaptive, off
+
+    public var next: Self {
+        switch self {
+        case .fixed: .adaptive
+        case .adaptive: .off
+        case .off: .fixed
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .fixed: "Fixed"
+        case .adaptive: "Adaptive"
+        case .off: "Off"
+        }
+    }
+}
+
 public enum ZoomStops {
     /// Stops closer than this (relative) are one stop: two detents a hair apart would make the second
     /// feel like a stuck gesture.
@@ -78,6 +98,7 @@ public struct ZoomStopGesture: Sendable {
 
     private let stops: [ZoomStopScale]
     private let limits: ClosedRange<Double>?
+    private let fixed: Bool
     /// Starting on a stop lets the user leave it; once away, crossing it again gives the normal detent.
     private var startStop: ZoomStopScale?
     private var current: Double
@@ -112,9 +133,10 @@ public struct ZoomStopGesture: Sendable {
 
     /// `stops` ascending (as `ZoomStops.scales` gives them); `limits` are the zoom limits, if any.
     public init(startScale: Double, stops: [ZoomStopScale], limits: ClosedRange<Double>? = nil, rubber: Bool = false,
-                at timestamp: TimeInterval? = nil) {
+                fixed: Bool = false, at timestamp: TimeInterval? = nil) {
         self.stops = stops
         self.limits = limits
+        self.fixed = fixed
         self.rubber = rubber
         current = startScale
         lastProposed = startScale
@@ -128,9 +150,10 @@ public struct ZoomStopGesture: Sendable {
     }
 
     /// A gesture from `transform` with the configured `stops` and the transform's zoom limits.
-    public init(transform: ViewTransform, stops: [ZoomStop], rubber: Bool = false, at timestamp: TimeInterval? = nil) {
+    public init(transform: ViewTransform, stops: [ZoomStop], rubber: Bool = false,
+                fixed: Bool = false, at timestamp: TimeInterval? = nil) {
         self.init(startScale: transform.scale, stops: ZoomStops.scales(of: stops, for: transform),
-                  limits: transform.scaleLimits, rubber: rubber, at: timestamp)
+                  limits: transform.scaleLimits, rubber: rubber, fixed: fixed, at: timestamp)
     }
 
     /// The scale to show for `proposedScale`, and the stop it rests on (nil between stops). An invalid
@@ -141,7 +164,7 @@ public struct ZoomStopGesture: Sendable {
         let tol = Self.reachTolerance
         guard proposedScale.isFinite, proposedScale > 0 else { return (current, resting) }
         let previous = lastProposed
-        let fast = speedBlend(proposedScale, at: timestamp)
+        let fast = fixed ? nil : speedBlend(proposedScale, at: timestamp)
         guard proposedScale != previous else { return (current, resting) }
         // An ulp of input noise must not release and immediately re-arm a held stop.
         if resting != nil, abs(proposedScale - previous) <= previous * tol {
@@ -162,6 +185,10 @@ public struct ZoomStopGesture: Sendable {
         hasMoved = true
 
         if var hold, increasing == hold.increasing || fast != nil {
+            if fixed {
+                rebase = current / proposedScale
+                return (current, resting)
+            }
             if let until = hold.pauseUntil, let timestamp, timestamp < until, (fast ?? 0) < 0.8 {
                 rebase = current / proposedScale
                 return (current, resting)

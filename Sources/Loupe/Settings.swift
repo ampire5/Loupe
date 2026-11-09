@@ -354,6 +354,8 @@ extension Notification.Name {
         ]
         for (title, action) in keys { menu.addItem(.viewerKey(title, action)) }
         menu.addItem(.separator())
+        menu.addItem(.viewerKey("Cycle Zoom Stop Mode", .cycleZoomStops))
+        menu.addItem(.viewerKey("Save Zoom Stops as Default", .saveZoomStops))
         menu.addItem(.viewerKey("Keep Manual Zoom and Position", .toggleKeepZoom))
         menu.addItem(.viewerKey("Save Manual Zoom Keeping as Default", .saveKeepZoom))
         menu.addItem(.viewerKey("Manual Zoom Carry (Share, Scale, Screen)", .toggleZoomCarry))
@@ -534,6 +536,7 @@ extension Notification.Name {
             let effective = viewer?.effectiveConfig ?? config
             for item in menu.items {
                 switch item.representedObject as? String {
+                case KeyAction.cycleZoomStops.rawValue: item.title = "Zoom Stops: \(effective.zoomStopMode.title)"
                 case KeyAction.toggleKeepZoom.rawValue: item.state = effective.keepZoomPosition ? .on : .off
                 default: break
                 }

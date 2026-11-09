@@ -80,7 +80,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 <td width="50%"><img src="docs/images/strip.webp" alt="The thumbnail strip"></td>
 </tr>
 <tr>
-<td><b>Every pixel, instantly.</b> <code>1</code> for 100 %, <code>2</code>/<code>4</code> for 200/400 %, pinch, double-tap Smart zoom, or hold the right button and drag. Zoom stops at fit-width, fit-height and 100 % click under your finger.</td>
+<td><b>Every pixel, instantly.</b> <code>1</code> for 100 %, <code>2</code>/<code>4</code> for 200/400 %, pinch, double-tap for Fit / 100 %, or hold the right button and drag. Zoom stops at fit width, fit height and 100 % click under your finger.</td>
 <td><b>The strip.</b> A filmstrip like Photos': the current photo in the middle in its own shape, the rest narrow. Swipe with two fingers or drag it and every photo that reaches the middle opens; click to jump. How wide the thumbnails may grow is up to you (<code>strip-cell-max</code>, 9:16 … 3:2).</td>
 </tr>
 <tr>
@@ -147,6 +147,7 @@ The most useful defaults. `?` shows every binding, gestures included; a capital 
 | `Home` `End` | First / last photo | `w` `h` `x` | Fit width / fit height / fill |
 | `Return` | Folder browser on this photo | `z` | Fit ↔ 100 % at the pointer |
 | `⇧⌘H` | Home | `=` `-` | Zoom in / out |
+| `u` | Cycle Fixed / Adaptive / Off in this tab | `⇧U` | Save zoom stop mode as default |
 | `⌘[` | Back to where it was opened from | `⇧` + arrows | Pan |
 | `t` | Hide or show the strip (pin it in full screen) | `c` `v` | Auto colour / vibrance, this folder (`⇧C` `⇧V`: default) |
 | `i` | Stats bar | `s` | Next scaling filter, this folder (`⇧S`: default) |
@@ -177,6 +178,7 @@ As far as we know, no other Mac app goes this deep into Logitech hardware, and i
 
 - Three-finger swipes and taps, force click, two-finger scrolling through the strip, click-and-swipe chords.
 - Right-button drag to zoom with inertia and rubber banding.
+- Slow zoom settles at the configured stops with a brief pause and a haptic click. Nudge in either direction to step to a nearby stop, such as Fit Width from Fit on a landscape photo. A fast gesture passes through with less resistance. Works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to leave a stop. Adaptive is the default, and Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
 - Plays well with **Mac Mouse Fix**: Loupe still hears the MX Master's back and forward buttons while Mac Mouse Fix has them (`mx-side-buttons`).
 
@@ -317,7 +319,7 @@ Everything is in the Settings window (`⌘,`) — and in two plain-text files, s
 - `~/.config/loupe/loupe.conf` — about 130 `key=value` settings, mpv-style.
 - `~/.config/loupe/input.conf` — key, mouse, trackpad and MX Master bindings: `<input> <action> [args]`. `Loupe --print-input-conf` prints the full template.
 
-Both reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
+Set `zoom-stop-mode=off` to start with zoom stops off while keeping your `zoom-stops` list. Both files reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
 
 The Settings window searches every setting, and its **Key Bindings** page is an editor for `input.conf`: press a key or choose a mouse button, pick the action, or go back to the built-in binding. It follows the system's light or dark look; Home and the folder browser stay dark, like a darkroom.
 

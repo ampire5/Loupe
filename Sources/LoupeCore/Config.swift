@@ -246,6 +246,7 @@ public struct Config: Equatable, Sendable {
     /// `zoom-stops` as written in the file, unknown tokens included, so a menu toggle adds or removes only
     /// its own token and leaves a typo or a token from a newer Loupe where it was.
     private var zoomStopTokens = defaultZoomStops.map(Config.text(of:))
+    public var zoomStopMode = ZoomStopMode.adaptive
     /// `zoom-stop-haptics`: a trackpad tick when a gesture lands on a stop.
     public var zoomStopHaptics = true
     /// `zoom-animation`: milliseconds a zoom step (key, menu, double click, stop) glides, 0...1000 (`no`: 0, a jump;
@@ -686,7 +687,7 @@ public struct Config: Equatable, Sendable {
     }
 
     /// Every key loupe.conf understands, in file order.
-    public static let keys = ["zoom-stops", "zoom-stop-haptics",
+    public static let keys = ["zoom-stops", "zoom-stop-mode", "zoom-stop-haptics",
                               "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "subject-target", "subject-size", "subject-pull", "subject-recheck", "subject-analysis", "default-zoom-mode", "fit-upscale",
                               "smart-zoom", "smart-zoom-gesture", "smart-zoom-options", "zoom-anchor", "zoom-anchor-center",
                               "rmb-zoom-speed", "rmb-zoom-inertia",
@@ -733,7 +734,7 @@ public struct Config: Equatable, Sendable {
                                          "vibrance-amount"] + EffectFolderKeys.keys(.grain)
     /// The zoom keys a folder may set for itself (M4b spec §4.1); `fit-upscale` stays global.
     public static let zoomFolderKeys = ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode", "zoom-anchor",
-                                        "subject-target"]
+                                        "subject-target", "zoom-stop-mode"]
     /// The custom detector's keys, a tab's and a folder's (`⌥C`, `⌥G`), not loupe.conf's: detector.conf holds the rest.
     public static let detectorFolderKeys = ["detector", "detector-mode"]
     /// The two-page keys a folder sets for itself.
@@ -780,6 +781,7 @@ public struct Config: Equatable, Sendable {
     public func text(forKey key: String) -> String? {
         switch key {
         case "zoom-stops": return zoomStopTokens.isEmpty ? "none" : zoomStopTokens.joined(separator: ",")
+        case "zoom-stop-mode": return zoomStopMode.rawValue
         case "zoom-stop-haptics": return zoomStopHaptics ? "yes" : "no"
         case "zoom-animation": return String(zoomAnimationMilliseconds)
         case "zoom-rubber-band": return zoomRubberBand ? "yes" : "no"
@@ -984,6 +986,8 @@ public struct Config: Equatable, Sendable {
         switch key {
         case "zoom-stops":
             zoomStopTokens = Self.zoomStopTokens(value)
+        case "zoom-stop-mode":
+            if let v = ZoomStopMode(rawValue: value.lowercased()) { zoomStopMode = v } else { return .badValue }
         case "zoom-stop-haptics":
             if let v = Self.bool(value) { zoomStopHaptics = v } else { return .badValue }
         case "zoom-animation":

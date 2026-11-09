@@ -5,6 +5,7 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case exitFullScreen
     case fit, actual100, actual200, actual400, fitWidth, fitHeight, fill, toggleFitActual, zoomIn, zoomOut
     case toggleKeepZoom, saveKeepZoom
+    case cycleZoomStops, saveZoomStops
     /// `keep-zoom-as` for the folder (`share` ↔ `scale`), and as the loupe.conf default.
     case toggleZoomCarry, saveZoomCarry
     case zoomSubject, cycleStepPan, saveStepPan, cycleZoomAnchor, saveZoomAnchor
@@ -177,7 +178,7 @@ public struct KeyMap: Sendable, Equatable {
     /// The actions a menu item does (Zoom, Scaling, Colour, View); `menuKey` gives the key each item shows.
     static let menuActions: Set<KeyAction> = [
         .fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .zoomIn, .zoomOut,
-        .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
+        .cycleZoomStops, .saveZoomStops, .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .zoomSubject, .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor,
         .toggleZoomSet, .screenShare, .fillSubject, .cycleSubjectTarget, .cycleDetectorMode, .saveDetectorSize, .nextTarget, .toggleSubjects, .rememberZoom, .toggleStepZoom, .toggleSmartZoom, .manualZoom,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance, .toggleGrain, .saveGrain, .toggleDeband, .saveDeband,
@@ -274,6 +275,8 @@ public struct KeyMap: Sendable, Equatable {
         .toggleFitActual: ("Fit / actual size at the pointer", .zoom),
         .zoomIn: ("Zoom in", .zoom),
         .zoomOut: ("Zoom out", .zoom),
+        .cycleZoomStops: ("Cycle fixed / adaptive / off zoom stops (this tab)", .zoom),
+        .saveZoomStops: ("Save zoom stop mode as default", .zoom),
         .toggleKeepZoom: ("Keep zoom and position on/off (this folder)", .zoom),
         .saveKeepZoom: ("Save keep zoom as default", .zoom),
         .toggleZoomCarry: ("Keep the share of the photo / the scale / the share of the screen (this folder)", .zoom),
@@ -400,6 +403,8 @@ public struct KeyMap: Sendable, Equatable {
         // Zoom by key position (= on the top row, keypad +/−), so no layout needs Shift for +.
         KeyBinding(keyCodes: [24, 69], allowsRepeat: true, action: .zoomIn),
         KeyBinding(keyCodes: [27, 78], allowsRepeat: true, action: .zoomOut),
+        KeyBinding(character: "u", modifiers: .shift, allowsRepeat: false, action: .saveZoomStops),
+        KeyBinding(character: "u", allowsRepeat: false, action: .cycleZoomStops),
         // Keep zoom: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "l", modifiers: .shift, allowsRepeat: false, action: .saveKeepZoom),
         KeyBinding(character: "l", modifiers: .option, allowsRepeat: false, action: .rememberZoom),   // before plain l

@@ -2215,6 +2215,7 @@ import UniformTypeIdentifiers
         }
         let modelChanged = effectiveConfig.detectorSetup.analysisID != config.detectorSetup.analysisID
         effectiveConfig = config
+        viewerView.zoomStopMode = config.zoomStopMode
         if modelChanged {
             viewerView.holdSmartZoomView(); subjectsAsked = nil; subjects.keepOnly([])
             viewerView.subjectOverlayView.analysisChanged()
@@ -3034,6 +3035,12 @@ import UniformTypeIdentifiers
         switch action {
         case .rememberZoom:
             saveZoomFolder(smart: session.smartZoom.mode != .off)
+        case .cycleZoomStops:
+            let mode = effectiveConfig.zoomStopMode.next
+            setTabZoom("zoom-stop-mode", mode.rawValue)
+            toast.show("Zoom stops: \(mode.title)")
+        case .saveZoomStops:
+            saveAsDefault(["zoom-stop-mode"], from: folder, toast: "Zoom stops saved as default")
         case .toggleKeepZoom:
             let value = ZoomKeys.toggled(effectiveConfig)
             setTabZoom(ZoomKeys.keepKey, value)

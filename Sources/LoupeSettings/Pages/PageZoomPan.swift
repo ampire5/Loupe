@@ -10,6 +10,11 @@ extension SettingsPanel {
                     description: "⇧Z always applies Auto. ⌥S switches Manual / SmartZoom without changing the view. N selects the next complete group; M changes profile."),
                 .toggle("smart-zoom-gesture", "Double tap applies auto framing", symbol: "hand.tap.fill",
                     description: "Two-finger double tap switches Fit / 100% by default. Turn this on to apply Auto instead."),
+                .choice("zoom-stop-mode", "Zoom stop mode", [
+                    (word: "fixed", title: "Fixed"), (word: "adaptive", title: "Adaptive"), (word: "off", title: "Off"),
+                ], symbol: "dot.scope",
+                        description: "Fixed stops the gesture at each mark. Adaptive lets you push through. "
+                            + "U cycles modes for this tab. Shift+U saves the current mode as default."),
                 .text("zoom-stops", "Zoom stops", placeholder: "fit-width,fit-height,100%", symbol: "scope",
                       description: "Slow pinch and right-button zoom settle on these stops. Faster gestures pass with less resistance. "
                         + "Use fit-width, fit-height and percentages, separated by commas, or none. Default fit-width,fit-height,100%."),

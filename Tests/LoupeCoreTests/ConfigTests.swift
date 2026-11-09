@@ -14,6 +14,16 @@ import Foundation
     #expect(parsed == c && warnings.isEmpty)
 }
 
+@Test func disablingZoomStopsPreservesTheConfiguredList() {
+    let (config, warnings) = Config.parse("zoom-stops=fit-width,150%\nzoom-stop-mode=off")
+    #expect(warnings.isEmpty)
+    #expect(config.zoomStopMode == .off)
+    #expect(config.text(forKey: "zoom-stop-mode") == "off")
+    let (enabled, rejected) = config.applying(["zoom-stop-mode": "fixed"])
+    #expect(rejected.isEmpty && enabled.zoomStopMode == .fixed)
+    #expect(enabled.zoomStops == [.fitWidth, .percent(150)])
+}
+
 @Test func fullScreenTabsDefaultToShownAndCanAutoHide() {
     #expect(Config().text(forKey: "fullscreen-tabs") == "shown")
     let (config, warnings) = Config.parse("fullscreen-tabs=auto")
@@ -1164,7 +1174,7 @@ import Foundation
 /// One valid and one invalid sample value per key (nil: the key has no invalid value).
 private let keySamples: [String: (valid: String, invalid: String?)] = [
     // Unknown tokens are warned about by `parse`, not refused: the list always takes (spec §8.4).
-    "zoom-stops": ("fit-height, 200%", nil),
+    "zoom-stops": ("fit-height, 200%", nil), "zoom-stop-mode": ("fixed", "maybe"),
     "trackpad-navigation-haptics": ("no", "maybe"), "trackpad-haptic-pattern": ("alignment", "strong"),
     "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
     "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("tick", "stop"),
@@ -1257,7 +1267,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     #expect(Config.scalingFolderKeys == ["downscale", "upscale", "upscale-high", "lanczos-antiring"] + EffectFolderKeys.keys(.deband))
     #expect(Config.colorFolderKeys == ["auto-color", "auto-color-method", "auto-color-strength", "vibrance", "vibrance-amount"] + EffectFolderKeys.keys(.grain))
     #expect(Config.zoomFolderKeys == ["smart-zoom", "smart-zoom-options", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "default-zoom-mode",
-                                     "zoom-anchor", "subject-target"])
+                                     "zoom-anchor", "subject-target", "zoom-stop-mode"])
     #expect(Config.spreadFolderKeys == ["spread", "spread-shift", "spread-direction", "spread-landscape",
                                         "spread-wide-ratio"])
     #expect(Config.detectorFolderKeys == ["detector", "detector-mode"])

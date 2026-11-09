@@ -90,6 +90,8 @@ public enum InputConfTemplate {
     # KP_ADD zoom-in                                # zoom in
     # - zoom-out                                    # zoom out
     # KP_SUBTRACT zoom-out                          # zoom out
+    # u cycle-zoom-stops                           # fixed / adaptive / off zoom stops in this tab
+    # U save-zoom-stops                             # save zoom stop mode as default
     # l toggle-keep-zoom                            # keep zoom and position in this folder, on/off
     # L save-keep-zoom                              # keep zoom as the default for all folders
     # k toggle-zoom-carry                           # a kept zoom keeps the share of the photo / the scale, this folder

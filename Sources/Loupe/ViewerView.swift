@@ -117,6 +117,21 @@ import QuartzCore
     private var scrollButtons = 0
     private var scrollModifiers: NSEvent.ModifierFlags?
     /// Zoom stops for the right-button zoom in progress, made at the press.
+    var zoomStopMode = Settings.shared.config.zoomStopMode {
+        didSet {
+            guard zoomStopMode != oldValue else { return }
+            pinch = nil
+            thumbZoom = nil
+            if rmbZoom != nil { endRMBZoom() }
+            if zoomCoast != nil { stopInertia() }
+            if session.transform.stretch != nil { springBackZoom() }
+        }
+    }
+
+    private var activeZoomStops: [ZoomStop] {
+        zoomStopMode == .off ? [] : Settings.shared.config.zoomStops
+    }
+
     private var rmbStops: ZoomStopGesture?
     /// Release velocity of the right-button zoom (doublings/s), and where the drag ended (cumulative travel, points).
     private var rmbVelocity = ZoomVelocityTracker()
@@ -810,7 +825,8 @@ import QuartzCore
         let t = session.transform
         let config = Settings.shared.config
         if event.phase.contains(.began) || pinch?.last != t {
-            pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: config.zoomStops, rubber: config.zoomRubberBand),
+            pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: activeZoomStops, rubber: config.zoomRubberBand,
+                                                fixed: zoomStopMode == .fixed),
                           proposed: t.scale, last: t)
         }
         guard var p = pinch else { return }
@@ -1551,8 +1567,8 @@ import QuartzCore
                           inverted: config.rmbZoomInvert)
         rmbVelocity.reset()
         rmbDy = 0
-        rmbStops = ZoomStopGesture(transform: session.transform, stops: config.zoomStops,
-                                   rubber: config.zoomRubberBand, at: event.timestamp)
+        rmbStops = ZoomStopGesture(transform: session.transform, stops: activeZoomStops,
+                                   rubber: config.zoomRubberBand, fixed: zoomStopMode == .fixed, at: event.timestamp)
         rmbAxis.reset()
         rmbPress = pointer
         rmbCentring = subjectCentring(session.transform)
@@ -1839,7 +1855,7 @@ import QuartzCore
         invalidateSmartZoomRequest(); session.noteManualZoom()
         let start = zoomBase
         let anchor = gestureAnchor(cursorOrCentre())
-        let stops = Settings.shared.config.zoomStops
+        let stops = activeZoomStops
         var t = start
         var bumps: Set<ZoomStepBump> = []
         for _ in 0..<abs(steps) {
@@ -1872,7 +1888,8 @@ import QuartzCore
         stopInertia()
         let t = session.transform
         if thumbZoom?.last != t {
-            thumbZoom = (ThumbZoom(transform: t, stops: config.zoomStops, mode: config.thumbZoomStops), t)
+            thumbZoom = (ThumbZoom(transform: t, stops: activeZoomStops, mode: config.thumbZoomStops,
+                                  fixed: zoomStopMode == .fixed), t)
         }
         guard var z = thumbZoom?.zoom else { return }
         let r = z.turn(doublings: doublings, at: timestamp)
@@ -1957,7 +1974,7 @@ import QuartzCore
         case .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring: return onScalingKey?(action) ?? false
         case .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance: return onColourKey?(action) ?? false
         case .toggleGrain, .saveGrain, .toggleDeband, .saveDeband: return onEffectKey?(action) ?? false
-        case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry, .rememberZoom:
+        case .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry, .rememberZoom, .cycleZoomStops, .saveZoomStops:
             return onZoomKey?(action) ?? false
         case .cyclePanIndicators, .savePanIndicators: return onPanIndicatorKey?(action) ?? false
         case .toggleSpread, .saveSpread, .shiftSpread: return onSpreadKey?(action) ?? false

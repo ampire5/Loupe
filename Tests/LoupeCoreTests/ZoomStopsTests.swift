@@ -26,6 +26,17 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     #expect(g.constrain(4).hitStop == .percent(200) && g.justHit)
 }
 
+@Test func fixedStopsNeedANewGestureToPass() {
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one, two], fixed: true, at: 1)
+    #expect(g.constrain(1.2, at: 1.02).hitStop == .percent(100) && g.justHit)
+    #expect(g.constrain(3, at: 1.04).scale == 1 && !g.justHit)
+    #expect(g.constrain(2.7, at: 1.06).scale < 1 && !g.justHit)
+
+    var next = ZoomStopGesture(startScale: 1, stops: [one, two], fixed: true, at: 2)
+    #expect(next.constrain(1.3, at: 2.02).scale == 1.3)
+    #expect(next.constrain(2.2, at: 2.04).hitStop == .percent(200) && next.justHit)
+}
+
 @Test func aPreciseGestureFindsTheStopAndFingerJitterDoesNotReleaseIt() {
     for direction in [1.0, -1.0] {
         func scale(_ offset: Double) -> Double { pow(2, offset * direction) }
