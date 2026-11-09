@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 — 2026-11-09
+
+- Choose Fixed, Adaptive or Off for continuous zoom stops. Adaptive settles at nearby stops during slow gestures and lets fast gestures pass through. `u` cycles the mode for the current tab; `⇧U` saves the default.
+- Add folder-aware debanding and display grain, with their own controls and defaults.
+- Refine trackpad navigation, filmstrip previews and haptic feedback, and update the default toolbar icons.
+- Keep half-precision rendering compatible with the Intel build.
+
+## 0.3.0 — 2026-11-05
+
+- Browse Apple Photos alongside local folders. File View has a docked information inspector, and photo viewing history is tracked separately from file changes.
+- Add subject circles and per-class protection to SmartZoom framing profiles.
+- Keep the full-screen tab bar and toolbar together, with a choice of a stable visible header or automatic hiding.
+
 ## 0.2.1 — 2026-10-29
 
 - Restore photo metadata and EXIF in the toolbar, with independent file and folder names and more readable text.

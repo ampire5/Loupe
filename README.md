@@ -80,8 +80,8 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 <td width="50%"><img src="docs/images/strip.webp" alt="The thumbnail strip"></td>
 </tr>
 <tr>
-<td><b>Every pixel, instantly.</b> <code>1</code> for 100 %, <code>2</code>/<code>4</code> for 200/400 %, pinch, double-tap for Fit / 100 %, or hold the right button and drag. Zoom stops at fit width, fit height and 100 % click under your finger.</td>
-<td><b>The strip.</b> A filmstrip like Photos': the current photo in the middle in its own shape, the rest narrow. Swipe with two fingers or drag it and every photo that reaches the middle opens; click to jump. How wide the thumbnails may grow is up to you (<code>strip-cell-max</code>, 9:16 … 3:2).</td>
+<td><b>Every pixel, instantly.</b> <code>1</code> for 100 %, <code>2</code>/<code>4</code> for 200/400 %, pinch, double-tap for Fit / 100 %, or hold the right button and drag. Adaptive zoom stops let you feel common scales as you pass them.</td>
+<td><b>The strip.</b> The current photo is in the middle in its own shape; the rest are narrow. Drag to scrub photos, swipe with two fingers to preview a selection and open it when the strip settles, or click to jump. Drag the top edge to resize it. <code>strip-cell-max</code> sets the widest thumbnail shape (9:16 … 3:2).</td>
 </tr>
 <tr>
 <td><img src="docs/images/home-recent.webp" alt="Home: Recent"></td>
@@ -115,6 +115,14 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 <td><b>Everything is a key.</b> <code>?</code> shows every binding of your current layout, gestures included.</td>
 </tr>
 </table>
+
+### Viewer toolbar and full screen
+
+The native toolbar puts navigation, zoom and SmartZoom next to a compact summary of the current photo and framing profile. Open photo information with `⌘I` in either the viewer or File View; File View keeps the inspector docked beside the grid as you move through the selection.
+
+<p align="center"><img src="docs/images/viewer-toolbar.webp" alt="Native photo viewer toolbar with navigation, zoom, SmartZoom and the camera and framing summary"></p>
+
+In full screen, the header stays expanded by default when the tab bar is visible, so the tabs stay in place. Set **Settings → Interface → Full Screen → Tabs → Auto** to hide the tabs and toolbar together. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
 
 ### SmartZoom
 
@@ -176,7 +184,7 @@ Around the picture: a checkerboard behind transparent pixels (or the background 
 
 As far as we know, no other Mac app goes this deep into Logitech hardware, and it keeps growing.
 
-- Three-finger swipes and taps, force click, two-finger scrolling through the strip, click-and-swipe chords.
+- Swipe with three fingers left or right to browse photos, or up or down to show or hide the filmstrip. Hold a click and swipe with three fingers to show or hide the toolbar. A three-finger double tap switches between Fit Height and Fit Width; a force click opens photo information.
 - Right-button drag to zoom with inertia and rubber banding.
 - Slow zoom settles at the configured stops with a brief pause and a haptic click. Nudge in either direction to step to a nearby stop, such as Fit Width from Fit on a landscape photo. A fast gesture passes through with less resistance. Works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to leave a stop. Adaptive is the default, and Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
