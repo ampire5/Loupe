@@ -1,13 +1,13 @@
 {
-  "originHash" : "2317b0473ae7903386201ed6e066a70626d59833e44c339caaa0c779c282a651",
+  "originHash" : "ff6de07ac191944113093e3954be64850a58e0805296bbefaf58f3bf27290ffc",
   "pins" : [
     {
       "identity" : "homescreenkit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/HomeScreenKit.git",
       "state" : {
-        "revision" : "81583f4e76ab65f3c5d11bcd4fabda875bc8a55f",
-        "version" : "0.13.4"
+        "revision" : "e64a51b87535916c355501afdd39909f7952a49a",
+        "version" : "0.13.5"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/SettingsKit.git",
       "state" : {
-        "revision" : "5a5e26bb95cc4281b2d53e26e81a6e2490e5c4ce",
-        "version" : "0.8.1"
+        "revision" : "e0bb777ec16fbb1169d41fae9c357a11e7fbb27a",
+        "version" : "0.8.2"
       }
     },
     {
