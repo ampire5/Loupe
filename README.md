@@ -190,7 +190,7 @@ As far as we know, no other Mac app goes this deep into Logitech hardware, and i
 
 - Swipe with three fingers left or right to browse photos, or up or down to show or hide the filmstrip. Hold a click and swipe with three fingers to show or hide the toolbar. A three-finger double tap switches between Fit Height and Fit Width; a force click opens photo information.
 - Right-button drag to zoom with inertia and rubber banding.
-- Slow zoom settles at the configured stops with a brief pause and a haptic click. Nudge in either direction to step to a nearby stop, such as Fit Width from Fit on a landscape photo. A fast gesture passes through with less resistance. Works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to leave a stop. Adaptive is the default, and Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
+- Adaptive zoom holds at a configured stop while you keep moving. Push a little farther in either direction to continue, or sweep quickly to pass through without holding. This works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to pass a stop in the same direction. Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
 - Plays well with **Mac Mouse Fix**: Loupe still hears the MX Master's back and forward buttons while Mac Mouse Fix has them (`mx-side-buttons`).
 
@@ -331,7 +331,7 @@ Everything is in the Settings window (`⌘,`) — and in two plain-text files, s
 - `~/.config/loupe/loupe.conf` — about 130 `key=value` settings, mpv-style.
 - `~/.config/loupe/input.conf` — key, mouse, trackpad and MX Master bindings: `<input> <action> [args]`. `Loupe --print-input-conf` prints the full template.
 
-Set `zoom-stop-mode=off` to start with zoom stops off while keeping your `zoom-stops` list. Both files reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
+Set `zoom-stop-mode=off` to start with zoom stops off while keeping your `zoom-stops` list. Set `zoom-stop-breakaway` to adjust the travel needed to leave an Adaptive stop (default `0.04` scale doublings, range `0.005…0.5`). Both files reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
 
 The Settings window searches every setting, and its **Key Bindings** page is an editor for `input.conf`: press a key or choose a mouse button, pick the action, or go back to the built-in binding. It follows the system's light or dark look; Home and the folder browser stay dark, like a darkroom.
 

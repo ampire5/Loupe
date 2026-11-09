@@ -95,7 +95,7 @@ import Testing
                 #expect(session.smartZoom.mode == mode)
                 #expect(!request.matches(photo: photo, revision: session.smartZoomRevision, enabled: true))
             }
-            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true, at: 1)
+            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true, ended: false, at: 1)
             #expect(session.smartZoom.mode == mode)
             let manual = NSMenuItem(); manual.representedObject = KeyAction.manualZoom.rawValue
             view.performKeyAction(manual)
@@ -103,6 +103,27 @@ import Testing
             #expect(session.smartZoom.lastEnabled == mode)
         }
     }
+    @Test func thumbWheelEndDiscardsTheHeldStop() {
+        _ = NSApplication.shared
+        let reader = FileReader(threads: 1)
+        let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: DecodePool(), limits: CacheLimits(config: Config()))
+        let thumbs = ThumbnailStore(directory: nil, reader: reader, thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: cache, thumbnails: thumbs, positions: FolderPositions(database: nil))
+        defer { session.close() }
+        let view = ViewerView(session: session, resampling: ResampleSettings(config: Config()))
+        view.zoomStopMode = .fixed
+        session.transform = ViewTransform(imageSize: CGSize(width: 1200, height: 1200),
+                                          viewSize: CGSize(width: 600, height: 600)).withMode(.actual(0.9))
+        let inward = Settings.shared.config.thumbZoomInvert ? 1 : -1
+        view.thumbWheelZoom(delta: 36 * inward, stepsPerRevolution: 360, began: true, ended: false, at: 1)
+        #expect(session.transform.scale == 1)
+        view.thumbWheelZoom(delta: 0, stepsPerRevolution: 360, began: false, ended: true, at: 1.1)
+        #expect(session.transform.scale == 1)
+        // A phase-less follow-up must be able to leave the stop even without a new began event.
+        view.thumbWheelZoom(delta: inward, stepsPerRevolution: 360, began: false, ended: false, at: 1.2)
+        #expect(session.transform.scale > 1)
+    }
+
     @Test func rightVerticalDragZoomsWhileSmartZoomRemainsEnabled() throws {
         _ = NSApplication.shared
         let reader = FileReader(threads: 1)

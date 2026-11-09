@@ -629,7 +629,8 @@ import UniformTypeIdentifiers
         if let controller = NSApp.keyWindow?.windowController as? ViewerWindowController, controller.isShowingHome {
             controller.homeThumbWheel(delta: delta, stepsPerRevolution: perTurn)
         }
-        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn, began: phase == .began, at: time)
+        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn,
+                                                     began: phase == .began, ended: phase == .ended, at: time)
     }
 
 

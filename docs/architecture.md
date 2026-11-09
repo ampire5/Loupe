@@ -169,10 +169,15 @@ zoom and right-button scrolling keep their first owner until release. Button rec
 middle-button scrolling must cross a wheel step (12 precise points or one notched unit) before cancelling a click.
 State is local to the existing input owners; no polling, new queues or dependencies are introduced.
 
-`ZoomStopGesture` resolves continuous zoom stops for right-button drag, pinch and the thumb wheel's Pause
-mode. It uses raw input speed to capture stops slightly early during slow movement and lets faster gestures
-carry more of their travel through. It reports one haptic event per input event that reaches or crosses a stop.
-Slow landings pause briefly. A small nudge after the pause selects a close neighboring stop in its direction.
-Fast input can interrupt the pause. Mouse inertia stops
-at its first landing and stays idle if the drag releases on a stop.
-The minimum and maximum zoom remain limits, with the existing optional stretch.
+`ZoomStopGesture` owns continuous stop state for right-button drag, pinch and thumb-wheel Pause.
+In Adaptive mode the gesture tracks, holds at a stop or departs with that stop suppressed until clearance.
+Signed raw input from capture drives breakaway (`zoom-stop-breakaway`, scale doublings), and only excess
+travel moves the view after release. Early capture applies when entering the approach zone. Inside the zone,
+fine adjustment stays free up to the exact stop. Raw-input speed narrows the approach zone and reduces the
+breakaway threshold chosen at capture, down to full bypass with crossing feedback. Fixed mode holds in the approach direction until reversal or a new gesture.
+Mouse inertia keeps the drag's mapping, lands on the first eligible stop it crosses and stays idle if the drag
+releases on a stop. The minimum and maximum zoom remain limits, with the existing optional stretch.
+`ViewerView` discards stop state on cancellation, when a different photo replaces the current one, or when
+the window loses key status or changes fullscreen state.
+Pinch and thumb-wheel end events discard their state. Right-button release can hand its state to mouse inertia.
+See the [Soft Detents / Semantic Stops](../AGENTS.md#soft-detents--semantic-stops) interaction guidelines.

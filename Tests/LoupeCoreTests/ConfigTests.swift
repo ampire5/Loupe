@@ -24,6 +24,16 @@ import Foundation
     #expect(enabled.zoomStops == [.fitWidth, .percent(150)])
 }
 
+@Test func zoomStopBreakawayRoundTripsAndRejectsOutOfRangeValues() {
+    #expect(Config().text(forKey: "zoom-stop-breakaway") == "0.04")
+    let (config, warnings) = Config.parse("zoom-stop-breakaway=0.005")
+    #expect(warnings.isEmpty && config.text(forKey: "zoom-stop-breakaway") == "0.005")
+    for value in ["-1", "0", "0.004", "0.51", "nan", "inf"] {
+        let (rejected, warnings) = Config.parse("zoom-stop-breakaway=" + value)
+        #expect(rejected == Config() && warnings.count == 1)
+    }
+}
+
 @Test func fullScreenTabsDefaultToShownAndCanAutoHide() {
     #expect(Config().text(forKey: "fullscreen-tabs") == "shown")
     let (config, warnings) = Config.parse("fullscreen-tabs=auto")
@@ -1176,7 +1186,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     // Unknown tokens are warned about by `parse`, not refused: the list always takes (spec §8.4).
     "zoom-stops": ("fit-height, 200%", nil), "zoom-stop-mode": ("fixed", "maybe"),
     "trackpad-navigation-haptics": ("no", "maybe"), "trackpad-haptic-pattern": ("alignment", "strong"),
-    "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
+    "zoom-stop-breakaway": ("0.125", "0"), "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
     "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("tick", "stop"),
     "thumb-zoom-invert": ("yes", "maybe"),
     "archive-folders": ("no", "maybe"),

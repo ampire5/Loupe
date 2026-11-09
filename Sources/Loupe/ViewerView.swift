@@ -120,9 +120,7 @@ import QuartzCore
     var zoomStopMode = Settings.shared.config.zoomStopMode {
         didSet {
             guard zoomStopMode != oldValue else { return }
-            pinch = nil
-            thumbZoom = nil
-            if rmbZoom != nil { endRMBZoom() }
+            resetContinuousZoom()
             if zoomCoast != nil { stopInertia() }
             if session.transform.stretch != nil { springBackZoom() }
         }
@@ -379,7 +377,11 @@ import QuartzCore
     /// zoom animation goes on to the mode its key asked for, its frame (and a spring-back's stretch) kept: its tick
     /// drops it itself if the image or view size changed under it.
     private func imageDidChange(samePhoto: Bool) {
-        guard samePhoto else { stopInertiaAtZoomTarget(); return }
+        guard samePhoto else {
+            resetContinuousZoom()
+            stopInertiaAtZoomTarget()
+            return
+        }
         guard zoomAnimation != nil else { stopInertia(); return }
         coast = nil      // `animateZoom` already stopped these; the animation runs alone on the link
         zoomCoast = nil
@@ -814,11 +816,18 @@ import QuartzCore
     }
 
     /// Pinch zooms around the cursor: the image point under it stays put. One gesture (phase began →
-    /// ended) settles on nearby stops when slow and passes them with less resistance when fast. If something else
+    /// ended) holds on nearby stops until the fingers push through. A fast sweep can bypass the hold. If something else
     /// changed the transform mid-pinch (a key, a new photo, a resize) the stops are recomputed from there.
     /// With `zoom-rubber-band` a pinch past a zoom limit stretches about the fingers (`ZoomStopGesture.stretch`), and
     /// lifting them springs back to the limit (M4b spec §3).
     override func magnify(with event: NSEvent) {
+        let ended = event.phase.contains(.ended)
+        if event.phase.contains(.cancelled) || (ended && pinch?.last != session.transform) {
+            let previous = pinch
+            pinch = nil
+            if let previous, previous.last == session.transform, previous.stops.stretch != 1 { springBackZoom() }
+            return
+        }
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         stopInertia()
@@ -826,7 +835,7 @@ import QuartzCore
         let config = Settings.shared.config
         if event.phase.contains(.began) || pinch?.last != t {
             pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: activeZoomStops, rubber: config.zoomRubberBand,
-                                                fixed: zoomStopMode == .fixed),
+                                                fixed: zoomStopMode == .fixed, breakaway: config.zoomStopBreakaway),
                           proposed: t.scale, last: t)
         }
         guard var p = pinch else { return }
@@ -842,7 +851,7 @@ import QuartzCore
         if p.stops.justHit, config.zoomStopHaptics { zoomStopFeedback(justHit: true) }
         else if bump == .limit { navigationFeedback(for: "zoom limit", pattern: .alignment) }
         p.last = session.transform
-        guard event.phase.contains(.ended) || event.phase.contains(.cancelled) else {
+        guard ended else {
             pinch = p
             return
         }
@@ -930,6 +939,7 @@ import QuartzCore
         center.removeObserver(self, name: NSWindow.willEnterFullScreenNotification, object: nil)
         center.removeObserver(self, name: NSWindow.willExitFullScreenNotification, object: nil)
         resetTouches()
+        resetContinuousZoom()
         stopInertiaAtZoomTarget()   // the display link belongs to the window it was made for
         stopWheelLink()
         cursorAutohide.stop()
@@ -948,6 +958,7 @@ import QuartzCore
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         resetTouches()
+        resetContinuousZoom()
         folderScroll.buttonsReleased()
         stopInertiaAtZoomTarget()   // a pinch or right-button release may never come: a held zoom stretch goes too
         cursorAutohide.stop()
@@ -956,7 +967,10 @@ import QuartzCore
     /// A freshly opened or re-focused window hides a resting cursor too, without waiting for a move.
     @objc private func windowDidBecomeKey(_ notification: Notification) { cursorAutohide.activity() }
 
-    @objc private func windowWillChangeFullScreen(_ notification: Notification) { stopInertiaAtZoomTarget() }
+    @objc private func windowWillChangeFullScreen(_ notification: Notification) {
+        resetContinuousZoom()
+        stopInertiaAtZoomTarget()
+    }
 
     /// Touches stopped being delivered without every finger being seen lifting.
     private func resetTouches() {
@@ -1568,7 +1582,8 @@ import QuartzCore
         rmbVelocity.reset()
         rmbDy = 0
         rmbStops = ZoomStopGesture(transform: session.transform, stops: activeZoomStops,
-                                   rubber: config.zoomRubberBand, fixed: zoomStopMode == .fixed, at: event.timestamp)
+                                   rubber: config.zoomRubberBand, fixed: zoomStopMode == .fixed,
+                                   breakaway: config.zoomStopBreakaway, at: event.timestamp)
         rmbAxis.reset()
         rmbPress = pointer
         rmbCentring = subjectCentring(session.transform)
@@ -1689,6 +1704,12 @@ import QuartzCore
     override func otherMouseDragged(with event: NSEvent) {
         cursorAutohide.activity()
         MouseButtons.shared.moved(event)
+    }
+
+    private func resetContinuousZoom() {
+        pinch = nil
+        thumbZoom = nil
+        if rmbZoom != nil { endRMBZoom() }
     }
 
     private func endRMBZoom() {
@@ -1876,20 +1897,21 @@ import QuartzCore
     /// `stepsPerRevolution` per turn (the package's sign: left = positive on the MX Master 4), right = in unless
     /// `thumb-zoom-invert`, by `thumb-zoom-speed` doublings per turn, at once (no animation, as a pinch). A turn of the wheel (`began`) is a new gesture, as is one after something else changed the transform;
     /// `thumb-zoom-stops` says whether a stop briefly resists the turn or only ticks. The mouse answers as for `zoom-step`.
-    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, at timestamp: TimeInterval) {
+    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, ended: Bool, at timestamp: TimeInterval) {
+        if began { thumbZoom = nil }
+        defer { if ended { thumbZoom = nil } }
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         guard !isCheatSheetOpen() else { return }
         let config = Settings.shared.config
         let doublings = ThumbZoom.doublings(delta: config.thumbZoomInvert ? delta : -delta,
                                             stepsPerRevolution: stepsPerRevolution, speed: config.thumbZoomSpeed)
-        if began { thumbZoom = nil }
         guard doublings != 0 else { return }
         stopInertia()
         let t = session.transform
         if thumbZoom?.last != t {
             thumbZoom = (ThumbZoom(transform: t, stops: activeZoomStops, mode: config.thumbZoomStops,
-                                  fixed: zoomStopMode == .fixed), t)
+                                  fixed: zoomStopMode == .fixed, breakaway: config.zoomStopBreakaway), t)
         }
         guard var z = thumbZoom?.zoom else { return }
         let r = z.turn(doublings: doublings, at: timestamp)

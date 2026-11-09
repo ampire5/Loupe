@@ -19,9 +19,9 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
 @Test func continuingInOneGesturePushesThroughAndCanReachTheNextStop() {
     var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
     #expect(g.constrain(1.3).hitStop == .percent(100) && g.justHit)
-    let held = g.constrain(1.3 * 1.04)
+    let held = g.constrain(1.3 * 1.02)
     #expect(held.scale == 1 && held.hitStop == .percent(100) && !g.justHit)
-    let past = g.constrain(1.3 * 1.07)
+    let past = g.constrain(1.3 * 1.05)
     #expect(past.scale > 1 && past.scale < 1.03 && past.hitStop == nil && !g.justHit)
     #expect(g.constrain(4).hitStop == .percent(200) && g.justHit)
 }
@@ -37,6 +37,14 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     #expect(next.constrain(2.2, at: 2.04).hitStop == .percent(200) && next.justHit)
 }
 
+@Test func fixedStopsIgnoreFloatingPointJitterWhileHeld() {
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one], fixed: true)
+    let capture = 1.2
+    #expect(g.constrain(capture).hitStop == .percent(100))
+    #expect(g.constrain(capture.nextDown).scale == 1 && !g.justHit)
+    #expect(g.constrain(1.3).scale == 1 && !g.justHit)
+}
+
 @Test func aPreciseGestureFindsTheStopAndFingerJitterDoesNotReleaseIt() {
     for direction in [1.0, -1.0] {
         func scale(_ offset: Double) -> Double { pow(2, offset * direction) }
@@ -47,7 +55,7 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
         for (offset, time) in [(-0.033, 1.060), (-0.037, 1.072), (-0.034, 1.084), (-0.038, 1.096)] {
             #expect(g.constrain(scale(offset), at: time).scale == 1 && !g.justHit)
         }
-        let backedOut = g.constrain(scale(-0.11), at: 1.19)
+        let backedOut = g.constrain(scale(-0.12), at: 1.19)
         #expect(direction * (backedOut.scale - 1) < 0 && backedOut.hitStop == nil && !g.justHit)
     }
 }
@@ -59,105 +67,117 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
     #expect(g.constrain(1.012, at: 1.032).hitStop == .percent(102) && g.justHit)
 }
 
-@Test func closeFitStopsPauseAndStepBackAndForthInOneGesture() {
+@Test func closeStopsRemainReachableWithoutJumpingBetweenThem() {
     let fit = at(.fitHeight, 1), width = at(.fitWidth, 1.07)
-    var g = ZoomStopGesture(startScale: 0.94, stops: [fit, width], at: 1)
+    var g = ZoomStopGesture(startScale: 0.94, stops: [fit, width], breakaway: 0.08, at: 1)
     #expect(g.constrain(0.975, at: 1.05).hitStop == .fitHeight && g.justHit)
-    // More than a nudge during the pause does not count towards leaving it.
     #expect(g.constrain(1.01, at: 1.10).scale == 1 && !g.justHit)
-    #expect(g.constrain(1.016, at: 1.15).scale == 1 && !g.justHit)
-    let wider = g.constrain(1.039, at: 1.19)
+    let released = g.constrain(1.032, at: 1.15)
+    #expect(released.scale > 1 && released.scale < 1.01 && !g.justHit)
+    let wider = g.constrain(1.07, at: 1.25)
     #expect(wider.scale == 1.07 && wider.hitStop == .fitWidth && g.justHit)
-    #expect(g.constrain(1.01, at: 1.24).scale == 1.07 && !g.justHit)
-    let back = g.constrain(0.983, at: 1.30)
-    #expect(back.scale == 1 && back.hitStop == .fitHeight && g.justHit)
 }
 
-@Test func aSmallNudgeFromFitCanReachFitWidthWithoutLandingFirst() {
-    let fit = at(.fitHeight, 1), width = at(.fitWidth, 1.07)
-    var g = ZoomStopGesture(startScale: 1, stops: [fit, width], at: 1)
-    #expect(g.constrain(1.016, at: 1.05).scale == 1 && !g.justHit)
-    #expect(g.constrain(1.028, at: 1.10).hitStop == .fitWidth && g.justHit)
+@Test func aFlickBypassesMultipleStopsAndKeepsItsFullTravel() {
+    for (start, target) in [(0.9, 1.2), (1.2, 0.9)] {
+        let stops = [one, at(.percent(105), 1.05)]
+        var g = ZoomStopGesture(startScale: start, stops: stops, limits: 0.25...1.25, rubber: true, at: 1)
+        let flick = g.constrain(target, at: 1.02)
+        #expect(flick.scale == target && flick.hitStop == nil && g.justHit)
+    }
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one], limits: 0.25...1.25, rubber: true, at: 1)
+    let limit = g.constrain(1.5, at: 1.02)
+    #expect(limit.scale == 1.25 && g.stretch > 1)
 }
 
-@Test func aFlickCanInterruptThePauseAndPassBothCloseStops() {
-    var g = ZoomStopGesture(startScale: 0.94, stops: [one, at(.percent(107), 1.07)], at: 1)
-    #expect(g.constrain(0.975, at: 1.05).scale == 1 && g.justHit)
-    let flick = g.constrain(1.20, at: 1.065)
-    #expect(flick.scale > 1.07 && flick.hitStop == nil && g.justHit)
+@Test func slowZoomFindsTheStopAndNeedsLessTravelToLeaveIt() {
+    var g = ZoomStopGesture(startScale: pow(2, -0.08), stops: [one], at: 1)
+    #expect(g.constrain(pow(2, -0.03), at: 1.06).hitStop == .percent(100) && g.justHit)
+    #expect(g.constrain(pow(2, 0.009), at: 1.11).scale == 1 && !g.justHit)
+    let near = g.constrain(pow(2, 0.012), at: 1.14)
+    #expect(abs(near.scale - pow(2, 0.002)) < 1e-12 && near.hitStop == nil && !g.justHit)
+    #expect(g.constrain(pow(2, 0.011), at: 1.17).hitStop == nil && !g.justHit)
 }
 
-@Test func slowApproachCapturesEarlyAndHoldsWhileAFlickKeepsMoving() {
+@Test func aFreshGestureCanFineTuneInsideTheApproachZone() {
     for direction in [1.0, -1.0] {
         func scale(_ offset: Double) -> Double { pow(2, offset * direction) }
-        var slow = ZoomStopGesture(startScale: scale(-0.075), stops: [one])
-        _ = slow.constrain(scale(-0.075), at: 1)
-        _ = slow.constrain(scale(-0.055), at: 1.05)
-        let landing = slow.constrain(scale(-0.035), at: 1.1)
-        #expect(landing.scale == 1 && landing.hitStop == .percent(100) && slow.justHit)
-        let held = slow.constrain(scale(0.014), at: 1.15)
-        #expect(held.scale == 1 && !slow.justHit)
-
-        var fast = ZoomStopGesture(startScale: scale(-0.05), stops: [one])
-        _ = fast.constrain(scale(-0.05), at: 1)
-        let flick = fast.constrain(scale(0.09), at: 1.02)
-        #expect(direction * (flick.scale - 1) > 0 && flick.hitStop == nil && fast.justHit)
-        #expect(abs(flick.scale - 1) < abs(scale(0.09) - 1))
+        var g = ZoomStopGesture(startScale: scale(-0.025), stops: [one], at: 1)
+        let near = g.constrain(scale(-0.012), at: 1.025)
+        #expect(near.scale == scale(-0.012) && near.hitStop == nil && !g.justHit)
+        #expect(g.constrain(scale(-0.019), at: 1.05).scale == scale(-0.019) && !g.justHit)
+        #expect(g.constrain(1, at: 1.08).hitStop == .percent(100) && g.justHit)
     }
 }
 
-@Test func brakingBeforeAStopRestoresCaptureAndAccelerationPushesOffIt() {
-    var g = ZoomStopGesture(startScale: pow(2, -0.4), stops: [one])
-    _ = g.constrain(pow(2, -0.4), at: 1)
+@Test func crossingNearBypassSpeedKeepsAlmostAllTravelOnEitherSideOfTheCutoff() {
+    for direction in [1.0, -1.0] {
+        for speed in [2.99, 3.01] {
+            func scale(_ offset: Double) -> Double { pow(2, offset * direction) }
+            let target = -0.04 + speed * 0.02
+            var g = ZoomStopGesture(startScale: scale(-0.04), stops: [one], at: 1)
+            let crossing = g.constrain(scale(target), at: 1.02)
+            #expect(crossing.hitStop == nil && g.justHit)
+            #expect(abs(log2(crossing.scale) - target * direction) < 0.001)
+        }
+    }
+}
+
+@Test func brakingBeforeAStopRestoresCapture() {
+    var g = ZoomStopGesture(startScale: pow(2, -0.4), stops: [one], at: 1)
     _ = g.constrain(pow(2, -0.045), at: 1.05)
     let landing = g.constrain(pow(2, -0.025), at: 1.10)
-    #expect(landing.scale == 1 && g.justHit)
-    #expect(g.constrain(pow(2, -0.006), at: 1.15).scale == 1 && !g.justHit)
-    let resumed = g.constrain(pow(2, 0.034), at: 1.155)
-    #expect(resumed.scale > 1 && resumed.scale < pow(2, 0.04) && !g.justHit)
+    #expect(landing.scale == 1 && landing.hitStop == .percent(100) && g.justHit)
 }
 
-@Test func aFlickPaysForEachDetentAndStillObeysTheZoomLimit() {
-    let stops = [one, at(.percent(105), 1.05)]
-    var g = ZoomStopGesture(startScale: 0.9, stops: stops, limits: 0.25...1.25, rubber: true)
-    _ = g.constrain(0.9, at: 1)
-    let fast = g.constrain(1.2, at: 1.02)
-    #expect(fast.scale > 1.05 && fast.scale < 1.18 && fast.hitStop == nil && g.justHit)
-    let limit = g.constrain(1.5, at: 1.04)
-    #expect(limit.scale == 1.25 && g.stretch > 1 && !g.justHit)
+@Test func heldMotionIsSignedAndUsesTheSameOriginAfterReversalOrPause() {
+    for direction in [1.0, -1.0] {
+        func scale(_ offset: Double) -> Double { pow(2, offset * direction) }
+        var g = ZoomStopGesture(startScale: scale(-0.2), stops: [one], breakaway: 0.125, at: 1)
+        #expect(g.constrain(1, at: 1.2).hitStop == .percent(100) && g.justHit)
+        for (offset, time) in [(0.09, 1.3), (-0.04, 1.4), (0.10, 1.5), (-0.124, 2.5), (-0.125, 2.6)] {
+            #expect(g.constrain(scale(offset), at: time).scale == 1 && !g.justHit)
+        }
+        let past = g.constrain(scale(-0.126), at: 2.7)
+        #expect(abs(past.scale - scale(-0.001)) < 1e-12 && past.hitStop == nil && !g.justHit)
+        let precise = g.constrain(scale(-0.146), at: 2.8)
+        #expect(abs(precise.scale - scale(-0.021)) < 1e-12 && !g.justHit)
+    }
 }
 
-@Test func zoomingOutCanPushThroughAndRecrossAStop() {
-    var g = ZoomStopGesture(startScale: 1.4, stops: [half, one, two])
-    #expect(g.constrain(0.9).hitStop == .percent(100) && g.justHit)
-    #expect(g.constrain(0.88).hitStop == .percent(100) && !g.justHit)
-    let past = g.constrain(0.8)
-    #expect(past.scale < 1 && past.scale > 0.9 && past.hitStop == nil)
-    #expect(g.constrain(1.1).hitStop == .percent(100) && g.justHit)
+@Test func releasedStopRearmsOnlyAfterClearingItsCaptureZone() {
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one], breakaway: 0.125)
+    #expect(g.constrain(1).hitStop == .percent(100))
+    #expect(g.constrain(pow(2, 0.13)).scale > 1)
+    let immediateReverse = g.constrain(pow(2, 0.12))
+    #expect(immediateReverse.scale < 1 && immediateReverse.hitStop == nil && !g.justHit)
+    #expect(g.constrain(pow(2, 0.05)).scale < 1)
+    #expect(g.constrain(pow(2, 0.15)).hitStop == .percent(100) && g.justHit)
 }
 
-@Test func reversingLeavesTheStopAtOnceWithoutUnwindingTheOvershoot() {
-    var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
-    _ = g.constrain(1.3)
-    _ = g.constrain(1.35)            // still held
-    let back = g.constrain(1.215)      // 10 % back
-    #expect(abs(back.scale - 0.9) < 1e-12 && back.hitStop == nil && !g.justHit)
+@Test func aNearbyLimitDoesNotRearmAStopWhileStillInsideItsCaptureZone() {
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one], limits: 0.25...1.005, at: 1)
+    #expect(g.constrain(1, at: 1.2).hitStop == .percent(100))
+    #expect(g.constrain(pow(2, 0.049), at: 1.4).scale == 1.005)
+    let back = g.constrain(pow(2, 0.048), at: 1.6)
+    #expect(back.scale > 1 && back.scale < 1.005 && back.hitStop == nil && !g.justHit)
 }
 
-@Test func reversingRunsToTheStopOnTheOtherSideAndClampsThere() {
-    var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
-    _ = g.constrain(1.3)
-    let low = g.constrain(0.4)       // rebased: 0.4 × (1 / 1.3) ≈ 0.31, below 50 %
-    #expect(low.scale == 0.5 && low.hitStop == .percent(50) && g.justHit)
-    let lower = g.constrain(0.39)
-    #expect(lower.scale == 0.5 && lower.hitStop == .percent(50) && !g.justHit)
+@Test func aFlickOutOfAHoldConsumesOnlyTheRemainingBreakawayTravel() {
+    var g = ZoomStopGesture(startScale: 0.9, stops: [one, at(.percent(105), 1.05)], breakaway: 0.125, at: 1)
+    #expect(g.constrain(1, at: 1.2).hitStop == .percent(100))
+    #expect(g.constrain(pow(2, 0.1), at: 1.3).scale == 1)
+    let flick = g.constrain(pow(2, 0.3), at: 1.31)
+    #expect(abs(flick.scale - pow(2, 0.175)) < 1e-12 && flick.hitStop == nil && g.justHit)
 }
 
-@Test func comingBackToALeftStopHitsItAgain() {
-    var g = ZoomStopGesture(startScale: 0.7, stops: [half, one, two])
-    _ = g.constrain(1.3)
-    _ = g.constrain(1.2)
-    #expect(g.constrain(1.4).hitStop == .percent(100) && g.justHit)
+@Test func aNewGestureStartsWithNoHoldOrConsumedTravel() {
+    var previous = ZoomStopGesture(startScale: 0.9, stops: [one])
+    let held = previous.constrain(1.1)
+    #expect(held.hitStop == .percent(100))
+    #expect(previous.constrain(1.12).scale == 1)
+    var next = ZoomStopGesture(startScale: held.scale, stops: [one])
+    #expect(next.constrain(1.01).scale == 1.01 && !next.justHit)
 }
 
 @Test func aGestureStartingOnAStopPassesItInEitherDirection() {

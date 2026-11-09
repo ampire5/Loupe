@@ -247,6 +247,8 @@ public struct Config: Equatable, Sendable {
     /// its own token and leaves a typo or a token from a newer Loupe where it was.
     private var zoomStopTokens = defaultZoomStops.map(Config.text(of:))
     public var zoomStopMode = ZoomStopMode.adaptive
+    /// `zoom-stop-breakaway`: travel in scale doublings to leave an Adaptive stop.
+    public var zoomStopBreakaway = ZoomStopGesture.defaultBreakaway
     /// `zoom-stop-haptics`: a trackpad tick when a gesture lands on a stop.
     public var zoomStopHaptics = true
     /// `zoom-animation`: milliseconds a zoom step (key, menu, double click, stop) glides, 0...1000 (`no`: 0, a jump;
@@ -687,7 +689,7 @@ public struct Config: Equatable, Sendable {
     }
 
     /// Every key loupe.conf understands, in file order.
-    public static let keys = ["zoom-stops", "zoom-stop-mode", "zoom-stop-haptics",
+    public static let keys = ["zoom-stops", "zoom-stop-mode", "zoom-stop-breakaway", "zoom-stop-haptics",
                               "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "subject-target", "subject-size", "subject-pull", "subject-recheck", "subject-analysis", "default-zoom-mode", "fit-upscale",
                               "smart-zoom", "smart-zoom-gesture", "smart-zoom-options", "zoom-anchor", "zoom-anchor-center",
                               "rmb-zoom-speed", "rmb-zoom-inertia",
@@ -782,6 +784,7 @@ public struct Config: Equatable, Sendable {
         switch key {
         case "zoom-stops": return zoomStopTokens.isEmpty ? "none" : zoomStopTokens.joined(separator: ",")
         case "zoom-stop-mode": return zoomStopMode.rawValue
+        case "zoom-stop-breakaway": return formatNumber(zoomStopBreakaway)
         case "zoom-stop-haptics": return zoomStopHaptics ? "yes" : "no"
         case "zoom-animation": return String(zoomAnimationMilliseconds)
         case "zoom-rubber-band": return zoomRubberBand ? "yes" : "no"
@@ -988,6 +991,9 @@ public struct Config: Equatable, Sendable {
             zoomStopTokens = Self.zoomStopTokens(value)
         case "zoom-stop-mode":
             if let v = ZoomStopMode(rawValue: value.lowercased()) { zoomStopMode = v } else { return .badValue }
+        case "zoom-stop-breakaway":
+            guard let v = Double(value), (0.005...0.5).contains(v) else { return .badValue }
+            zoomStopBreakaway = v
         case "zoom-stop-haptics":
             if let v = Self.bool(value) { zoomStopHaptics = v } else { return .badValue }
         case "zoom-animation":
