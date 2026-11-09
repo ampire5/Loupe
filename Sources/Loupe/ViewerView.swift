@@ -695,7 +695,7 @@ import QuartzCore
     }
 
     /// Pinch zooms around the cursor: the image point under it stays put. One gesture (phase began →
-    /// ended) pauses at each zoom stop it reaches; continuing the pinch pushes through. If something else
+    /// ended) settles on nearby stops when slow and passes them with less resistance when fast. If something else
     /// changed the transform mid-pinch (a key, a new photo, a resize) the stops are recomputed from there.
     /// With `zoom-rubber-band` a pinch past a zoom limit stretches about the fingers (`ZoomStopGesture.stretch`), and
     /// lifting them springs back to the limit (M4b spec §3).
@@ -711,7 +711,7 @@ import QuartzCore
         }
         guard var p = pinch else { return }
         p.proposed *= max(0.01, 1 + event.magnification)
-        let r = p.stops.constrain(p.proposed)
+        let r = p.stops.constrain(p.proposed, at: event.timestamp)
         let anchor = gestureAnchor(viewPoint(event))
         DebugLog.log("magnify \(event.magnification) -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (p.stops.stretch == 1 ? "" : " stretch \(p.stops.stretch)"))
@@ -1369,7 +1369,8 @@ import QuartzCore
                           inverted: config.rmbZoomInvert)
         rmbVelocity.reset()
         rmbDy = 0
-        rmbStops = ZoomStopGesture(transform: session.transform, stops: config.zoomStops, rubber: config.zoomRubberBand)
+        rmbStops = ZoomStopGesture(transform: session.transform, stops: config.zoomStops,
+                                   rubber: config.zoomRubberBand, at: event.timestamp)
         rmbAxis.reset()
         rmbPress = pointer
         rmbCentring = subjectCentring(session.transform)
@@ -1412,7 +1413,7 @@ import QuartzCore
         }
         let dy = (p.y - press.y) / k
         let doublings = zoom.doublings(dyPoints: dy)
-        let r = stops.constrain(zoom.scale(doublings: doublings))
+        let r = stops.constrain(zoom.scale(doublings: doublings), at: event.timestamp)
         rmbStops = stops
         rmbDy = dy
         rmbVelocity.add(doublings, at: event.timestamp)
@@ -1675,21 +1676,22 @@ import QuartzCore
     /// `stepsPerRevolution` per turn (the package's sign: left = positive on the MX Master 4), right = in unless
     /// `thumb-zoom-invert`, by `thumb-zoom-speed` doublings per turn, at once (no animation, as a pinch). A turn of the wheel (`began`) is a new gesture, as is one after something else changed the transform;
     /// `thumb-zoom-stops` says whether a stop briefly resists the turn or only ticks. The mouse answers as for `zoom-step`.
-    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool) {
+    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, at timestamp: TimeInterval) {
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         guard !isCheatSheetOpen() else { return }
         let config = Settings.shared.config
         let doublings = ThumbZoom.doublings(delta: config.thumbZoomInvert ? delta : -delta,
                                             stepsPerRevolution: stepsPerRevolution, speed: config.thumbZoomSpeed)
+        if began { thumbZoom = nil }
         guard doublings != 0 else { return }
         stopInertia()
         let t = session.transform
-        if began || thumbZoom?.last != t {
+        if thumbZoom?.last != t {
             thumbZoom = (ThumbZoom(transform: t, stops: config.zoomStops, mode: config.thumbZoomStops), t)
         }
         guard var z = thumbZoom?.zoom else { return }
-        let r = z.turn(doublings: doublings)
+        let r = z.turn(doublings: doublings, at: timestamp)
         let shown = t.zoomed(toScale: r.scale, anchor: gestureAnchor(cursorOrCentre()))
         DebugLog.log("thumb zoom \(delta)/\(stepsPerRevolution): \(t.scale) -> \(r.scale)"
                      + (r.stop.map { " stop \($0)" } ?? "") + (r.bump.map { " \($0)" } ?? ""))

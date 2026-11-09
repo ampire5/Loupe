@@ -56,16 +56,20 @@ public enum ZoomStops {
 }
 
 /// The stops for one continuous pinch, right-button drag or thumb-wheel turn. Feed the cumulative scale
-/// proposed by the input. A crossing lands exactly on the stop and discards that event's overshoot so
-/// even a large event can land. Further travel in the same direction spends a small amount of motion
-/// before leaving; reversing or starting a new gesture can leave immediately.
+/// proposed by the input and the event time. Slow motion snaps slightly early and needs more travel
+/// to leave. A flick keeps its excess motion and may cross in one event, still reporting the detent.
+/// Untimed input (mouse coast) lands exactly on the first stop.
 public struct ZoomStopGesture: Sendable {
     /// Relative distance within which the start counts as on a stop. Below half `mergeTolerance`, so it
     /// can only ever be on one.
     public static let startTolerance = 0.005
 
-    /// The same 0.08 doublings in either direction: about 6% extra scale input, or 16 pt at the default RMB speed.
-    private static let pushRatio = pow(2.0, 0.08)
+    // Speeds are in doublings/s, and detent travel is in doublings, independent of the current scale.
+    private static let slowSpeed = 0.5
+    private static let fastSpeed = 3.0
+    private static let slowTravel = 0.11
+    private static let fastTravel = 0.018
+    private static let captureDistance = 0.012
     private static let reachTolerance = 1e-12
 
     private let stops: [ZoomStopScale]
@@ -77,12 +81,14 @@ public struct ZoomStopGesture: Sendable {
     /// Output = proposed × rebase. Rebase when travel is consumed, so reversing needs no unwind.
     private var rebase = 1.0
     private var resting: ZoomStop?
-    private var hold: (increasing: Bool, breakthrough: Double)?
+    private var hold: (increasing: Bool, remaining: Double)?
+    private var lastTime: TimeInterval?
+    private var velocity: Double?
     var isRestingOnStop: Bool {
         resting != nil || stops.contains { abs($0.scale - current) <= Self.reachTolerance * current }
     }
 
-    /// True only on arrival, for a single haptic tick.
+    /// True when an event lands on or passes a stop, for one haptic tick.
     public private(set) var justHit = false
     /// Whether the zoom limits stretch (`zoom-rubber-band`) instead of absorbing. Turning it off drops the
     /// stretch; from then on the gesture behaves as without it (the right-button coast does this).
@@ -94,12 +100,14 @@ public struct ZoomStopGesture: Sendable {
     public private(set) var stretch = 1.0
 
     /// `stops` ascending (as `ZoomStops.scales` gives them); `limits` are the zoom limits, if any.
-    public init(startScale: Double, stops: [ZoomStopScale], limits: ClosedRange<Double>? = nil, rubber: Bool = false) {
+    public init(startScale: Double, stops: [ZoomStopScale], limits: ClosedRange<Double>? = nil, rubber: Bool = false,
+                at timestamp: TimeInterval? = nil) {
         self.stops = stops
         self.limits = limits
         self.rubber = rubber
         current = startScale
         lastProposed = startScale
+        lastTime = timestamp
         // An exact match is already excluded by the strict crossing check. Treat only an approximate
         // match as a departure in progress.
         startStop = stops.first {
@@ -109,48 +117,77 @@ public struct ZoomStopGesture: Sendable {
     }
 
     /// A gesture from `transform` with the configured `stops` and the transform's zoom limits.
-    public init(transform: ViewTransform, stops: [ZoomStop], rubber: Bool = false) {
+    public init(transform: ViewTransform, stops: [ZoomStop], rubber: Bool = false, at timestamp: TimeInterval? = nil) {
         self.init(startScale: transform.scale, stops: ZoomStops.scales(of: stops, for: transform),
-                  limits: transform.scaleLimits, rubber: rubber)
+                  limits: transform.scaleLimits, rubber: rubber, at: timestamp)
     }
 
     /// The scale to show for `proposedScale`, and the stop it rests on (nil between stops). An invalid
     /// proposal (non-positive, NaN) keeps the current scale.
-    public mutating func constrain(_ proposedScale: Double) -> (scale: Double, hitStop: ZoomStop?) {
+    public mutating func constrain(_ proposedScale: Double, at timestamp: TimeInterval? = nil)
+        -> (scale: Double, hitStop: ZoomStop?) {
         justHit = false
         let tol = Self.reachTolerance
-        guard proposedScale.isFinite, proposedScale > 0, proposedScale != lastProposed else {
-            return (current, resting)
-        }
+        guard proposedScale.isFinite, proposedScale > 0 else { return (current, resting) }
+        let previous = lastProposed
+        let fast = speedBlend(proposedScale, at: timestamp)
+        guard proposedScale != previous else { return (current, resting) }
         // An ulp of input noise must not release and immediately re-arm a held stop.
-        if resting != nil, abs(proposedScale - lastProposed) <= lastProposed * tol {
+        if resting != nil, abs(proposedScale - previous) <= previous * tol {
             return (current, resting)
         }
-        let increasing = proposedScale > lastProposed
+        let increasing = proposedScale > previous
+        let direction = increasing ? 1.0 : -1.0
         lastProposed = proposedScale
+        let travel = fast.map { Self.slowTravel + (Self.fastTravel - Self.slowTravel) * $0 } ?? 0.08
+        let rawWanted = proposedScale * rebase
+        var wanted = rawWanted
 
-        if let hold {
-            if increasing == hold.increasing {
-                let passed = increasing ? proposedScale > hold.breakthrough * (1 + tol)
-                                        : proposedScale < hold.breakthrough * (1 - tol)
-                if !passed {
-                    rebase = current / proposedScale
-                    return (current, resting)
-                }
-                // Spend only the travel needed to push through; the remainder zooms at the normal rate.
-                rebase = current / hold.breakthrough
+        if let hold, increasing == hold.increasing {
+            // Spend the remaining fraction of the detent at the current speed. Acceleration can lower
+            // the cost of new input, but cannot release any travel already consumed.
+            let cost = hold.remaining * travel
+            let motion = direction * (log2(proposedScale) - log2(previous))
+            if motion <= cost + tol {
+                self.hold?.remaining = max(0, hold.remaining - motion / travel)
+                rebase = current / proposedScale
+                return (current, resting)
             }
-            self.hold = nil
+            wanted = current * pow(2, direction * (motion - cost))
+        }
+        hold = nil
+
+        let capture = pow(2, Self.captureDistance * (fast.map { 1 - $0 } ?? 0))
+        var stop: ZoomStop?
+        for offset in stops.indices {
+            let point = stops[increasing ? offset : stops.count - 1 - offset]
+            guard point != startStop else { continue }
+            let s = point.scale
+            let atLimit = limits.map { s <= $0.lowerBound * (1 + tol) || s >= $0.upperBound * (1 - tol) } ?? false
+            let window = atLimit ? 1 : capture
+            let reached = increasing
+                ? s > current * (1 + tol) && wanted >= s * (1 - tol) / window
+                : s < current * (1 - tol) && wanted <= s * (1 + tol) * window
+            guard reached else { continue }
+
+            justHit = true
+            if atLimit {
+                // Preserve the raw overshoot for the rubber band.
+                stop = point.stop
+                break
+            }
+            let overshoot = max(0, direction * (log2(wanted) - log2(s))) * (fast ?? 0)
+            if overshoot <= travel + tol {
+                wanted = s
+                stop = point.stop
+                hold = (increasing, max(0, 1 - overshoot / travel))
+                break
+            }
+            wanted = s * pow(2, direction * (overshoot - travel))
         }
 
-        let wanted = proposedScale * rebase
-        let crossed = increasing
-            ? stops.first { $0 != startStop && $0.scale > current * (1 + tol) && wanted >= $0.scale * (1 - tol) }
-            : stops.last { $0 != startStop && $0.scale < current * (1 - tol) && wanted <= $0.scale * (1 + tol) }
         var scale = wanted
-        if let crossed {
-            scale = crossed.scale
-        } else if let limits {
+        if let limits {
             if wanted >= limits.upperBound * (1 - tol) {
                 scale = limits.upperBound
             } else if wanted <= limits.lowerBound * (1 + tol) {
@@ -171,25 +208,37 @@ public struct ZoomStopGesture: Sendable {
                 stretching = true
             }
         }
-        let stop = crossed?.stop ?? (scale == current ? resting : nil)
-        if crossed != nil {
-            let atLimit = limits.map {
-                scale <= $0.lowerBound * (1 + tol) || scale >= $0.upperBound * (1 - tol)
-            } ?? false
-            if !atLimit {
-                hold = (increasing, increasing ? proposedScale * Self.pushRatio : proposedScale / Self.pushRatio)
-            }
-        }
-        if scale != wanted && !stretching { rebase = scale / proposedScale }
+        let effectiveScale = stretching ? wanted : scale
+        if effectiveScale != rawWanted { rebase = effectiveScale / proposedScale }
         if let startStop, abs(startStop.scale - scale) > Self.startTolerance * scale
             || (current < startStop.scale) != (scale < startStop.scale) {
             self.startStop = nil
         }
-        justHit = crossed != nil
+        if stop == nil, scale == current { stop = resting }
         resting = stop
         current = scale
         return (scale, stop)
     }
+
+    /// Track the speed of the raw gesture, so holding the displayed scale does not slow the estimate.
+    /// React quickly to a flick, smooth short fluctuations, and forget the speed after a pause.
+    private mutating func speedBlend(_ proposal: Double, at timestamp: TimeInterval?) -> Double? {
+        guard !stops.isEmpty, let timestamp, timestamp.isFinite else { return nil }
+        defer { lastTime = timestamp }
+        guard let lastTime, timestamp > lastTime, timestamp - lastTime <= 0.12 else {
+            velocity = nil
+            return 0
+        }
+        let dt = timestamp - lastTime
+        let sample = (log2(proposal) - log2(lastProposed)) / max(dt, 0.001)
+        let previous = velocity ?? sample
+        let smoothing = abs(sample) > abs(previous) ? 0.006 : 0.018
+        let filtered = sample * previous < 0 ? sample : sample + (previous - sample) * exp(-dt / smoothing)
+        velocity = filtered
+        let t = min(1, max(0, (abs(filtered) - Self.slowSpeed) / (Self.fastSpeed - Self.slowSpeed)))
+        return t * t * (3 - 2 * t)
+    }
+
 }
 
 /// What a `zoomStepped` step ran into, for the mouse's haptics (M4c spec §5, §12.3): a `zoom-stops` stop it landed on

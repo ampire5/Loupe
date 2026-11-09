@@ -577,9 +577,9 @@ import UniformTypeIdentifiers
         mouseClient = client
         MouseButtons.shared.heardSideButtons = { [weak client] in client?.watching ?? [] }
         client.onButton = { cid, pressed, time in Self.button(cid, pressed: pressed, at: time) }
-        client.onThumbWheel = { [weak client] delta, touching, phase, _ in
+        client.onThumbWheel = { [weak client] delta, touching, phase, time in
             Self.thumbWheel(delta: delta, touching: touching, phase: phase,
-                            stepsPerRevolution: client?.device.thumbWheelStepsPerRevolution)
+                            stepsPerRevolution: client?.device.thumbWheelStepsPerRevolution, at: time)
         }
         client.onAvailability = { DebugLog.log("mx MouseService \($0 ? "connected" : "not available")") }
         divertMouseInputs()
@@ -620,7 +620,8 @@ import UniformTypeIdentifiers
     /// The thumb wheel: a held button's binding first, else (`thumb-wheel-zoom`) the key window's zoom, or on Home the
     /// card size. The turn size comes with the mouse's description; a step without it (which should not happen) cannot
     /// be scaled to `input.conf`'s steps and is dropped.
-    private static func thumbWheel(delta: Int, touching: Bool, phase: ThumbPhase, stepsPerRevolution: Int?) {
+    private static func thumbWheel(delta: Int, touching: Bool, phase: ThumbPhase,
+                                   stepsPerRevolution: Int?, at time: TimeInterval) {
         DebugLog.log("mx thumb wheel \(delta) touching \(touching) \(phase) per turn \(stepsPerRevolution ?? 0)")
         guard let perTurn = stepsPerRevolution,
               !MouseButtons.shared.thumbWheel(delta: delta, stepsPerRevolution: perTurn),
@@ -628,7 +629,7 @@ import UniformTypeIdentifiers
         if let controller = NSApp.keyWindow?.windowController as? ViewerWindowController, controller.isShowingHome {
             controller.homeThumbWheel(delta: delta, stepsPerRevolution: perTurn)
         }
-        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn, began: phase == .began)
+        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn, began: phase == .began, at: time)
     }
 
 

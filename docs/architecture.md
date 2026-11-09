@@ -164,6 +164,7 @@ middle-button scrolling must cross a wheel step (12 precise points or one notche
 State is local to the existing input owners; no polling, new queues or dependencies are introduced.
 
 `ZoomStopGesture` resolves continuous zoom stops for right-button drag, pinch and the thumb wheel's Pause
-mode. It reports one haptic event on exact landing and lets continued input spend a little extra travel
-to pass the stop. Reversal is immediate; mouse inertia stops at the first landing and stays idle if the
-drag releases on a stop. The minimum and maximum zoom remain limits, with the existing optional stretch.
+mode. It uses raw input speed to capture stops slightly early during slow movement and lets faster gestures
+carry more of their travel through. It reports one haptic event per input event that reaches or crosses a stop.
+Reversal is immediate. Mouse inertia stops at its first landing and stays idle if the drag releases on a stop.
+The minimum and maximum zoom remain limits, with the existing optional stretch.

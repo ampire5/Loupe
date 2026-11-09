@@ -60,7 +60,7 @@ import Testing
                 #expect(session.smartZoom.mode == mode)
                 #expect(!request.matches(photo: photo, revision: session.smartZoomRevision, enabled: true))
             }
-            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true)
+            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true, at: 1)
             #expect(session.smartZoom.mode == mode)
             let manual = NSMenuItem(); manual.representedObject = KeyAction.manualZoom.rawValue
             view.performKeyAction(manual)

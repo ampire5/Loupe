@@ -83,7 +83,7 @@ extension SettingsPanel {
                         .choice("thumb-zoom-stops", "Zoom stops", [
                             (word: "tick", title: "Tick"), (word: "halt", title: "Pause"),
                         ], description: "Tick: the zoom goes through a stop and the mouse ticks (Zoom stop haptic); "
-                            + "Pause: the zoom lands on the stop and ticks. Keep turning to push through. Default Pause."),
+                            + "Pause: slow turns settle on a stop. Faster turns pass with less resistance. Default Pause."),
                         .toggle("thumb-zoom-invert", "Invert",
                                 description: "Left zooms in, right out. Default off."),
                     ]),

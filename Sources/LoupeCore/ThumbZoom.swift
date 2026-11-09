@@ -1,7 +1,7 @@
 import Foundation
 
 /// `thumb-zoom-stops`: what the thumb-wheel zoom does at a `zoom-stops` stop. `tick`: it goes through, the mouse ticks
-/// (`haptic-zoom-stop`); `halt` (the default): it lands exactly on each stop, then continued turning pushes through.
+/// (`haptic-zoom-stop`); `halt` (the default): slow turns land on a stop and faster turns pass with less resistance.
 public enum ThumbZoomStops: String, CaseIterable, Sendable {
     case tick, halt
 }
@@ -40,7 +40,7 @@ public struct ThumbZoom: Sendable {
 
     /// The scale after `doublings` more, the stop it rests on (`halt` only; nil between stops and with `tick`), and
     /// the bump to play, if any.
-    public mutating func turn(doublings: Double) -> (scale: Double, stop: ZoomStop?, bump: ZoomStepBump?) {
+    public mutating func turn(doublings: Double, at timestamp: TimeInterval? = nil) -> (scale: Double, stop: ZoomStop?, bump: ZoomStepBump?) {
         guard doublings.isFinite, doublings != 0 else { return (current, nil, nil) }
         let old = current
         proposed *= pow(2, doublings)
@@ -48,7 +48,7 @@ public struct ThumbZoom: Sendable {
         var hitStop = false
         switch mode {
         case .halt:
-            let r = halting.constrain(proposed)
+            let r = halting.constrain(proposed, at: timestamp)
             current = r.scale
             stop = r.hitStop
             hitStop = halting.justHit
