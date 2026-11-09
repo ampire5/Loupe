@@ -118,11 +118,15 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 
 ### Viewer toolbar and full screen
 
-The native toolbar puts navigation, zoom and SmartZoom next to a compact summary of the current photo and framing profile. Open photo information with `⌘I` in either the viewer or File View; File View keeps the inspector docked beside the grid as you move through the selection.
+The native toolbar puts navigation, zoom and SmartZoom next to a compact summary of the current photo and framing profile.
 
 <p align="center"><img src="docs/images/viewer-toolbar.webp" alt="Native photo viewer toolbar with navigation, zoom, SmartZoom and the camera and framing summary"></p>
 
 In full screen, the header stays expanded by default when the tab bar is visible, so the tabs stay in place. Set **Settings → Interface → Full Screen → Tabs → Auto** to hide the tabs and toolbar together. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
+
+In File View, `⌘I` docks the information inspector beside the grid. It updates as you select another photo, and Loupe remembers the panel width and which sections you collapsed.
+
+<p align="center"><img src="docs/images/browser-inspector.webp" width="82%" alt="Loupe File View with sample images and a docked inspector showing EXIF, file details and Last Viewed"></p>
 
 ### SmartZoom
 
