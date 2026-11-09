@@ -61,6 +61,9 @@ import QuartzCore
     var onSpreadKey: ((KeyAction) -> Bool)?
     /// `i` pressed; the window controller owns the stats bar.
     var onToggleStats: (() -> Void)?
+    var onDoubleTapStatus: (() -> Void)?
+    var onShowToolbar: ((Bool) -> Void)?
+    var onShowStrip: ((Bool) -> Void)?
     var onToggleToolbarPin: (() -> Void)?
     /// `t` pressed; the window controller owns the thumbnail strip.
     var onToggleStrip: (() -> Void)?
@@ -126,17 +129,30 @@ import QuartzCore
     private var pinch: Pinch?
     /// The thumb wheel's zoom gesture (`thumbWheelZoom`) and the transform it last showed.
     private var thumbZoom: (zoom: ThumbZoom, last: ViewTransform)?
-    private struct Pinch { var stops: ZoomStopGesture; var proposed: Double; var last: ViewTransform; var centring: Centring? }
+    private struct Pinch { var stops: ZoomStopGesture; var proposed: Double; var last: ViewTransform; var bumps = ZoomBumps() }
     /// A gesture zooming in towards the subject brings it to the centre (`zoom-anchor-center`, `SubjectCentring`): its
     /// image point, where it was on screen and the scale at the gesture's start, the framing's scale.
     private struct Centring { var image: CGPoint; var start: CGPoint; var startScale: Double; var target: Double }
     private var rmbCentring: Centring?
     /// Three-finger swipe recogniser, fed from raw touches (see "Three-finger swipe" below).
-    private var threeFingerSwipe = ThreeFingerSwipe()
+    private var threeFingerSwipe = ThreeFingerSwipe(allowsReversal: true)
     /// Fingers on the trackpad right now (from the touch events), and the scroll filter that uses it: it
     /// stops a three-finger swipe from panning, and remembers where the picture was when the current
     /// scroll gesture began so the swipe can undo what the two earlier fingers already did.
     private var touchCount = 0
+    private var primaryClickGestures = PrimaryClickGestures()
+    private struct HeldTrackpadSwipe {
+        enum Input { case touches, scroll }
+        let button: Int
+        var input: Input?
+        var touches = ThreeFingerSwipe(allowsReversal: true)
+        var travel = CGVector.zero
+        var reversal: ThreeFingerSwipe.HorizontalReversal?
+    }
+    private var heldTrackpadSwipe: HeldTrackpadSwipe?
+    private var trackpadButton: Int?
+    private var ignoreTouchesUntilLift = false
+    private var panFingerSign = 1.0
     private var scrollGuard = ScrollGestureGuard<ScrollStart>()
     private struct ScrollStart { var center: CGPoint; var mode: ZoomMode }
     /// Left-drag release velocity (fed in `mouseDown`/`mouseDragged`) and the glide that follows it. The
@@ -431,6 +447,10 @@ import QuartzCore
             return
         }
         if event.hasPreciseScrollingDeltas {
+            if threeFingerSwipe.hasRecognizedSwipe || ignoreTouchesUntilLift {
+                releaseRubber()
+                return
+            }
             if phase.contains(.began) { rubber.beginGesture() }
             let fingersOff = momentum.isEmpty ? !phase.isDisjoint(with: [.ended, .cancelled])
                                               : !momentum.isDisjoint(with: [.ended, .cancelled])
@@ -442,7 +462,14 @@ import QuartzCore
                 return
             }
             DebugLog.log("scroll pan \(event.scrollingDeltaX), \(event.scrollingDeltaY)\(momentum.isEmpty ? "" : " momentum")")
-            let k = backing
+            if momentum.isEmpty {
+                if touchCount >= 2 {
+                    panFingerSign = FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
+                } else if phase.contains(.began) || phase.isEmpty {
+                    panFingerSign = 1
+                }
+            }
+            let k = backing * panFingerSign
             let delta = CGVector(dx: event.scrollingDeltaX * k, dy: event.scrollingDeltaY * k)
             if !momentum.isEmpty {
                 // Every momentum event, an empty one too, so the next one's speed is over the gap from this one.
@@ -525,8 +552,14 @@ import QuartzCore
     /// would replace the playlist under the scrub.
     private func folderScrollConsumed(_ event: NSEvent, delta: GestureAxisLock.Delta?) -> Bool {
         let config = Settings.shared.config
-        guard config.folderScrollGesture, !isStripPressed() else { return false }
+        guard !isStripPressed() else { return false }
         let precise = event.hasPreciseScrollingDeltas
+        if precise, heldTrackpadSwipe != nil {
+            scrollHeldTrackpad(event)
+            return true
+        }
+        guard config.folderScrollGesture else { return false }
+        if precise, trackpadButton != nil, !heldButtons.isEmpty { return true }
         // Fingers and notches by `folder-scroll-direction` (`FolderScrollDirection.factor`).
         let k = config.folderScrollDirection.factor(precise: precise, invertedFromDevice: event.isDirectionInvertedFromDevice)
         let momentum = ScrollPhase(rawValue: event.momentumPhase.rawValue)
@@ -561,7 +594,8 @@ import QuartzCore
             refreshCursor()
         }
         switch step {
-        case .next, .previous: goFolder(step == .next ? 1 : -1, from: "held-button scroll")
+        case .next, .previous:
+            goFolder(step == .next ? 1 : -1, from: "held-button scroll", trackpad: precise && touchCount > 0)
         case .up, .down:
             // Vertical by the fingers, whatever `folder-scroll-direction` did to the deltas (it turns dy with dx).
             let fingersDown = (step == .down) == (config.folderScrollDirection == .natural)
@@ -580,14 +614,83 @@ import QuartzCore
         return true
     }
 
-    /// The force click's stage in the current press (0 up, 1 click, 2 force click): `TP_FORCE` fires on reaching 2.
-    private var pressureStage = 0
+    private func beginHeldTrackpadPress(_ event: NSEvent) -> Bool {
+        guard !event.modifierFlags.contains(.control), (1...3).contains(touchCount) else { return false }
+        trackpadButton = event.buttonNumber
+        guard touchCount == 3 else { return false }
+        heldTrackpadSwipe = HeldTrackpadSwipe(button: event.buttonNumber)
+        primaryClickGestures = PrimaryClickGestures()
+        threeFingerSwipe.reset()
+        resetScrollGesture()
+        stopInertiaAtZoomTarget()
+        window?.makeFirstResponder(self)
+        cursorAutohide.activity()
+        return true
+    }
+
+    private func endHeldTrackpadPress(_ event: NSEvent) -> Bool {
+        if trackpadButton == event.buttonNumber { trackpadButton = nil }
+        guard heldTrackpadSwipe?.button == event.buttonNumber else { return false }
+        heldTrackpadSwipe = nil
+        ignoreTouchesUntilLift = touchCount > 0
+        folderScroll.buttonsReleased()
+        _ = scrollGuard.swipeFired()
+        return true
+    }
+
+    /// A physical press can produce a raw touch stream and a precise scroll stream.
+    /// The first to recognize a direction owns the press. Only horizontal travel can reverse.
+    private func scrollHeldTrackpad(_ event: NSEvent) {
+        guard event.momentumPhase.isEmpty, touchCount == 3, var swipe = heldTrackpadSwipe,
+              swipe.input != .touches else { return }
+        if swipe.input == .scroll, swipe.reversal == nil { return }
+        let sign = FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
+        swipe.travel.dx += sign * event.scrollingDeltaX
+        swipe.travel.dy += sign * event.scrollingDeltaY
+        let x = swipe.travel.dx, y = swipe.travel.dy
+        let threshold = Settings.shared.config.folderScrollThreshold
+        let step: ThreeFingerSwipe.Step?
+        if swipe.reversal != nil {
+            step = swipe.reversal?.update(x: x, distance: threshold)
+        } else if abs(x) >= threshold, abs(x) > abs(y) * ThreeFingerSwipe.dominance {
+            let first: ThreeFingerSwipe.Step = x < 0 ? .next : .previous
+            swipe.input = .scroll
+            swipe.reversal = .init(x: x, first: first)
+            step = first
+        } else if abs(y) >= threshold, abs(y) > abs(x) * ThreeFingerSwipe.dominance {
+            swipe.input = .scroll
+            step = y < 0 ? .up : .down
+        } else {
+            step = nil
+        }
+        heldTrackpadSwipe = swipe
+        if let step { performHeldTrackpadSwipe(step, at: event.timestamp) }
+    }
+
+    private func performHeldTrackpadSwipe(_ step: ThreeFingerSwipe.Step, at time: TimeInterval) {
+        switch step {
+        case .next, .previous:
+            let config = Settings.shared.config
+            guard config.folderScrollGesture else { return }
+            let next = (step == .next) == (config.folderScrollDirection == .natural)
+            goFolder(next ? 1 : -1, from: "held trackpad click", trackpad: true)
+        case .up, .down:
+            if !performTrackpad(step == .up ? .clickUp : .clickDown, at: time) {
+                onShowToolbar?(step == .down)
+                navigationFeedback(for: "toolbar")
+            }
+        case .tap, .doubleTap: break
+        }
+    }
 
     override func pressureChange(with event: NSEvent) {
-        let stage = event.stage
-        defer { pressureStage = stage }
-        guard stage == 2, pressureStage < 2 else { return }
-        performTrackpad(.forceClick, at: event.timestamp)
+        let force = primaryClickGestures.pressure(stage: event.stage)
+        guard force, touchCount < 2, heldTrackpadSwipe == nil else { return }
+        if Settings.shared.inputMap.mouse(.forceClick, .tap) == .action(.toggleInfoPanel) {
+            onToggleInfoPanel?()
+        } else {
+            _ = performTrackpad(.forceClick, at: event.timestamp)
+        }
     }
 
     /// A precise scroll over the thumbnail strip, which scrubs with it unless this says the gesture is spent: it stops a
@@ -600,6 +703,7 @@ import QuartzCore
         if MouseButtons.shared.wheel(event, delta: scroll) { return true }   // a held button's wheel binding takes it
         stopInertiaAtZoomTarget()   // the strip scrubs photos
         if folderScrollConsumed(event, delta: scroll) { return true }
+        if threeFingerSwipe.hasRecognizedSwipe || ignoreTouchesUntilLift { return true }
         let t = session.transform
         let free = scrollGuard.scroll(phase: ScrollPhase(rawValue: event.phase.rawValue),
                                       momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
@@ -707,18 +811,20 @@ import QuartzCore
         let config = Settings.shared.config
         if event.phase.contains(.began) || pinch?.last != t {
             pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: config.zoomStops, rubber: config.zoomRubberBand),
-                          proposed: t.scale, last: t, centring: subjectCentring(t))
+                          proposed: t.scale, last: t)
         }
         guard var p = pinch else { return }
         p.proposed *= max(0.01, 1 + event.magnification)
         let r = p.stops.constrain(p.proposed)
-        let anchor = gestureAnchor(viewPoint(event))
+        let anchor = viewPoint(event)
+        session.subjectZoom = false
         DebugLog.log("magnify \(event.magnification) -> \(r.scale)\(r.hitStop.map { " stop \($0)" } ?? "")"
                      + (p.stops.stretch == 1 ? "" : " stretch \(p.stops.stretch)"))
-        let zoomed = p.centring.map { centred($0, t, scale: r.scale) }
-            ?? t.zoomed(toScale: r.scale, anchor: anchor)
-        session.transform = zoomed.withStretch(Self.zoomStretch(p.stops.stretch, anchor: anchor))
-        zoomStopFeedback(justHit: p.stops.justHit)
+        session.transform = t.zoomed(toScale: r.scale, anchor: anchor)
+            .withStretch(Self.zoomStretch(p.stops.stretch, anchor: anchor))
+        let bump = p.bumps.frame(scale: r.scale, stretch: p.stops.stretch, limits: t.scaleLimits, landedOnStop: p.stops.justHit)
+        if p.stops.justHit, config.zoomStopHaptics { zoomStopFeedback(justHit: true) }
+        else if bump == .limit { navigationFeedback(for: "zoom limit", pattern: .alignment) }
         p.last = session.transform
         guard event.phase.contains(.ended) || event.phase.contains(.cancelled) else {
             pinch = p
@@ -738,6 +844,7 @@ import QuartzCore
         session.subjectZoom = false   // a gesture: leaves Zoom to Subject
         subjectZoomPress = nil
         animateZoom(to: zoomBase.toggledFitActual(anchor: viewPoint(event)))
+        navigationFeedback(for: "fit / actual size")
     }
 
     /// A gesture's zoom stretch factor as the transform's stretch about `anchor`: none at 1 (inside the limits).
@@ -757,7 +864,23 @@ import QuartzCore
     /// A tick on the trackpad when a gesture lands on a stop (once per landing), unless turned off.
     private func zoomStopFeedback(justHit: Bool) {
         guard justHit, Settings.shared.config.zoomStopHaptics else { return }
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        trackpadFeedback(.alignment, for: "zoom stop")
+    }
+
+    private func navigationFeedback(for event: String, pattern: NSHapticFeedbackManager.FeedbackPattern = .generic) {
+        guard Settings.shared.config.trackpadNavigationHaptics else { return }
+        trackpadFeedback(pattern, for: event)
+    }
+
+    private func trackpadFeedback(_ pattern: NSHapticFeedbackManager.FeedbackPattern, for event: String) {
+        let selected: NSHapticFeedbackManager.FeedbackPattern = switch Settings.shared.config.trackpadHapticPattern {
+        case .automatic: pattern
+        case .generic: .generic
+        case .alignment: .alignment
+        case .levelChange: .levelChange
+        }
+        DebugLog.log("trackpad haptic requested: \(event) (\(selected.rawValue))")
+        NSHapticFeedbackManager.defaultPerformer.perform(selected, performanceTime: .now)
     }
 
     // MARK: Three-finger swipe
@@ -823,6 +946,11 @@ import QuartzCore
     private func resetTouches() {
         threeFingerSwipe.reset()
         touchCount = 0
+        heldTrackpadSwipe = nil
+        trackpadButton = nil
+        ignoreTouchesUntilLift = false
+        primaryClickGestures = PrimaryClickGestures()
+        panFingerSign = 1
         scrollGuard.fingersLifted()
     }
 
@@ -831,6 +959,39 @@ import QuartzCore
         // were cancelled are no longer in it.
         let points = event.touches(matching: .touching, in: self).map(\.normalizedPosition)
         touchCount = points.count
+        let statusTap = primaryClickGestures.touches(points, at: event.timestamp, interval: NSEvent.doubleClickInterval)
+        if statusTap, !ignoreTouchesUntilLift, heldTrackpadSwipe == nil, !isStripPressed() {
+            onDoubleTapStatus?()
+            navigationFeedback(for: "status bar")
+        }
+        if ignoreTouchesUntilLift {
+            if points.isEmpty {
+                ignoreTouchesUntilLift = false
+                scrollGuard.fingersLifted()
+            }
+            return
+        }
+        if heldTrackpadSwipe == nil, let button = trackpadButton, touchCount == 3,
+           !heldButtons.isEmpty, !isStripPressed() {
+            if let start = dragStart, dragPoint != nil { restoreTransform(start) }
+            if let start = rmbZoom?.start, rmbDragging { restoreTransform(start) }
+            if button == 1 { MouseButtons.shared.release(.right, at: event.timestamp) }
+            endRMBZoom()
+            dragPoint = nil
+            primaryClickGestures = PrimaryClickGestures()
+            dragStart = nil
+            dragVelocity.reset()
+            heldTrackpadSwipe = HeldTrackpadSwipe(button: button)
+            refreshCursor()
+        }
+        if var swipe = heldTrackpadSwipe {
+            guard swipe.input != .scroll else { return }
+            let step = swipe.touches.update(touches: points, at: event.timestamp)
+            if swipe.touches.hasRecognizedSwipe { swipe.input = .touches }
+            heldTrackpadSwipe = swipe
+            if let step { performHeldTrackpadSwipe(step, at: event.timestamp) }
+            return
+        }
         if points.isEmpty { scrollGuard.fingersLifted() }
         // A click held while two fingers swipe is the folder gesture; with the clicking finger counted it would
         // also look like a three-finger photo swipe. Start the swipe afresh once the button is up.
@@ -838,7 +999,7 @@ import QuartzCore
             threeFingerSwipe.reset()
             return
         }
-        guard let step = threeFingerSwipe.update(touches: points, at: event.timestamp) else { return }
+        guard let step = threeFingerSwipe.update(touches: points, at: event.timestamp, doubleTapInterval: NSEvent.doubleClickInterval) else { return }
         DebugLog.log("three fingers -> \(step)")
         if step == .tap {
             performTrackpad(.threeTap, at: event.timestamp)
@@ -854,9 +1015,23 @@ import QuartzCore
             session.transform = t
         }
         switch step {
-        case .next, .previous: session.go(by: step == .next ? 1 : -1)
-        case .up: performTrackpad(.threeUp, at: event.timestamp)
-        case .down: performTrackpad(.threeDown, at: event.timestamp)
+        case .next, .previous:
+            if !session.go(by: step == .next ? 1 : -1), session.playlist != nil {
+                navigationFeedback(for: "end of photo list", pattern: .alignment)
+            }
+        case .up, .down:
+            if !performTrackpad(step == .up ? .threeUp : .threeDown, at: event.timestamp) {
+                onShowStrip?(step == .up)
+                navigationFeedback(for: "filmstrip")
+            }
+        case .doubleTap:
+            guard let target = zoomBase.toggledFitAxis() else { return }
+            session.noteManualZoom()
+            invalidateSmartZoomRequest()
+            session.subjectZoom = false
+            subjectZoomPress = nil
+            animateZoom(to: target)
+            navigationFeedback(for: "fit height / width")
         case .tap: break
         }
     }
@@ -868,13 +1043,10 @@ import QuartzCore
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// Takes focus for the keys and remembers where a drag starts; a click does nothing else
-    /// (double click included). Any press stops a coast in progress (the picture is "caught"), and holds a
-    /// rubber-band spring where it shows.
-    /// Where the left button went down, for a double click that did not move.
-    private var pressPoint: CGPoint?
-
+    /// Takes focus and remembers where a drag starts. Any press catches a moving picture
+    /// and holds a rubber-band spring where it shows.
     override func mouseDown(with event: NSEvent) {
+        if beginHeldTrackpadPress(event) { return }
         resetScrollGesture()
         invalidateSmartZoomRequest()
         stopInertia(catching: true)
@@ -890,7 +1062,7 @@ import QuartzCore
         }
         let p = viewPoint(event)
         dragPoint = p
-        pressPoint = p
+        primaryClickGestures.mouseDown(at: clickPoint(event), time: event.timestamp, touching: touchCount > 0)
         dragStart = session.transform
         dragVelocity.reset()
         dragVelocity.add(p, at: event.timestamp)
@@ -902,6 +1074,8 @@ import QuartzCore
     /// from the cursor wherever the system scales or drops deltas); past an image edge it stretches under the
     /// rubber band's resistance instead. The release velocity is tracked from the same positions.
     override func mouseDragged(with event: NSEvent) {
+        if heldTrackpadSwipe?.button == event.buttonNumber { return }
+        primaryClickGestures.mouseDragged(to: clickPoint(event))
         cursorAutohide.activity()
         MouseButtons.shared.moved(event)
         updatePointerPage(at: viewPoint(event))   // a drag moves the pointer too: the info panel follows its page
@@ -917,11 +1091,8 @@ import QuartzCore
     }
 
     override func mouseUp(with event: NSEvent) {
-        // A double click that did not move (under 4 pt): the folder browser on this photo (`browse`).
-        if event.clickCount == 2, let start = pressPoint, hypot(viewPoint(event).x - start.x, viewPoint(event).y - start.y) < 4 {
-            pressPoint = nil
-            onTabAction?(.browse)
-        }
+        if endHeldTrackpadPress(event) { return }
+        let browse = primaryClickGestures.mouseUp(at: clickPoint(event), interval: NSEvent.doubleClickInterval)
         let wasDragging = dragPoint != nil
         dragPoint = nil
         dragStart = nil
@@ -929,6 +1100,11 @@ import QuartzCore
         refreshCursor()
         endStaleRMBZoom()
         folderScroll.release(.left, held: heldButtons)
+        if browse {
+            releaseRubber()
+            onTabAction?(.browse)
+            return
+        }
         guard wasDragging, rmbZoom == nil else {
             releaseRubber()
             return
@@ -942,6 +1118,11 @@ import QuartzCore
         releaseRubber(velocity: v)
         let glide = CGVector(dx: stretched.dx == 0 ? v.dx : 0, dy: stretched.dy == 0 ? v.dy : 0)
         if glide != .zero { startInertia(velocity: glide) }
+    }
+
+    private func clickPoint(_ event: NSEvent) -> CGPoint {
+        let p = viewPoint(event)
+        return CGPoint(x: p.x / backing, y: p.y / backing)
     }
 
     // MARK: Cursor
@@ -1340,6 +1521,7 @@ import QuartzCore
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     override func rightMouseDown(with event: NSEvent) {
+        if beginHeldTrackpadPress(event) { return }
         resetScrollGesture()
         DebugLog.log("mouse button 1 down")
         MouseButtons.shared.press(.right, at: event.timestamp)   // the first button of a chord (`MBTN_RIGHT+…`)
@@ -1383,6 +1565,7 @@ import QuartzCore
     /// `RMBZoom.doublings(dyPoints:)` for the zoom, its velocity and its glide alike). The press-to-release drag is
     /// one zoom-stop gesture.
     override func rightMouseDragged(with event: NSEvent) {
+        if heldTrackpadSwipe?.button == event.buttonNumber { return }
         cursorAutohide.activity()
         MouseButtons.shared.moved(event)
         // After a right+button chord the right button does not zoom until it is released (spec §3.3).
@@ -1440,6 +1623,7 @@ import QuartzCore
     /// the release velocity to a coast (`RMBZoomCoast`); a click, a stale or slow release does not coast. A release
     /// past a zoom limit springs back instead, whatever the velocity (M4b spec §3).
     override func rightMouseUp(with event: NSEvent) {
+        if endHeldTrackpadPress(event) { return }
         DebugLog.log("mouse button 1 up")
         cursorAutohide.activity()
         // The release of a right+button chord does nothing: no glide, no spring of a zoom the chord took over.
@@ -2025,10 +2209,17 @@ import QuartzCore
         }
     }
 
-    private func goFolder(_ step: Int, from source: String = "key") {
+    private func goFolder(_ step: Int, from source: String = "key", trackpad: Bool = false) {
         DebugLog.log("\(source) \(step > 0 ? "next" : "previous") folder")
         stopInertiaAtZoomTarget()
-        session.goFolder(by: step)
+        if trackpad {
+            session.goFolder(by: step, reversingTrackpadSwipe: true) { [weak self] in
+                guard let self, self.window?.isKeyWindow == true else { return }
+                self.navigationFeedback(for: "folder changed")
+            }
+        } else {
+            session.goFolder(by: step)
+        }
     }
 
     override func layout() {

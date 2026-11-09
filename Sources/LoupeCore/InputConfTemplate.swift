@@ -160,12 +160,10 @@ public enum InputConfTemplate {
     # ── Trackpad ──────────────────────────────────────────────────────────────────────────────────────
     #   Trackpad gestures bind like a button: only an action, no -long or +WHEEL. The three-finger swipe
     #   up / down works unless System Settings › Trackpad gives it to Mission Control / Exposé.
-    # TP_3UP browse                                 # three fingers up: folder browser on this photo's folder
-    # TP_3DOWN back                                 # three fingers down: back to Recent, Folders or Stash
-    # TP_3TAP cycle-stats                           # three-finger tap: stats bar
-    # TP_FORCE toggle-info-panel                    # force click: info panel
-    # TP_CLICK_DOWN next-tab                        # click held + two fingers down: next tab
-    # TP_CLICK_UP previous-tab                      # click held + two fingers up: previous tab
+    # TP_3UP / TP_3DOWN override the filmstrip's show / hide gestures.
+    # TP_3TAP is unassigned. A double tap with three fingers switches Fit Height / Fit Width.
+    # TP_FORCE toggle-info-panel                    # one-finger force click: info panel
+    # TP_CLICK_DOWN / TP_CLICK_UP override the toolbar's show / hide gestures while holding a click.
 
     # ── Mouse ─────────────────────────────────────────────────────────────────────────────────────────
     # MX_GESTURE toggle-smart-zoom                  # Manual / SmartZoom, retaining the selected profile

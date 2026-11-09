@@ -24,7 +24,7 @@ public enum StripWindowMode: String, Sendable {
 }
 
 /// `strip-scroll-direction`: which way a two-finger swipe over the strip moves the selection (the kit's
-/// `FilmstripScrollDirection`: `natural`, fingers left go to the next files, or `reversed`, the default).
+/// `FilmstripScrollDirection`: `natural`, fingers left go to the next files, the default, or `reversed`).
 public typealias StripScrollDirection = FilmstripScrollDirection
 
 /// `launch-reveal`: when the photo first appears at a launch that goes back into full screen. `settled` (the default):
@@ -226,6 +226,11 @@ public enum SetResult: Equatable, Sendable {
     case unknownKey
 }
 
+public enum TrackpadHapticPattern: String, Sendable {
+    case automatic, generic, alignment
+    case levelChange = "level-change"
+}
+
 /// Settings from ~/.config/loupe/loupe.conf: mpv-style `key=value`, `#` comments. A missing file or key
 /// means the default; the file is only created when a setting is changed from the menu.
 public struct Config: Equatable, Sendable {
@@ -258,7 +263,7 @@ public struct Config: Equatable, Sendable {
     /// `step-zoom`: what a step does to the zoom (`StepZoom`; folder key, `ZoomRules`).
     public var stepZoom = StepZoom.keep
     public var smartZoomMode = SmartZoomMode.off
-    public var smartZoomGesture = true
+    public var smartZoomGesture = false
     public var smartZoomOptions: [String: [String: String]] = [:]
     /// `subject-pull`: how hard (%, 0…100) framing while browsing draws the view to the subject's centre, against
     /// showing more of the other boxes found (`SubjectFraming.pan`).
@@ -404,7 +409,7 @@ public struct Config: Equatable, Sendable {
     /// `strip-corner-radius`: rounding of the cells' corners in points, 0...16 (0: square).
     public var stripCornerRadius = 8.0
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`FilmstripScroll`).
-    public var stripScrollDirection = StripScrollDirection.reversed
+    public var stripScrollDirection = StripScrollDirection.natural
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
     public var stripHideDelayMilliseconds = 250
     /// `strip-fade-in`: milliseconds of the strip's show fade, 0...2000 (0: it appears without animation).
@@ -452,6 +457,9 @@ public struct Config: Equatable, Sendable {
     public var mouseMoveStep = 20.0
     /// `mouse-haptics`: the mouse vibrates at all (`no`: never).
     public var mouseHaptics = true
+    /// Trackpad feedback for panels, folder changes and boundaries.
+    public var trackpadNavigationHaptics = true
+    public var trackpadHapticPattern = TrackpadHapticPattern.automatic
     /// `mx-side-buttons`: how Loupe gets the MX Master's back / forward buttons (`SideButtonsMode`, M4c spec §12.1);
     /// applied at once by a reload.
     public var mxSideButtons = SideButtonsMode.watch
@@ -707,6 +715,7 @@ public struct Config: Equatable, Sendable {
                               "thumb-size", "thumb-cache-size", "folder-poll", "folder-view-memory",
                               "folder-scroll-gesture", "folder-scroll-direction", "folder-scroll-threshold", "folder-scroll-repeat",
                               "archive-folders", "folder-toast",
+                              "trackpad-navigation-haptics", "trackpad-haptic-pattern",
                               "mouse-long-press", "mouse-move-step", "mouse-haptics",
                               "mx-side-buttons", "haptic-strong-strength",
                               "haptic-zoom-stop", "haptic-limit", "haptic-step", "haptic-toggle", "haptic-end",
@@ -805,6 +814,8 @@ public struct Config: Equatable, Sendable {
         case "toast-duration": return String(toastDurationMilliseconds)
         case "mouse-long-press": return String(mouseLongPressMilliseconds)
         case "mouse-move-step": return formatNumber(mouseMoveStep)
+        case "trackpad-haptic-pattern": return trackpadHapticPattern.rawValue
+        case "trackpad-navigation-haptics": return trackpadNavigationHaptics ? "yes" : "no"
         case "mouse-haptics": return mouseHaptics ? "yes" : "no"
         case "haptic-zoom-stop": return HapticChoice.text(hapticZoomStop)
         case "haptic-limit": return HapticChoice.text(hapticLimit)
@@ -1070,6 +1081,11 @@ public struct Config: Equatable, Sendable {
             if let v = Int(value), (150...2000).contains(v) { mouseLongPressMilliseconds = v } else { return .badValue }
         case "mouse-move-step":
             if let v = Double(value), (4...200).contains(v) { mouseMoveStep = v } else { return .badValue }
+        case "trackpad-haptic-pattern":
+            guard let v = TrackpadHapticPattern(rawValue: value.lowercased()) else { return .badValue }
+            trackpadHapticPattern = v
+        case "trackpad-navigation-haptics":
+            guard let v = Self.bool(value) else { return .badValue }; trackpadNavigationHaptics = v
         case "mouse-haptics":
             if let v = Self.bool(value) { mouseHaptics = v } else { return .badValue }
         case "haptic-zoom-stop":

@@ -9,7 +9,7 @@ extension SettingsPanel {
                     (word: "frame", title: "Auto framing")], symbol: "camera.metering.center.weighted",
                     description: "⇧Z always applies Auto. ⌥S switches Manual / SmartZoom without changing the view. N selects the next complete group; M changes profile."),
                 .toggle("smart-zoom-gesture", "Double tap applies auto framing", symbol: "hand.tap.fill",
-                    description: "Two-finger Smart Zoom tap applies Auto when enabled in macOS. Off restores Fit / 100%."),
+                    description: "Two-finger double tap switches Fit / 100% by default. Turn this on to apply Auto instead."),
                 .text("zoom-stops", "Zoom stops", placeholder: "fit-width,fit-height,100%", symbol: "scope",
                       description: "Where pinch and right-button zoom pause: fit-width, fit-height and percentages, "
                         + "comma-separated; none for no stops. Default fit-width,fit-height,100%."),

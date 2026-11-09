@@ -127,6 +127,8 @@ extension Notification.Name {
     /// The strip's motion: a trackpad gesture with its momentum (`FilmstripScroll`), or a mouse drag (`dragging`).
     private var scroll = FilmstripScroll()
     private var scrollRest: Task<Void, Never>?
+    private var scrollCandidate: Int?
+    private var gestureSuppressesReveal = false
     private var dragging = false
     /// Ends the session's scrub once a drag rests on one file.
     private var dragRest: Task<Void, Never>?
@@ -379,6 +381,7 @@ extension Notification.Name {
         view.cancelResize()
         endMotion()
         isFullScreen = on
+        gestureSuppressesReveal = false
         mouseNearBottom = false
         mouseNearEdge = false
         if reservesSpace != reserved { onReservesSpaceChange?() }
@@ -387,14 +390,22 @@ extension Notification.Name {
 
     /// `T`, View › Thumbnail Strip, the capsule's T button and the reveal chevron: a `beside` strip hides or comes
     /// back, a floating one is pinned or let go; nothing in a window's `hidden` mode. Each flips only its own flag.
-    func togglePin() {
+    func togglePin() { setStripVisibility(nil) }
+
+    func setStripVisibility(_ visible: Bool?) {
         switch StripPlacement.flag(mode, fullScreen: isFullScreen) {
         case .hidden?:
-            barHidden.toggle()
+            let hidden = visible.map { !$0 } ?? !barHidden
+            guard hidden != barHidden else { return }
+            barHidden = hidden
             DebugLog.log("strip beside \(barHidden ? "hidden" : "shown")")
             onReservesSpaceChange?()
         case .pinned?:
-            pinned.toggle()
+            let next = visible ?? !pinned
+            let suppress = visible == false && (mouseNearBottom || mouseOverStrip)
+            guard next != pinned || suppress != gestureSuppressesReveal else { return }
+            pinned = next
+            gestureSuppressesReveal = suppress
             DebugLog.log("strip \(pinned ? "pinned" : "unpinned")")
         case nil:
             return
@@ -437,7 +448,8 @@ extension Notification.Name {
     /// A floating strip is out: the mouse reached the bottom band or is over the strip or its capsule, a cell is
     /// hovered, the edge is dragged, the strip moves, or the cheat sheet keeps it.
     private var revealedByEdge: Bool {
-        mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing || isMoving || ((staysShown || positionPopover?.isShown == true) && isShown)
+        !gestureSuppressesReveal && (mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing
+            || isMoving || ((staysShown || positionPopover?.isShown == true) && isShown))
     }
 
     private var placement: StripPlacement {
@@ -687,6 +699,7 @@ extension Notification.Name {
         guard nearBottom != mouseNearBottom || nearEdge != mouseNearEdge || overStrip != mouseOverStrip else { return }
         mouseNearBottom = nearBottom
         mouseNearEdge = nearEdge
+        if !nearBottom, !overStrip { gestureSuppressesReveal = false }
         if overStrip != mouseOverStrip {
             mouseOverStrip = overStrip
             capsuleRelease?.cancel()
@@ -724,7 +737,7 @@ extension Notification.Name {
         if positionPopover?.isShown == true, positionSlider.integerValue != list.index + 1 {
             updatePosition(index: list.index, count: list.files.count)
         }
-        // While the strip moves, the files it reaches are the session's current ones already.
+        // While the strip moves, its preview selection owns the filmstrip position.
         guard let pages = sessionPages, pages != shownPages, !isMoving else { return }
         rest(on: pages, animated: pages.isStep(from: shownPages))
     }
@@ -734,10 +747,11 @@ extension Notification.Name {
         session.playlist.map { StripPages(current: $0.index, pages: session.currentPages) }
     }
 
-    /// The file `FilmstripScroll` takes as current: the session's, or the page of its pair the motion reached last
-    /// (`reachedPage`), so the motion does not jump back to the current page's cell.
+    /// Anchor each scroll delta on the moving selection. A mouse drag can also land on the other
+    /// page of the current spread without changing the session's selected file.
     private var motionCurrent: Int? {
         guard let index = session.playlist?.index else { return nil }
+        if !dragging, let offset = scroll.offset, let candidate = view.layout.item(atBase: offset) { return candidate }
         if let page = reachedPage, sessionPages?.contains(page) == true { return page }
         return index
     }
@@ -765,6 +779,7 @@ extension Notification.Name {
     /// new places (a listing that arrives in parts, `FolderWatcher`); a motion whose centre file is still there goes
     /// on from it, anything else (another folder) ends with the old list and the strip rests on the current file.
     private func playlistChanged(_ list: [URL]) {
+        scrollCandidate = nil
         labelFacts = [:]
         labelled = nil
         let map = FilmstripItems.indexMap(from: files, to: list)
@@ -988,6 +1003,10 @@ extension Notification.Name {
     /// The motion is over (momentum end, cancel, rest, release): the strip settles on the nearest file and expands
     /// it, and the scrub ends there.
     private func finishMotion() {
+        if scrollCandidate != nil {
+            scrollCandidate = nil
+            view.endHover()
+        }
         scrollRest?.cancel()
         scrollRest = nil
         dragRest?.cancel()
@@ -1084,7 +1103,7 @@ extension Notification.Name {
     // MARK: Trackpad scroll
 
     /// A precise scroll over the strip that is the strip's (`FilmstripView.onStripScroll`): the strip moves, a new
-    /// file at the centre scrubs to it; the end of the momentum or a cancelled gesture finishes at once, otherwise
+    /// file at the centre is the candidate. The end of the momentum or a cancelled gesture commits it, otherwise
     /// the rest timer does. Not during a press: the press owns the strip.
     private func scrolled(_ event: NSEvent) {
         guard !closed, !view.isPressed, let current = motionCurrent else { return }
@@ -1095,15 +1114,22 @@ extension Notification.Name {
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
                                    layout: view.layout, current: current, now: event.timestamp,
                                    anchor: motionAnchor(current: current))
-        if let file = outcome.item { reached(file) }
         if outcome.commit {
             drawMotion(animated: false)
             finishMotion()
             return
         }
         guard scroll.isMoving else { return }
-        if !wasMoving { dropHover() }
+        if !wasMoving {
+            dropHover()
+            stepLabelHide?.cancel()
+        }
         drawMotion(animated: !wasMoving)
+        if let offset = scroll.offset, let file = view.layout.item(atBase: offset),
+           file != scrollCandidate, files.indices.contains(file) {
+            scrollCandidate = file
+            view.showLabel(item: file, text: label(file))
+        }
         armScrollRest()
         if !wasMoving { update() }
     }

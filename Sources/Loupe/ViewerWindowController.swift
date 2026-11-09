@@ -353,7 +353,10 @@ import UniformTypeIdentifiers
         }
         windowedToolbarReveal.onVisibilityChange = { [weak self] in self?.applyStatsLayout() }
         viewerView.onToggleToolbarPin = { [weak self] in self?.toggleToolbarPin() }
+        viewerView.onShowToolbar = { [weak self] in self?.setViewerToolbar($0, pinInFullScreen: true) }
+        viewerView.onShowStrip = { [weak self] in self?.strip.setStripVisibility($0) }
         viewerView.onToggleStats = { [weak self] in self?.toggleStats() }
+        viewerView.onDoubleTapStatus = { [weak self] in self?.toggleTrackpadStatus() }
         viewerView.onToggleStrip = { [weak self] in self?.strip.togglePin() }
         viewerView.onToggleStripPlacement = { [weak self] in self?.strip.togglePlacement() }
         viewerView.onToggleCheatSheet = { [weak self] in self?.toggleCheatSheet() }
@@ -2263,8 +2266,19 @@ import UniformTypeIdentifiers
                                        height: Int((screen.frame.height * k).rounded()))
     }
 
+    private var trackpadStatusOverride: Bool?
+
+    private func toggleTrackpadStatus() {
+        let show = statsBar.isHidden
+        trackpadStatusOverride = show
+        if isFullScreen { fullScreenStatus = show } else { statsMode = show ? .compact : .hidden }
+        if show { statsBar.reveal() }
+        applyStatsLayout()
+    }
+
     /// `I` and View › Image Status: windowed hidden ↔ compact, fullscreen hidden ↔ shown.
     private func toggleStats() {
+        trackpadStatusOverride = nil
         if viewerToolbarPinned {
             toolbarPinnedOverride = false
             if isFullScreen { fullScreenStatus = true } else { statsMode = .compact }
@@ -2291,8 +2305,11 @@ import UniformTypeIdentifiers
     }
 
     @objc func toggleViewerToolbar(_ sender: Any?) {
-        let enabled = !toolbarWanted
-        toolbarPinnedOverride = nil
+        setViewerToolbar(!toolbarWanted)
+    }
+
+    private func setViewerToolbar(_ enabled: Bool, pinInFullScreen: Bool = false) {
+        toolbarPinnedOverride = pinInFullScreen && isFullScreen ? enabled : nil
         if isFullScreen { fullScreenToolbar = enabled } else { windowToolbar = enabled }
         applyFullScreenToolbar()
         applyStatsLayout()
@@ -2578,8 +2595,8 @@ import UniformTypeIdentifiers
         let toolbarShown = viewerToolbarPinned || (!isFullScreen && (window?.toolbar?.isVisible ?? toolbarWanted))
         let allowTogether = Settings.shared.config.statsBarWithToolbar
         let toolbarArriving = isExitingFullScreen && windowedToolbarWanted
-        let visible = !viewerToolbarPinned && (isFullScreen ? fullScreenStatus : statsMode != .hidden)
-            && (allowTogether || (!toolbarShown && !toolbarArriving))
+        let visible = trackpadStatusOverride ?? (!viewerToolbarPinned && (isFullScreen ? fullScreenStatus : statsMode != .hidden)
+            && (allowTogether || (!toolbarShown && !toolbarArriving)))
         statsBar.isHidden = !visible
         guard !isClosed else { return }
         applyToolbarVisibility()

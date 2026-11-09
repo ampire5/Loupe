@@ -289,6 +289,7 @@ import LoupeRender
     /// The folder listings out or queued (`rereadFolder`).
     private var rereads = Rereads()
     private var folderTask: Task<Void, Never>?
+    private var pendingTrackpadFolderDirection: Int?
     /// While set, folder steps go through this list (a gallery opened from a Stash list) instead of the disk; any open
     /// that is not from Stash clears it (`open`).
     var stashNavigator: ListFolderNavigator?
@@ -799,8 +800,16 @@ import LoupeRender
     /// (or its first). The siblings are found off the main thread; meanwhile the stats line says "Loading
     /// folder…" and the current photo stays. At the first / last sibling nothing happens; a failure keeps the
     /// current folder and says why. A second request while one is pending is ignored.
-    func goFolder(by step: Int) {
+    func goFolder(by step: Int, reversingTrackpadSwipe: Bool = false, onEntered: (() -> Void)? = nil) {
+        if reversingTrackpadSwipe, pendingTrackpadFolderDirection == -step {
+            // The old folder is still on screen. Turning back before the first move lands keeps it there.
+            cancelFolderRequest()
+            folderMessage = nil
+            onChange?()
+            return
+        }
         guard playlist?.isSourceOrdered != true, let current = playlist?.current, let token = folderRequest.begin(from: current) else { return }
+        pendingTrackpadFolderDirection = reversingTrackpadSwipe ? step : nil
         cancelOpenFolder()
         folderMessage = FolderRequest.loadingText
         onChange?()
@@ -841,6 +850,7 @@ import LoupeRender
             case .drop:
                 return
             case .stay:
+                self.pendingTrackpadFolderDirection = nil
                 self.folderMessage = nil
                 self.onChange?()
             case .enter(let list):
@@ -851,9 +861,11 @@ import LoupeRender
                 self.playlist = list
                 self.endScrubOnReplace()
                 self.navigated(direction: 1, from: nil, fresh: true)   // clears the message
+                onEntered?()
                 if let label { self.onFolderLabel?(label) }
                 if let found, stash != nil { self.onListFolder?(found.listID, found.folder) }
             case .fail(let text):
+                self.pendingTrackpadFolderDirection = nil
                 self.folderMessage = text
                 self.onChange?()
             }
@@ -1048,6 +1060,7 @@ import LoupeRender
     }
 
     private func cancelFolderRequest() {
+        pendingTrackpadFolderDirection = nil
         folderRequest.cancel()
         folderTask?.cancel()
         folderTask = nil

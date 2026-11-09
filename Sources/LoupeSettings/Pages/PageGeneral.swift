@@ -159,8 +159,8 @@ extension SettingsPanel {
             ]),
             SettingsCard([
                 .toggle("folder-scroll-gesture", "Folder gesture", symbol: "arrow.left.arrow.right",
-                        description: "Hold a button and scroll sideways for the next or previous folder: trackpad click "
-                            + "+ two-finger swipe, right button + wheel tilt. Default on.",
+                        description: "On a trackpad, hold a click with one finger and swipe sideways with two others. "
+                            + "With a mouse, hold the right button and tilt the wheel. Default on.",
                         nested: [
                             .choice("folder-scroll-direction", "Direction", [
                                 (word: "reversed", title: "Reversed"), (word: "natural", title: "Natural"),

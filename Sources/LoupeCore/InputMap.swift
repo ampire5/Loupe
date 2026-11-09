@@ -15,12 +15,7 @@ public struct InputMap: Sendable, Equatable {
         (.right, .wheel, .action(.nextFolder)),
         (.gesture, .tap, .action(.toggleSmartZoom)),
         (.gesture, .withRight, .action(.cycleStats)),
-        (.threeUp, .tap, .action(.browse)),
-        (.threeDown, .tap, .action(.back)),
-        (.threeTap, .tap, .action(.cycleStats)),
         (.forceClick, .tap, .action(.toggleInfoPanel)),
-        (.clickDown, .tap, .action(.nextTab)),
-        (.clickUp, .tap, .action(.previousTab)),
     ]
 
     /// The layout without `input.conf`.

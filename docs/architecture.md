@@ -26,6 +26,12 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
   active session. A native tab is a separate window/controller/session.
 - `ViewerWindowController` owns the AppKit view hierarchy, source adapters, panel presentation and one
   `ViewerSession`. `ViewerView` handles input/visual motion; `RenderLoop` owns the render thread.
+  Raw trackpad contacts distinguish held folder and toolbar swipes from unpressed photo and filmstrip swipes.
+  Primary click handling pairs light contacts for the status bar and plain presses for the browser. Force
+  pressure invalidates both candidates before the mouse button is released. Horizontal
+  swipes can reverse along the locked axis without lifting. Filmstrip scrolling previews a candidate
+  without changing the viewer session until the strip settles. AppKit feedback marks panel changes, zoom
+  stops and limits, photo boundaries and committed folder changes. Logitech feedback uses MouseService.
 - `WindowToolbarController` retains the native toolbar and applies the native bottom tab accessory's fullscreen
   minimum height. `ViewerWindowController` reconciles `fullscreen-tabs`, the temporary B override and stats layout
   on native tab layout, selection and settings changes. Shown tabs keep the whole header stable; auto mode hides
