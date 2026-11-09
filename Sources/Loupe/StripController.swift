@@ -56,7 +56,7 @@ extension Notification.Name {
 ///
 /// Dragging the strip's top edge resizes it live (cells relaid each move, pictures asked for again only on release,
 /// at the new pixel size) and saves `strip-height` through `Settings`.
-@MainActor final class StripController: NSObject {
+@MainActor final class StripController: NSObject, NSPopoverDelegate {
     static let pinnedKey = "stripPinned"
     static let barHiddenKey = "stripBarHidden"
     /// The reveal chevron's gap to the window's bottom edge.
@@ -67,6 +67,10 @@ extension Notification.Name {
     let view = FilmstripView()
     /// The capsule of the strip's buttons, on the strip's right end.
     private let tools = FilmstripToolsView()
+    private var positionPopover: NSPopover?
+    private let positionLabel = NSTextField(labelWithString: "")
+    private let positionSlider = NSSlider()
+    private var showsPositionTool = false
     /// The chevron that brings a hidden `beside` strip back.
     private let reveal = FilmstripRevealView()
     private let session: ViewerSession
@@ -268,6 +272,7 @@ extension Notification.Name {
     /// The window closes: no timers, no more notifications.
     func close() {
         closed = true
+        positionPopover?.close()
         resizing = false   // a drag cut off by the close has nothing left to restore or save
         dragging = false
         sessionScrubbing = false   // the session closes too
@@ -432,7 +437,7 @@ extension Notification.Name {
     /// A floating strip is out: the mouse reached the bottom band or is over the strip or its capsule, a cell is
     /// hovered, the edge is dragged, the strip moves, or the cheat sheet keeps it.
     private var revealedByEdge: Bool {
-        mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing || isMoving || (staysShown && isShown)
+        mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing || isMoving || ((staysShown || positionPopover?.isShown == true) && isShown)
     }
 
     private var placement: StripPlacement {
@@ -529,9 +534,11 @@ extension Notification.Name {
     private func updateTools(_ p: StripPlacement) {
         guard container != nil else { return }
         let wanted = p.tools(mode: mode)
-        if wanted != shownTools {
+        let showsPosition = files.count > 1 && session.playlist != nil
+        if wanted != shownTools || showsPosition != showsPositionTool {
             shownTools = wanted
-            tools.tools = wanted.map { tool in
+            showsPositionTool = showsPosition
+            var buttons = wanted.map { tool in
                 FilmstripTool(symbol: tool.symbol, help: tool.help, isOn: tool.isOn,
                               separatorBefore: tool.separatorBefore) { [weak self] in
                     switch tool.action {
@@ -540,9 +547,66 @@ extension Notification.Name {
                     }
                 }
             }
+            if showsPosition {
+                buttons.insert(FilmstripTool(symbol: "arrow.right.to.line", help: "Go to Photo…") { [weak self] in
+                    self?.showPositionPopover()
+                }, at: 0)
+            }
+            tools.tools = buttons
         }
         placeTools()
-        setToolsShown(isShown && capsuleHeld && p.pin != nil)
+        setToolsShown(isShown && (capsuleHeld || positionPopover?.isShown == true) && p.pin != nil)
+    }
+
+    private func showPositionPopover() {
+        if let positionPopover, positionPopover.isShown { positionPopover.performClose(nil); return }
+        guard let list = session.playlist, list.files.count > 1, tools.window != nil else { return }
+        let controller = NSViewController()
+        controller.view = NSView(frame: NSRect(x: 0, y: 0, width: 288, height: 68))
+        positionLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        positionLabel.frame = NSRect(x: 12, y: 39, width: 264, height: 18)
+        positionSlider.frame = NSRect(x: 12, y: 12, width: 264, height: 22)
+        positionSlider.minValue = 1
+        positionSlider.maxValue = Double(list.files.count)
+        positionSlider.isContinuous = false
+        positionSlider.setAccessibilityLabel("Photo position in folder")
+        positionSlider.target = self
+        positionSlider.action = #selector(choosePosition(_:))
+        controller.view.addSubview(positionLabel)
+        controller.view.addSubview(positionSlider)
+        updatePosition(index: list.index, count: list.files.count)
+
+        let popover = NSPopover()
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = controller
+        popover.contentSize = controller.view.bounds.size
+        positionPopover = popover
+        popover.show(relativeTo: tools.bounds, of: tools, preferredEdge: .maxY)
+        update()
+    }
+
+    private func updatePosition(index: Int, count: Int) {
+        let number = index + 1
+        if positionSlider.integerValue != number { positionSlider.integerValue = number }
+        let label = "Photo \(number.formatted()) of \(count.formatted())"
+        if positionLabel.stringValue != label { positionLabel.stringValue = label }
+    }
+
+    @objc private func choosePosition(_ slider: NSSlider) {
+        guard let list = session.playlist else { return }
+        let index = Int(slider.doubleValue.rounded()) - 1
+        guard list.files.indices.contains(index), index != list.index else { return }
+        endMotion()
+        scrub(to: index)
+        endSessionScrub()
+        if let current = session.playlist { updatePosition(index: current.index, count: current.files.count) }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        positionPopover = nil
+        update()
     }
 
     /// The capsule on the strip's right end (the strip's width changes with the window's); the hover label keeps
@@ -650,10 +714,15 @@ extension Notification.Name {
 
     /// Called on every session change (every frame of a pan), so it only compares.
     func sessionDidChange() {
-        guard let list = session.playlist else { return }
+        guard let list = session.playlist else { positionPopover?.close(); return }
         if list.files != files {
+            positionPopover?.close()
             playlistChanged(list.files)
+            update()
             return
+        }
+        if positionPopover?.isShown == true, positionSlider.integerValue != list.index + 1 {
+            updatePosition(index: list.index, count: list.files.count)
         }
         // While the strip moves, the files it reaches are the session's current ones already.
         guard let pages = sessionPages, pages != shownPages, !isMoving else { return }

@@ -58,7 +58,7 @@ enum SessionCardAction {
             HomeSourceInfo(title: "Stash", page: stashPage(), pageFilters: ["Scenes", "Images", "Galleries"])
         default:
             HomeSourceInfo(title: "Recent", sortKeys: [.date, .name], groupsByDate: true, noun: "item",
-                           emptyHint: "Open a photo with ⌘O or drop it here")
+                           emptyHint: "Drop a photo here or press ⌘O to open one")
         }
     }
 

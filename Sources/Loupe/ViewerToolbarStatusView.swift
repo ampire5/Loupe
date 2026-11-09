@@ -34,8 +34,6 @@ struct ViewerStatusChoices {
     let zoomButton = NSButton(title: "100%", target: nil, action: nil)
     let profileButton = NSButton(title: "Vision", target: nil, action: nil)
     let groupButton = NSButton(title: "—", target: nil, action: nil)
-    private let zoomLabel = NSTextField(labelWithString: "Zoom")
-    private let modeLabel = NSTextField(labelWithString: "Mode")
     private let profileLabel = NSTextField(labelWithString: "Profile")
     private let groupLabel = NSTextField(labelWithString: "Group")
     private let dividers = [NSView(), NSView()]
@@ -56,7 +54,7 @@ struct ViewerStatusChoices {
         glass.frame = bounds
         glass.autoresizingMask = [.width, .height]
         addSubview(glass)
-        for label in [titleLabel, folderLabel, noExposure, profileLabel, groupLabel, zoomLabel, modeLabel] + exposureLabels {
+        for label in [titleLabel, folderLabel, noExposure, profileLabel, groupLabel] + exposureLabels {
             label.font = .systemFont(ofSize: 11)
             label.textColor = ProCameraStyle.primary
             label.lineBreakMode = .byTruncatingMiddle
@@ -64,7 +62,7 @@ struct ViewerStatusChoices {
             glass.contentView.addSubview(label)
         }
         titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        for label in [folderLabel, profileLabel, groupLabel, zoomLabel, modeLabel] { label.textColor = ProCameraStyle.secondary }
+        for label in [folderLabel, profileLabel, groupLabel] { label.textColor = ProCameraStyle.secondary }
         configure(positionButton, "Photo position", #selector(positionClicked))
         configure(previous, "Previous photo", #selector(previousClicked), symbol: "chevron.left")
         configure(next, "Next photo", #selector(nextClicked), symbol: "chevron.right")
@@ -75,18 +73,21 @@ struct ViewerStatusChoices {
         configure(profileButton, "SmartZoom profile", #selector(profileClicked))
         configure(groupButton, "Subject group", #selector(groupClicked))
         zoomButton.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        for value in [modeButton, profileButton, groupButton] { value.font = .systemFont(ofSize: 12, weight: .medium) }
-        for caption in [zoomLabel, modeLabel, profileLabel, groupLabel] {
-            caption.textColor = .white.withAlphaComponent(0.55)
-            caption.stringValue = caption.stringValue.uppercased()
+        for button in [positionButton, metadataButton] {
+            button.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         }
+        for label in exposureLabels {
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        }
+        for value in [modeButton, profileButton, groupButton] { value.font = .systemFont(ofSize: 12, weight: .medium) }
+
         for divider in dividers {
             divider.wantsLayer = true
             divider.layer?.backgroundColor = ProCameraStyle.separator.cgColor
             glass.contentView.addSubview(divider)
         }
         progress.wantsLayer = true
-        progress.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        progress.layer?.backgroundColor = ProCameraStyle.secondary.cgColor
         glass.contentView.addSubview(progress)
         heightAnchor.constraint(equalToConstant: Self.height).isActive = true
         toolTip = "Current photo, EXIF and zoom controls"
@@ -251,7 +252,6 @@ struct ViewerStatusChoices {
         }
         let left = zoomRect.minX + (compact ? 5 : 8), right = zoomRect.maxX - (compact ? 5 : 8)
         let inner = max(0, right - left)
-        zoomLabel.isHidden = true; modeLabel.isHidden = true
         let labelled = inner >= 200
         profileLabel.isHidden = !labelled; groupLabel.isHidden = !labelled
         let caption: CGFloat = labelled ? 54 : 0
@@ -270,7 +270,7 @@ struct ViewerStatusChoices {
     /// Below the normal three-column budget the two essential sections use one row each. AppKit reserves
     /// titlebar space for traffic lights and overflow too, so a 320 pt window can leave less than 270 pt here.
     private func layoutMinimal(width: CGFloat) {
-        for view in [titleLabel, folderLabel, positionButton, previous, next, compactInfo, profileLabel, groupLabel, zoomLabel, modeLabel, progress] {
+        for view in [titleLabel, folderLabel, positionButton, previous, next, compactInfo, profileLabel, groupLabel, progress] {
             view.isHidden = true
         }
         dividers.forEach { $0.isHidden = true }

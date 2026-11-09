@@ -137,7 +137,18 @@ import UniformTypeIdentifiers
         set { UserDefaults.standard.set(newValue, forKey: "viewerToolbar") }
     }
     private let windowedToolbarReveal = WindowToolbarRevealController(hideDelay: Chrome.Motion.duration(Chrome.Motion.hide))
-    private var toolbarPinnedOverride: Bool?
+    private var windowedToolbarPin: Bool?
+    private var isExitingFullScreen = false
+    private var windowedToolbarWanted: Bool { windowedToolbarPin == true || windowToolbar }
+    private var fullScreenToolbarPin: Bool?
+    /// Full screen starts from the windowed pin, then can change it for that visit only.
+    private var toolbarPinnedOverride: Bool? {
+        get { isFullScreen ? fullScreenToolbarPin : windowedToolbarPin }
+        set {
+            if isFullScreen { fullScreenToolbarPin = newValue }
+            else { windowedToolbarPin = newValue }
+        }
+    }
     private var lastLayoutToolbarPinned: Bool?
     private var toolbarLayoutReconcileScheduled = false
     private var appliedFullScreenTabs = Settings.shared.config.fullScreenTabs
@@ -145,7 +156,7 @@ import UniformTypeIdentifiers
         fullScreenToolbar && Settings.shared.config.fullScreenTabs == .shown && window?.tabGroup?.isTabBarVisible == true
     }
     private var viewerToolbarPinned: Bool { toolbarPinnedOverride ?? (isFullScreen ? fullScreenTabsPinned : windowToolbar) }
-    private var toolbarWanted: Bool { viewerToolbarPinned || (isFullScreen ? fullScreenToolbar : windowToolbar) }
+    private var toolbarWanted: Bool { isFullScreen ? viewerToolbarPinned || fullScreenToolbar : windowedToolbarWanted }
     /// What the window's toolbar was last told, so the system's slide-in in full screen is not pinned by telling it again.
     private var toolbarWasWanted = true
     /// Remembered like the windowed `statsMode`, for the next full screen.
@@ -447,6 +458,10 @@ import UniformTypeIdentifiers
         observe(NSWindow.willEnterFullScreenNotification) {
             $0.isEnteringFullScreen = true
             $0.setFullScreen(true)
+        }
+        observe(NSWindow.willExitFullScreenNotification) {
+            $0.isExitingFullScreen = true
+            $0.applyStatsLayout()
         }
         observe(NSWindow.didExitFullScreenNotification) { $0.setFullScreen(false) }
         observe(NSWindow.didChangeScreenNotification) { $0.updateScreenSize() }
@@ -2269,8 +2284,8 @@ import UniformTypeIdentifiers
 
     func toggleToolbarPin() {
         toolbarPinnedOverride = !viewerToolbarPinned
-        fullScreenToolbar = true
-        windowToolbar = true
+        if isFullScreen { fullScreenToolbar = true }
+        else { windowToolbar = true }
         applyFullScreenToolbar()
         applyStatsLayout()
     }
@@ -2284,15 +2299,17 @@ import UniformTypeIdentifiers
     }
 
     private func setFullScreen(_ on: Bool) {
+        if on, !isFullScreen { fullScreenToolbarPin = windowedToolbarPin }
         isFullScreen = on
+        isExitingFullScreen = false
         if on { fullScreenToolbarOverride = nil }   // `fullscreen-toolbar` decides at each entry
         if on {
             applyFullScreenToolbar()
         } else {
             windowToolbarController.resetFullScreenAutohiding()
             if let window { windowToolbarController.setFullScreenTabBarAutohiding(false, in: window) }
-            if !isShowingHome { windowToolbarController.toolbar.isVisible = windowToolbar }
-            toolbarWasWanted = windowToolbar
+            if !isShowingHome { windowToolbarController.toolbar.isVisible = toolbarWanted }
+            toolbarWasWanted = toolbarWanted
         }
         applyStatsLayout()
         strip.setFullScreen(on)
@@ -2559,8 +2576,10 @@ import UniformTypeIdentifiers
         // `stats-bar-with-toolbar` off: the bar is the toolbar's stand-in and shows only without it. In full screen the toolbar
         // is not on screen but slides in on demand, so it does not count there: the bar shows as `I` says.
         let toolbarShown = viewerToolbarPinned || (!isFullScreen && (window?.toolbar?.isVisible ?? toolbarWanted))
+        let allowTogether = Settings.shared.config.statsBarWithToolbar
+        let toolbarArriving = isExitingFullScreen && windowedToolbarWanted
         let visible = !viewerToolbarPinned && (isFullScreen ? fullScreenStatus : statsMode != .hidden)
-            && (Settings.shared.config.statsBarWithToolbar || !toolbarShown)
+            && (allowTogether || (!toolbarShown && !toolbarArriving))
         statsBar.isHidden = !visible
         guard !isClosed else { return }
         applyToolbarVisibility()

@@ -22,7 +22,7 @@ extension SettingsPanel {
                 .choice("icon-set", "Icons", [(word: "lucide", title: "Lucide"), (word: "sf", title: "SF Symbols")],
                         symbol: "star",
                         description: "The set the line icons are drawn from. Takes effect at the next launch. "
-                            + "Default Lucide."),
+                            + "Default SF Symbols."),
                 .choice("open-in", "Open files in", [
                     (word: "tab", title: "Tab"), (word: "window", title: "Window"),
                     (word: "replace", title: "Current tab"),

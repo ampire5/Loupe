@@ -220,8 +220,14 @@ import LoupeRender
         check("B pins windowed toolbar", window.toolbar?.isVisible == true)
         let originalFullScreenPolicy = Settings.shared.config.fullScreenToolbar.rawValue
         _ = Settings.shared.saveAsDefault(["fullscreen-toolbar": "hidden"])
+        let originalStatsTogether = Settings.shared.config.statsBarWithToolbar
+        _ = Settings.shared.saveAsDefault(["stats-bar-with-toolbar": "no"])
+        var statsHiddenAtExit = false
+        let willLeave = center.addObserver(forName: NSWindow.willExitFullScreenNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { statsHiddenAtExit = statusBar?.isHidden == true }
+        }
         for round in 1...2 {
-            entered = false; exited = false
+            entered = false; exited = false; statsHiddenAtExit = false
             window.toggleFullScreen(nil)
             for _ in 0..<250 {
                 if entered { break }
@@ -242,14 +248,18 @@ import LoupeRender
                 try? await Task.sleep(for: .milliseconds(20))
             }
             check("pin entry \(round): exits full screen", exited)
+            if round == 2 { check("status bar hides before the windowed toolbar returns", statsHiddenAtExit) }
             try? await Task.sleep(for: .milliseconds(300))
+            check("pin entry \(round): restores the visible windowed toolbar",
+                  window.toolbar === viewerToolbar && viewerToolbar?.isVisible == true && nativeHost(viewerToolbar) != nil)
         }
-        _ = Settings.shared.saveAsDefault(["fullscreen-toolbar": originalFullScreenPolicy])
+        center.removeObserver(willLeave)
+        _ = Settings.shared.saveAsDefault(["fullscreen-toolbar": originalFullScreenPolicy,
+                                           "stats-bar-with-toolbar": originalStatsTogether ? "yes" : "no"])
         let recentController = ViewerWindowController(cache: cache, thumbnails: thumbs, thumbnailsReady: nil,
             positions: FolderPositions(database: nil), folderSettings: FolderSettings(database: nil), recent: nil)
         let recentWindow = recentController.window!
         recentController.showHome(tab: .recent)
-        controller.toggleToolbarPin()
         window.addTabbedWindow(recentWindow, ordered: .above)
         recentWindow.makeKeyAndOrderFront(nil)
         try? await Task.sleep(for: .milliseconds(300))
