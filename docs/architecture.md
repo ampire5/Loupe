@@ -166,6 +166,7 @@ State is local to the existing input owners; no polling, new queues or dependenc
 `ZoomStopGesture` resolves continuous zoom stops for right-button drag, pinch and the thumb wheel's Pause
 mode. It uses raw input speed to capture stops slightly early during slow movement and lets faster gestures
 carry more of their travel through. It reports one haptic event per input event that reaches or crosses a stop.
-Small reversals stay on a captured stop. Deliberate motion breaks out in either direction. Mouse inertia stops
+Slow landings pause briefly. A small nudge after the pause selects a close neighboring stop in its direction.
+Fast input can interrupt the pause. Mouse inertia stops
 at its first landing and stays idle if the drag releases on a stop.
 The minimum and maximum zoom remain limits, with the existing optional stretch.

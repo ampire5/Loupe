@@ -43,9 +43,37 @@ private let half = at(.percent(50), 0.5), one = at(.percent(100), 1), two = at(.
 
 @Test func aNearbyStopCannotCaptureOnTheOtherSideOfTheMidpoint() {
     let next = at(.percent(102), 1.02)
-    var g = ZoomStopGesture(startScale: 1, stops: [one, next], at: 1)
+    var g = ZoomStopGesture(startScale: 1.004, stops: [one, next], at: 1)
     #expect(g.constrain(1.006, at: 1.016).hitStop == nil)
     #expect(g.constrain(1.012, at: 1.032).hitStop == .percent(102) && g.justHit)
+}
+
+@Test func closeFitStopsPauseAndStepBackAndForthInOneGesture() {
+    let fit = at(.fitHeight, 1), width = at(.fitWidth, 1.07)
+    var g = ZoomStopGesture(startScale: 0.94, stops: [fit, width], at: 1)
+    #expect(g.constrain(0.975, at: 1.05).hitStop == .fitHeight && g.justHit)
+    // More than a nudge during the pause does not count towards leaving it.
+    #expect(g.constrain(1.01, at: 1.10).scale == 1 && !g.justHit)
+    #expect(g.constrain(1.016, at: 1.15).scale == 1 && !g.justHit)
+    let wider = g.constrain(1.039, at: 1.19)
+    #expect(wider.scale == 1.07 && wider.hitStop == .fitWidth && g.justHit)
+    #expect(g.constrain(1.01, at: 1.24).scale == 1.07 && !g.justHit)
+    let back = g.constrain(0.983, at: 1.30)
+    #expect(back.scale == 1 && back.hitStop == .fitHeight && g.justHit)
+}
+
+@Test func aSmallNudgeFromFitCanReachFitWidthWithoutLandingFirst() {
+    let fit = at(.fitHeight, 1), width = at(.fitWidth, 1.07)
+    var g = ZoomStopGesture(startScale: 1, stops: [fit, width], at: 1)
+    #expect(g.constrain(1.016, at: 1.05).scale == 1 && !g.justHit)
+    #expect(g.constrain(1.028, at: 1.10).hitStop == .fitWidth && g.justHit)
+}
+
+@Test func aFlickCanInterruptThePauseAndPassBothCloseStops() {
+    var g = ZoomStopGesture(startScale: 0.94, stops: [one, at(.percent(107), 1.07)], at: 1)
+    #expect(g.constrain(0.975, at: 1.05).scale == 1 && g.justHit)
+    let flick = g.constrain(1.20, at: 1.065)
+    #expect(flick.scale > 1.07 && flick.hitStop == nil && g.justHit)
 }
 
 @Test func slowApproachCapturesEarlyAndHoldsWhileAFlickKeepsMoving() {

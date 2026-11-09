@@ -71,6 +71,9 @@ public struct ZoomStopGesture: Sendable {
     private static let fastTravel = 0.018
     private static let captureDistance = 0.045
     private static let reverseTravelFraction = 0.35
+    private static let settleTime: TimeInterval = 0.09
+    private static let closeStopRatio = pow(2.0, 0.12)
+    private static let stepTravel = 0.035
     private static let reachTolerance = 1e-12
 
     private let stops: [ZoomStopScale]
@@ -86,8 +89,10 @@ public struct ZoomStopGesture: Sendable {
         let entryIncreasing: Bool
         var increasing: Bool
         var remaining: Double
+        var pauseUntil: TimeInterval? = nil
     }
     private var hold: DetentHold?
+    private var hasMoved = false
     private var lastTime: TimeInterval?
     private var velocity: Double?
     var isRestingOnStop: Bool {
@@ -148,23 +153,36 @@ public struct ZoomStopGesture: Sendable {
         let travel = fast.map { Self.slowTravel + (Self.fastTravel - Self.slowTravel) * $0 } ?? 0.08
         let rawWanted = proposedScale * rebase
         var wanted = rawWanted
+        let precise = fast.map { $0 <= 0.25 } ?? false
+        let neighbor = precise ? closeNeighbor(increasing: increasing) : nil
+        if !hasMoved, neighbor != nil {
+            // A photo can open at Fit. Let the first nudge reach a close stop without chasing it.
+            hold = DetentHold(entryIncreasing: increasing, increasing: increasing, remaining: 1)
+        }
+        hasMoved = true
 
         if var hold, increasing == hold.increasing || fast != nil {
+            if let until = hold.pauseUntil, let timestamp, timestamp < until, (fast ?? 0) < 0.8 {
+                rebase = current / proposedScale
+                return (current, resting)
+            }
+            hold.pauseUntil = nil
             if increasing != hold.increasing {
                 // Backing out is easier than continuing, but small reversals must stay in the pocket.
                 // Changing direction starts fresh so alternating jitter cannot add up to an exit.
                 hold.increasing = increasing
-                hold.remaining = increasing == hold.entryIncreasing ? 1 : Self.reverseTravelFraction
+                hold.remaining = increasing == hold.entryIncreasing || neighbor != nil ? 1 : Self.reverseTravelFraction
             }
-            let cost = hold.remaining * travel
+            let requiredTravel = neighbor == nil ? travel : Self.stepTravel
+            let cost = hold.remaining * requiredTravel
             let motion = direction * (log2(proposedScale) - log2(previous))
             if motion <= cost + tol {
-                hold.remaining = max(0, hold.remaining - motion / travel)
+                hold.remaining = max(0, hold.remaining - motion / requiredTravel)
                 self.hold = hold
                 rebase = current / proposedScale
                 return (current, resting)
             }
-            wanted = current * pow(2, direction * (motion - cost))
+            wanted = neighbor?.scale ?? (current * pow(2, direction * (motion - cost)))
         }
         hold = nil
 
@@ -199,7 +217,8 @@ public struct ZoomStopGesture: Sendable {
                 wanted = s
                 stop = point.stop
                 hold = DetentHold(entryIncreasing: increasing, increasing: increasing,
-                                  remaining: max(0, 1 - overshoot / travel))
+                                  remaining: max(0, 1 - overshoot / travel),
+                                  pauseUntil: precise ? timestamp.map { $0 + Self.settleTime } : nil)
                 break
             }
             wanted = s * pow(2, direction * (overshoot - travel))
@@ -237,6 +256,16 @@ public struct ZoomStopGesture: Sendable {
         resting = stop
         current = scale
         return (scale, stop)
+    }
+
+    private func closeNeighbor(increasing: Bool) -> ZoomStopScale? {
+        guard let index = stops.firstIndex(where: { abs($0.scale - current) <= Self.reachTolerance * current })
+        else { return nil }
+        let neighbor = index + (increasing ? 1 : -1)
+        guard stops.indices.contains(neighbor) else { return nil }
+        let point = stops[neighbor]
+        let ratio = increasing ? point.scale / current : current / point.scale
+        return ratio <= Self.closeStopRatio ? point : nil
     }
 
     /// Track the speed of the raw gesture, so holding the displayed scale does not slow the estimate.
