@@ -45,7 +45,7 @@ jobs:
           fi
           echo "id=$id sha=$sha"
           { echo "id=$id"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.run.outputs.sha }}
           fetch-depth: 0
@@ -59,7 +59,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "$version"
       - name: The apps from CI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ env.APP }}-macOS-*
           merge-multiple: true
