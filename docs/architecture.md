@@ -50,6 +50,8 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
    `ViewerView`/`RenderLoop` snapshot → `TileRenderer`. Keep the shown image pinned until its replacement is ready.
 3. Home browser → `LoupeHomeSource`, `FolderBrowserSource` or `PhotosBrowserSource` → streamed listings and
    thumbnail requests. The app supplies data; HomeScreenKit owns browser UI, selection and sorting interaction.
+   Grid and sidebar pin commands share `BrowserPlaces`. `FolderBrowserSource` serializes pin writes off the
+   main thread and then refreshes Places in both views.
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
    panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
 5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.
@@ -131,6 +133,8 @@ cores. Their async deadlines cancel pending admission without waiting for a bloc
 its slot and path reservation until it actually returns. Reachability submits only a bounded batch of task waiters
 and treats missing or timed-out answers as unavailable for cover reads. A cancelled cover that never acquired its
 limiter slot does not release one.
+Places keeps a root navigable when the check has no answer, so the sidebar can reveal the current folder under
+that root. A negative check dims the place.
 
 `StateDatabase` backs positions, folder settings, recent folders, sessions and file viewing history. Thumbnail
 catalog data is owned by `ThumbnailStore`. `Settings` and config stores handle user configuration; panel/window

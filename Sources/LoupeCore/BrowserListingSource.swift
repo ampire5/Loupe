@@ -93,14 +93,14 @@ public enum BrowserListingSource {
         }
     }
 
-    /// The top level: the home folder, the volumes, the pinned folders, in that order; one that does not answer within
-    /// a second (a share that hangs) or is gone is dimmed.
+    /// The top level: the home folder, the volumes, then pinned folders. Only a negative check dims a place.
+    /// A check still in flight or skipped at the batch deadline leaves its place available for navigation.
     public static func places(pins: [URL], home: URL, volumes: [URL]) async -> [BrowserEntry] {
         let all = [home] + volumes + pins
         let reachable = await HomeGrid.availability(of: all.map(\.path), timeout: .seconds(1))
         return all.map { url in
             BrowserEntry(url: url, name: url.path == "/" ? FileManager.default.displayName(atPath: "/") : url.lastPathComponent,
-                         kind: .place, isDimmed: reachable[url.path] != .some(true))
+                         kind: .place, isDimmed: reachable[url.path] == .some(false))
         }
     }
 

@@ -28,6 +28,7 @@ extension Notification.Name {
 
     private let thumbnails: ThumbnailStore
     private let places: BrowserPlaces
+    private static let pinWriter = DispatchQueue(label: "local.loupe.browserPins", qos: .userInitiated)
     private let settings: FolderSettings?
     private let positions: FolderPositions
     var fileViewHistory: FileViewHistory { positions.fileViews }
@@ -252,8 +253,8 @@ extension Notification.Name {
 
     // MARK: Places
 
-    /// The home folder, the volumes and the pins, each dimmed when it does not answer within a second. Nothing of the
-    /// browser's changes: the sidebar and the path's menus ask too, while a folder is listing.
+    /// The home folder, the volumes and the pins, with up to one second for availability checks.
+    /// The sidebar and path menus also call this while a folder is listing.
     func places() async -> [BrowserEntry] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let volumes = await Task.detached { BrowserListingSource.volumes() }.value
@@ -1233,8 +1234,7 @@ extension Notification.Name {
         }
         items += [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
         if entry.kind == .folder || entry.kind == .place {
-            items.append(places.isPinned(entry.url) ? HomeMenuItem(id: "unpin", title: "Unpin")
-                                                    : HomeMenuItem(id: "pin", title: "Pin"))
+            items.append(pinMenuItem(for: entry.url))
         }
         if entry.kind == .folder, case .folder = location {
             items.append(HomeMenuItem(id: "prepare-subtree", title: "Prepare thumbnails of folder and subfolders"))
@@ -1254,10 +1254,7 @@ extension Notification.Name {
         case "openNewWindow": open(entry, how: .openNewWindow)
         case "reveal": reveal(entry.url)
         case "copyPath": copyPath(entry.url)
-        case "pin", "unpin":
-            if item == "pin" { places.pin(entry.url) } else { places.unpin(entry.url) }
-            view?.reloadPlaces()
-            onPlacesChanged?()
+        case "pin", "unpin": changePin(for: entry.url, pinned: item == "pin")
         case "rename": view?.beginRename()
         case "trash": view?.trashSelected()
         case "prepare-subtree": prepareSubtree(entry)
@@ -1340,10 +1337,26 @@ extension Notification.Name {
         return nil
     }
 
-    /// A sidebar row of a folder, a place or a zip (`.folder` rows): the cards' Show in Finder and Copy Path.
+    private func pinMenuItem(for folder: URL) -> HomeMenuItem {
+        places.isPinned(folder) ? HomeMenuItem(id: "unpin", title: "Unpin") : HomeMenuItem(id: "pin", title: "Pin")
+    }
+
+    private func changePin(for folder: URL, pinned: Bool) {
+        Self.pinWriter.async { [weak self, places] in
+            if pinned { places.pin(folder) } else { places.unpin(folder) }
+            DispatchQueue.main.async { [weak self] in
+                self?.view?.reloadPlaces()
+                self?.onPlacesChanged?()
+            }
+        }
+    }
+
+    /// The sidebar uses the same pin commands as the grid. A dimmed place still has a directory URL.
     func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] {
-        guard case .folder = row.location else { return [] }
-        return [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
+        guard case .folder(let url) = row.location else { return [] }
+        var items = [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
+        if row.expandable || url.hasDirectoryPath { items.append(pinMenuItem(for: url)) }
+        return items
     }
 
     func performSidebar(_ item: String, on row: HomeSidebarRow) {
@@ -1351,6 +1364,9 @@ extension Notification.Name {
         switch item {
         case "reveal": reveal(url)
         case "copyPath": copyPath(url)
+        case "pin", "unpin":
+            guard row.expandable || url.hasDirectoryPath else { return }
+            changePin(for: url, pinned: item == "pin")
         default: break
         }
     }

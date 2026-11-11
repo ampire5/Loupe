@@ -106,7 +106,7 @@ import LoupeCore
         if entry.kind == .collection { collections.perform(item, on: entry) } else { folders.perform(item, on: entry, in: location) }
     }
 
-    /// A folder's, a place's or a zip's row in the sidebar: Show in Finder and Copy Path, as their cards.
+    /// Sidebar menus share the folder and Places commands with the grid.
     func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] {
         isPhotos(row.location) ? [] : folders.sidebarMenu(for: row)
     }
