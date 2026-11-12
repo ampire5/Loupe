@@ -768,6 +768,11 @@ import UniformTypeIdentifiers
     /// A new tab or window with nothing to show: Home (Home spec §2.1).
     func startEmpty() { showHome() }
 
+    func startBrowsing(_ folder: URL) {
+        restoreBrowserAt = (folder, nil)
+        showHome(tab: .folders)
+    }
+
     /// File › Open…'s panel: one image or zip.
     static func makeOpenPanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
@@ -1279,6 +1284,10 @@ import UniformTypeIdentifiers
             down ? MouseButtons.shared.otherMouseDown(event) : MouseButtons.shared.otherMouseUp(event)
         }
         view.onSidebarToggle = { [weak self] in self?.toggleHomeSidebar(nil) }
+        view.onOpenSidebarFolderInNewTab = { [weak self] folder in
+            guard let self else { return }
+            self.registry?.browseInNewTab(folder, beside: self)
+        }
         view.onHome = { [weak self] in self?.showStartPage() }
         view.onSidebarWidthChange = { width in
             _ = Settings.shared.saveAsDefault(["home-sidebar-width": String(Int(width.rounded()))])

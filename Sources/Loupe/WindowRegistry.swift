@@ -165,6 +165,13 @@ import StashKitUI
         makeTab(beside: anchor ?? current)?.startEmpty()
     }
 
+    func browseInNewTab(_ folder: URL, beside anchor: ViewerWindowController) {
+        guard let controller = makeTab(beside: anchor) else { return }
+        activate(controller)
+        controller.startBrowsing(folder)
+        controller.bringToFront()
+    }
+
     /// ⌘N: a window of its own, cascaded from `from`'s (the current one's without) at its size. From a window in full
     /// screen with `new-window-fullscreen=follow` it enters full screen in its own Space, and Stash or the Open panel
     /// comes once it is there.

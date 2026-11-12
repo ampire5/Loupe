@@ -58,6 +58,7 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
    Recursive browsing sends flattened image entries through the existing thumbnail and viewing-history flow.
    The walk is cancelled when the browser changes listing. The thumbnail catalog keeps its last successful
    result in a separate table by volume and folder and serves it provisionally during a fresh walk.
+   Opening a folder from the sidebar in a new tab uses WindowRegistry and starts that native tab in Home's browser.
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
    panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
 5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.
