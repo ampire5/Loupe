@@ -94,7 +94,7 @@ extension Notification.Name {
     /// at most, set on each ask.
     /// The folder on screen, for its cards' covers, and where the catalog keeps its files: resolved once, off the main
     /// thread (`ThumbnailStore.shownFolderPlace`); nil while it is being resolved.
-    private var coverFolder: String?
+    private var coverLocation: BrowserLocation?
     private var coverPlace: CoverPlace?
     private var placeTask: Task<Void, Never>?
     /// The folder's cards' covers: those kept, and the cards still waiting for one.
@@ -244,7 +244,7 @@ extension Notification.Name {
         markOrderTask = nil
         _ = begin(nil)
         stopWatching()
-        showCovers(of: nil)
+        showCovers(at: nil)
         pictureTask?.cancel()
         waiting.removeAll()
         Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
@@ -262,7 +262,7 @@ extension Notification.Name {
         Task { [thumbnails, thumbnailWindow] in await thumbnails.setRequest(window: thumbnailWindow, nil, stamps: [:]) }
         _ = begin(nil)
         stopWatching()
-        showCovers(of: nil)
+        showCovers(at: nil)
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
     }
@@ -291,9 +291,18 @@ extension Notification.Name {
             places.refreshFavoriteAvailability()
         }
         shownFavoriteAvailability = revision
-        let favorites = places.sidebarFavorites().map { url, available in
-            HomeSidebarRow(id: url.path, title: url.lastPathComponent, symbol: "folder", location: .folder(url),
-                           expandable: available, isDimmed: !available)
+        let startupDisk = await Task.detached(priority: .utility) {
+            FileManager.default.displayName(atPath: "/")
+        }.value
+        let volumes = (sidebarSystemPlaces ?? []).compactMap { row -> (URL, String)? in
+            guard case .folder(let url) = row.location, row.symbol == "externaldrive" else { return nil }
+            return (url, row.title)
+        }
+        let folders = places.sidebarFavorites()
+        let hints = HomeFavorites.locationHints(for: folders.map(\.0), volumes: volumes, startupDisk: startupDisk)
+        let favorites = folders.map { url, available in
+            HomeSidebarRow(id: url.path, title: url.path == "/" ? startupDisk : url.lastPathComponent, symbol: "folder", location: .folder(url),
+                           expandable: available, isDimmed: !available, locationHint: hints[url])
         }
         return (favorites, sidebarSystemPlaces ?? [])
     }
@@ -408,13 +417,31 @@ extension Notification.Name {
         }
     }
 
+    func listFavorites() -> AsyncThrowingStream<BrowserListing, Error> {
+        leave()
+        let location = BrowserLocation.source(HomeFavorites.sourceID)
+        showCovers(at: location)
+        return AsyncThrowingStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                defer { continuation.finish() }
+                guard let self else { return }
+                let rows = await self.sidebarPlaces().favorites
+                guard !Task.isCancelled, self.coverLocation == location else { return }
+                let entries = HomeFavorites.entries(from: rows)
+                self.remember(entries)
+                continuation.yield(BrowserListing(entries: entries, complete: true))
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     /// The places as `places()` gives them, then with each one's free space (`1.2 TB free`), asked off the main
     /// thread for a second at most: a share that does not answer keeps its card without it.
     private func listPlaces() -> AsyncThrowingStream<BrowserListing, Error> {
         // The Places page is the browser's place now: a folder's listing and watch stop.
         let token = begin(nil)
         stopWatching()
-        showCovers(of: nil)
+        showCovers(at: nil)
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor [weak self] in
                 guard let entries = await self?.places(), let self, !Task.isCancelled, self.gate.isCurrent(token) else { return }
@@ -444,7 +471,7 @@ extension Notification.Name {
         listingFailed = false
         listingAnswered(false, reset: true)
         // A zip's listing is its photos: no cards with covers.
-        showCovers(of: ArchivePath.isArchive(folder) ? nil : folder)
+        showCovers(at: ArchivePath.isArchive(folder) ? nil : .folder(folder))
         return AsyncThrowingStream { continuation in
             // The kept listing at once, in the move's turn: the browser draws it then (`lastListing`) and asks for its
             // pictures by id, which must find its entries here.
@@ -748,7 +775,7 @@ extension Notification.Name {
         let inView = Set(ids.prefix(visible))
         let files = wanted.filter { $0.kind == .file }
         sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
-        let cardIDs = wanted.filter { $0.kind == .folder || $0.kind == .archive }.map(\.id)
+        let cardIDs = wanted.filter { !$0.isDimmed && ($0.kind == .folder || $0.kind == .archive) }.map(\.id)
         // The folder cards' picture: a poster's slot, a compact card's 76 pt square (its layout kept there, as board B
         // draws it), a row's cover; with photos in the grid too, `width` is theirs.
         let coverWidth = view?.coverWidth ?? width
@@ -829,12 +856,11 @@ extension Notification.Name {
 
     /// The folder on screen changed (nil: none, the places or one of Home's own sources): the old one's covers stop
     /// and the new one is resolved, off the main thread, for its cards' (`ThumbnailStore.shownFolderPlace`).
-    private func showCovers(of folder: URL?) {
-        let path = folder?.standardizedFileURL.path
-        guard path != coverFolder else { return }
+    private func showCovers(at location: BrowserLocation?) {
+        guard location != coverLocation else { return }
         placeTask?.cancel()
         placeTask = nil
-        coverFolder = path
+        coverLocation = location
         coverPlace = nil
         coverShare = nil
         cards.reset()
@@ -857,12 +883,15 @@ extension Notification.Name {
         changedWhilePaused = []
         stopQueuedCovers()
         progressMayHaveChanged()
-        guard let folder, let path else { return }
+        if location == .source(HomeFavorites.sourceID) {
+            coverPlace = .unknown(network: false)
+        }
+        guard case .folder(let folder) = location else { return }
         let thumbnails = self.thumbnails
         placeTask = Task { @MainActor [weak self] in
             let place = await thumbnails.shownFolderPlace(folder)
             let share = await Task.detached(priority: .utility) { ThumbnailStore.networkVolume(folder) }.value
-            guard let self, !Task.isCancelled, self.coverFolder == path, place != .notNow else { return }
+            guard let self, !Task.isCancelled, self.coverLocation == location, place != .notNow else { return }
             self.coverPlace = place
             self.coverShare = share
             // Its photos' folder is the same: the store needs no second resolve of it.
@@ -883,13 +912,14 @@ extension Notification.Name {
     /// With `thumbs-ahead = folder`, the subfolders of the cards in view follow every window's margin in the queue
     /// (`aheadWork`), in the grid's order, once the folder's entries are dated.
     private func sendCovers() {
-        guard !isPaused, let place = coverPlace, let size = coverSize, let folderPath = coverFolder else { return }
+        guard !isPaused, let place = coverPlace, let size = coverSize, let coverLocation else { return }
         let shownLocation: ThumbnailLocation?, network: Bool
         switch place {
         case .located(let location): (shownLocation, network) = (location, location.isNetwork)
         case .unknown(let onShare): (shownLocation, network) = (nil, onShare)
         case .notNow: return
         }
+        let favorites = coverLocation == .source(HomeFavorites.sourceID)
         let pending = cards.pending, visiblePending = cards.visiblePending
         let waiting = Set(pending)
         // The follow-ups of the last ask (the live area: a card scrolled away waits until it is asked for again), in
@@ -899,7 +929,7 @@ extension Notification.Name {
         let ids = Array(pending.prefix(visiblePending)) + inView + pending.dropFirst(visiblePending)
             + asked.filter { !lastInView.contains($0) }
         let visible = visiblePending + inView.count
-        let aheadList = shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadIDs(in: shownLocation) : []
+        let aheadList = !favorites && shownDated && Settings.shared.config.thumbsAhead == .folder ? aheadIDs(in: shownLocation) : []
         aheadSent = Set(aheadList)
         // The kept entries as they are now (copied on write: nothing is made for this ask).
         let ahead = subfolders
@@ -914,13 +944,13 @@ extension Notification.Name {
         /// now: a visit recorded later is later). Nil: no longer this folder's.
         typealias CardNow = (entry: BrowserEntry, lastViewed: String?, dated: Bool, picture: Bool, since: Date)
         let lookup: @MainActor (String) -> CardNow? = { [weak self] id in
-            guard let self, self.coverFolder == folderPath, let entry = self.shown[id] else { return nil }
+            guard let self, self.coverLocation == coverLocation, let entry = self.shown[id] else { return nil }
             return (entry, self.positions.fileName(in: entry.url), self.shownDated, self.cards.pending.contains(id),
                     self.visit(of: entry.url)?.visited ?? Date())
         }
         let deliver: @MainActor (String, CGImage?, FolderCardFacts, Bool, Bool) -> Void = {
             [weak self] id, mosaic, facts, again, noCover in
-            guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
+            guard let self, self.coverLocation == coverLocation, self.shown[id] != nil else { return }
             self.keepFacts(facts, for: id, again: again)
             // Done without a picture (no photos, unreadable, none made): the card stops waiting for one.
             if noCover {
@@ -933,16 +963,27 @@ extension Notification.Name {
             self.cards.delivered(id, mosaic)
             self.view?.setImage(mosaic, for: id)
         }
-        let subfolderWork = aheadWork(network: network, folderPath: folderPath)
+        let subfolderWork = aheadWork(network: network, coverLocation: coverLocation)
         let work: @Sendable (String) async -> Bool = { id in
             if let subfolder = ahead.card(id) { return await subfolderWork(subfolder) }
             guard let card = await lookup(id) else { return true }
             let entry = card.entry
             // Only its summary is wanted: that waits for the folder's date (`shownDated`), which brings it back.
             guard card.picture || card.dated else { return false }
-            let location = shownLocation?.subfolder(entry.url.lastPathComponent)
+            let location: ThumbnailLocation?
+            let cardNetwork: Bool
+            if favorites {
+                switch await thumbnails.folderLocation(entry.url) {
+                case .located(let found): (location, cardNetwork) = (found, found.isNetwork)
+                case .unknown(let onShare): (location, cardNetwork) = (nil, onShare)
+                case .notNow: return Task.isCancelled
+                }
+            } else {
+                (location, cardNetwork) = (shownLocation?.subfolder(entry.url.lastPathComponent), network)
+            }
+            guard !Task.isCancelled else { return true }
             guard let made = await thumbnails.folderCard(entry.url, archive: entry.kind == .archive, in: location,
-                                                         network: network, maxPixel: cellPixels,
+                                                         network: cardNetwork, maxPixel: cellPixels,
                                                          lastViewed: card.lastViewed, modified: entry.date) else { return false }
             guard !Task.isCancelled else { return true }
             var inside: ChildSummaries?
@@ -964,9 +1005,13 @@ extension Notification.Name {
             await deliver(id, mosaic, facts, again, card.picture && mosaic == nil && !again)
             return !again
         }
+        let favoriteURLs = favorites ? Dictionary(ids.compactMap { id in
+            shown[id].map { (id, $0.url) }
+        }, uniquingKeysWith: { first, _ in first }) : [:]
         sendToQueue { queue, client in
-            await queue.want(ids, visible: visible, ahead: aheadList, client: client, isNetwork: { _ in network },
-                             work: work)
+            await queue.want(ids, visible: visible, ahead: aheadList, client: client, isNetwork: { id in
+                favoriteURLs[id].map { ThumbnailStore.networkVolume($0) != nil } ?? network
+            }, work: work)
         }
     }
 
@@ -1001,13 +1046,13 @@ extension Notification.Name {
             subfolders.set(AheadSubfolders.entries([], card: id, folder: folder, location: location), for: id)
             return
         }
-        let thumbnails = self.thumbnails, folderPath = coverFolder
+        let thumbnails = self.thumbnails, coverLocation = self.coverLocation
         Task { @MainActor [weak self] in
             guard let names = await thumbnails.subfolderNames(of: folder, in: location) else { return }
             let entries = await Task.detached(priority: .utility) {
                 AheadSubfolders.entries(names, card: id, folder: folder, location: location)
             }.value
-            guard let self, self.coverFolder == folderPath, self.shown[id] != nil else { return }
+            guard let self, self.coverLocation == coverLocation, self.shown[id] != nil else { return }
             self.subfolders.set(entries, for: id)
             if !names.isEmpty { self.sendCovers() }
         }
@@ -1016,18 +1061,18 @@ extension Notification.Name {
     /// The work ahead on one subfolder (`ThumbnailStore.prepareAhead`) while its parent card is on screen. A summary
     /// it wrote (new or changed) has its parent card's "+N inside" counted again (`refreshInside`); a fresh one skipped
     /// costs the parent nothing.
-    private func aheadWork(network: Bool, folderPath: String) -> @Sendable (AheadSubfolders.Card) async -> Bool {
+    private func aheadWork(network: Bool, coverLocation: BrowserLocation) -> @Sendable (AheadSubfolders.Card) async -> Bool {
         let thumbnails = self.thumbnails
         let lastViewed: @MainActor (AheadSubfolders.Card) -> String?? = { [weak self] card in
-            guard let self, self.coverFolder == folderPath, self.shown[card.parent] != nil else { return nil }
+            guard let self, self.coverLocation == coverLocation, self.shown[card.parent] != nil else { return nil }
             return .some(self.positions.fileName(in: card.url))
         }
         let refresh: @MainActor (String, ThumbnailLocation) -> Void = { [weak self] parent, location in
-            guard let self, self.coverFolder == folderPath else { return }
+            guard let self, self.coverLocation == coverLocation else { return }
             self.refreshInside(of: parent, at: location)
         }
         let finished: @MainActor (String) -> Void = { [weak self] id in
-            guard let self, self.coverFolder == folderPath else { return }
+            guard let self, self.coverLocation == coverLocation else { return }
             self.aheadDone(id)
         }
         return { card in
@@ -1048,12 +1093,12 @@ extension Notification.Name {
     /// `location`), after `insideRefreshDelay`, once for every summary written meanwhile.
     private func refreshInside(of parent: String, at location: ThumbnailLocation) {
         guard insideRefresh[parent] == nil else { return }
-        let thumbnails = self.thumbnails, folderPath = coverFolder
+        let thumbnails = self.thumbnails, coverLocation = self.coverLocation
         insideRefresh[parent] = Task { @MainActor [weak self] in
             guard (try? await Task.sleep(for: Self.insideRefreshDelay)) != nil else { return }
             self?.insideRefresh[parent] = nil
             let inside = await thumbnails.childSummaries(of: location)
-            guard let self, self.coverFolder == folderPath, self.facts[parent] != nil else { return }
+            guard let self, self.coverLocation == coverLocation, self.facts[parent] != nil else { return }
             self.facts[parent]?.inside = inside
             self.showSummary(parent)
         }
@@ -1342,7 +1387,7 @@ extension Notification.Name {
     /// The popover's "Prepare subfolders": the walk from the folder on screen down to `thumbs-depth`.
     func prepareShownSubtree(of location: BrowserLocation) {
         guard case .folder(let folder) = location, !ArchivePath.isArchive(folder),
-              coverFolder == folder.standardizedFileURL.path else { return }
+              coverLocation == .folder(folder) else { return }
         prepareSubtree(of: folder, location: shownLocation)
     }
 

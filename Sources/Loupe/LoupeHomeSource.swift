@@ -45,8 +45,11 @@ import LoupeCore
 
     func list(_ location: BrowserLocation) -> AsyncThrowingStream<BrowserListing, Error> {
         let stream: AsyncThrowingStream<BrowserListing, Error>
-        if case .source(let id) = location { stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id) }
-        else { stream = folders.list(location) }
+        switch location {
+        case .source(HomeFavorites.sourceID): return folders.listFavorites()
+        case .source(let id): stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id)
+        default: stream = folders.list(location)
+        }
         let history = folders.fileViewHistory
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -82,7 +85,7 @@ import LoupeCore
     /// The first `visible` of `ids` are in view: a folder's cards in view get their covers before the margin's.
     func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
         if isPhotos(view?.location) { photos.wantImages(ids, width: width) }
-        else if case .source = view?.location {
+        else if case .source = view?.location, view?.location != .source(HomeFavorites.sourceID) {
             collections.wantImages(ids, width: width)
         } else {
             folders.wantImages(ids, visible: visible, width: width)
@@ -155,7 +158,12 @@ import LoupeCore
 
     func setCardStyle(_ style: CardStyle, for location: BrowserLocation) { folders.setCardStyle(style, for: location) }
 
-    func info(for source: String) -> HomeSourceInfo { PhotosLocation.owns(source) ? photos.info(source) : collections.info(for: source) }
+    func info(for source: String) -> HomeSourceInfo {
+        if source == HomeFavorites.sourceID {
+            return HomeSourceInfo(title: "Favorites", noun: "folder", emptyHint: "Choose Add to Favorites from a folder’s menu", preservesOrder: true)
+        }
+        return PhotosLocation.owns(source) ? photos.info(source) : collections.info(for: source)
+    }
 
     /// Recent, Sessions, Photos, then Favorites and the system Places. Stash appears when it has an address.
     func sidebar() async -> [HomeSidebarSection] {
@@ -164,6 +172,7 @@ import LoupeCore
             HomeSidebarSection(id: "library", title: nil, rows: [
                 HomeSidebarRow(id: HomeCollections.recent, title: "Recent", symbol: "clock",
                                location: .source(HomeCollections.recent)),
+                HomeFavorites.sourceRow,
                 HomeSidebarRow(id: HomeCollections.sessions, title: "Sessions", symbol: "rectangle.stack",
                                location: .source(HomeCollections.sessions)),
                 HomeSidebarRow(id: PhotosLocation.root, title: "Photos", symbol: "photo.on.rectangle",
@@ -189,7 +198,8 @@ import LoupeCore
         if isPhotos(old), !isPhotos(new) { photos.stop() }
         else if isPhotos(old), old != new { photos.stopPictures() }
         let wasSource = if case .source? = old { true } else { false }
-        if case .source = new, !wasSource { folders.leave() }
+        let favorites = BrowserLocation.source(HomeFavorites.sourceID)
+        if case .source = new, new != favorites, !wasSource || old == favorites { folders.leave() }
         if wasSource, old != new { collections.stopPictures() }
     }
 

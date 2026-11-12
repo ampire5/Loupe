@@ -53,7 +53,8 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
    thumbnail requests. The app supplies data; HomeScreenKit owns browser UI, selection and sorting interaction.
    Grid and sidebar favorite commands share `BrowserPlaces`. It keeps the existing ordered `browser_pins` rows,
    commits changes before publishing them, and notifies every Home window sharing the store. The sidebar separates
-   Favorites from system Places. The Places grid and breadcrumb still include the saved folders.
+   Favorites from system Places and exposes the same ordered folders as a separate Favorites source.
+   The source uses the normal folder cover queue and resolves each favorite's catalog location independently.
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
    panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
 5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.

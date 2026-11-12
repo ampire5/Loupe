@@ -1,10 +1,50 @@
+import AppKit
 import Foundation
-import HomeScreenKit
+@testable import HomeScreenKit
 import LoupeCore
 import Testing
 @testable import Loupe
 
 @MainActor struct SidebarFavoritesTests {
+    @Test func favoriteGetsTheCoverFromItsOwnFolder() async throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let favorite = root.appendingPathComponent("Photos", isDirectory: true)
+        try manager.createDirectory(at: favorite, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+        let fixture = try #require(CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                            space: CGColorSpaceCreateDeviceRGB(),
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        fixture.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        fixture.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        let bitmap = NSBitmapImageRep(cgImage: try #require(fixture.makeImage()))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: favorite.appendingPathComponent("photo.png"))
+
+        let places = BrowserPlaces(database: nil)
+        places.pin(favorite)
+        let thumbnails = ThumbnailStore(directory: root.appendingPathComponent("cache"), reader: FileReader(threads: 1),
+                                        thumbSize: 320, limitBytes: 1_000_000)
+        let folders = FolderBrowserSource(thumbnails: thumbnails, places: places, settings: nil,
+                                          positions: FolderPositions(database: nil), recent: nil, stores: [])
+        defer { folders.stop() }
+        let collections = CollectionSource(thumbnails: thumbnails, recent: { [] }, sessions: { [] }, stashPage: { nil })
+        let source = LoupeHomeSource(folders: folders, collections: collections, hasStash: { false })
+        let browser = HomeBrowserView(source: source)
+        browser.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        source.view = browser
+        browser.show(.source(HomeFavorites.sourceID), selecting: nil)
+        browser.layoutSubtreeIfNeeded()
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while browser.card(for: favorite.path)?.image == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let card = try #require(browser.card(for: favorite.path) as? CollectionCard)
+        #expect(card.image != nil)
+        #expect(card.coverTitle.isHidden)
+    }
+
     @Test(.timeLimit(.minutes(1))) func favoriteCommandsRefreshBothHomeSources() async throws {
         let places = BrowserPlaces(database: nil)
         let thumbnails = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
