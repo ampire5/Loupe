@@ -50,6 +50,19 @@ import LoupeCore
         case .source(let id): stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id)
         default: stream = folders.list(location)
         }
+        return withViewingHistory(stream, at: location)
+    }
+
+    func supportsRecursiveListing(in folder: URL) -> Bool {
+        folder.isFileURL && !ArchivePath.isArchive(folder)
+    }
+
+    func listRecursively(in folder: URL) -> AsyncThrowingStream<BrowserListing, Error> {
+        withViewingHistory(folders.listRecursively(in: folder), at: .folder(folder))
+    }
+
+    private func withViewingHistory(_ stream: AsyncThrowingStream<BrowserListing, Error>,
+                                    at location: BrowserLocation) -> AsyncThrowingStream<BrowserListing, Error> {
         let history = folders.fileViewHistory
         return AsyncThrowingStream { continuation in
             let task = Task {

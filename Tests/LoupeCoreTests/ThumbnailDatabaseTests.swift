@@ -498,6 +498,20 @@ import HomeScreenModel
 
     /// A folder's listing is kept by volume and path, replaced by the next one, and the least recently written go once
     /// there are more than the capacity.
+    @Test func recursiveListingSurvivesReopeningWithoutReplacingTheDirectListing() throws {
+        let directory = tempDir()
+        let db = try ThumbnailDatabase(directory: directory, thumbSize: 512, now: Clock().now)
+        let time = Date()
+        try db.putListing(Data([1]), at: folderX)
+        try db.putListing(Data([2]), at: folderX, recursive: true, scannedAt: time)
+        try db.putListing(Data([3]), at: folderX, recursive: true, scannedAt: time.addingTimeInterval(-1))
+
+        let reopened = try ThumbnailDatabase(directory: directory, thumbSize: 512)
+        #expect(try reopened.listing(at: folderX) == Data([1]))
+        #expect(try reopened.listing(at: folderX, recursive: true) == Data([2]))
+        #expect(try reopened.listing(at: folderY, recursive: true) == nil)
+    }
+
     @Test func listingsAreKeptAndBounded() throws {
         let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: Clock().now, listingCapacity: 2)
         try db.putListing(Data([1]), at: folderX)

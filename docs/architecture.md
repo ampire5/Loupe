@@ -55,6 +55,9 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
    commits changes before publishing them, and notifies every Home window sharing the store. The sidebar separates
    Favorites from system Places and exposes the same ordered folders as a separate Favorites source.
    The source uses the normal folder cover queue and resolves each favorite's catalog location independently.
+   Recursive browsing sends flattened image entries through the existing thumbnail and viewing-history flow.
+   The walk is cancelled when the browser changes listing. The thumbnail catalog keeps its last successful
+   result in a separate table by volume and folder and serves it provisionally during a fresh walk.
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
    panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
 5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.

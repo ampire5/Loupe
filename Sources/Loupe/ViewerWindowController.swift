@@ -1048,7 +1048,15 @@ import UniformTypeIdentifiers
            tab == nil || tab == .recent {
             browser.show(.source(PhotosLocation.collection(album)), selecting: current.absoluteString)
         } else if shown == .folders {
-            if let start = browseAt ?? (returningFromViewer ? session.playlist.map { BrowseTarget.location(for: $0.current) } : nil) {
+            let viewerLocation = returningFromViewer ? session.playlist.map { playlist in
+                let photo = playlist.current.standardizedFileURL
+                if browser.includesSubfolders, case .folder(let root) = browser.location,
+                   photo.isFileURL, photo.pathComponents.starts(with: root.standardizedFileURL.pathComponents) {
+                    return (location: browser.location, select: photo.path)
+                }
+                return BrowseTarget.location(for: playlist.current)
+            } : nil
+            if let start = browseAt ?? viewerLocation {
                 browser.lastOpenedID = start.select
                 browser.show(start.location, selecting: start.select)
             } else if let restore = restoreBrowserAt {

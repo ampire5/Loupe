@@ -435,6 +435,41 @@ extension Notification.Name {
         }
     }
 
+    func listRecursively(in folder: URL) -> AsyncThrowingStream<BrowserListing, Error> {
+        let token = begin(folder.standardizedFileURL.path)
+        stopWatching()
+        showCovers(at: nil)
+        listingAnswered(false, reset: true)
+        return AsyncThrowingStream { continuation in
+            let task = Task { @MainActor [weak self, thumbnails] in
+                defer { continuation.finish() }
+                if let cached = await thumbnails.storedRecursiveListing(folder),
+                   !Task.isCancelled, let self {
+                    self.deliverStored(cached, token: token, to: continuation)
+                }
+                guard !Task.isCancelled else { return }
+                let scannedAt = Date()
+                let read = Task.detached(priority: .userInitiated) {
+                    try RecursiveFolderFiles.read(in: folder, extensions: Playlist.imageExtensions,
+                                                  cancelled: { Task.isCancelled })
+                }
+                do {
+                    let entries = try await withTaskCancellationHandler {
+                        try await read.value
+                    } onCancel: {
+                        read.cancel()
+                    }
+                    guard let self, !Task.isCancelled, self.gate.isCurrent(token) else { return }
+                    deliver(BrowserListing(entries: entries, complete: true), token: token, to: continuation)
+                    await thumbnails.storeRecursiveListing(entries, of: folder, scannedAt: scannedAt)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     /// The places as `places()` gives them, then with each one's free space (`1.2 TB free`), asked off the main
     /// thread for a second at most: a share that does not answer keeps its card without it.
     private func listPlaces() -> AsyncThrowingStream<BrowserListing, Error> {
