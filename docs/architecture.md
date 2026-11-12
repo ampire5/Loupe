@@ -135,9 +135,9 @@ its slot and path reservation until it actually returns. Reachability submits on
 and treats missing or timed-out answers as unavailable for cover reads. A cancelled cover that never acquired its
 limiter slot does not release one.
 Places keeps a system root navigable when the check has no answer, so the sidebar can reveal the current folder
-under that root. A negative check dims the place. Sidebar Favorites share one bounded directory check across Home
-windows for the same set of paths. Unavailable or unanswered folders stay in order and dimmed. Mount changes
-invalidate in-flight Favorites checks and reload the sidebar.
+under that root. A negative check dims the place. Sidebar Favorites publish the saved order with cached status
+and share one background directory check across Home windows for the same set of paths. Unavailable or
+unanswered folders stay in order and dimmed. Mount changes restart the check and refresh cached system Places.
 
 `StateDatabase` backs positions, folder settings, recent folders, sessions and file viewing history. Thumbnail
 catalog data is owned by `ThumbnailStore`. `Settings` and config stores handle user configuration; panel/window

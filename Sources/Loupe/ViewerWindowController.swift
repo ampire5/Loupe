@@ -1284,6 +1284,7 @@ import UniformTypeIdentifiers
         folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         source.photos.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
+        folders.onSidebarAvailabilityChanged = { [weak view] in view?.reloadSidebar() }
         // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done. The popover (View ›
         // Thumbnails…) has the counts whether or not anything is being prepared (`ThumbsProgress.display`).
         folders.onProgress = { [weak browser] progress in

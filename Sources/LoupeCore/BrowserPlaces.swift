@@ -5,6 +5,7 @@ import Foundation
 public final class BrowserPlaces: PathMoving, @unchecked Sendable {
     public static let lastFolderKey = "browser-last-folder"
     public static let favoritesDidChange = Notification.Name("LoupeFolderFavoritesDidChange")
+    package static let favoriteAvailabilityDidChange = Notification.Name("LoupeFolderFavoriteAvailabilityDidChange")
 
     private let database: StateDatabase?
     private let lock = NSLock()
@@ -16,7 +17,9 @@ public final class BrowserPlaces: PathMoving, @unchecked Sendable {
     }
     private var state = State()
 
-    @MainActor private var favoriteCheck: (paths: Set<String>, task: Task<[String: Bool?], Never>)?
+    @MainActor package private(set) var favoriteAvailabilityRevision = 0
+    @MainActor private var favoriteAvailability: [String: Bool] = [:]
+    @MainActor private var favoriteCheck: (paths: Set<String>, task: Task<Void, Never>)?
 
     public init(database: StateDatabase?) {
         self.database = database
@@ -36,28 +39,36 @@ public final class BrowserPlaces: PathMoving, @unchecked Sendable {
         return lock.withLock { state.pinned.contains(path) }
     }
 
-    /// All Home windows with the same favorites share the current check. The next reload after it finishes
-    /// probes again. An unanswered path remains visible but dimmed.
-    @MainActor public func checkedFavorites() async -> [(url: URL, available: Bool)] {
-        let urls = pins()
-        guard !urls.isEmpty else { return [] }
-        let paths = urls.map(\.path)
-        let membership = Set(paths)
-        let task: Task<[String: Bool?], Never>
-        if let current = favoriteCheck, current.paths == membership {
-            task = current.task
-        } else {
-            task = Task {
-                await HomeGrid.directoryAvailability(of: paths, timeout: .seconds(1))
-            }
-            favoriteCheck = (membership, task)
-        }
-        let checked = await task.value
-        if favoriteCheck?.task == task { favoriteCheck = nil }
-        return urls.map { ($0, checked[$0.path] == .some(true)) }
+    @MainActor package func sidebarFavorites() -> [(url: URL, available: Bool)] {
+        pins().map { ($0, favoriteAvailability[$0.path] ?? true) }
     }
 
-    @MainActor public func invalidateFavoriteAvailability() {
+    /// Home windows share an in-flight check for the same folders. Order changes can use the cached answer
+    /// immediately. Missing or unanswered paths become dimmed when the bounded probe finishes.
+    @MainActor package func refreshFavoriteAvailability() {
+        let paths = lock.withLock { state.pinned }
+        let membership = Set(paths)
+        guard favoriteCheck?.paths != membership else { return }
+        invalidateFavoriteAvailability()
+        favoriteAvailability = favoriteAvailability.filter { membership.contains($0.key) }
+        guard !paths.isEmpty else { return }
+        let task = Task { [weak self] in
+            let checked = await HomeGrid.directoryAvailability(of: paths, timeout: .seconds(1))
+            guard let self, !Task.isCancelled else { return }
+            favoriteCheck = nil
+            guard lock.withLock({ Set(state.pinned) }) == membership else { return }
+            let available = Dictionary(uniqueKeysWithValues: paths.map { ($0, checked[$0] == .some(true)) })
+            let changed = available.contains { (favoriteAvailability[$0.key] ?? true) != $0.value }
+            favoriteAvailability = available
+            if changed {
+                favoriteAvailabilityRevision += 1
+                NotificationCenter.default.post(name: Self.favoriteAvailabilityDidChange, object: self)
+            }
+        }
+        favoriteCheck = (membership, task)
+    }
+
+    @MainActor package func invalidateFavoriteAvailability() {
         favoriteCheck?.task.cancel()
         favoriteCheck = nil
     }
@@ -184,5 +195,4 @@ public final class BrowserPlaces: PathMoving, @unchecked Sendable {
         if let plain, plain > 0 { return Int64(plain) }
         return nil
     }
-
 }

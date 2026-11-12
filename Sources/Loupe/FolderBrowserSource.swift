@@ -23,12 +23,16 @@ extension Notification.Name {
     var onOpen: ((OpenTarget, HomeClick) -> Void)?
     /// The shared favorites list changed, including from another Home window.
     var onPlacesChanged: (() -> Void)?
+    var onSidebarAvailabilityChanged: (() -> Void)?
     /// Asks before deleting for good (a volume without a Trash); the answer comes back on the main actor.
     var confirmDelete: ((String, @escaping (Bool) -> Void) -> Void)?
 
     private let thumbnails: ThumbnailStore
     private let places: BrowserPlaces
     private static let favoritesWriter = DispatchQueue(label: "local.loupe.folderFavorites", qos: .userInitiated)
+    private var sidebarSystemPlaces: [HomeSidebarRow]?
+    private var sidebarSystemRefresh: Task<Void, Never>?
+    private var shownFavoriteAvailability: Int?
     private let settings: FolderSettings?
     private let positions: FolderPositions
     var fileViewHistory: FileViewHistory { positions.fileViews }
@@ -157,6 +161,9 @@ extension Notification.Name {
                 self.onPlacesChanged?()
             }
         })
+        observers.append(center.addObserver(forName: BrowserPlaces.favoriteAvailabilityDidChange, object: places, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onSidebarAvailabilityChanged?() }
+        })
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
             guard let url = note.object as? URL else { return }
             MainActor.assumeIsolated {
@@ -244,6 +251,8 @@ extension Notification.Name {
     }
 
     func stop() {
+        sidebarSystemRefresh?.cancel()
+        sidebarSystemRefresh = nil
         dropMarkAspects()
         markOrderTask?.cancel()
         markOrderTask = nil
@@ -272,20 +281,43 @@ extension Notification.Name {
     }
 
     func sidebarPlaces() async -> (favorites: [HomeSidebarRow], system: [HomeSidebarRow]) {
-        async let checked = places.checkedFavorites()
-        let system = await placeEntries(pins: []).map { entry in
-            HomeSidebarRow(id: entry.id, title: entry.name, symbol: symbol(for: entry), location: .folder(entry.url),
-                           expandable: !entry.isDimmed, isDimmed: entry.isDimmed)
+        if sidebarSystemPlaces == nil {
+            if sidebarSystemRefresh == nil { refreshSidebarSystemPlaces() }
+            await sidebarSystemRefresh?.value
         }
-        let favorites = await checked.map { url, available in
+        let revision = places.favoriteAvailabilityRevision
+        // A reload triggered by a new probe result should publish that result without starting another probe.
+        if shownFavoriteAvailability == nil || shownFavoriteAvailability == revision {
+            places.refreshFavoriteAvailability()
+        }
+        shownFavoriteAvailability = revision
+        let favorites = places.sidebarFavorites().map { url, available in
             HomeSidebarRow(id: url.path, title: url.lastPathComponent, symbol: "folder", location: .folder(url),
                            expandable: available, isDimmed: !available)
         }
-        return (favorites, system)
+        return (favorites, sidebarSystemPlaces ?? [])
+    }
+
+    private func refreshSidebarSystemPlaces() {
+        sidebarSystemRefresh?.cancel()
+        sidebarSystemRefresh = Task { [weak self] in
+            guard let self else { return }
+            let system = await placeEntries(pins: []).map { entry in
+                HomeSidebarRow(id: entry.id, title: entry.name, symbol: symbol(for: entry), location: .folder(entry.url),
+                               expandable: !entry.isDimmed, isDimmed: entry.isDimmed)
+            }
+            guard !Task.isCancelled else { return }
+            sidebarSystemRefresh = nil
+            let changed = sidebarSystemPlaces != nil && sidebarSystemPlaces != system
+            sidebarSystemPlaces = system
+            if changed { onSidebarAvailabilityChanged?() }
+        }
     }
 
     func mountedVolumesChanged() {
         places.invalidateFavoriteAvailability()
+        places.refreshFavoriteAvailability()
+        refreshSidebarSystemPlaces()
     }
 
     func moveFavoriteFolder(_ folder: URL, before other: URL?) {

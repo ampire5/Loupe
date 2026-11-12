@@ -47,7 +47,7 @@ import Testing
         #expect(other.sidebarMenu(for: row).contains { $0.id == "remove-favorite" })
     }
 
-    @Test func unavailableFavoriteRemainsInOrderAndRecoversOnReload() async throws {
+    @Test(.timeLimit(.minutes(1))) func unavailableFavoriteRemainsInOrderAndRecoversOnReload() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("loupe-favorites-\(UUID())", isDirectory: true)
         let missing = directory.appendingPathComponent("missing", isDirectory: true)
@@ -63,6 +63,11 @@ import Testing
         defer { folders.stop() }
         let collections = CollectionSource(thumbnails: thumbnails, recent: { [] }, sessions: { [] }, stashPage: { nil })
         let source = LoupeHomeSource(folders: folders, collections: collections, hasStash: { false })
+        let changes = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        folders.onSidebarAvailabilityChanged = { changes.continuation.yield(()) }
+        var updates = changes.stream.makeAsyncIterator()
+        _ = await source.sidebar()
+        _ = await updates.next()
         let sections = await source.sidebar()
         #expect(sections.map(\.id) == ["library", "favorites", "places"])
         let favorites = try #require(sections.first { $0.id == "favorites" })
@@ -73,9 +78,45 @@ import Testing
         #expect(await source.places().suffix(2).map { $0.url.path } == [missing.path, directory.path])
 
         try FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        _ = await source.sidebar()
+        _ = await updates.next()
         let reloaded = try #require(await source.sidebar().first { $0.id == "favorites" })
         #expect(reloaded.rows.map(\.id) == [missing.path, directory.path])
         #expect(reloaded.rows.map(\.isDimmed) == [false, false])
+    }
+
+    @Test(.timeLimit(.minutes(1))) func reorderReturnsBeforeRefreshingCachedAvailability() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-favorite-reorder-\(UUID())", isDirectory: true)
+        let child = root.appendingPathComponent("child", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let places = BrowserPlaces(database: nil)
+        places.pin(root)
+        places.pin(child)
+        let thumbnails = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
+        let folders = FolderBrowserSource(thumbnails: thumbnails, places: places, settings: nil,
+                                          positions: FolderPositions(database: nil), recent: nil, stores: [])
+        defer { folders.stop() }
+        let collections = CollectionSource(thumbnails: thumbnails, recent: { [] }, sessions: { [] }, stashPage: { nil })
+        let source = LoupeHomeSource(folders: folders, collections: collections, hasStash: { false })
+        let changes = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        folders.onSidebarAvailabilityChanged = { changes.continuation.yield(()) }
+        var updates = changes.stream.makeAsyncIterator()
+        _ = await source.sidebar()
+        _ = await updates.next()
+        let initial = try #require(await source.sidebar().first { $0.id == "favorites" })
+        #expect(initial.rows.map(\.isDimmed) == [false, true])
+
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        places.movePin(child, before: root)
+        let reordered = try #require(await source.sidebar().first { $0.id == "favorites" })
+        #expect(reordered.rows.map(\.id) == [child.path, root.path])
+        #expect(reordered.rows.map(\.isDimmed) == [true, false])
+        _ = await updates.next()
+        let refreshed = try #require(await source.sidebar().first { $0.id == "favorites" })
+        #expect(refreshed.rows.map(\.id) == [child.path, root.path])
+        #expect(refreshed.rows.map(\.isDimmed) == [false, false])
     }
 
     @Test(.timeLimit(.minutes(1))) func recentMenusOfferFavoritesOnlyForFolders() async throws {
