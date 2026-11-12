@@ -45,7 +45,8 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
 
 ## Important flows
 
-1. Finder/menu/argument → `AppDelegate` → `WindowRegistry.open` → controller → session playlist/focus.
+1. Finder/menu/argument or `loupe://open?path=…` → `AppDelegate` → `WindowRegistry.open` → controller → session playlist/focus.
+   `OpenLink` decodes the percent-encoded absolute file or folder path before tab routing or instance handover.
 2. Session focus → `ImageCache` planning → file read/decode/Metal pyramid → qualifying entry → session →
    `ViewerView`/`RenderLoop` snapshot → `TileRenderer`. Keep the shown image pinned until its replacement is ready.
 3. Home browser → `LoupeHomeSource`, `FolderBrowserSource` or `PhotosBrowserSource` → streamed listings and

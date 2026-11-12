@@ -246,9 +246,9 @@ import UniformTypeIdentifiers
         return nil
     }
 
-    /// Finder "Open With", `open -a Loupe file…` and drops on the Dock icon: every file, the first of each folder
-    /// (spec §2.2), each to its tab (`WindowRegistry.open`).
+    /// Finder, the Dock and loupe://open links share the same tab routing.
     func application(_ application: NSApplication, open urls: [URL]) {
+        let urls = urls.compactMap { OpenLink.fileURL(for: $0) }
         guard !urls.isEmpty else { return }
         if isSecondary { Self.postHandOver(paths: urls.map(\.path)); return }
         guard !registry.controllers.isEmpty else {
