@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/HomeScreenKit.git",
       "state" : {
-        "revision" : "70beffadf51da53963212485a51324a10ca9a6af",
-        "version" : "0.14.0"
+        "revision" : "e74dfece61b449c48e4ac0a160a52f30dbcda927",
+        "version" : "0.14.2"
       }
     },
     {
