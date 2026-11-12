@@ -53,7 +53,7 @@ import HomeScreenModel
 
     @Test func emptySelectionAndReadFailureHaveAnExplicitState() {
         let empty = BrowserInspectorContent.make(entry: nil, result: nil, pending: false)
-        #expect(empty.message == "Select a file to see its information.")
+        #expect(empty.message == "Select a photo or folder")
         #expect(empty.sections.isEmpty)
         var metadata = PhotoMetadata(properties: [:], pngText: [:], created: nil, modified: nil)
         metadata.error = "File not found"

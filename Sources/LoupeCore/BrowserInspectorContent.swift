@@ -75,7 +75,7 @@ public struct BrowserInspectorContent: Equatable, Sendable {
 
     public static func make(entry: BrowserEntry?, result: BrowserInspectorResult?, pending: Bool) -> Self {
         guard let entry else {
-            return Self(name: "", subtitle: "", summary: [], sections: [], message: "Select a file to see its information.")
+            return Self(name: "", subtitle: "", summary: [], sections: [], message: "Select a photo or folder")
         }
         let metadata = result?.metadata, header = metadata?.header, facts = entry.facts
         let waiting = pending && entry.isFile && entry.url.isFileURL && result == nil
@@ -101,7 +101,7 @@ public struct BrowserInspectorContent: Equatable, Sendable {
             return value
         }
         let known = values(fileRows, fallback: cachedFile)
-        let missing = waiting ? "Requesting…" : "—"
+        let missing = waiting ? "Reading…" : "—"
         let summary = ["Dimensions", "Size", "Modified", "Profile", "Bit depth"].compactMap { key -> InfoRow? in
             guard entry.isFile || known[key] != nil else { return nil }
             return InfoRow(label: key, value: known[key] ?? missing)

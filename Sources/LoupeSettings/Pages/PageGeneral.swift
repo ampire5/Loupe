@@ -14,26 +14,22 @@ extension SettingsPanel {
     static let general = SettingsPage("general", "General", symbol: "gearshape", sections: [
         SettingsSection("Launch & Window", [
             SettingsCard([
-                .choice("launch-reveal", "Full-screen launch", [
+                .choice("launch-reveal", "Photo on full-screen launch", [
                     (word: "settled", title: "When settled"), (word: "immediate", title: "Immediately"),
                 ], symbol: "play.rectangle",
-                description: "When the photo appears at a launch back into full screen: once the window has settled, "
-                    + "or during the animation. Default When settled."),
+                description: "Show the photo after the window opens or during the animation. Default: When settled."),
                 .choice("icon-set", "Icons", [(word: "lucide", title: "Lucide"), (word: "sf", title: "SF Symbols")],
                         symbol: "star",
-                        description: "The set the line icons are drawn from. Takes effect at the next launch. "
-                            + "Default SF Symbols."),
+                        description: "Takes effect after restarting Loupe. Default: SF Symbols."),
                 .choice("open-in", "Open files in", [
                     (word: "tab", title: "Tab"), (word: "window", title: "Window"),
                     (word: "replace", title: "Current tab"),
                 ], symbol: "macwindow.on.rectangle",
-                description: "Where a file that is not open yet goes: a new tab in the front window, a new window, or "
-                    + "the current tab. Default Tab."),
+                description: "For files that aren’t already open. Tab opens a new tab in the front window. Default: Tab."),
                 .choice("new-window-fullscreen", "New window from full screen", [
                     (word: "follow", title: "Full screen"), (word: "no", title: "Window"),
                 ], symbol: "rectangle.on.rectangle",
-                description: "A window opened from a full-screen one: full screen too, in a Space of its own, or an "
-                    + "ordinary window. Default Full screen."),
+                description: "A new full-screen window opens in its own Space. Default: Full screen."),
                 .color("background", "Background", names: backgroundNames, symbol: "square.fill",
                        description: "The colour around the photo, in a window and in full screen: black, dark-gray, "
                         + "medium-gray, light-gray, white, #RRGGBB or #RGB. Default #2a2a2a."),
@@ -42,8 +38,8 @@ extension SettingsPanel {
                 ], symbol: "circle.lefthalf.filled",
                 description: "Light or dark windows and Home. The photo and everything over it stay dark."),
                 .number("cursor-autohide", "Hide the cursor after", unit: "ms", step: 100, symbol: "cursorarrow",
-                        description: "Without mouse movement over the photo (never over the strip); keys and scrolling "
-                            + "do not bring it back. 1–600000 ms, or no; default 1000."),
+                        description: "Hide the pointer when it stops moving over the photo. It stays visible over the "
+                            + "filmstrip. Move it to bring it back. 1–600000 ms or no. Default: 1000 ms."),
             ]),
             SettingsCard([
                 .icon("app-icon", "Dock icon", choices: { context?.iconChoices() ?? [] }, folder: context?.iconFolder,
@@ -61,29 +57,27 @@ extension SettingsPanel {
         ]),
         SettingsSection("Home", [
             SettingsCard([
-                .choice("home-tab", "Home shows", [
+                .choice("home-tab", "Open Home to", [
                     (word: "recent", title: "Recent"), (word: "sessions", title: "Sessions"),
                     (word: "folders", title: "Folders"), (word: "stash", title: "Stash"),
                 ], symbol: "house",
-                description: "What a new tab, a new window or a launch without a photo shows first; choosing in the "
-                    + "sidebar changes it. Stash only with a Stash address set. Default Recent."),
+                description: "The first view in a new tab, window or launch without a photo. Choosing a view in the "
+                    + "sidebar updates this setting. Stash requires a server address. Default: Recent."),
                 .choice("home-start", "Start page", [
                     (word: "recent", title: "Recent"), (word: "sessions", title: "Sessions"),
                     (word: "folders", title: "Places"), (word: "stash", title: "Stash"),
                 ], symbol: "house.fill",
-                description: "Where the toolbar's house and ⇧⌘H on Home go. Stash only with a Stash address set. "
-                    + "Default Recent."),
+                description: "The view opened by the Home button or ⇧⌘H. Stash requires a server address. Default: Recent."),
                 .toggle("home-sidebar", "Sidebar", symbol: "sidebar.left",
                         description: "Home's sidebar of sources, places and folders. ⌃⌘S on Home. Default on."),
                 .toggle("home-path-bar", "Path bar", symbol: "chevron.right.2",
-                        description: "The folders from the places down to the one shown, under the grid; a click goes "
-                            + "to one. ⌥⌘P on Home. Default on."),
+                        description: "Show the current folder’s path below the grid. Click a folder in the path to open it. "
+                            + "⌥⌘P on Home. Default: On."),
                 .number("home-sidebar-width", "Sidebar width", unit: "pt", step: 10, symbol: "rectangle.lefthalf.inset.filled",
                         description: "Dragging the sidebar's right edge sets it too. 180–1600 pt, shown at most a third of "
                             + "the window (400 pt in any window). Default 384."),
-                .toggle("home-sidebar-compact", "Join single-folder chains", symbol: "arrow.right.to.line",
-                        description: "A folder holding one folder only shows with it on one row, a › b › c, as in "
-                            + "VS Code. Default on."),
+                .toggle("home-sidebar-compact", "Combine single-folder branches", symbol: "arrow.right.to.line",
+                        description: "Show folders with just one subfolder on one line, such as a › b › c. Default: On."),
                 .choice("home-sidebar-indent", "Tree indent", [
                     (word: "compact", title: "Compact"), (word: "even", title: "Even"),
                 ], symbol: "increase.indent",
@@ -100,18 +94,17 @@ extension SettingsPanel {
                         description: "The wanted thumbnail width on Home; the thumbnails grow to fill the width, "
                             + "folder and Recent cards are 1.6 times as wide. ⌘= / ⌘− there change the column count. "
                             + "60–480 pt, default 387."),
-                .choice("grid-style", "Folders thumbnails", [
+                .choice("grid-style", "Photo thumbnail shape", [
                     (word: "square", title: "Square"), (word: "aspect", title: "Aspect"),
                 ], symbol: "photo.on.rectangle",
-                description: "Square: each photo fills its square, cropped. Aspect: each photo whole inside its square. "
-                    + "⌥T in Folders. Default Square."),
-                .choice("grid-names", "Folders names", [
+                description: "Square crops photos to fill each thumbnail. Aspect shows the whole photo. "
+                    + "⌥T in Folders. Default: Square."),
+                .choice("grid-names", "Thumbnail labels", [
                     (word: "auto", title: "By size"), (word: "off", title: "Off"), (word: "photo", title: "On photo"),
                     (word: "below", title: "Below"),
                 ], symbol: "character.textbox",
-                description: "By size: names and facts under thumbnails from 160 pt, on hover on smaller ones. Or names "
-                    + "on the thumbnails, under them, or none (the selected one shows in the bar). ⌥N in Folders. "
-                    + "Default By size."),
+                description: "By size shows names and details below thumbnails 160 pt or wider, and on hover for smaller ones. "
+                    + "The bar shows the selected name even when labels are off. ⌥N in Folders. Default: By size."),
                 .choice("folder-cover", "Folder covers", [
                     (word: "grid", title: "Grid"), (word: "hero", title: "Hero"), (word: "stack", title: "Stack"),
                     (word: "single", title: "Single"),
@@ -123,15 +116,13 @@ extension SettingsPanel {
                 ], symbol: "rectangle.grid.1x2",
                 description: "How folders and archives show in the browser: a big cover with a line of facts below, a "
                     + "compact card, or a list. Remembered for each folder, like its sort."),
-                .choice("grid-style-memory", "Square or Aspect", [
+                .choice("grid-style-memory", "Remember thumbnail shape", [
                     (word: "tab", title: "Per tab"), (word: "folder", title: "Per folder"),
                     (word: "global", title: "Everywhere"),
                 ], symbol: "rectangle.grid.2x2",
-                description: "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its "
-                    + "own until it closes, a new one starts from the Folders thumbnails setting. Per folder: saved for "
-                    + "the folder and the ones under it, like its sort. Everywhere: changes the Folders thumbnails "
-                    + "setting for all. "
-                    + "Default Per tab."),
+                description: "Per tab keeps the ⌥T choice until the tab or window closes. New tabs start with Photo "
+                    + "thumbnail shape. Per folder also applies to subfolders. Everywhere updates the default shape. "
+                    + "Default: Per tab."),
                 .choice("session-restore", "At launch", [
                     (word: "none", title: "Home"), (word: "last", title: "Last Session"),
                 ], symbol: "rectangle.stack.badge.play",
@@ -179,9 +170,9 @@ extension SettingsPanel {
             .number("toast-duration", "Message duration", unit: "ms", step: 250, symbol: "text.bubble",
                     description: "How long the messages at the bottom of the window stay; they fade in 0.25 s. "
                         + "500–10000 ms, default 2000."),
-            .toggle("folder-toast", "Folder name on entering", symbol: "rectangle.and.text.magnifyingglass",
-                    description: "Entering another folder — a step, an open from Finder — says its name in a "
-                        + "message; a Stash gallery says its title and its place in the list. Default on."),
+            .toggle("folder-toast", "Show folder name on open", symbol: "rectangle.and.text.magnifyingglass",
+                    description: "Show a brief message when you move to another folder or open one from Finder. "
+                        + "For Stash galleries, it includes the gallery’s position in the list. Default: On."),
             .toggle("config-warnings", "Config errors in the window", symbol: "exclamationmark.triangle",
                     description: "A problem in loupe.conf shows as a banner at the top of the window for 8 s, not "
                         + "only on stderr. Default on."),
