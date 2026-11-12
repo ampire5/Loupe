@@ -1306,11 +1306,12 @@ import UniformTypeIdentifiers
             guard let library = self?.attachedStash(), paths.indices.contains(i) else { return }
             library.page.navigate(to: paths[i])
         }
-        // A volume mounted or unmounted: the sidebar's places and the Places page again.
+        // A volume mounted or unmounted: check sidebar Favorites and Places again.
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
-            homeObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak view] _ in
+            homeObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak view, weak folders] _ in
                 MainActor.assumeIsolated {
+                    folders?.mountedVolumesChanged()
                     view?.reloadSidebar()
                     view?.browser.reloadPlaces()
                 }

@@ -95,7 +95,10 @@ import LoupeCore
                 HomeMenuItem(id: "photos-tab", title: "Open in New Tab"),
                 HomeMenuItem(id: "photos-window", title: "Open in New Window")] : []
         }
-        return entry.kind == .collection ? collections.menu(for: entry) : folders.menu(for: entry, in: location)
+        guard entry.kind == .collection else { return folders.menu(for: entry, in: location) }
+        var items = collections.menu(for: entry)
+        if let folder = collections.recentFolder(for: entry) { items.append(folders.favoriteMenuItem(for: folder)) }
+        return items
     }
 
     func perform(_ item: String, on entry: BrowserEntry, in location: BrowserLocation) {
@@ -103,7 +106,12 @@ import LoupeCore
             photos.open(entry, how: item == "photos-tab" ? .openNewTab : item == "photos-window" ? .openNewWindow : .open)
             return
         }
-        if entry.kind == .collection { collections.perform(item, on: entry) } else { folders.perform(item, on: entry, in: location) }
+        if entry.kind == .collection {
+            if let folder = collections.recentFolder(for: entry), folders.performFavoriteCommand(item, for: folder) { return }
+            collections.perform(item, on: entry)
+        } else {
+            folders.perform(item, on: entry, in: location)
+        }
     }
 
     /// Sidebar menus share the folder and Places commands with the grid.
@@ -111,6 +119,7 @@ import LoupeCore
         isPhotos(row.location) ? [] : folders.sidebarMenu(for: row)
     }
     func performSidebar(_ item: String, on row: HomeSidebarRow) { folders.performSidebar(item, on: row) }
+    func moveFavoriteFolder(_ folder: URL, before other: URL?) { folders.moveFavoriteFolder(folder, before: other) }
 
     func open(_ entry: BrowserEntry, in location: BrowserLocation, sort: BrowserSort, how: HomeClick) {
         if isPhotos(location) { photos.open(entry, how: how, sort: sort) }
@@ -148,13 +157,9 @@ import LoupeCore
 
     func info(for source: String) -> HomeSourceInfo { PhotosLocation.owns(source) ? photos.info(source) : collections.info(for: source) }
 
-    /// Recent and Sessions; the places (the home folder, the volumes, the pinned folders), each opening as a tree;
-    /// Stash's library when it has an address.
+    /// Recent, Sessions, Photos, then Favorites and the system Places. Stash appears when it has an address.
     func sidebar() async -> [HomeSidebarSection] {
-        let places = await folders.places().map { e in
-            HomeSidebarRow(id: e.id, title: e.name, symbol: folders.symbol(for: e), location: .folder(e.url),
-                           expandable: !e.isDimmed, isDimmed: e.isDimmed)
-        }
+        let (favorites, places) = await folders.sidebarPlaces()
         var sections = [
             HomeSidebarSection(id: "library", title: nil, rows: [
                 HomeSidebarRow(id: HomeCollections.recent, title: "Recent", symbol: "clock",
@@ -164,8 +169,9 @@ import LoupeCore
                 HomeSidebarRow(id: PhotosLocation.root, title: "Photos", symbol: "photo.on.rectangle",
                                location: .source(PhotosLocation.root)),
             ]),
-            HomeSidebarSection(id: "places", title: "Places", rows: places),
         ]
+        if !favorites.isEmpty { sections.append(.favorites(favorites)) }
+        sections.append(HomeSidebarSection(id: "places", title: "Places", rows: places))
         if hasStash() {
             sections.append(HomeSidebarSection(id: "stash", title: "Stash", rows: [
                 HomeSidebarRow(id: HomeCollections.stash, title: "Library", symbol: "server.rack",

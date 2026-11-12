@@ -21,14 +21,14 @@ extension Notification.Name {
     weak var view: HomeBrowserView?
     /// Opens a photo, a folder or a zip in the viewer, here or in a new tab or window.
     var onOpen: ((OpenTarget, HomeClick) -> Void)?
-    /// A folder was pinned or unpinned: the sidebar's places change.
+    /// The shared favorites list changed, including from another Home window.
     var onPlacesChanged: (() -> Void)?
     /// Asks before deleting for good (a volume without a Trash); the answer comes back on the main actor.
     var confirmDelete: ((String, @escaping (Bool) -> Void) -> Void)?
 
     private let thumbnails: ThumbnailStore
     private let places: BrowserPlaces
-    private static let pinWriter = DispatchQueue(label: "local.loupe.browserPins", qos: .userInitiated)
+    private static let favoritesWriter = DispatchQueue(label: "local.loupe.folderFavorites", qos: .userInitiated)
     private let settings: FolderSettings?
     private let positions: FolderPositions
     var fileViewHistory: FileViewHistory { positions.fileViews }
@@ -150,6 +150,13 @@ extension Notification.Name {
         Self.nextWindow += 1
         watcher.onChange = { [weak self] _ in self?.watchChanges?.yield() }
         let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: BrowserPlaces.favoritesDidChange, object: places, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.view?.location == .places { self.view?.reload() }
+                self.onPlacesChanged?()
+            }
+        })
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
             guard let url = note.object as? URL else { return }
             MainActor.assumeIsolated {
@@ -253,12 +260,36 @@ extension Notification.Name {
 
     // MARK: Places
 
-    /// The home folder, the volumes and the pins, with up to one second for availability checks.
-    /// The sidebar and path menus also call this while a folder is listing.
+    /// The Places page and breadcrumb keep the home folder, volumes and favorites.
     func places() async -> [BrowserEntry] {
+        await placeEntries(pins: places.pins())
+    }
+
+    private func placeEntries(pins: [URL]) async -> [BrowserEntry] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let volumes = await Task.detached { BrowserListingSource.volumes() }.value
-        return await BrowserListingSource.places(pins: places.pins(), home: home, volumes: volumes)
+        let volumes = await Task.detached(priority: .utility) { BrowserListingSource.volumes() }.value
+        return await BrowserListingSource.places(pins: pins, home: home, volumes: volumes)
+    }
+
+    func sidebarPlaces() async -> (favorites: [HomeSidebarRow], system: [HomeSidebarRow]) {
+        async let checked = places.checkedFavorites()
+        let system = await placeEntries(pins: []).map { entry in
+            HomeSidebarRow(id: entry.id, title: entry.name, symbol: symbol(for: entry), location: .folder(entry.url),
+                           expandable: !entry.isDimmed, isDimmed: entry.isDimmed)
+        }
+        let favorites = await checked.map { url, available in
+            HomeSidebarRow(id: url.path, title: url.lastPathComponent, symbol: "folder", location: .folder(url),
+                           expandable: available, isDimmed: !available)
+        }
+        return (favorites, system)
+    }
+
+    func mountedVolumesChanged() {
+        places.invalidateFavoriteAvailability()
+    }
+
+    func moveFavoriteFolder(_ folder: URL, before other: URL?) {
+        Self.favoritesWriter.async { [places] in places.movePin(folder, before: other) }
     }
 
     func parent(of folder: URL) -> BrowserLocation { BrowserListingSource.parent(of: folder) }
@@ -1234,7 +1265,7 @@ extension Notification.Name {
         }
         items += [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
         if entry.kind == .folder || entry.kind == .place {
-            items.append(pinMenuItem(for: entry.url))
+            items.append(favoriteMenuItem(for: entry.url))
         }
         if entry.kind == .folder, case .folder = location {
             items.append(HomeMenuItem(id: "prepare-subtree", title: "Prepare thumbnails of folder and subfolders"))
@@ -1248,13 +1279,13 @@ extension Notification.Name {
     }
 
     func perform(_ item: String, on entry: BrowserEntry, in location: BrowserLocation) {
+        if (entry.kind == .folder || entry.kind == .place), performFavoriteCommand(item, for: entry.url) { return }
         switch item {
         case "open": open(entry, how: .open)
         case "openNewTab": open(entry, how: .openNewTab)
         case "openNewWindow": open(entry, how: .openNewWindow)
         case "reveal": reveal(entry.url)
         case "copyPath": copyPath(entry.url)
-        case "pin", "unpin": changePin(for: entry.url, pinned: item == "pin")
         case "rename": view?.beginRename()
         case "trash": view?.trashSelected()
         case "prepare-subtree": prepareSubtree(entry)
@@ -1337,36 +1368,34 @@ extension Notification.Name {
         return nil
     }
 
-    private func pinMenuItem(for folder: URL) -> HomeMenuItem {
-        places.isPinned(folder) ? HomeMenuItem(id: "unpin", title: "Unpin") : HomeMenuItem(id: "pin", title: "Pin")
+    func favoriteMenuItem(for folder: URL) -> HomeMenuItem {
+        places.isPinned(folder)
+            ? HomeMenuItem(id: "remove-favorite", title: "Remove from Favorites")
+            : HomeMenuItem(id: "add-favorite", title: "Add to Favorites")
     }
 
-    private func changePin(for folder: URL, pinned: Bool) {
-        Self.pinWriter.async { [weak self, places] in
-            if pinned { places.pin(folder) } else { places.unpin(folder) }
-            DispatchQueue.main.async { [weak self] in
-                self?.view?.reloadPlaces()
-                self?.onPlacesChanged?()
-            }
+    func performFavoriteCommand(_ item: String, for folder: URL) -> Bool {
+        guard folder.isFileURL, item == "add-favorite" || item == "remove-favorite" else { return false }
+        Self.favoritesWriter.async { [places] in
+            if item == "add-favorite" { places.pin(folder) } else { places.unpin(folder) }
         }
+        return true
     }
 
-    /// The sidebar uses the same pin commands as the grid. A dimmed place still has a directory URL.
+    /// The sidebar uses the same favorite commands as the grid. A dimmed favorite still has a directory URL.
     func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] {
         guard case .folder(let url) = row.location else { return [] }
         var items = [HomeMenuItem(id: "reveal", title: "Show in Finder"), HomeMenuItem(id: "copyPath", title: "Copy Path")]
-        if row.expandable || url.hasDirectoryPath { items.append(pinMenuItem(for: url)) }
+        if row.expandable || url.hasDirectoryPath { items.append(favoriteMenuItem(for: url)) }
         return items
     }
 
     func performSidebar(_ item: String, on row: HomeSidebarRow) {
         guard case .folder(let url) = row.location else { return }
+        if (row.expandable || url.hasDirectoryPath), performFavoriteCommand(item, for: url) { return }
         switch item {
         case "reveal": reveal(url)
         case "copyPath": copyPath(url)
-        case "pin", "unpin":
-            guard row.expandable || url.hasDirectoryPath else { return }
-            changePin(for: url, pinned: item == "pin")
         default: break
         }
     }

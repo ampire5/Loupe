@@ -17,7 +17,17 @@ public enum HomeGrid {
         await availability(of: paths, timeout: timeout, checks: checks, check: check)
     }
 
+    /// Favorites must still be directories when they become reachable. Their checks share the worker budget with
+    /// Places and Recent but reserve different keys because those queries only check for existence.
+    static func directoryAvailability(of paths: [String], timeout: Duration) async -> [String: Bool?] {
+        await availability(of: paths, timeout: timeout, checks: checks, key: { "directory:" + $0 }) { path in
+            var directory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
+        }
+    }
+
     static func availability(of paths: [String], timeout: Duration, checks: BlockingChecks,
+                             key: @escaping @Sendable (String) -> String = { $0 },
                              check: @escaping @Sendable (String) -> Bool) async -> [String: Bool?] {
         var seen: Set<String> = []
         let paths = paths.filter { seen.insert($0).inserted }
@@ -33,7 +43,7 @@ public enum HomeGrid {
                 next += 1
                 group.addTask {
                     let remaining = ContinuousClock.now.duration(to: deadline)
-                    return (path, await checks.value(key: path, within: remaining) { check(path) })
+                    return (path, await checks.value(key: key(path), within: remaining) { check(path) })
                 }
             }
             for _ in 0..<min(checks.limit, paths.count) { enqueue() }

@@ -182,6 +182,11 @@ enum SessionCardAction {
 
     // MARK: Clicks and menus
 
+    func recentFolder(for entry: BrowserEntry) -> URL? {
+        guard let recent = shownRecent[entry.id], recent.kind == .folder, recent.gallery == nil else { return nil }
+        return URL(fileURLWithPath: recent.path, isDirectory: true)
+    }
+
     func menu(for entry: BrowserEntry) -> [HomeMenuItem] {
         switch HomeCollections.target(entry.id) {
         case .recent: HomeCollections.recentMenu()
