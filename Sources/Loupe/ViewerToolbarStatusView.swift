@@ -137,10 +137,13 @@ struct ViewerStatusChoices {
         folderLabel.toolTip = new.note ?? new.folder?.path
         set(positionButton, new.value(.position) ?? "—")
         let metadata = [ImageStatus.Kind.size, .megapixels, .format, .fileSize]
-            .compactMap { new.value($0) }.joined(separator: "  ")
-        metadataText = metadata.isEmpty ? "Info" : metadata
+            .compactMap { new.value($0) }.joined(separator: " · ")
+        metadataText = metadata.isEmpty ? "Photo info" : metadata
         set(metadataButton, metadataText)
-        metadataButton.toolTip = [metadata, exposure?.value, "Show Info (⌘I)"].compactMap { $0 }.joined(separator: "\n")
+        let infoTip = [new.title.isEmpty ? nil : new.title, metadata.isEmpty ? nil : metadata,
+                       exposure?.value, "Show Info (⌘I)"].compactMap { $0 }.joined(separator: "\n")
+        metadataButton.toolTip = infoTip
+        compactInfo.toolTip = infoTip
         let parts = exposure?.parts.map(\.text) ?? []
         for i in exposureLabels.indices {
             set(exposureLabels[i], i < parts.count ? parts[i] : "")
@@ -210,13 +213,14 @@ struct ViewerStatusChoices {
         let capturePreferred = preferred.capture
         let groupPreferred = preferred.zoom
         let filePreferred = preferred.file
-        let fileWidth: CGFloat = fileCollapsed ? 24 : min(filePreferred, max(180, width - capturePreferred - groupPreferred))
+        let fileWidth: CGFloat = fileCollapsed ? (compact ? 24 : 0) : min(filePreferred, max(180, width - capturePreferred - groupPreferred))
         let captureWidth: CGFloat = compact ? min(164, max(126, (width - fileWidth) * 0.48))
             : min(capturePreferred, max(210, width - fileWidth - 230))
         let zoomWidth = max(0, width - fileWidth - captureWidth)
         let captureRect = NSRect(x: fileWidth, y: 0, width: captureWidth, height: Self.height)
         let zoomRect = NSRect(x: fileWidth + captureWidth, y: 0, width: zoomWidth, height: Self.height)
-        dividers.forEach { $0.isHidden = false }
+        dividers[0].isHidden = fileWidth == 0
+        dividers[1].isHidden = false
         modeButton.isHidden = false
         for (divider, x) in zip(dividers, [captureRect.minX, zoomRect.minX]) {
             divider.frame = NSRect(x: x, y: 6, width: 1, height: 34)
@@ -224,7 +228,7 @@ struct ViewerStatusChoices {
         let top: CGFloat = 24, bottom: CGFloat = 5, row: CGFloat = 17
         // ChromeGlass's content is unflipped. Both rows are placed explicitly in its coordinates.
         for view in [titleLabel, folderLabel, positionButton, previous, next] { view.isHidden = fileCollapsed }
-        compactInfo.isHidden = !fileCollapsed
+        compactInfo.isHidden = !compact
         compactInfo.frame = NSRect(x: 2, y: 7, width: 20, height: 32)
         if !fileCollapsed {
             let positionWidth: CGFloat = 64
@@ -270,18 +274,18 @@ struct ViewerStatusChoices {
     /// Below the normal three-column budget the two essential sections use one row each. AppKit reserves
     /// titlebar space for traffic lights and overflow too, so a 320 pt window can leave less than 270 pt here.
     private func layoutMinimal(width: CGFloat) {
-        for view in [titleLabel, folderLabel, positionButton, previous, next, compactInfo, profileLabel, groupLabel, progress] {
+        for view in [titleLabel, folderLabel, positionButton, previous, next, profileLabel, groupLabel, progress] {
             view.isHidden = true
         }
         dividers.forEach { $0.isHidden = true }
         modeButton.isHidden = true
-        metadataButton.isHidden = false
-        set(metadataButton, "")
-        metadataButton.frame = NSRect(x: 3, y: 24, width: max(0, width - 6), height: 17)
+        metadataButton.isHidden = true
+        compactInfo.isHidden = false
+        compactInfo.frame = NSRect(x: 4, y: 24, width: 16, height: 17)
         let hasParts = exposure?.parts.isEmpty == false
         noExposure.isHidden = hasParts
-        noExposure.frame = metadataButton.frame
-        layoutExposure(exposureLabels, x: 4, y: 24, width: width - 8, gap: 1)
+        noExposure.frame = NSRect(x: 24, y: 24, width: max(0, width - 32), height: 17)
+        layoutExposure(exposureLabels, x: 24, y: 24, width: width - 32, gap: 4)
         profileButton.isHidden = false; groupButton.isHidden = false; zoomButton.isHidden = false
         let profileWidth = max(40, (width - 50) * 0.43)
         profileButton.frame = NSRect(x: 4, y: 5, width: profileWidth, height: 17)
@@ -289,20 +293,15 @@ struct ViewerStatusChoices {
         groupButton.frame = NSRect(x: profileWidth + 7, y: 5, width: max(0, width - profileWidth - 55), height: 17)
     }
 
-    /// Compress every value proportionally, so a long ISO/focal length cannot cover the next section.
-    /// Full values remain available to VoiceOver and in the EXIF tooltip, including the narrowest window.
+    /// Keep each visible setting intact. The info control's tooltip and the Info panel keep the full values.
     private func layoutExposure(_ labels: [NSTextField], x origin: CGFloat, y: CGFloat, width: CGFloat, gap: CGFloat) {
-        let shown = labels.filter { !$0.isHidden }
-        let measured = shown.map { ceil($0.cell!.cellSize.width) + 1 }
-        let available = max(0, width - gap * CGFloat(max(0, shown.count - 1)))
-        let total = measured.reduce(0, +)
-        let ratio = total > 0 ? min(1, available / total) : 1
+        let end = origin + width
         var x = origin
-        for (label, natural) in zip(shown, measured) {
-            let width = natural * ratio
-            label.frame = NSRect(x: x, y: y, width: width, height: 17)
-            label.toolTip = label.stringValue
-            x += width + gap
+        for label in labels where !label.isHidden {
+            let measured = ceil(label.cell!.cellSize.width) + 1
+            guard x + measured <= end else { label.isHidden = true; continue }
+            label.frame = NSRect(x: x, y: y, width: measured, height: 17)
+            x += measured + gap
         }
     }
 

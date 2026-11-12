@@ -128,7 +128,20 @@ import Testing
                 }
             }
             let shown = descendants(view).compactMap { ($0 as? NSTextField).flatMap { $0.isHiddenOrHasHiddenAncestor ? nil : $0.stringValue } }
-            for part in exposure { #expect(shown.contains(part.text)) }
+            if width == 1800 {
+                for part in exposure { #expect(shown.contains(part.text)) }
+            } else {
+                #expect(exposure.contains { shown.contains($0.text) })
+                for label in descendants(view).compactMap({ $0 as? NSTextField })
+                    where !label.isHiddenOrHasHiddenAncestor && exposure.contains(where: { $0.text == label.stringValue }) {
+                    #expect(label.frame.width >= label.cell!.cellSize.width)
+                }
+                let info = descendants(view).compactMap { $0 as? NSButton }.first {
+                    !$0.isHiddenOrHasHiddenAncestor && $0.accessibilityLabel() == "Photo information"
+                }
+                #expect(info?.toolTip?.contains(value.title) == true)
+                #expect(info?.toolTip?.contains("ISO") == true)
+            }
         }
         for button in [view.metadataButton, view.zoomButton, view.modeButton, view.profileButton, view.groupButton] {
             #expect(button.alignment == .left)

@@ -735,7 +735,7 @@ import UniformTypeIdentifiers
         // How Home's browser draws a folder's folders and archives (folder cards spec): ⌥⌘1–⌥⌘3 (`CardStyleKeys`; ⌘
         // digits are the tabs'), on Home on a folder only, checked at its style (ViewerWindowController validates
         // them; `CardStyleMenuReset` unchecks them where no viewer answers). Elsewhere `MainMenu` lets the keys go on.
-        for (index, title) in ["as Posters", "as Cards", "as List"].enumerated() {
+        for (index, title) in ["Folder Posters", "Folder Cards", "Folder List"].enumerated() {
             let item = view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
                                     keyEquivalent: String(index + 1))
             item.keyEquivalentModifierMask = [.option, .command]

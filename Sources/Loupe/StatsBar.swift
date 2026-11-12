@@ -21,12 +21,14 @@ import LoupeCore
 @MainActor final class StatsBar: NSView {
     /// The strip's height: two rows of text, or one.
     static func height(rows: Int) -> CGFloat { rows == 1 ? 26 : 42 }
-    private static let inset: CGFloat = 14
-    private static let columnGap: CGFloat = 20
+    private static let inset: CGFloat = 12
+    private static let columnGap: CGFloat = 16
     /// The room the names keep in the middle of one row before the ends give up slots.
     private static let namesRoom: CGFloat = 240
     /// A bar narrower than this has the left end only.
     private static let narrowest: CGFloat = 520
+    /// Keep the filename visible on the single-row bar, even when that means dropping a fact.
+    private static let compactNamesRoom: CGFloat = 112
     /// The kinds at each end.
     private static let leftKinds: [ImageStatus.Kind] = [.position, .size, .megapixels, .exposure]
     private static let rightKinds: [ImageStatus.Kind] = [.zoom, .fileSize, .format]
@@ -172,7 +174,7 @@ import LoupeCore
         if let note = status.note {
             return (note, ProCameraStyle.color(status.noteTone, monochrome: options.monochrome))
         }
-        return (showsFolderName ? status.folder.map(FolderLabel.name(of:)) ?? "" : "", ProCameraStyle.primary)
+        return (showsFolderName ? status.folder.map(FolderLabel.name(of:)) ?? "" : "", ProCameraStyle.secondary)
     }
 
     /// The names: in two rows the file's under the facts and the folder's at the right end; in one row both in the middle,
@@ -182,7 +184,7 @@ import LoupeCore
         let folder = folderText
         if rows == 1 {
             let line = NSMutableAttributedString(attributedString: ProCameraStyle.name(
-                status.title, size: 12, weight: .semibold, color: titleColor))
+                status.title, size: 12, weight: .medium, color: titleColor))
             if !folder.text.isEmpty {
                 line.append(ProCameraStyle.name("  ·  ", size: 12, weight: .regular, color: ProCameraStyle.secondary))
                 line.append(ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color))
@@ -196,7 +198,7 @@ import LoupeCore
             folderLabel.attributedStringValue = NSAttributedString()
             folderLabel.toolTip = nil
         } else {
-            titleLabel.attributedStringValue = ProCameraStyle.name(status.title, size: 12, weight: .semibold, color: titleColor)
+            titleLabel.attributedStringValue = ProCameraStyle.name(status.title, size: 12, weight: .medium, color: titleColor)
             titleLabel.toolTip = status.title
             folderLabel.attributedStringValue = folder.text.isEmpty ? NSAttributedString()
                 : Self.aligned(ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color), .right,
@@ -224,7 +226,7 @@ import LoupeCore
         }
     }
 
-    private static func decodeText(_ ms: Int) -> String { "decode \(ms) ms" }
+    private static func decodeText(_ ms: Int) -> String { "Decode \(ms) ms" }
 
     /// A text with its own paragraph style: a label takes the alignment from there, not from `alignment`.
     private static func aligned(_ text: NSAttributedString, _ alignment: NSTextAlignment,
@@ -302,13 +304,16 @@ import LoupeCore
         // Each end gets at most half of what the names leave (one row) or of the bar (two rows); a row that does not fit
         // gives up slots by its priority. The slots carry their own padding (6 a side), which the edges give back.
         let side = max(0, (available - (rows == 1 ? Self.namesRoom : Self.columnGap)) / 2)
-        let left = min(factsRow.naturalWidth - 12, showsRight ? side : available)
+        let compactLeft = rows == 1 && !status.title.isEmpty
+            ? max(0, available - Self.compactNamesRoom - Self.columnGap) : available
+        let left = min(factsRow.naturalWidth - 12, showsRight ? side : compactLeft)
         let rightFacts = showsRight ? min(rightFactsRow.naturalWidth - 12, max(0, side - detail - Self.columnGap)) : 0
         let rightEnd = showsRight ? detail + (rightFacts > 0 ? Self.columnGap + rightFacts : 0) : 0
         let heights = Self.rowHeights
         let padding = (Self.height(rows: 2) - heights.top - heights.bottom) / 2
         let y = rows == 1 ? (Self.height(rows: 1) - rowHeight) / 2 : padding + heights.bottom
         let height = rows == 1 ? rowHeight : heights.top
+        factsRow.isHidden = left <= 0
         factsRow.frame = backingAlignedRect(NSRect(x: Self.inset - 6, y: y, width: left + 12, height: height),
                                             options: .alignAllEdgesNearest)
         rightFactsRow.frame = backingAlignedRect(NSRect(x: bounds.width - Self.inset - rightEnd - 6, y: y,
@@ -318,12 +323,12 @@ import LoupeCore
         if rows == 1 {
             // The names in the middle of the bar, as wide as the room on its narrower side allows (in what is left
             // between the ends when that is too little).
-            let middleStart = Self.inset + left + Self.columnGap
+            let middleStart = Self.inset + (left > 0 ? left + Self.columnGap : 0)
             let middleEnd = bounds.width - Self.inset - rightEnd - (showsRight ? Self.columnGap : 0)
             let half = min(bounds.midX - middleStart, middleEnd - bounds.midX)
             let (start, room) = half * 2 >= Self.namesRoom ? (bounds.midX - half, half * 2)
                 : (middleStart, middleEnd - middleStart)
-            titleLabel.isHidden = room < 80
+            titleLabel.isHidden = room <= 0
             folderLabel.isHidden = true
             place(titleLabel, x: start, y: y, width: max(0, room), height: rowHeight)
             return

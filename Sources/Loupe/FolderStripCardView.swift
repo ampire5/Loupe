@@ -1,4 +1,5 @@
 import AppKit
+import HomeChrome
 
 /// The retained details inside the strip's shared card plate.
 @MainActor final class FolderStripCardView: NSView {
@@ -10,7 +11,7 @@ import AppKit
     override var isFlipped: Bool { true }
     override init(frame: NSRect) {
         super.init(frame: frame)
-        facts.textColor = NSColor(white: 0.75, alpha: 1)
+        facts.textColor = Chrome.Palette.overMedia.secondaryText
         facts.font = .systemFont(ofSize: 11.5)
         facts.maximumNumberOfLines = 3
         facts.lineBreakMode = .byTruncatingTail
@@ -40,7 +41,7 @@ import AppKit
     override func layout() {
         super.layout()
         let h = min(textHeight, bounds.height)
-        facts.frame = CGRect(x: -2, y: 0, width: bounds.width + 2, height: h)
+        facts.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
         guard imageCount > 0 else { return }
         let y = h + (h > 0 ? 8 : 0)
         let width = max(0, (bounds.width - CGFloat(imageCount - 1) * 4) / CGFloat(imageCount))
