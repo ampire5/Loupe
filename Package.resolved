@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/LogiHIDPP.git",
       "state" : {
-        "revision" : "af29a2e5850d3fd17a61570ee6c085618cb4f404",
-        "version" : "0.1.1"
+        "revision" : "082ceaa5847917389426a927397d18b47b400b15",
+        "version" : "0.1.2"
       }
     },
     {
