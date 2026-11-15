@@ -34,11 +34,11 @@ import Foundation
     }
 }
 
-@Test func fullScreenTabsDefaultToShownAndCanAutoHide() {
-    #expect(Config().text(forKey: "fullscreen-tabs") == "shown")
-    let (config, warnings) = Config.parse("fullscreen-tabs=auto")
+@Test func fullScreenTabsDefaultToAutoHideAndCanStayShown() {
+    #expect(Config().text(forKey: "fullscreen-tabs") == "auto")
+    let (config, warnings) = Config.parse("fullscreen-tabs=shown")
     #expect(warnings.isEmpty)
-    #expect(config.text(forKey: "fullscreen-tabs") == "auto")
+    #expect(config.text(forKey: "fullscreen-tabs") == "shown")
     #expect(!Config.parse("fullscreen-tabs=hidden").1.isEmpty)
 }
 
@@ -1238,7 +1238,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
     "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
-    "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("auto", "hidden"), "stats-modified": ("no", "perhaps"),
+    "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("shown", "hidden"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
     "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("lucide", "tabler"),
     "app-icon": ("profile", "two words"),

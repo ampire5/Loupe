@@ -510,7 +510,7 @@ public struct Config: Equatable, Sendable {
     /// `fullscreen-toolbar`: the viewer's toolbar in full screen (`FullScreenToolbar`).
     public var fullScreenToolbar = FullScreenToolbar.remember
     /// `fullscreen-tabs`: keep the native header stable while tabs are shown, or hide it as one block.
-    public var fullScreenTabs = FullScreenTabs.shown
+    public var fullScreenTabs = FullScreenTabs.auto
     /// `stats-modified`: the photo's modification date in the stats bar.
     public var statsModified = true
     /// `stats-bar-autohide`: the stats bar fades out by itself after `stats-bar-hide-delay` and comes back with a photo.

@@ -42,6 +42,8 @@ Loupe is built for libraries of tens of thousands of photos on a NAS, not for a 
 - **Zip archives are folders.** Browse and view zips on a share without unpacking or copying them.
 - **Thumbnails are cached.** A SQLite catalog keeps thumbnails and folder covers, so a big folder opens with its grid already there the second time. The disk cache stays under 2 GB by default (`thumb-cache-size`), dropping the longest unseen first; **File → Clean Up Thumbnails** forgets files that are gone, **Clear Thumbnail Cache…** starts over.
 - **Sessions.** **File → Save Session As…** keeps every window and tab under a name, to reopen from Home. *Last Session* is always there, and `session-restore=last` brings it back at launch.
+- **Favorite folders.** Choose **Add to Favorites** from a folder’s menu to keep it in the sidebar and on the Favorites page, with a cover. Open a sidebar folder in a new tab to keep your current view.
+- **Browse subfolders together.** Turn on **Include subfolders** in File View to browse photos from the current folder and its descendants in one grid.
 - **Drop a folder on Home** to open it, or a single photo.
 - **Tidy as you go.** Rename (`F2`) and move to the Trash right in the browser, sort by name, date or size per folder; Recent, Sessions and folder settings follow a rename.
 - **Your Stash library** in a tab, with galleries opened straight from the share (see [Stash](#stash)).
@@ -122,7 +124,7 @@ The native toolbar puts navigation, zoom and SmartZoom next to a compact summary
 
 <p align="center"><img src="docs/images/viewer-toolbar.webp" alt="Native photo viewer toolbar with navigation, zoom, SmartZoom and the camera and framing summary"></p>
 
-In full screen, the header stays expanded by default when the tab bar is visible, so the tabs stay in place. Set **Settings → Interface → Full Screen → Tabs → Auto** to hide the tabs and toolbar together. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
+In full screen, the tabs and toolbar hide together by default and return when you move the pointer to the screen edge. Choose **Settings → Interface → Full Screen → Tabs → Always visible** to keep the header expanded while tabs are shown. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
 
 In File View, `⌘I` docks the information inspector beside the grid. It updates as you select another photo, and Loupe remembers the panel width and which sections you collapsed.
 
@@ -135,6 +137,8 @@ SmartZoom frames detected subjects using Vision or a compatible local Core ML mo
 Adjustable circles around subjects determine the rectangular crop. Per-class cut limits protect important objects:
 framing shifts first, then reduces zoom only when necessary. Faces are protected by default; profiles can override
 radius, protection padding and cut allowance for each class.
+
+In **Settings → Zoom & Pan**, choose how continuous zoom behaves at stops such as fit width, fit height and 100%. A slow gesture can settle at a stop, and continued movement carries the zoom past it.
 
 ### Folder panels
 
@@ -365,7 +369,7 @@ Contributions are welcome. A full contributing guide is on the roadmap; until th
 
 ## Roadmap
 
-Next up: side-by-side comparison of two photos, Favorites and Viewed, animated images, HDR photos — and a plugin architecture for media servers. See **[ROADMAP.md](ROADMAP.md)**.
+Next up are side-by-side photo comparison, photo-level favorites and an Unviewed filter. The roadmap also covers animated images, HDR and media-server plugins. See **[ROADMAP.md](ROADMAP.md)**.
 
 ## Image credits
 

@@ -6,9 +6,14 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 
 - **Light, dark or system theme everywhere.** Home, the folder browser and the keys cheat sheet follow the choice in Settings, as the Settings window already does.
 - **Compare two photos side by side.** Two images in one window with zoom and pan locked together — for picking the best shot of a burst, the best of several AI renders, or checking an edit against the original.
-- **Favorites and Viewed.** Mark photos and folders, see at a glance what you haven't looked at yet, filter by *Unviewed*.
-- **A new stats bar, strip and toolbar** in the viewer, in the style of the new Home. Home's own toolbar is the system's now, as in Photos; the viewer's is next.
+- **Photo favorites and viewing status.** Mark individual photos and filter by *Unviewed*.
 - **Stash: write back.** Rating, O count and Organized from the viewer; `F` for full screen on the Stash tab.
+
+## Implemented in the next release
+
+- Favorite folders appear in the sidebar and as cover cards on a Favorites page.
+- File View can include photos from subfolders, and sidebar folders can open in new tabs.
+- The viewer has an updated toolbar and status bar, and continuous zoom can settle at configurable stops.
 
 ## Planned
 
@@ -21,6 +26,7 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 
 ## Exploring
 
+- **Everything search in Home.** Try opening photos directly from results provided by a user-configured Everything server.
 - **Media-server plugins.** A documented plugin architecture shared with [FrameScrub](https://github.com/ampire5/FrameScrub): a *source* (library, metadata, viewed marks and history) and a *transport* (local path, share, HTTP). The existing Stash integration becomes the first plugin; others — Immich, PhotoPrism, Synology Photos, Nextcloud, WebDAV, S3 — are open to the community.
 - **Faster reading from network shares:** decoding while the file is still arriving, paged folder listings on slow SMB shares, a first picture from the stored thumbnail.
 
