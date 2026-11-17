@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # renovate: datasource=github-tags depName=libjpeg-turbo/libjpeg-turbo
-jpeg_turbo_version=3.2.0
+jpeg_turbo_version=3.2.1
 # renovate: datasource=github-tags depName=google/brotli extractVersion=^v(?<version>.+)$
 brotli_version=1.2.1
 # renovate: datasource=github-tags depName=google/highway
