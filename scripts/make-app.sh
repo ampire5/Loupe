@@ -30,6 +30,8 @@ grain_bundle="$(dirname "$built")/Loupe_LoupeRender.bundle"
 cp -R "$grain_bundle" "$app/Contents/Resources/"
 mkdir -p "$app/Contents/Resources/Licenses/libplacebo"
 cp third_party/libplacebo/LICENSE third_party/libplacebo/SOURCE "$app/Contents/Resources/Licenses/libplacebo/"
+mkdir -p "$app/Contents/Resources/Licenses/libjxl"
+cp third_party/libjxl/LICENSE third_party/libjxl/PATENTS "$app/Contents/Resources/Licenses/libjxl/"
 # The symbols go to build/Loupe.dSYM, for symbolicating crash reports, not into the app (~5 MB less).
 rm -rf build/Loupe.dSYM
 dsymutil "$built" -o build/Loupe.dSYM >/dev/null 2>&1 || echo "warning: no build/Loupe.dSYM (dsymutil failed)" >&2
@@ -72,6 +74,10 @@ if ! check_links; then
     exit 1
 fi
 cp Resources/Info.plist "$app/Contents/Info.plist"
+# SwiftPM does not emit Xcode's extension-point registration file. Ship the declaration
+# that matches AppExtensionPoint.playback in EmbeddedPlayback.swift.
+mkdir -p "$app/Contents/Extensions"
+cp Resources/Loupe.appexpt "$app/Contents/Extensions/Loupe.appexpt"
 # The build's identity for About Loupe (LoupeCore BuildInfo): commit (+dirty with uncommitted changes, the local
 # Package.resolved and release.yaml aside), branch, build time with its time zone and the label. A tag checkout
 # (detached HEAD) names CI's ref (GITHUB_REF_NAME), else "detached". Git is asked only when this tree is a repository's

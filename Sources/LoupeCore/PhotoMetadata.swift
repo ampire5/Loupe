@@ -94,7 +94,9 @@ public struct PhotoMetadata: Equatable, Sendable, Codable {
         }
         guard FileManager.default.fileExists(atPath: url.path) else { return failed("File not found") }
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else { return failed("Not a readable image file") }
+        let source = PlaybackMedia.isFilesystemGIF(url) ? GIFPoster.read(url)?.source
+            : CGImageSourceCreateWithURL(url as CFURL, options)
+        guard let source else { return failed("Not a readable image file") }
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, options) as? [String: Any] else {
             return failed("No image data in the file")
         }

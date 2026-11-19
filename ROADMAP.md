@@ -6,15 +6,21 @@ Loupe is made by one person in their spare time, so there are no dates here — 
 
 - **Light, dark or system theme everywhere.** Home, the folder browser and the keys cheat sheet follow the choice in Settings, as the Settings window already does.
 - **Compare two photos side by side.** Two images in one window with zoom and pan locked together — for picking the best shot of a burst, the best of several AI renders, or checking an edit against the original.
-- **Favorites and Viewed.** Mark photos and folders, see at a glance what you haven't looked at yet, filter by *Unviewed*.
-- **A new stats bar, strip and toolbar** in the viewer, in the style of the new Home. Home's own toolbar is the system's now, as in Photos; the viewer's is next.
+- **Photo favorites and viewing status.** Mark individual photos and filter by *Unviewed*.
 - **Stash: write back.** Rating, O count and Organized from the viewer; `F` for full screen on the Stash tab.
+
+## Implemented in the next release
+
+- Favorite folders appear in the sidebar and as cover cards on a Favorites page.
+- File View can include photos from subfolders, and sidebar folders can open in new tabs.
+- Home includes Everything and Web Images search.
+- The viewer has an updated toolbar and status bar, and continuous zoom can settle at configurable stops.
 
 ## Planned
 
 - **Logitech, deeper.** More of the mouse's own features and more events worth feeling, mice connected over Bluetooth without a receiver, and more HID++ devices as people test them.
 - **A contributing guide**: how to build, test and send a pull request, plus the code layout and conventions.
-- **Animated images:** GIF, animated WebP, APNG, animated AVIF and JPEG XL.
+- **More animated image formats:** APNG, animated AVIF and JPEG XL.
 - **HDR photos** shown the way macOS shows them: gain-map HEIC from the iPhone, Ultra HDR JPEG, HDR AVIF and JPEG XL on XDR and HDR displays.
 - **Manual colour:** exposure, contrast, saturation and warmth per folder, built into the same colour cube as auto colour, so they cost nothing per frame.
 - **Instant 100 % on 100–300 MP photos:** decode only the visible region, keep the full-resolution level sparse, and give memory back under pressure.

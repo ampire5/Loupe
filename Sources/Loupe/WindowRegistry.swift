@@ -27,6 +27,7 @@ import StashKitUI
     var isQuitting = false
     /// A new controller with the app's shared stores, already added (`AppDelegate.makeController`).
     var makeController: (() -> ViewerWindowController)?
+    var framingLibrary: FramingLearningLibrary?
 
     var controllers: [ViewerWindowController] { entries.map(\.controller) }
 
@@ -43,6 +44,7 @@ import StashKitUI
     func add(_ controller: ViewerWindowController) {
         guard let window = controller.window, !entries.contains(where: { $0.controller === controller }) else { return }
         controller.registry = self
+        controller.framingLibrary = framingLibrary
         controller.onStashPick = { [weak self, weak controller] pick in
             guard let self, let controller else { return false }
             return self.stashPick(pick, in: controller)
@@ -91,7 +93,7 @@ import StashKitUI
     /// `openIn`: instead of `open-in` (a Recent card's plain click: `.replace`, this tab). `returnTo`: the Home tab ⌘W
     /// goes back to when it lands in `from` itself.
     func open(_ target: OpenTarget, force: OpenForce? = nil, openIn: OpenIn? = nil, from: ViewerWindowController? = nil,
-              stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil) {
+              stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil, recursive: RecursivePhotoListing? = nil) {
         let front = from ?? current ?? lastKey
         let decision = OpenRouter.route(target, tabs: tabFacts(), front: front.map(Self.tabID),
                                         openIn: openIn ?? Settings.shared.config.openIn, force: force)
@@ -100,23 +102,25 @@ import StashKitUI
         case .focus(let tab, let url):
             guard let controller = tabController(tab) else { return }
             activate(controller)
-            if let url { controller.open(url) }
+            if let recursive { controller.open(target, recursive: recursive) }
+            else if let url { controller.open(url) }
             controller.bringToFront()
         case .newTab(let tab):
             guard let controller = makeTab(beside: tabController(tab) ?? front) else { return }
             activate(controller)
-            controller.open(target, stashPick: stashPick)
+            controller.open(target, stashPick: stashPick, recursive: recursive)
             controller.bringToFront()
         case .newWindow:
             guard let (controller, fullScreen) = makeWindow(from: front) else { return }
             activate(controller)
-            controller.open(target, stashPick: stashPick)
+            controller.open(target, stashPick: stashPick, recursive: recursive)
             controller.bringToFront()
             if fullScreen { controller.enterFullScreen() }
         case .replace(let tab):
             guard let controller = tabController(tab) else { return }
             activate(controller)
-            controller.open(target, stashPick: stashPick, returnTo: controller === from ? returnTo : nil)
+            controller.open(target, stashPick: stashPick, returnTo: controller === from ? returnTo : nil,
+                            recursive: recursive)
             controller.bringToFront()
         }
     }
@@ -163,6 +167,13 @@ import StashKitUI
             return
         }
         makeTab(beside: anchor ?? current)?.startEmpty()
+    }
+
+    func browseInNewTab(_ folder: URL, beside anchor: ViewerWindowController) {
+        guard let controller = makeTab(beside: anchor) else { return }
+        activate(controller)
+        controller.startBrowsing(folder)
+        controller.bringToFront()
     }
 
     /// ⌘N: a window of its own, cascaded from `from`'s (the current one's without) at its size. From a window in full
@@ -467,12 +478,14 @@ import StashKitUI
             let visible = Self.isVisible(previous)
             entries[p].visible = visible
             previous.session.setActivity(active: false, visible: visible, lastActive: entries[p].rank)
+            previous.playbackVisibilityChanged(visible, active: false)
             previous.browserVisibilityChanged(visible)
             previous.photosVisibilityChanged(visible)
         }
         let visible = Self.isVisible(controller)
         entries[i].visible = visible
         controller.session.setActivity(active: true, visible: visible, lastActive: entries[i].rank)
+        controller.playbackVisibilityChanged(visible, active: true)
         controller.browserVisibilityChanged(visible)
         controller.photosVisibilityChanged(visible)
         if DebugLog.isEnabled { controller.viewerView.watchSharp(session: controller.session.cacheID.raw) }
@@ -487,6 +500,7 @@ import StashKitUI
             guard visible != entries[i].visible else { continue }
             entries[i].visible = visible
             controller.session.setActivity(active: controller === active, visible: visible, lastActive: entries[i].rank)
+            controller.playbackVisibilityChanged(visible, active: controller === active)
             controller.browserVisibilityChanged(visible)
             controller.photosVisibilityChanged(visible)
         }

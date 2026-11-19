@@ -1,18 +1,20 @@
 import Foundation
 import HomeScreenModel
 
-/// The images in the current file's folder in the folder's `BrowserSort` order, the order Home's grid shows them in
-/// (`FolderPlaylist`), and the position within them. The current file is always part of it, even if its extension is
-/// unknown or the folder could not be listed.
+/// The viewer's files and position: a folder, a recursive File View snapshot, or an ordered external source.
 public struct Playlist: Equatable, Sendable {
     public static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "jpe", "heic", "heif", "avif", "jxl", "webp", "png", "gif", "tif", "tiff", "bmp",
     ]
 
+    public static let mediaExtensions = imageExtensions.union(PlaybackMedia.videoExtensions)
+
     /// The order and the position: the grid's own sort over the same entries the grid has (`BrowserListingSource.fileEntry`).
     private var model: FolderPlaylist
     private var sourceIndex: Int?
     public var isSourceOrdered: Bool { sourceIndex != nil }
+    public private(set) var recursiveRoot: URL?
+    public var usesFolderListing: Bool { !isSourceOrdered && recursiveRoot == nil }
     /// `model`'s URLs, kept: the cache and the strip read them on every step.
     public private(set) var files: [URL]
     public var index: Int { sourceIndex ?? model.index }
@@ -25,6 +27,22 @@ public struct Playlist: Equatable, Sendable {
     /// `init(files:current:stamps:)` without stamps.
     public init(files: [URL], current: URL) {
         self.init(files: files, current: current, stamps: [:])
+    }
+
+    /// The current file can open before the full recursive sequence has been prepared.
+    public init(recursiveRoot: URL, sort: BrowserSort, current: URL) {
+        self.init(recursiveRoot: recursiveRoot, entries: [], sort: sort, current: current)
+    }
+
+    init(recursiveRoot: URL, entries: [BrowserEntry], sort: BrowserSort, current: URL) {
+        model = FolderPlaylist(folder: recursiveRoot, entries: entries, sort: sort, current: current)
+        files = model.urls
+        self.recursiveRoot = model.folder
+        stamps = model.files.reduce(into: [:]) { result, entry in
+            if let date = entry.date, let size = entry.size {
+                result[entry.url] = FileStamp(modified: date, size: Int(size))
+            }
+        }
     }
 
     /// An authoritative source sequence: no extension filtering, filename sorting or folder lookup.
@@ -45,7 +63,7 @@ public struct Playlist: Equatable, Sendable {
     public init(files: [URL], current: URL, stamps: [URL: FileStamp], keeping: [URL] = [], sort: BrowserSort = .standard) {
         let me = current.standardizedFileURL
         var images = files.map(\.quicklyStandardized)
-            .filter { Self.imageExtensions.contains($0.pathExtension.lowercased()) }
+            .filter { Self.mediaExtensions.contains($0.pathExtension.lowercased()) }
         images += keeping.map(\.standardizedFileURL)
         // Drop duplicates (same file listed twice).
         var seen = Set<URL>()
@@ -84,7 +102,7 @@ public struct Playlist: Equatable, Sendable {
                 let wanted = url == me || keep.contains(url)
                 if url == me { listsMe = true }
                 if hidden && !wanted { continue }
-                if imageExtensions.contains(url.pathExtension.lowercased()) {
+                if mediaExtensions.contains(url.pathExtension.lowercased()) {
                     images.append(url)
                     if let stamp { stamps[url] = stamp }
                 } else if wanted {
@@ -123,7 +141,7 @@ public struct Playlist: Equatable, Sendable {
                 let name = withUnsafeBytes(of: entry.pointee.d_name) { raw in
                     String(decoding: raw.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self)
                 }
-                guard !name.hasPrefix("."), imageExtensions.contains((name as NSString).pathExtension.lowercased()) else { continue }
+                guard !name.hasPrefix("."), mediaExtensions.contains((name as NSString).pathExtension.lowercased()) else { continue }
                 images.append(folder.appendingPathComponent(name, isDirectory: false))
             }
             return Playlist(files: images, current: me)
@@ -160,7 +178,7 @@ public struct Playlist: Equatable, Sendable {
             } else { result.sourceIndex = min(index, result.files.count - 1) }
             return result
         }
-        if !result.model.move(to: current) {
+        if result.current != current, !result.model.move(to: current) {
             _ = result.model.move(by: min(index, listed.files.count - 1) - listed.index)
         }
         return result

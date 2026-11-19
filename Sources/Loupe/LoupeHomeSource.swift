@@ -1,4 +1,5 @@
 import AppKit
+import EverythingSearchUI
 import HomeScreenKit
 import LoupeCore
 
@@ -6,6 +7,27 @@ import LoupeCore
 /// `FolderBrowserSource`, Recent, Sessions and Stash from `CollectionSource`, each request sent by its location or by
 /// its card's kind.
 @MainActor final class LoupeHomeSource: HomeSource {
+    var onEverythingOpen: ((URL) -> Void)?
+    private lazy var everythingPage = EverythingSearchPage(loadConnection: SavedEverythingConnection.load) { [weak self] url, isFolder in
+        if isFolder { self?.view?.show(.folder(url), selecting: nil) }
+        else { self?.onEverythingOpen?(url) }
+    }
+
+    var onWebImageOpen: ((WebImageResult, WebImageSearch) -> Void)?
+    private var webImagesPage: WebImagesPage?
+    var webImagesTabVisible = true {
+        didSet { webImagesPage?.tabVisible = webImagesTabVisible }
+    }
+    func webImagesPreferencesChanged() { webImagesPage?.preferencesChanged() }
+
+    private func webPage() -> WebImagesPage {
+        if let webImagesPage { return webImagesPage }
+        let page = WebImagesPage { [weak self] result, search in self?.onWebImageOpen?(result, search) }
+        page.tabVisible = webImagesTabVisible
+        webImagesPage = page
+        return page
+    }
+
     let folders: FolderBrowserSource
     let collections: CollectionSource
     let photos: PhotosBrowserSource
@@ -45,8 +67,24 @@ import LoupeCore
 
     func list(_ location: BrowserLocation) -> AsyncThrowingStream<BrowserListing, Error> {
         let stream: AsyncThrowingStream<BrowserListing, Error>
-        if case .source(let id) = location { stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id) }
-        else { stream = folders.list(location) }
+        switch location {
+        case .source(HomeFavorites.sourceID): return folders.listFavorites()
+        case .source(let id): stream = PhotosLocation.owns(id) ? photos.list(id) : collections.list(id)
+        default: stream = folders.list(location)
+        }
+        return withViewingHistory(stream, at: location)
+    }
+
+    func supportsRecursiveListing(in folder: URL) -> Bool {
+        folder.isFileURL && !ArchivePath.isArchive(folder)
+    }
+
+    func listRecursively(in folder: URL) -> AsyncThrowingStream<BrowserListing, Error> {
+        withViewingHistory(folders.listRecursively(in: folder), at: .folder(folder))
+    }
+
+    private func withViewingHistory(_ stream: AsyncThrowingStream<BrowserListing, Error>,
+                                    at location: BrowserLocation) -> AsyncThrowingStream<BrowserListing, Error> {
         let history = folders.fileViewHistory
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -82,7 +120,7 @@ import LoupeCore
     /// The first `visible` of `ids` are in view: a folder's cards in view get their covers before the margin's.
     func wantImages(_ ids: [String], visible: Int, width: CGFloat) {
         if isPhotos(view?.location) { photos.wantImages(ids, width: width) }
-        else if case .source = view?.location {
+        else if case .source = view?.location, view?.location != .source(HomeFavorites.sourceID) {
             collections.wantImages(ids, width: width)
         } else {
             folders.wantImages(ids, visible: visible, width: width)
@@ -95,7 +133,10 @@ import LoupeCore
                 HomeMenuItem(id: "photos-tab", title: "Open in New Tab"),
                 HomeMenuItem(id: "photos-window", title: "Open in New Window")] : []
         }
-        return entry.kind == .collection ? collections.menu(for: entry) : folders.menu(for: entry, in: location)
+        guard entry.kind == .collection else { return folders.menu(for: entry, in: location) }
+        var items = collections.menu(for: entry)
+        if let folder = collections.recentFolder(for: entry) { items.append(folders.favoriteMenuItem(for: folder)) }
+        return items
     }
 
     func perform(_ item: String, on entry: BrowserEntry, in location: BrowserLocation) {
@@ -103,14 +144,20 @@ import LoupeCore
             photos.open(entry, how: item == "photos-tab" ? .openNewTab : item == "photos-window" ? .openNewWindow : .open)
             return
         }
-        if entry.kind == .collection { collections.perform(item, on: entry) } else { folders.perform(item, on: entry, in: location) }
+        if entry.kind == .collection {
+            if let folder = collections.recentFolder(for: entry), folders.performFavoriteCommand(item, for: folder) { return }
+            collections.perform(item, on: entry)
+        } else {
+            folders.perform(item, on: entry, in: location)
+        }
     }
 
-    /// A folder's, a place's or a zip's row in the sidebar: Show in Finder and Copy Path, as their cards.
+    /// Sidebar menus share the folder and Places commands with the grid.
     func sidebarMenu(for row: HomeSidebarRow) -> [HomeMenuItem] {
         isPhotos(row.location) ? [] : folders.sidebarMenu(for: row)
     }
     func performSidebar(_ item: String, on row: HomeSidebarRow) { folders.performSidebar(item, on: row) }
+    func moveFavoriteFolder(_ folder: URL, before other: URL?) { folders.moveFavoriteFolder(folder, before: other) }
 
     func open(_ entry: BrowserEntry, in location: BrowserLocation, sort: BrowserSort, how: HomeClick) {
         if isPhotos(location) { photos.open(entry, how: how, sort: sort) }
@@ -146,31 +193,45 @@ import LoupeCore
 
     func setCardStyle(_ style: CardStyle, for location: BrowserLocation) { folders.setCardStyle(style, for: location) }
 
-    func info(for source: String) -> HomeSourceInfo { PhotosLocation.owns(source) ? photos.info(source) : collections.info(for: source) }
-
-    /// Recent and Sessions; the places (the home folder, the volumes, the pinned folders), each opening as a tree;
-    /// Stash's library when it has an address.
-    func sidebar() async -> [HomeSidebarSection] {
-        let places = await folders.places().map { e in
-            HomeSidebarRow(id: e.id, title: e.name, symbol: folders.symbol(for: e), location: .folder(e.url),
-                           expandable: !e.isDimmed, isDimmed: e.isDimmed)
+    func info(for source: String) -> HomeSourceInfo {
+        if source == HomeCollections.webImages { return HomeSourceInfo(title: "Web Images", page: webPage()) }
+        if source == HomeCollections.everything { return HomeSourceInfo(title: "Everything", page: everythingPage) }
+        if source == HomeFavorites.sourceID {
+            return HomeSourceInfo(title: "Favorites", noun: "folder",
+                                  emptyHint: "Control-click a folder and choose Add to Favorites.", preservesOrder: true)
         }
+        return PhotosLocation.owns(source) ? photos.info(source) : collections.info(for: source)
+    }
+
+    /// Recent, Sessions, Photos, then Favorites and the system Places. Stash appears when it has an address.
+    func sidebar() async -> [HomeSidebarSection] {
+        let (favorites, places) = await folders.sidebarPlaces()
         var sections = [
             HomeSidebarSection(id: "library", title: nil, rows: [
                 HomeSidebarRow(id: HomeCollections.recent, title: "Recent", symbol: "clock",
                                location: .source(HomeCollections.recent)),
+                HomeFavorites.sourceRow,
                 HomeSidebarRow(id: HomeCollections.sessions, title: "Sessions", symbol: "rectangle.stack",
                                location: .source(HomeCollections.sessions)),
                 HomeSidebarRow(id: PhotosLocation.root, title: "Photos", symbol: "photo.on.rectangle",
                                location: .source(PhotosLocation.root)),
             ]),
-            HomeSidebarSection(id: "places", title: "Places", rows: places),
         ]
+        if WebImagesPreferences.server != nil {
+            sections[0].rows.append(HomeSidebarRow(id: HomeCollections.webImages, title: "Web Images",
+                                                  symbol: "photo.badge.magnifyingglass", location: .source(HomeCollections.webImages)))
+        }
+        if !favorites.isEmpty { sections.append(.favorites(favorites)) }
+        sections.append(HomeSidebarSection(id: "places", title: "Places", rows: places))
         if hasStash() {
             sections.append(HomeSidebarSection(id: "stash", title: "Stash", rows: [
                 HomeSidebarRow(id: HomeCollections.stash, title: "Library", symbol: "server.rack",
                                location: .source(HomeCollections.stash)),
             ]))
+        }
+        if await SavedEverythingConnection.isConfigured() {
+            sections[0].rows.append(HomeSidebarRow(id: HomeCollections.everything, title: "Everything", symbol: "magnifyingglass",
+                                                  location: .source(HomeCollections.everything)))
         }
         return sections
     }
@@ -183,7 +244,8 @@ import LoupeCore
         if isPhotos(old), !isPhotos(new) { photos.stop() }
         else if isPhotos(old), old != new { photos.stopPictures() }
         let wasSource = if case .source? = old { true } else { false }
-        if case .source = new, !wasSource { folders.leave() }
+        let favorites = BrowserLocation.source(HomeFavorites.sourceID)
+        if case .source = new, new != favorites, !wasSource || old == favorites { folders.leave() }
         if wasSource, old != new { collections.stopPictures() }
     }
 

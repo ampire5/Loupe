@@ -39,7 +39,7 @@ struct ReplayScript {
     var openDwell: Duration = .seconds(2)
 
     static let all = ["fit", "100", "burst", "pingpong"]
-    static let known = all + ["jump10", "jump10-100", "jumpfar", "backfast"]
+    static let known = all + ["jump10", "jump10-100", "jumpfar", "backfast", "close"]
 
     /// From the first photo (3 s on it), five times: ten → 60 ms apart (key repeat or wheel), then 3 s on the photo
     /// it stops on, the landing.
@@ -85,6 +85,9 @@ struct ReplayScript {
             return jump("jump10-100", zoom: .actual)
         case "jumpfar":
             return jumpFar
+        case "close":
+            return ReplayScript(name: "close", zoom: .actual,
+                                steps: Array(repeating: ReplayStep(move: 1, dwell: .milliseconds(500)), count: 5))
         case "pingpong":
             let pair = [ReplayStep(move: 1, dwell: .milliseconds(400)), ReplayStep(move: -1, dwell: .milliseconds(400))]
             return ReplayScript(name: "pingpong", zoom: .actual, steps: Array(repeating: pair, count: 10).flatMap { $0 })

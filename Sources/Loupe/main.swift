@@ -1,6 +1,21 @@
 import AppKit
 import LoupeCore
 
+if let path = Bundle.main.object(forInfoDictionaryKey: "LoupeLearningBenchDirectory") as? String {
+    MainActor.assumeIsolated {
+        Task { @MainActor in await FramingLearningBench.run(directory: URL(fileURLWithPath: path)) }
+        NSApplication.shared.run()
+    }
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--framing-learning-bench"), CommandLine.arguments.count > i + 1 {
+    let directory = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    MainActor.assumeIsolated {
+        Task { @MainActor in await FramingLearningBench.run(directory: directory) }
+        NSApplication.shared.run()
+    }
+}
+
 #if DEBUG
 if CommandLine.arguments.contains("--file-view-history-bench") {
     MainActor.assumeIsolated {

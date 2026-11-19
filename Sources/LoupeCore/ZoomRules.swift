@@ -64,6 +64,11 @@ public struct ZoomRules: Equatable, Sendable {
         if let values = config.smartZoomOptions[detector?.name ?? "vision"] {
             for (key, value) in values {
                 if key == "size", let v = DetectorSetup.share(value) { subjectSize = v }
+                else if key == "chain" {
+                    let parsed = value.split(separator: ",").compactMap { SubjectKind(rawValue: String($0)) }
+                    let known = Set(config.detectorSetup.kinds + SubjectKind.vision)
+                    if !parsed.isEmpty && parsed.allSatisfy({ $0.parts.allSatisfy(known.contains) }) { chain = parsed }
+                }
                 else { _ = composition.set(key, value) }
             }
         }

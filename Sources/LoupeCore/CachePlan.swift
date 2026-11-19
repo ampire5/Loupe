@@ -127,12 +127,16 @@ public enum CachePlan {
     /// Neighbours up to this far away get a full-Lfit preview; farther ones a coarse one.
     public static let nearDistance = 3
 
-    public static func make(focus: CacheFocus, limits: CacheLimits, facts: (Int) -> EntryFacts) -> [CacheItem] {
+    /// The exclusion check applies only to jobs being considered. Size estimation reads the cached facts alone.
+    public static func make(focus: CacheFocus, limits: CacheLimits, isExcluded: (Int) -> Bool = { _ in false },
+                            facts: (Int) -> EntryFacts) -> [CacheItem] {
         guard !focus.scrubbing, (0..<focus.count).contains(focus.current) else { return [] }
-        return withoutActuallyEscaping(facts) { facts in
-            var builder = Builder(focus: focus, limits: limits, facts: facts)
-            builder.run()
-            return builder.items
+        return withoutActuallyEscaping(isExcluded) { isExcluded in
+            withoutActuallyEscaping(facts) { facts in
+                var builder = Builder(focus: focus, limits: limits, isExcluded: isExcluded, facts: facts)
+                builder.run()
+                return builder.items
+            }
         }
     }
 
@@ -162,6 +166,7 @@ public enum CachePlan {
         let focus: CacheFocus
         let limits: CacheLimits
         let facts: (Int) -> EntryFacts
+        let isExcluded: (Int) -> Bool
         let estimate: PixelSize
         let direction: Int
         var items: [CacheItem] = []
@@ -174,9 +179,10 @@ public enum CachePlan {
         /// Photos that have a preview or coarse item (or a full one), for `cache-previews`.
         var previewed: Set<Int> = []
 
-        init(focus: CacheFocus, limits: CacheLimits, facts: @escaping (Int) -> EntryFacts) {
+        init(focus: CacheFocus, limits: CacheLimits, isExcluded: @escaping (Int) -> Bool, facts: @escaping (Int) -> EntryFacts) {
             self.focus = focus
             self.limits = limits
+            self.isExcluded = isExcluded
             self.facts = facts
             estimate = CachePlan.estimatedSize(focus: focus, facts: facts)
             direction = focus.direction < 0 ? -1 : 1
@@ -282,7 +288,7 @@ public enum CachePlan {
 
         /// In the playlist and not failed; the current photo is planned even after a failure.
         private mutating func isPlannable(_ index: Int) -> Bool {
-            (0..<focus.count).contains(index) && !entry(index).facts.failed
+            (0..<focus.count).contains(index) && !isExcluded(index) && !entry(index).facts.failed
         }
 
         /// The second page of the pair, when it is a different photo in the playlist.
@@ -350,6 +356,7 @@ public enum CachePlan {
         /// `cache-memory` or a small card can never leave the photo on screen undisplayable (a 147 MP photo at 100 %
         /// still shows on a 4 GB card); its cost still counts in the total, leaving neighbours less room.
         private mutating func add(_ index: Int, _ goal: CacheGoal, allLevels: Bool = false, exempt: Bool = false) -> Bool {
+            guard !isExcluded(index) else { return false }
             let e = entry(index)
             let levels = e.grid.levelCount
             let cost: Int

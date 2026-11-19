@@ -42,9 +42,28 @@ Loupe is built for libraries of tens of thousands of photos on a NAS, not for a 
 - **Zip archives are folders.** Browse and view zips on a share without unpacking or copying them.
 - **Thumbnails are cached.** A SQLite catalog keeps thumbnails and folder covers, so a big folder opens with its grid already there the second time. The disk cache stays under 2 GB by default (`thumb-cache-size`), dropping the longest unseen first; **File → Clean Up Thumbnails** forgets files that are gone, **Clear Thumbnail Cache…** starts over.
 - **Sessions.** **File → Save Session As…** keeps every window and tab under a name, to reopen from Home. *Last Session* is always there, and `session-restore=last` brings it back at launch.
+- **Favorite folders.** Choose **Add to Favorites** from a folder’s menu to keep it in the sidebar and on the Favorites page, with a cover. Open a sidebar folder in a new tab to keep your current view.
+- **Browse subfolders together.** Turn on **Include subfolders** in File View to browse photos from the current folder and its descendants in one grid.
+- **Search across sources.** A saved [Network Everything](https://github.com/ampire5/EverythingMac) connection adds **Everything** to Home. Configure a SearXNG server in Loupe settings to use **Web Images** and browse the results in the viewer.
 - **Drop a folder on Home** to open it, or a single photo.
 - **Tidy as you go.** Rename (`F2`) and move to the Trash right in the browser, sort by name, date or size per folder; Recent, Sessions and folder settings follow a rename.
 - **Your Stash library** in a tab, with galleries opened straight from the share (see [Stash](#stash)).
+
+## Optional video and animation playback
+
+Loupe browses videos and animated GIF and WebP files alongside photos in filesystem folders. Select one to see its
+poster. To play in Loupe, install [FrameScrub](https://github.com/ampire5/FrameScrub) with its playback extension
+and enable it in **Loupe Settings › General › Playback extensions**.
+
+Select **Play** or press **Space** to start. **Autoplay media** starts playback when you browse to a file.
+Right-click the picture or poster to start or toggle playback. Double-click with the left button to return to the folder.
+Hold the **right mouse button** and scroll vertically over the picture to step forward or backward.
+The first step can open the player from its poster. Use the timeline to seek or **⌥⇧← / ⌥⇧→** to step with the keyboard.
+Hold **Control** while scrolling over the picture to scrub horizontally or adjust volume vertically. Press and release **⇧⌃** together to toggle Scrub Lock
+and use the configured FrameScrub controls without holding Control. **Esc** releases the lock.
+Plain arrows and horizontal three-finger swipes move between files. Outside Scrub Lock, **C** toggles Auto Color
+and **V** toggles vibrance. **Open in FrameScrub** opens a video paused at the last shown frame.
+**Open With** is available from the poster when embedded playback is unavailable.
 
 ## Numbers
 
@@ -122,7 +141,7 @@ The native toolbar puts navigation, zoom and SmartZoom next to a compact summary
 
 <p align="center"><img src="docs/images/viewer-toolbar.webp" alt="Native photo viewer toolbar with navigation, zoom, SmartZoom and the camera and framing summary"></p>
 
-In full screen, the header stays expanded by default when the tab bar is visible, so the tabs stay in place. Set **Settings → Interface → Full Screen → Tabs → Auto** to hide the tabs and toolbar together. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
+In full screen, the tabs and toolbar hide together by default and return when you move the pointer to the screen edge. Choose **Settings → Interface → Full Screen → Tabs → Always visible** to keep the header expanded while tabs are shown. `b` switches between a pinned and auto-hiding toolbar; `⌥⌘T` hides or shows the toolbar explicitly.
 
 In File View, `⌘I` docks the information inspector beside the grid. It updates as you select another photo, and Loupe remembers the panel width and which sections you collapsed.
 
@@ -136,6 +155,8 @@ Adjustable circles around subjects determine the rectangular crop. Per-class cut
 framing shifts first, then reduces zoom only when necessary. Faces are protected by default; profiles can override
 radius, protection padding and cut allowance for each class.
 
+In **Settings → Zoom & Pan**, choose how continuous zoom behaves at stops such as fit width, fit height and 100%. A slow gesture can settle at a stop, and continued movement carries the zoom past it.
+
 ### Folder panels
 
 While viewing a photo, bring the pointer to the right edge or press ⌃⌘→ for the neighbouring folders. The wheel, trackpad and visible scrollbar only browse folders; click or Return opens the selected folder. The open photo stays unchanged while browsing. Escape returns the selection to the open folder. The capsule pins the panel beside the photo or lets it float over it. Left and bottom slots use ⌃⌘← and ⌃⌘↓.
@@ -144,7 +165,8 @@ The folder filmstrip stays out of File View, Recent and Stash browsing; it accom
 
 ### Formats
 
-JPEG, HEIC/HEIF, AVIF, JPEG XL, WebP, PNG, GIF (first frame), TIFF and BMP, plus `.zip` archives, browsed as folders. RAW, PSD and other archive types are not supported yet, and neither is animation (it is on the [roadmap](ROADMAP.md)).
+JPEG, HEIC/HEIF, AVIF, JPEG XL, WebP, PNG, GIF, TIFF and BMP, plus `.zip` archives browsed as folders.
+Videos and animated GIF and WebP files in filesystem folders use [optional playback](#optional-video-and-animation-playback).
 
 Loupe can be your default viewer for any of these: **Get Info → Open with → Change All…** in Finder. Each format then gets its own document icon.
 
@@ -190,7 +212,7 @@ As far as we know, no other Mac app goes this deep into Logitech hardware, and i
 
 - Swipe with three fingers left or right to browse photos, or up or down to show or hide the filmstrip. Hold a click and swipe with three fingers to show or hide the toolbar. A three-finger double tap switches between Fit Height and Fit Width; a force click opens photo information.
 - Right-button drag to zoom with inertia and rubber banding.
-- Slow zoom settles at the configured stops with a brief pause and a haptic click. Nudge in either direction to step to a nearby stop, such as Fit Width from Fit on a landscape photo. A fast gesture passes through with less resistance. Works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to leave a stop. Adaptive is the default, and Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
+- Adaptive zoom holds at a configured stop while you keep moving. Push a little farther in either direction to continue, or sweep quickly to pass through without holding. This works with pinch, right-button drag and the MX Master thumb wheel in Pause mode. In Fixed mode, start a new gesture to pass a stop in the same direction. Off gives continuous zoom. Press `U` to cycle modes for this tab or `Shift+U` to save the current mode as the default.
 - **Logitech MX Master 4** over HID++ through the Bolt receiver, no Logi Options+: the haptic panel, gesture and shift buttons, button + wheel and button + move chords, and haptic feedback on zoom stops, limits, folder ends and more.
 - Plays well with **Mac Mouse Fix**: Loupe still hears the MX Master's back and forward buttons while Mac Mouse Fix has them (`mx-side-buttons`).
 
@@ -227,8 +249,8 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 | | |
 |---|---|
 | **Rendering** | Metal: a tiled image pyramid with its own shaders (Lanczos, EWA, Mitchell, Catmull-Rom, pixel art) in linear light, MetalFX spatial upscaling, display colour management through Core Graphics. |
-| **Decoding** | libjpeg-turbo for JPEG; a [fork of libjxl 0.12](https://github.com/ampire5/libjxl/tree/loupe) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP. The decoder is chosen by the file's magic bytes. |
-| **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a budget of a fifth of the Mac's memory, 1–4 GB, by default (`cache-memory`) and memory-pressure handling. |
+| **Decoding** | libjpeg-turbo for JPEG; [libjxl 0.13.0](https://github.com/libjxl/libjxl/releases/tag/v0.13.0) with two added functions (`JxlDecoderGetDCImage`, `JxlDecoderGetDCByteCount`) for the 1:8 preview; ImageIO for HEIC, AVIF, WebP, PNG, TIFF, GIF and BMP. The decoder is chosen by the file's magic bytes. |
+| **Caching** | An actor-based cache that plans which levels of which photos to keep, decode slots reserved for the current photo, prefetch in the direction you're going, a budget of a fifth of the Mac's memory, 1–4 GB, by default (`cache-memory`) and memory-pressure handling. The keep sets for open windows share 50% of the cache budget by default (`keep-share`). |
 | **Colour** | Auto colour and vibrance from Core Image's analysis, baked into a 33³ colour cube that is applied on the GPU, so every frame costs the same. |
 | **Storage** | SQLite (the C API, no ORM) for the thumbnail catalog, sessions and per-folder settings. Zip archives are read in place through Compression and zlib. |
 | **Input** | `input.conf` bindings for keys, mouse buttons, trackpad gestures and chords; the MX Master 4 over IOKit HID with [LogiHIDPP](https://github.com/ampire5/LogiHIDPP), a HID++ 2.0 library written for this. |
@@ -298,7 +320,7 @@ brew install cmake ninja pkgconf
 scripts/make-app.sh --install      # → ~/Applications/Loupe.app
 ```
 
-Loupe links its decoders statically: libjpeg-turbo, brotli, highway, Loupe's own libjxl (v0.12.0 + the DC preview functions, branch `loupe` of [ampire5/libjxl](https://github.com/ampire5/libjxl), the commit pinned in `scripts/build-deps.sh`) and libheif (LoupeBench only), arm64. The first build downloads them prebuilt into `.deps/arm64` (`scripts/deps.sh`), or builds them from source (`scripts/build-deps.sh`, with the tools above) when the recipe has no prebuilt archive yet. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
+Loupe links its decoders statically: libjpeg-turbo, brotli, highway, libjxl (v0.13.0 with [Loupe's DC preview patch](third_party/libjxl/dc-preview.patch), pinned in `scripts/build-deps.sh`) and libheif (LoupeBench only), arm64. The first build downloads them prebuilt into `.deps/arm64` (`scripts/deps.sh`), or builds them from source (`scripts/build-deps.sh`, with the tools above) when the recipe has no prebuilt archive yet. The app links them in, and `make-app.sh` checks that nothing links outside the system, so it runs without Homebrew. Homebrew's own `jpeg-xl` lacks the preview functions, so a plain `swift build` fails on purpose — the scripts point it at the build.
 
 ### Uninstall
 
@@ -331,7 +353,7 @@ Everything is in the Settings window (`⌘,`) — and in two plain-text files, s
 - `~/.config/loupe/loupe.conf` — about 130 `key=value` settings, mpv-style.
 - `~/.config/loupe/input.conf` — key, mouse, trackpad and MX Master bindings: `<input> <action> [args]`. `Loupe --print-input-conf` prints the full template.
 
-Set `zoom-stop-mode=off` to start with zoom stops off while keeping your `zoom-stops` list. Both files reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
+Set `zoom-stop-mode=off` to start with zoom stops off while keeping your `zoom-stops` list. Set `zoom-stop-breakaway` to adjust the travel needed to leave an Adaptive stop (default `0.04` scale doublings, range `0.005…0.5`). Both files reload when you switch back to Loupe; a mistake shows up in the window instead of being ignored. Your own Dock icons go in `~/.config/loupe/icons`.
 
 The Settings window searches every setting, and its **Key Bindings** page is an editor for `input.conf`: press a key or choose a mouse button, pick the action, or go back to the built-in binding. It follows the system's light or dark look; Home and the folder browser stay dark, like a darkroom.
 
@@ -365,7 +387,7 @@ Contributions are welcome. A full contributing guide is on the roadmap; until th
 
 ## Roadmap
 
-Next up: side-by-side comparison of two photos, Favorites and Viewed, animated images, HDR photos — and a plugin architecture for media servers. See **[ROADMAP.md](ROADMAP.md)**.
+Next up are side-by-side photo comparison, photo-level favorites and an Unviewed filter. The roadmap also covers animated images, HDR and media-server plugins. See **[ROADMAP.md](ROADMAP.md)**.
 
 ## Image credits
 

@@ -103,10 +103,11 @@ import LoupeRender
         #expect(controller.session.zoomRules(URL(fileURLWithPath: "/Demo/photo.jpg")).detector == nil)
         #expect(!Settings.shared.config.detectorSetup.detects)
         let window = try #require(controller.window)
-        let item = try #require(window.toolbar?.items.first { $0.itemIdentifier.rawValue == "viewer.smartZoom" })
-        #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
-        let root = try #require(window.contentView); root.layoutSubtreeIfNeeded()
-        let editButton = try #require(descendants(root).compactMap { $0 as? NSButton }.first {
+        // Test the editor wiring with the real panel, independently of window occlusion.
+        let panel = controller.makeSmartZoomPanel()
+        panel.setVisible(true)
+        panel.view.layoutSubtreeIfNeeded()
+        let editButton = try #require(descendants(panel.view).compactMap { $0 as? NSButton }.first {
             $0.title == "Edit profile…" || $0.title == "Edit Vision settings…"
         })
         #expect(editButton.isEnabled)

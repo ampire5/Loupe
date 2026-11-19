@@ -15,6 +15,7 @@ public enum PhotoFacts {
 
     /// From the file's header (ImageIO reads only what the properties need): a thumbnail made before facts were kept.
     public static func read(url: URL) -> FileFacts? {
+        if PlaybackMedia.isFilesystemGIF(url) { return GIFPoster.read(url).flatMap { read($0.source) } }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return nil }
         return read(source)

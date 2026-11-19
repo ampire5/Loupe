@@ -2,8 +2,7 @@
 # The recipe of Loupe's decoders: static, for $DEPS_ARCH (arm64 or x86_64; the Mac's own architecture
 # unless set), built from source into .deps/<arch> (or $LOUPE_DEPS). The app links them in and bundles no dylibs (and
 # Homebrew builds no Intel bottles any more):
-#   libjpeg-turbo; brotli and highway; Loupe's libjxl (github.com/ampire5/libjxl, branch `loupe`: v0.12.0 plus the DC
-#   image functions, pinned to a commit below); libde265 and libheif (LoupeBench only, HEIC without AVIF).
+#   libjpeg-turbo; brotli and highway; libjxl v0.13.0 with Loupe's DC image functions; libde265 and libheif (LoupeBench only, HEIC without AVIF).
 # Builds on either Mac, natively or as a cross build. Builds every time: scripts/deps.sh, which the build scripts call,
 # downloads the prebuilt result of this exact recipe instead, and runs this only when there is none. A change here is
 # a new recipe (a new prebuilt archive).
@@ -12,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # renovate: datasource=github-tags depName=libjpeg-turbo/libjpeg-turbo
-jpeg_turbo_version=3.2.0
+jpeg_turbo_version=3.2.1
 # renovate: datasource=github-tags depName=google/brotli extractVersion=^v(?<version>.+)$
 brotli_version=1.2.1
 # renovate: datasource=github-tags depName=google/highway
@@ -21,7 +20,10 @@ highway_version=1.4.0
 libde265_version=1.1.3
 # renovate: datasource=github-tags depName=strukturag/libheif extractVersion=^v(?<version>.+)$
 libheif_version=1.23.7
-libjxl_commit=8b643990a3f30a55c220386329a3c59ccf189473   # branch loupe
+libjxl_commit=5a7da83447212fe4900fc29ce97430b881caa67e   # v0.13.0
+libjxl_patch=third_party/libjxl/dc-preview.patch
+# The checksum also includes the patch in the prebuilt recipe key.
+libjxl_patch_sha256=5df53c60edc52ff1cbe7d8976b54fa2be59746593908206f776ff48f5f2ba505
 min=26.0
 arch=${DEPS_ARCH:-$(uname -m)}
 [[ $arch == arm64 || $arch == x86_64 ]] || { echo "error: DEPS_ARCH is $arch, not arm64 or x86_64" >&2; exit 1; }
@@ -41,8 +43,11 @@ clone libjpeg-turbo/libjpeg-turbo "$jpeg_turbo_version" libjpeg-turbo
 clone google/brotli "v$brotli_version" brotli
 clone google/highway "$highway_version" highway
 git init -q "$src/libjxl"
-git -C "$src/libjxl" fetch -q --depth 1 https://github.com/ampire5/libjxl "$libjxl_commit"
+git -C "$src/libjxl" fetch -q --depth 1 https://github.com/libjxl/libjxl "$libjxl_commit"
 git -C "$src/libjxl" -c advice.detachedHead=false checkout -q FETCH_HEAD
+[[ $(shasum -a 256 "$libjxl_patch" | cut -d' ' -f1) == "$libjxl_patch_sha256" ]] \
+    || { echo "error: libjxl patch checksum does not match the recipe" >&2; exit 1; }
+git -C "$src/libjxl" apply "$PWD/$libjxl_patch"
 git -C "$src/libjxl" submodule update -q --init --depth 1 third_party/skcms third_party/lcms
 clone strukturag/libde265 "v$libde265_version" libde265
 clone strukturag/libheif "v$libheif_version" libheif
@@ -66,7 +71,7 @@ build() {   # directory, then its CMake options
 build libjpeg-turbo -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=ON -DCMAKE_ASM_NASM_COMPILER=nasm
 build brotli -DBROTLI_DISABLE_TESTS=ON
 build highway -DHWY_ENABLE_TESTS=OFF -DHWY_ENABLE_EXAMPLES=OFF -DHWY_ENABLE_CONTRIB=OFF
-build libjxl -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF \
+build libjxl -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF \
     -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_BENCHMARK=OFF \
     -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_JNI=OFF \
     -DJPEGXL_ENABLE_PLUGINS=OFF -DJPEGXL_FORCE_SYSTEM_BROTLI=ON -DJPEGXL_FORCE_SYSTEM_HWY=ON
@@ -80,7 +85,7 @@ build libheif -DWITH_LIBDE265=ON -DWITH_LIBDE265_PLUGIN=OFF -DENABLE_PLUGIN_LOAD
 # (Output is captured first: with pipefail, `nm | grep -q` can fail spuriously when grep quits early.)
 symbols=$(nm -g "$prefix/lib/libjxl.a" 2>/dev/null)
 grep -q _JxlDecoderGetDCImage <<<"$symbols" \
-    || { echo "error: libjxl.a has no JxlDecoderGetDCImage (wrong branch?)" >&2; exit 1; }
+    || { echo "error: libjxl.a has no JxlDecoderGetDCImage" >&2; exit 1; }
 
 # SwiftPM reads only `Libs`: each .pc gets its whole static link line there (pkg-config --static), keeping the flags
 # SwiftPM allows (-L, -l, -framework), plus libc++ for the C++ libraries.

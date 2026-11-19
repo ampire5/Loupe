@@ -18,6 +18,7 @@ import LoupeCore
     private var saving = false
     var save: ((DetectorProfileDraft, @escaping (Result<Void, Error>) -> Void) -> Void)?
     var didClose: (() -> Void)?
+    var learn: (() -> Void)?
 
     init(draft: DetectorProfileDraft, categories: [SubjectKind], creating: Bool, applyingToTab: Bool = false) {
         self.draft = draft; self.categories = categories; self.creating = creating
@@ -38,6 +39,7 @@ import LoupeCore
         nameField.stringValue = draft.name; nameField.isEditable = creating
         nameField.placeholderString = "Profile name"; nameField.identifier = .init("profile.name")
         body.addArrangedSubview(row([label("Name"), nameField]))
+        if !creating { body.addArrangedSubview(button("Learn from reference crops…", #selector(openLearning))) }
         nameField.widthAnchor.constraint(equalToConstant: 570).isActive = true
         if applyingToTab { body.addArrangedSubview(label("Changes apply to this tab. Use Save SmartZoom for folder to remember them.")) }
         body.addArrangedSubview(label("Select categories to build a rule. All model categories in a group are required; Vision categories are individual fallback rules."))
@@ -100,6 +102,7 @@ import LoupeCore
         categoryTable.reloadData(); ruleTable.reloadData()
     }
     required init?(coder: NSCoder) { nil }
+    @objc private func openLearning() { learn?() }
     private func column() -> NSStackView { let v = NSStackView(); v.orientation = .vertical; v.alignment = .leading; v.spacing = 6; return v }
     private func row(_ views: [NSView]) -> NSStackView { let v = NSStackView(views: views); v.orientation = .horizontal; v.spacing = 8; return v }
     private func label(_ text: String) -> NSTextField { let v = NSTextField(wrappingLabelWithString: text); v.font = .systemFont(ofSize: 12); return v }

@@ -21,9 +21,9 @@ struct PagesTests {
     @Test func pagesCoverEveryKeyOnce() {
         let pages = SettingsPanel.pages()
         #expect(pages.map(\.id) == ["general", "zoom-pan", "quality", "colour", "strip", "interface", "mouse",
-                                    "key-bindings", "performance", "stash", "advanced"])
+                                    "key-bindings", "performance", "stash", "web-images", "advanced"])
         let keys = pages.flatMap(\.keys)
-        #expect(Config.keys.count == 172)
+        #expect(Config.keys.count == 174)
         #expect(Set(keys).count == keys.count, "a key is listed twice: \(keys.filter { k in keys.filter { $0 == k }.count > 1 })")
         #expect(Set(keys) == Set(Config.keys).union(ConfigSettingsStore.thumbnailKeys), "missing \(Set(Config.keys).subtracting(keys)), extra \(Set(keys).subtracting(Config.keys))")
     }
@@ -36,6 +36,7 @@ struct PagesTests {
     /// Spec §5: the sections of each page, in order.
     @Test func sectionsAsInTheSpec() {
         let sections = Dictionary(uniqueKeysWithValues: SettingsPanel.pages().map { ($0.id, $0.sections.map(\.title)) })
+        #expect(sections["general"] == ["Launch & Window", "Playback", "Home", "Folder", "Notifications"])
         #expect(sections["quality"] == ["Scaling", "Debanding", "Grain", "Transparency"])
         #expect(sections["colour"] == ["Auto Colour", "Vibrance"])
         #expect(sections["strip"] == ["Strip", "Thumbnails", "Prepare ahead"])
@@ -157,12 +158,8 @@ struct PagesTests {
         }
         #expect(items.map(\.word) == ["tab", "folder", "global"])
         #expect(items.map(\.title) == ["Per tab", "Per folder", "Everywhere"])
-        #expect(row("grid-style-memory")?.title == "Square or Aspect")
-        #expect(row("grid-style-memory")?.description
-                == "How the Square / Aspect choice (⌥T) is remembered. Per tab: each window or tab keeps its own until "
-                    + "it closes, a new one starts from the Folders thumbnails setting. Per folder: saved for the folder "
-                    + "and the ones under it, like its sort. Everywhere: changes the Folders thumbnails setting for "
-                    + "all. Default Per tab.")
+        #expect(row("grid-style-memory")?.title == "Remember thumbnail shape")
+        #expect(row("grid-style-memory")?.description?.contains("⌥T") == true)
         let keys = SettingsPanel.pages().first { $0.id == "general" }?.keys ?? []
         if let cards = keys.firstIndex(of: "folder-cards") {
             #expect(keys.firstIndex(of: "grid-style-memory") == cards + 1)

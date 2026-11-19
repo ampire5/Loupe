@@ -50,6 +50,41 @@ import Foundation
         #expect(p.pins().map(\.path) == ["/a", "/b"])
     }
 
+    @Test func reorderedLegacyPinsPersistAcrossReopen() throws {
+        let home = tempDir()
+        defer { try? fm.removeItem(at: home) }
+        let db = try StateDatabase(directory: home)
+        try db.perform { db in
+            try db.execute("""
+                INSERT INTO browser_pins(path, pinned) VALUES('/b', 1), ('/a', 1), ('/c', 2);
+                """)
+        }
+        let places = BrowserPlaces(database: db)
+        #expect(places.pins().map(\.path) == ["/b", "/a", "/c"])
+        places.movePin(dir("/b"), before: nil)
+        places.movePin(dir("/c"), before: dir("/a"))
+        places.pin(dir("/d"))
+        #expect(places.pins().map(\.path) == ["/c", "/a", "/b", "/d"])
+        #expect(BrowserPlaces(database: db).pins().map(\.path) == ["/c", "/a", "/b", "/d"])
+    }
+
+    @Test func failedReorderKeepsThePreviousOrder() throws {
+        let home = tempDir()
+        defer { try? fm.removeItem(at: home) }
+        let db = try StateDatabase(directory: home)
+        let places = BrowserPlaces(database: db)
+        places.pin(dir("/a")); places.pin(dir("/b")); places.pin(dir("/c"))
+        try db.perform { db in
+            try db.execute("""
+                CREATE TRIGGER refuse_pin_update BEFORE UPDATE ON browser_pins
+                WHEN OLD.path = '/a' BEGIN SELECT RAISE(FAIL, 'test write failure'); END;
+                """)
+        }
+        places.movePin(dir("/a"), before: nil)
+        #expect(places.pins().map(\.path) == ["/a", "/b", "/c"])
+        #expect(BrowserPlaces(database: db).pins().map(\.path) == ["/a", "/b", "/c"])
+    }
+
     @Test func lastFolderPersistsAcrossReopen() throws {
         let home = tempDir()
         defer { try? fm.removeItem(at: home) }

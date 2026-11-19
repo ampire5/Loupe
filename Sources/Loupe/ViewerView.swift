@@ -80,7 +80,11 @@ import QuartzCore
     /// Global output grain; the controller owns persistence and its OSD.
     var onRendererWarning: ((String) -> Void)?
     var onEffectKey: ((KeyAction) -> Bool)?
-    /// `l`, `⇧L` pressed (`toggleKeepZoom`, `saveKeepZoom`); the window controller owns the folder's zoom values.
+    private var feedbackMenuTask: Task<Void, Never>?
+    var onFramingFeedbackMenu: ((CGPoint?) async -> NSMenu?)?
+    /// An optional action supplied by a feature for a completed plain right click.
+    var onRightClick: ((NSEvent) -> Void)?
+    /// `l`, `⇧L` and other zoom actions; the controller owns folder settings.
     var onZoomKey: ((KeyAction) -> Bool)?
     /// `p`, `⇧P` pressed (`cyclePanIndicators`, `savePanIndicators`); the window controller tells `Settings` and toasts.
     var onPanIndicatorKey: ((KeyAction) -> Bool)?
@@ -120,9 +124,7 @@ import QuartzCore
     var zoomStopMode = Settings.shared.config.zoomStopMode {
         didSet {
             guard zoomStopMode != oldValue else { return }
-            pinch = nil
-            thumbZoom = nil
-            if rmbZoom != nil { endRMBZoom() }
+            resetContinuousZoom()
             if zoomCoast != nil { stopInertia() }
             if session.transform.stretch != nil { springBackZoom() }
         }
@@ -151,6 +153,7 @@ import QuartzCore
     private var rmbCentring: Centring?
     /// Three-finger swipe recogniser, fed from raw touches (see "Three-finger swipe" below).
     private var threeFingerSwipe = ThreeFingerSwipe(allowsReversal: true)
+    private var playbackThreeFingerSwipe = ThreeFingerSwipe(allowsReversal: true)
     /// Fingers on the trackpad right now (from the touch events), and the scroll filter that uses it: it
     /// stops a three-finger swipe from panning, and remembers where the picture was when the current
     /// scroll gesture began so the swipe can undo what the two earlier fingers already did.
@@ -379,7 +382,12 @@ import QuartzCore
     /// zoom animation goes on to the mode its key asked for, its frame (and a spring-back's stretch) kept: its tick
     /// drops it itself if the image or view size changed under it.
     private func imageDidChange(samePhoto: Bool) {
-        guard samePhoto else { stopInertiaAtZoomTarget(); return }
+        feedbackMenuTask?.cancel()
+        guard samePhoto else {
+            resetContinuousZoom()
+            stopInertiaAtZoomTarget()
+            return
+        }
         guard zoomAnimation != nil else { stopInertia(); return }
         coast = nil      // `animateZoom` already stopped these; the animation runs alone on the link
         zoomCoast = nil
@@ -796,6 +804,7 @@ import QuartzCore
     /// graphics memory, which the cache frees with the window's session); the window controller calls it when the
     /// window closes.
     func teardown() {
+        feedbackMenuTask?.cancel()
         stopInertiaAtZoomTarget()
         stopWheelLink()
         cursorAutohide.stop()
@@ -814,11 +823,18 @@ import QuartzCore
     }
 
     /// Pinch zooms around the cursor: the image point under it stays put. One gesture (phase began →
-    /// ended) settles on nearby stops when slow and passes them with less resistance when fast. If something else
+    /// ended) holds on nearby stops until the fingers push through. A fast sweep can bypass the hold. If something else
     /// changed the transform mid-pinch (a key, a new photo, a resize) the stops are recomputed from there.
     /// With `zoom-rubber-band` a pinch past a zoom limit stretches about the fingers (`ZoomStopGesture.stretch`), and
     /// lifting them springs back to the limit (M4b spec §3).
     override func magnify(with event: NSEvent) {
+        let ended = event.phase.contains(.ended)
+        if event.phase.contains(.cancelled) || (ended && pinch?.last != session.transform) {
+            let previous = pinch
+            pinch = nil
+            if let previous, previous.last == session.transform, previous.stops.stretch != 1 { springBackZoom() }
+            return
+        }
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         stopInertia()
@@ -826,7 +842,7 @@ import QuartzCore
         let config = Settings.shared.config
         if event.phase.contains(.began) || pinch?.last != t {
             pinch = Pinch(stops: ZoomStopGesture(transform: t, stops: activeZoomStops, rubber: config.zoomRubberBand,
-                                                fixed: zoomStopMode == .fixed),
+                                                fixed: zoomStopMode == .fixed, breakaway: config.zoomStopBreakaway),
                           proposed: t.scale, last: t)
         }
         guard var p = pinch else { return }
@@ -842,7 +858,7 @@ import QuartzCore
         if p.stops.justHit, config.zoomStopHaptics { zoomStopFeedback(justHit: true) }
         else if bump == .limit { navigationFeedback(for: "zoom limit", pattern: .alignment) }
         p.last = session.transform
-        guard event.phase.contains(.ended) || event.phase.contains(.cancelled) else {
+        guard ended else {
             pinch = p
             return
         }
@@ -930,6 +946,7 @@ import QuartzCore
         center.removeObserver(self, name: NSWindow.willEnterFullScreenNotification, object: nil)
         center.removeObserver(self, name: NSWindow.willExitFullScreenNotification, object: nil)
         resetTouches()
+        resetContinuousZoom()
         stopInertiaAtZoomTarget()   // the display link belongs to the window it was made for
         stopWheelLink()
         cursorAutohide.stop()
@@ -948,6 +965,7 @@ import QuartzCore
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         resetTouches()
+        resetContinuousZoom()
         folderScroll.buttonsReleased()
         stopInertiaAtZoomTarget()   // a pinch or right-button release may never come: a held zoom stretch goes too
         cursorAutohide.stop()
@@ -956,7 +974,10 @@ import QuartzCore
     /// A freshly opened or re-focused window hides a resting cursor too, without waiting for a move.
     @objc private func windowDidBecomeKey(_ notification: Notification) { cursorAutohide.activity() }
 
-    @objc private func windowWillChangeFullScreen(_ notification: Notification) { stopInertiaAtZoomTarget() }
+    @objc private func windowWillChangeFullScreen(_ notification: Notification) {
+        resetContinuousZoom()
+        stopInertiaAtZoomTarget()
+    }
 
     /// Touches stopped being delivered without every finger being seen lifting.
     private func resetTouches() {
@@ -970,12 +991,30 @@ import QuartzCore
         scrollGuard.fingersLifted()
     }
 
+    func trackPlaybackNavigation(_ points: [CGPoint], at time: TimeInterval) {
+        guard let step = playbackThreeFingerSwipe.update(touches: points, at: time) else { return }
+        switch step {
+        case .next, .previous:
+            stepThreeFingerSwipe(next: step == .next)
+        default:
+            break
+        }
+    }
+
+    func cancelPlaybackNavigation() { playbackThreeFingerSwipe.reset() }
+
+    private func stepThreeFingerSwipe(next: Bool) {
+        if !session.go(by: next ? 1 : -1), session.playlist != nil {
+            navigationFeedback(for: "end of photo list", pattern: .alignment)
+        }
+    }
+
     private func trackTouches(_ event: NSEvent) {
-        // `.touching` is the full set of fingers on the pad right now; the ones that just ended or
-        // were cancelled are no longer in it.
+        // `.touching` is the full set of fingers on the pad right now.
         let points = event.touches(matching: .touching, in: self).map(\.normalizedPosition)
+        let time = event.timestamp
         touchCount = points.count
-        let statusTap = primaryClickGestures.touches(points, at: event.timestamp, interval: NSEvent.doubleClickInterval)
+        let statusTap = primaryClickGestures.touches(points, at: time, interval: NSEvent.doubleClickInterval)
         if statusTap, !ignoreTouchesUntilLift, heldTrackpadSwipe == nil, !isStripPressed() {
             onDoubleTapStatus?()
             navigationFeedback(for: "status bar")
@@ -991,7 +1030,7 @@ import QuartzCore
            !heldButtons.isEmpty, !isStripPressed() {
             if let start = dragStart, dragPoint != nil { restoreTransform(start) }
             if let start = rmbZoom?.start, rmbDragging { restoreTransform(start) }
-            if button == 1 { MouseButtons.shared.release(.right, at: event.timestamp) }
+            if button == 1 { MouseButtons.shared.release(.right, at: time) }
             endRMBZoom()
             dragPoint = nil
             primaryClickGestures = PrimaryClickGestures()
@@ -1002,10 +1041,10 @@ import QuartzCore
         }
         if var swipe = heldTrackpadSwipe {
             guard swipe.input != .scroll else { return }
-            let step = swipe.touches.update(touches: points, at: event.timestamp)
+            let step = swipe.touches.update(touches: points, at: time)
             if swipe.touches.hasRecognizedSwipe { swipe.input = .touches }
             heldTrackpadSwipe = swipe
-            if let step { performHeldTrackpadSwipe(step, at: event.timestamp) }
+            if let step { performHeldTrackpadSwipe(step, at: time) }
             return
         }
         if points.isEmpty { scrollGuard.fingersLifted() }
@@ -1015,10 +1054,10 @@ import QuartzCore
             threeFingerSwipe.reset()
             return
         }
-        guard let step = threeFingerSwipe.update(touches: points, at: event.timestamp, doubleTapInterval: NSEvent.doubleClickInterval) else { return }
+        guard let step = threeFingerSwipe.update(touches: points, at: time, doubleTapInterval: NSEvent.doubleClickInterval) else { return }
         DebugLog.log("three fingers -> \(step)")
         if step == .tap {
-            performTrackpad(.threeTap, at: event.timestamp)
+            performTrackpad(.threeTap, at: time)
             return
         }
         stopInertiaAtZoomTarget()
@@ -1032,11 +1071,9 @@ import QuartzCore
         }
         switch step {
         case .next, .previous:
-            if !session.go(by: step == .next ? 1 : -1), session.playlist != nil {
-                navigationFeedback(for: "end of photo list", pattern: .alignment)
-            }
+            stepThreeFingerSwipe(next: step == .next)
         case .up, .down:
-            if !performTrackpad(step == .up ? .threeUp : .threeDown, at: event.timestamp) {
+            if !performTrackpad(step == .up ? .threeUp : .threeDown, at: time) {
                 onShowStrip?(step == .up)
                 navigationFeedback(for: "filmstrip")
             }
@@ -1412,6 +1449,14 @@ import QuartzCore
         if t.stretch != nil { session.transform = t.withStretch(nil) }
     }
 
+    /// An explicit save commits the requested zoom and stops coasting/elastic motion before capture.
+    func settleForFramingReference() -> ViewTransform {
+        stopInertiaAtZoomTarget()
+        let target = session.transform.withStretch(nil).clamped
+        if target != session.transform { session.transform = target }
+        return target
+    }
+
     private func inertiaTick(_ link: CADisplayLink) {
         guard link === inertiaLink, coast != nil || zoomCoast != nil || zoomAnimation != nil || rubber.isAnimating else {
             link.invalidate()
@@ -1531,12 +1576,32 @@ import QuartzCore
     // MARK: Right-button zoom
 
     // Spec §8.2: hold the right button and drag vertically; up zooms in, exponentially (`RMBZoom`), with
-    // the image point under the press staying put. A click without a drag does nothing in M1 (the context
-    // menu comes later), and none of these handlers call super, so AppKit pops no default menu.
+    // the image point under the press staying put.
 
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
+    func showFramingFeedbackMenu(at event: NSEvent? = nil, isEnabled: @escaping () -> Bool = { true }) {
+        guard isEnabled(), !isCovered(), session.image != nil, session.currentPages?.second == nil else { return }
+        let location = convert(event?.locationInWindow ?? window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+        let pixels = convertToBacking(location)
+        let t = settleForFramingReference()
+        let image = t.imagePoint(forView: .init(x: pixels.x, y: t.viewSize.height - pixels.y))
+        let point = CGPoint(x: image.x / t.imageSize.width, y: image.y / t.imageSize.height)
+        guard let prepare = onFramingFeedbackMenu else { return }
+        let source = session.entry?.url, stamp = session.entry?.sourceStamp
+        let normalized = bounds.contains(location) ? point : nil
+        feedbackMenuTask?.cancel()
+        feedbackMenuTask = Task { [weak self] in
+            let menu = await prepare(normalized)
+            guard let self, !Task.isCancelled, let menu, isEnabled(), !isCovered(), window?.isKeyWindow == true,
+                  window?.attachedSheet == nil, session.entry?.url == source, session.entry?.sourceStamp == stamp,
+                  session.transform == t else { return }
+            menu.popUp(positioning: nil, at: location, in: self)
+        }
+    }
+
     override func rightMouseDown(with event: NSEvent) {
+        feedbackMenuTask?.cancel()
         if beginHeldTrackpadPress(event) { return }
         resetScrollGesture()
         DebugLog.log("mouse button 1 down")
@@ -1568,7 +1633,8 @@ import QuartzCore
         rmbVelocity.reset()
         rmbDy = 0
         rmbStops = ZoomStopGesture(transform: session.transform, stops: activeZoomStops,
-                                   rubber: config.zoomRubberBand, fixed: zoomStopMode == .fixed, at: event.timestamp)
+                                   rubber: config.zoomRubberBand, fixed: zoomStopMode == .fixed,
+                                   breakaway: config.zoomStopBreakaway, at: event.timestamp)
         rmbAxis.reset()
         rmbPress = pointer
         rmbCentring = subjectCentring(session.transform)
@@ -1644,8 +1710,17 @@ import QuartzCore
         DebugLog.log("mouse button 1 up")
         cursorAutohide.activity()
         // The release of a right+button chord does nothing: no glide, no spring of a zoom the chord took over.
-        let chorded = MouseButtons.shared.rightZoomSuppressed
-        MouseButtons.shared.release(.right, at: event.timestamp)
+        let buttons = MouseButtons.shared
+        let chorded = buttons.rightZoomSuppressed
+        let clickAction: ((NSEvent) -> Void)?
+        if let onRightClick, buttons.canCompleteRightClick, !rmbDragging, !folderScroll.hasFired, let press = rmbPress {
+            let point = viewPoint(event)
+            clickAction = max(abs(point.x - press.x), abs(point.y - press.y)) < RMBZoom.clickSlopPoints * backing
+                ? onRightClick : nil
+        } else {
+            clickAction = nil
+        }
+        buttons.release(.right, at: event.timestamp)
         if chorded {
             endRMBZoom()
             folderScroll.release(.right, held: heldButtons)
@@ -1661,6 +1736,7 @@ import QuartzCore
             springBackZoom()
             return
         }
+        clickAction?(event)
         guard coasting, let zoom, let stops else { return }
         DebugLog.log("rmb zoom release velocity \(v) doublings/s")
         if v != 0 {
@@ -1689,6 +1765,22 @@ import QuartzCore
     override func otherMouseDragged(with event: NSEvent) {
         cursorAutohide.activity()
         MouseButtons.shared.moved(event)
+    }
+
+    private func resetContinuousZoom() {
+        pinch = nil
+        thumbZoom = nil
+        if rmbZoom != nil { endRMBZoom() }
+    }
+
+    var canClaimPlaybackScrub: Bool {
+        !rmbDragging && !folderScroll.hasFired && !MouseButtons.shared.rightZoomSuppressed && !isStripPressed()
+    }
+
+    func claimPlaybackScrub() {
+        MouseButtons.shared.claimRightDrag()
+        endRMBZoom()
+        releaseRubber()
     }
 
     private func endRMBZoom() {
@@ -1741,7 +1833,7 @@ import QuartzCore
 
     /// The viewer's one key dispatcher (`keyDown`, `performKeyEquivalent`): true when the key was the viewer's (done,
     /// or swallowed as a repeat), false for a key to pass on. Repeated for the same event it decides the same.
-    private func handleKey(_ event: NSEvent) -> Bool {
+    func handleKey(_ event: NSEvent) -> Bool {
         // ⌘ ⌃ combinations belong to menu shortcuts; ⌥ and shift are the table's (⌥← / ⌥→ are folder steps, other ⌥
         // keys are unbound and fall through to the menus).
         let flags = event.modifierFlags
@@ -1876,20 +1968,21 @@ import QuartzCore
     /// `stepsPerRevolution` per turn (the package's sign: left = positive on the MX Master 4), right = in unless
     /// `thumb-zoom-invert`, by `thumb-zoom-speed` doublings per turn, at once (no animation, as a pinch). A turn of the wheel (`began`) is a new gesture, as is one after something else changed the transform;
     /// `thumb-zoom-stops` says whether a stop briefly resists the turn or only ticks. The mouse answers as for `zoom-step`.
-    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, at timestamp: TimeInterval) {
+    func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, ended: Bool, at timestamp: TimeInterval) {
+        if began { thumbZoom = nil }
+        defer { if ended { thumbZoom = nil } }
         session.noteManualZoom()
         invalidateSmartZoomRequest()
         guard !isCheatSheetOpen() else { return }
         let config = Settings.shared.config
         let doublings = ThumbZoom.doublings(delta: config.thumbZoomInvert ? delta : -delta,
                                             stepsPerRevolution: stepsPerRevolution, speed: config.thumbZoomSpeed)
-        if began { thumbZoom = nil }
         guard doublings != 0 else { return }
         stopInertia()
         let t = session.transform
         if thumbZoom?.last != t {
             thumbZoom = (ThumbZoom(transform: t, stops: activeZoomStops, mode: config.thumbZoomStops,
-                                  fixed: zoomStopMode == .fixed), t)
+                                  fixed: zoomStopMode == .fixed, breakaway: config.zoomStopBreakaway), t)
         }
         guard var z = thumbZoom?.zoom else { return }
         let r = z.turn(doublings: doublings, at: timestamp)
@@ -1914,6 +2007,9 @@ import QuartzCore
         let t = zoomBase
         if Self.zoomCommands.contains(action) { session.noteManualZoom(); invalidateSmartZoomRequest(); session.subjectZoom = false; subjectZoomPress = nil }
         switch action {
+        case .showFramingFeedback: showFramingFeedbackMenu(); return true
+        case .confirmDetail, .confirmOverview, .confirmDetailAndNext, .confirmOverviewAndNext,
+             .undoFramingFeedback, .compareFraming, .toggleFramingIntent: return onZoomKey?(action) ?? false
         case .zoomSubject, .toggleStepZoom, .toggleSmartZoom, .manualZoom: return onZoomKey?(action) ?? false
         case .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor, .toggleZoomSet, .cycleSubjectTarget,
              .cycleDetectorMode, .saveDetectorSize:

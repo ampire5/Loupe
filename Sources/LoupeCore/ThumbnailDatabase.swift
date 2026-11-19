@@ -1,6 +1,7 @@
 import Foundation
 import HomeScreenModel
 import SQLite3
+import UniformTypeIdentifiers
 
 /// The thumbnail disk cache (spec §3.2): `Catalog.db` knows volumes, folders and files (stamp, `ImageInfo`,
 /// last access), `Thumbs.db` holds only the JPEG blobs by file id. Metadata apart from the blobs keeps the
@@ -249,6 +250,8 @@ public final class ThumbnailDatabase {
         try catalog.query("SELECT facts FROM file_facts WHERE file_id = ?", [.int(id)]) { r in
             info.facts = try? JSONDecoder().decode(FileFacts.self, from: r.blob(0))
         }
+        // The original movie records contain the poster's dimensions. Treat them as a cache miss on access.
+        if info.typeIdentifier == UTType.movie.identifier && info.facts == nil { return nil }
         var jpeg: Data?
         try thumbs.query("SELECT jpeg FROM thumbs WHERE file_id = ?", [.int(id)]) { jpeg = $0.blob(0) }
         return jpeg.map { ($0, info) }
@@ -282,7 +285,7 @@ public final class ThumbnailDatabase {
             """ : "SELECT file_id, facts FROM file_facts WHERE file_id IN (SELECT value FROM json_each(?))"
         try catalog.query(query, [Self.idList(ids)]) { r in
             guard var value = try? JSONDecoder().decode(FileFacts.self, from: r.blob(1)) else { return }
-            if includingHeader, !r.isNull(2) {
+            if includingHeader, !r.isNull(2), r.text(2) != UTType.movie.identifier {
                 value.typeIdentifier = r.text(2)
                 value.progressive = r.isNull(3) ? nil : r.int(3) != 0
                 value.colorSpace = r.isNull(4) ? nil : r.text(4)
@@ -645,24 +648,29 @@ public final class ThumbnailDatabase {
 
     /// Keeps `entries` (a `StoredListing`) as the listing of the folder of `location` (its `name` is ignored), and lets
     /// the least recently written go past `listingCapacity`.
-    public func putListing(_ entries: Data, at location: ThumbnailLocation) throws {
+    public func putListing(_ entries: Data, at location: ThumbnailLocation, recursive: Bool = false,
+                           scannedAt: Date? = nil) throws {
+        let table = recursive ? "recursive_folder_listings" : "folder_listings"
+        let capacity = recursive ? RecursiveListingSnapshot.capacity : listingCapacity
+        let written = (scannedAt ?? now()).timeIntervalSinceReferenceDate
         try catalog.transaction {
             try catalog.run("""
-                INSERT INTO folder_listings(volume, path, written, entries) VALUES(?, ?, ?, ?)
+                INSERT INTO \(table)(volume, path, written, entries) VALUES(?, ?, ?, ?)
                 ON CONFLICT(volume, path) DO UPDATE SET written = excluded.written, entries = excluded.entries
-                """, [.text(location.volume), .text(location.folder), .double(now().timeIntervalSinceReferenceDate),
-                      .blob(entries)])
+                    WHERE excluded.written >= \(table).written
+                """, [.text(location.volume), .text(location.folder), .double(written), .blob(entries)])
             try catalog.run("""
-                DELETE FROM folder_listings WHERE rowid IN
-                (SELECT rowid FROM folder_listings ORDER BY written DESC LIMIT -1 OFFSET ?)
-                """, [.int(Int64(listingCapacity))])
+                DELETE FROM \(table) WHERE rowid IN
+                (SELECT rowid FROM \(table) ORDER BY written DESC, rowid DESC LIMIT -1 OFFSET ?)
+                """, [.int(Int64(capacity))])
         }
     }
 
     /// The listing kept for the folder of `location`; nil when none is. Read only.
-    public func listing(at location: ThumbnailLocation) throws -> Data? {
+    public func listing(at location: ThumbnailLocation, recursive: Bool = false) throws -> Data? {
+        let table = recursive ? "recursive_folder_listings" : "folder_listings"
         var found: Data?
-        try catalog.query("SELECT entries FROM folder_listings WHERE volume = ? AND path = ?",
+        try catalog.query("SELECT entries FROM \(table) WHERE volume = ? AND path = ?",
                           [.text(location.volume), .text(location.folder)]) { found = $0.blob(0) }
         return found
     }
@@ -792,6 +800,9 @@ public final class ThumbnailDatabase {
         CREATE TABLE IF NOT EXISTS folder_listings(volume TEXT NOT NULL, path TEXT NOT NULL, written REAL NOT NULL,
             entries BLOB NOT NULL, PRIMARY KEY(volume, path));
         CREATE INDEX IF NOT EXISTS folder_listings_written ON folder_listings(written);
+        CREATE TABLE IF NOT EXISTS recursive_folder_listings(volume TEXT NOT NULL, path TEXT NOT NULL,
+            written REAL NOT NULL, entries BLOB NOT NULL, PRIMARY KEY(volume, path));
+        CREATE INDEX IF NOT EXISTS recursive_folder_listings_written ON recursive_folder_listings(written);
         """
     /// A photo's facts for its card (`PhotoFacts`: pixels, EXIF), JSON, by file id; read with the thumbnail, gone
     /// with the file's row or when the file changes. Its subjects (`SubjectBoxes`) beside them, gone with them. Created with `IF NOT EXISTS` on every open, out of the format

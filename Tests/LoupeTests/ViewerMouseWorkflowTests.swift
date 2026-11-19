@@ -5,6 +5,26 @@ import Testing
 @testable import Loupe
 
 @MainActor @Suite(.serialized) struct ViewerMouseWorkflowTests {
+    @Test func referenceCaptureFinishesZoomAndClearsElasticMotion() throws {
+        _ = NSApplication.shared
+        let reader = FileReader(threads: 1)
+        let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: DecodePool(), limits: CacheLimits(config: Config()))
+        let thumbs = ThumbnailStore(directory: nil, reader: reader, thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: cache, thumbnails: thumbs, positions: FolderPositions(database: nil))
+        defer { session.close() }
+        let view = ViewerView(session: session, resampling: ResampleSettings(config: Config()))
+        let target = ViewTransform(imageSize: .init(width: 1200, height: 1500), viewSize: .init(width: 600, height: 600), mode: .actual(1.4), center: .init(x: 0.65, y: 0.45)).clamped
+        session.transform = target.withMode(.actual(0.8)).withOffset(.init(dx: 10, dy: -4))
+        session.zoomTarget = target
+        let captured = view.settleForFramingReference()
+        #expect(session.zoomTarget == nil)
+        #expect(captured == target && session.transform == target)
+        _ = try FramingGeometry(captured)
+        session.transform = target.withStretch(.init(factor: 1.1, anchor: .init(x: 200, y: 200)))
+        let unstretched = view.settleForFramingReference()
+        #expect(unstretched == target)
+        #expect(view.settleForFramingReference() == target)
+    }
     @Test func twoFingerPanMovesOnBothAxesFromFirstDeltaThroughMomentum() throws {
         _ = NSApplication.shared
         let reader = FileReader(threads: 1)
@@ -95,7 +115,7 @@ import Testing
                 #expect(session.smartZoom.mode == mode)
                 #expect(!request.matches(photo: photo, revision: session.smartZoomRevision, enabled: true))
             }
-            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true, at: 1)
+            view.thumbWheelZoom(delta: 12, stepsPerRevolution: 360, began: true, ended: false, at: 1)
             #expect(session.smartZoom.mode == mode)
             let manual = NSMenuItem(); manual.representedObject = KeyAction.manualZoom.rawValue
             view.performKeyAction(manual)
@@ -103,6 +123,27 @@ import Testing
             #expect(session.smartZoom.lastEnabled == mode)
         }
     }
+    @Test func thumbWheelEndDiscardsTheHeldStop() {
+        _ = NSApplication.shared
+        let reader = FileReader(threads: 1)
+        let cache = ImageCache(loader: MetalPyramidLoader(), reader: reader, pool: DecodePool(), limits: CacheLimits(config: Config()))
+        let thumbs = ThumbnailStore(directory: nil, reader: reader, thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: cache, thumbnails: thumbs, positions: FolderPositions(database: nil))
+        defer { session.close() }
+        let view = ViewerView(session: session, resampling: ResampleSettings(config: Config()))
+        view.zoomStopMode = .fixed
+        session.transform = ViewTransform(imageSize: CGSize(width: 1200, height: 1200),
+                                          viewSize: CGSize(width: 600, height: 600)).withMode(.actual(0.9))
+        let inward = Settings.shared.config.thumbZoomInvert ? 1 : -1
+        view.thumbWheelZoom(delta: 36 * inward, stepsPerRevolution: 360, began: true, ended: false, at: 1)
+        #expect(session.transform.scale == 1)
+        view.thumbWheelZoom(delta: 0, stepsPerRevolution: 360, began: false, ended: true, at: 1.1)
+        #expect(session.transform.scale == 1)
+        // A phase-less follow-up must be able to leave the stop even without a new began event.
+        view.thumbWheelZoom(delta: inward, stepsPerRevolution: 360, began: false, ended: false, at: 1.2)
+        #expect(session.transform.scale > 1)
+    }
+
     @Test func rightVerticalDragZoomsWhileSmartZoomRemainsEnabled() throws {
         _ = NSApplication.shared
         let reader = FileReader(threads: 1)
@@ -128,7 +169,13 @@ import Testing
         }
         let start = session.transform.scale
         let revision = session.smartZoomRevision
+        var rightClicks = 0
+        view.onRightClick = { _ in rightClicks += 1 }
         view.rightMouseDown(with: try event(.rightMouseDown, y: 300, at: 0))
+        #expect(rightClicks == 0)
+        view.rightMouseUp(with: try event(.rightMouseUp, y: 300, at: 0.05))
+        #expect(rightClicks == 1)
+        view.rightMouseDown(with: try event(.rightMouseDown, y: 300, at: 0.06))
         #expect(session.smartZoomRevision == revision)
         view.rightMouseDragged(with: try event(.rightMouseDragged, y: 320, at: 0.1))
         #expect(session.transform.scale != start)
@@ -144,6 +191,7 @@ import Testing
         view.rightMouseDragged(with: try event(.rightMouseDragged, y: 340, at: 0.2))
         #expect(session.transform.scale != afterWheel)
         view.rightMouseUp(with: try event(.rightMouseUp, y: 340, at: 0.3))
+        #expect(rightClicks == 1)
     }
 
     @Test func rightModifierAndColourWheelDoNotCancelPendingSmartZoom() throws {

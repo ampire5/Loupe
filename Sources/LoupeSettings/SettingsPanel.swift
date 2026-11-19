@@ -28,6 +28,7 @@ public struct SettingsPanelContext {
     /// The Catalog card's «Clear Thumbnails…»: File › Clear Thumbnail Cache…'s confirmation and clear; true when
     /// the thumbnails went.
     public var clearThumbnails: @MainActor () async -> Bool
+    public var showPlaybackExtensions: @MainActor () -> Void
 
     public init(configURL: URL, inputURL: URL,
                 iconChoices: @escaping @MainActor () -> [IconChoice] = { [] },
@@ -35,7 +36,8 @@ public struct SettingsPanelContext {
                 translateKey: @escaping (UInt16, Bool) -> String? = { _, _ in nil },
                 reloadInput: @escaping @MainActor () -> Void = {},
                 menuRows: @escaping @MainActor () -> [(input: String, title: String)] = { [] },
-                catalogDirectory: URL? = nil, clearThumbnails: @escaping @MainActor () async -> Bool = { false }) {
+                catalogDirectory: URL? = nil, clearThumbnails: @escaping @MainActor () async -> Bool = { false },
+                showPlaybackExtensions: @escaping @MainActor () -> Void = {}) {
         self.configURL = configURL
         self.inputURL = inputURL
         self.iconChoices = iconChoices
@@ -46,6 +48,7 @@ public struct SettingsPanelContext {
         self.menuRows = menuRows
         self.catalogDirectory = catalogDirectory
         self.clearThumbnails = clearThumbnails
+        self.showPlaybackExtensions = showPlaybackExtensions
     }
 }
 
@@ -68,7 +71,7 @@ public struct SettingsPanelContext {
 
     /// The pages in spec §5 order.
     public static func pages() -> [SettingsPage] {
-        [general, zoomPan, quality, colour, strip, interface, mouse, keyBindings, performance, stash, advanced]
+        [general, zoomPan, quality, colour, strip, interface, mouse, keyBindings, performance, stash, webImages, advanced]
     }
 
     /// The folder notes ask the store again: the app calls it when the main window or its folder changed, or a

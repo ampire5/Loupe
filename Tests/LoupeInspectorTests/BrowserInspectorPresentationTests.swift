@@ -57,7 +57,7 @@ import Testing
         loader.select(entry("b.jpg", camera: "Camera B"))
         #expect(visibleValues(controller.view).contains("Camera B"))
         #expect(!visibleValues(controller.view).contains("Camera A"))
-        #expect(visibleValues(controller.view).contains("Requesting information…"))
+        #expect(visibleValues(controller.view).contains("Reading metadata…"))
         #expect(disclosures(controller.view) == sections)
         await gate.finish("a.jpg")
         for _ in 0..<300 where !(await gate.names.contains("b.jpg")) { try? await Task.sleep(for: .milliseconds(1)) }
@@ -67,7 +67,7 @@ import Testing
         #expect(loader.result != nil)
         #expect(disclosures(controller.view) == sections)
         #expect(visibleValues(controller.view).contains("Camera B"))
-        #expect(!visibleValues(controller.view).contains("Requesting information…"))
+        #expect(!visibleValues(controller.view).contains("Reading metadata…"))
     }
 
     @Test func allInformationGroupsStartExpanded() async {

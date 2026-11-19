@@ -317,12 +317,13 @@ extension SubjectFraming {
     static func framesHead(_ kind: SubjectKind) -> Bool { kind == .face || detector.heads.contains(kind) }
 
     /// Every valid instance of every required class. Presence is independent of spacing and head expansion.
-    public static func pick(_ boxes: SubjectBoxes, _ kind: SubjectKind) -> [CGRect]? {
+    public static func pick(_ boxes: SubjectBoxes, _ kind: SubjectKind, framing: DetectorFraming? = nil) -> [CGRect]? {
         var result: [CGRect] = []
         for part in kind.parts {
-            let found = boxes.boxes(part).compactMap(validRect)
+            let found = boxes.boxes(part, framing: framing).compactMap(validRect)
             guard !found.isEmpty else { return nil }
-            result.append(contentsOf: kind.parts.count == 1 && framesHead(part) ? found.map(head) : found)
+            let isHead = part == .face || (framing ?? detector).heads.contains(part)
+            result.append(contentsOf: kind.parts.count == 1 && isHead ? found.map(head) : found)
         }
         return result
     }

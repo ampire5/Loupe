@@ -1,5 +1,6 @@
 import Foundation
 import HomeScreenModel
+import Synchronization
 import Testing
 @testable import LoupeCore
 
@@ -132,6 +133,36 @@ import Testing
         let places = await BrowserListingSource.places(pins: [root.appendingPathComponent("gone")],
                                                        home: root.appendingPathComponent("home"), volumes: [])
         #expect(places.map(\.isDimmed) == [false, true])
+    }
+
+    @Test func placesKeepsVolumeUsableDuringAnotherAvailabilityCheck() async throws {
+        let root = try tree([], dirs: ["home", "volume/child"])
+        let gate = BlockingGate()
+        let started = Mutex(false)
+        let volume = root.appendingPathComponent("volume", isDirectory: true)
+        let first = Task {
+            await HomeGrid.availability(of: [volume.path], timeout: .seconds(30)) { _ in
+                started.withLock { $0 = true }
+                gate.wait()
+                return true
+            }
+        }
+        defer {
+            gate.open()
+            first.cancel()
+            try? fm.removeItem(at: root)
+        }
+        try #require(await eventually { started.withLock { $0 } })
+
+        let places = await BrowserListingSource.places(pins: [], home: root.appendingPathComponent("home"),
+                                                       volumes: [volume])
+        let entry = try #require(places.last)
+        #expect(!entry.isDimmed)
+        let row = HomeSidebarRow(id: entry.id, title: entry.name, symbol: "externaldrive", location: .folder(entry.url),
+                                 expandable: !entry.isDimmed, isDimmed: entry.isDimmed)
+        var sidebar = SidebarTree(sections: [HomeSidebarSection(id: "places", title: "Places", rows: [row])])
+        _ = sidebar.follow(.folder(volume.appendingPathComponent("child", isDirectory: true)))
+        #expect(sidebar.currentLine != nil)
     }
 
     @Test func unreadableFolderThrows() async {

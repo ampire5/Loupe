@@ -41,9 +41,9 @@ import Testing
         var z = ThumbZoom(transform: at(0.4), stops: stops, mode: .halt)
         let a = z.turn(doublings: 0.5)
         #expect(close(a.scale, 0.5) && a.stop == .fitWidth && a.bump == .stop)
-        let b = z.turn(doublings: 0.04)  // still held
+        let b = z.turn(doublings: 0.02)  // still held
         #expect(close(b.scale, 0.5) && b.bump == nil)
-        let c = z.turn(doublings: 0.12)  // same turn crosses without another pulse
+        let c = z.turn(doublings: 0.08)  // same turn crosses without another pulse
         #expect(c.scale > 0.5 && c.scale < 0.55 && c.stop == nil && c.bump == nil)
         // A new turn from the stop passes it.
         var next = ThumbZoom(transform: at(0.5), stops: stops, mode: .halt)

@@ -37,4 +37,20 @@ extension ThumbnailStore {
               let data = perform("stored listing", { try $0.listing(at: location) }) ?? nil else { return nil }
         return await Self.offActor { StoredListing.decode(data, in: folder) }
     }
+
+    public func storedRecursiveListing(_ folder: URL) async -> [BrowserEntry]? {
+        let locate = self.locate
+        guard let location = await Self.offActor({ locate(folder.appendingPathComponent("_")) }),
+              let data = perform("stored recursive listing", { try $0.listing(at: location, recursive: true) }) ?? nil
+        else { return nil }
+        return await Self.offActor { RecursiveListingSnapshot.decode(data, in: folder) }
+    }
+
+    public func storeRecursiveListing(_ entries: [BrowserEntry], of folder: URL, scannedAt: Date) async {
+        let locate = self.locate
+        guard let location = await Self.offActor(qos: .utility, { locate(folder.appendingPathComponent("_")) }),
+              let data = await Self.offActor(qos: .utility, { RecursiveListingSnapshot.encode(entries, in: folder) }),
+              !Task.isCancelled else { return }
+        _ = perform("store recursive listing") { try $0.putListing(data, at: location, recursive: true, scannedAt: scannedAt) }
+    }
 }

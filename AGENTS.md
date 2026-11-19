@@ -62,3 +62,37 @@ docs/kits.md and `scripts/kits-check.py` checks them.
 Read [docs/architecture.md](docs/architecture.md) before changing a subsystem. Follow its source/test entry points,
 and update it in the same change when ownership, data flow, target dependencies or cancellation changes.
 Historical plans and specs explain decisions; verify current behavior against the architecture map and source.
+
+## Soft Detents / Semantic Stops
+
+Use a soft detent when a continuous control has a few values worth landing on exactly, such as unity gain,
+zero rotation, a fit scale or a timeline landmark. Preserve fine adjustment between them. Use hard steps
+for inherently discrete choices and reserve hard bounds for the actual limits of the range.
+
+- **Snapping** chooses a discrete target at a boundary or on commit. **Magnetic snapping** pulls a nearby
+  value toward a target based on proximity. A **stateful detent** captures a landmark during a gesture, holds
+  the displayed value while input keeps moving, and releases when signed travel exceeds a threshold.
+- **Capture radius** defines the approach zone. Measure it in the control's native motion units, such as
+  doublings for zoom. Keep it small and cap it on each side at the midpoint to the neighboring landmark.
+  Emit one capture cue and keep the gesture active.
+- **Breakaway threshold** measures signed input displacement from the capture point. Reversal unwinds
+  displacement before building it in the opposite direction. Tune the threshold for each input mapping.
+  Prefer a spatial threshold over timed lockouts or absolute-distance accumulation.
+- **Hysteresis** suppresses the released stop until the value clears its capture zone by a margin.
+  Other stops stay available. **Velocity bypass** lets a deliberate sweep pass without latching. Estimate
+  speed from raw input with valid timestamps. Preserve a predictable spatial fallback for untimed input.
+- **Continuity** starts release at the held value and applies only the displacement beyond the threshold.
+  Rebase the input-to-value mapping at that transition and retain its ordinary sensitivity. Avoid replaying
+  absorbed travel, jumping to a neighboring landmark, warping the pointer or animating the value behind input.
+  Keep the held value on release and discard gesture state. On cancellation, follow the control's existing
+  commit or rollback convention and discard the state without applying pending motion.
+- **Input and accessibility** share landmark values across mouse, trackpad, touch, keyboard and assistive
+  actions. Give discrete actions an explicit route to landmarks and fine steps independent of gesture speed.
+  Expose a label, current value and adjustment actions. Keep visual or spoken feedback available alongside
+  optional haptics, and announce meaningful changes without repeating the hold on every event.
+  See [Apple's accessibility guidance for adjustable controls](https://developer.apple.com/videos/play/tech-talks/111433/).
+- **Acceptance** exercises approach from both sides, hold across pauses and jitter, signed reversal, release
+  just past the threshold, immediate reversal after release, and recapture after clearance. Check fast sweeps
+  across several landmarks, fine adjustment away from stops, close landmarks, limits, and a fresh gesture after
+  end or cancel. Replay different event sizes and check the feel on each supported device. Verify exact landmark
+  values, continuity at breakaway, and usable feedback with haptics disabled and with assistive input.

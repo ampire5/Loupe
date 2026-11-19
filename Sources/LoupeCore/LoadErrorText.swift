@@ -21,6 +21,7 @@ public enum LoadErrorText {
         case DecodeError.outOfMemory: return "not enough memory"
         case DecodeError.tooLarge:
             return size.map { "too large to display (\($0.width)×\($0.height))" } ?? "too large to display"
+        case let web as WebImageFiles.FileError: return web.localizedDescription
         case let cocoa as CocoaError:
             // "The file doesn’t exist." / "You don’t have permission to view it." — no file name inside.
             let text = (cocoa as NSError).localizedFailureReason ?? ""

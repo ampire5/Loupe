@@ -19,6 +19,7 @@ import LoupeCore
         var modelLoading = false
         var modelNote = ""
         var canEditProfile = false
+        var learned = false
     }
     let view = NSScrollView()
     private let body = SmartZoomDocumentView()
@@ -34,6 +35,7 @@ import LoupeCore
     private let weights = NSStackView()
     private let normalize = NSSegmentedControl(labels: ["Per type", "Per object"], trackingMode: .selectOne, target: nil, action: nil)
     private let showBoxes = NSButton(checkboxWithTitle: "Show detections and frame", target: nil, action: nil)
+    private let objectFeedback = NSButton(checkboxWithTitle: "Object feedback on right-click", target: nil, action: nil)
     private let protection = NSSegmentedControl(labels: ["Protect all found", "Selected group"], trackingMode: .selectOne, target: nil, action: nil)
     private let steady = NSButton(checkboxWithTitle: "Keep similar photos steady", target: nil, action: nil)
     private var controls: [String: SmartZoomSlider] = [:]
@@ -58,6 +60,11 @@ import LoupeCore
     var toggleBoxes: (() -> Void)?
     var saveFolder: (() -> Void)?
     var saveProfile: (() -> Void)?
+    var saveReference: ((FramingIntent, Bool) -> Void)?
+    var learn: (() -> Void)?
+    var chooseIntent: ((FramingIntent) -> Void)?
+    var feedbackSettings: (() -> FramingLearningLibrary?)?
+    private var currentIntent = FramingIntent.detail
 
     override init() {
         super.init()
@@ -122,6 +129,23 @@ import LoupeCore
             SmartZoomButton("Save to profile") { [weak self] _ in self?.saveProfile?() }])
         save.orientation = .vertical; save.alignment = .leading; save.spacing = 6
         body.addArrangedSubview(save)
+        let intentions = NSSegmentedControl(labels: ["Detail", "Overview"], trackingMode: .selectOne,
+                                           target: self, action: #selector(intentChanged(_:)))
+        intentions.selectedSegment = 0; intentions.identifier = .init("learning.intent")
+        body.addArrangedSubview(intentions)
+        let training = NSStackView(views: [
+            SmartZoomButton("Comfortable detail view") { [weak self] _ in self?.saveReference?(.detail, false) },
+            SmartZoomButton("Good overview composition") { [weak self] _ in self?.saveReference?(.overview, false) },
+            SmartZoomButton("Remember and next photo") { [weak self] _ in guard let self else { return }; saveReference?(currentIntent, true) },
+            SmartZoomButton("Learn from reference crops…") { [weak self] _ in self?.learn?() }])
+        training.arrangedSubviews[0].toolTip = "⌥1 · Save detail crop; ⇧⌥1 · Save and next photo"
+        training.arrangedSubviews[1].toolTip = "⌥2 · Save overview crop; ⇧⌥2 · Save and next photo"
+        training.orientation = .vertical; training.alignment = .leading; training.spacing = 6
+        body.addArrangedSubview(training)
+        objectFeedback.target = self
+        objectFeedback.action = #selector(objectFeedbackChanged)
+        objectFeedback.identifier = .init("smartzoom.object-feedback-on-right-click")
+        body.addArrangedSubview(objectFeedback)
         for item in [mode, model, modelNote, profile, groups, explanation, weights, note] as [NSView] {
             item.widthAnchor.constraint(lessThanOrEqualTo: body.widthAnchor, constant: -28).isActive = true
         }
@@ -140,10 +164,21 @@ import LoupeCore
         row.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -28).isActive = true
     }
     func setProfileEditing(_ editing: Bool) { editingProfile = editing; interactionChanged?() }
-    func setVisible(_ shown: Bool) { visible = shown; if shown { refresh(); modelsRequested?() } }
+    func setVisible(_ shown: Bool) {
+        visible = shown
+        if shown { refreshObjectFeedbackBinding(); refresh(); modelsRequested?() }
+    }
+    func refreshObjectFeedbackBinding() {
+        guard visible else { return }
+        let settings = feedbackSettings?()
+        objectFeedback.isEnabled = settings != nil
+        objectFeedback.state = settings?.objectFeedbackOnRightClick == true ? .on : .off
+    }
     func refresh() {
         guard visible, let next = source?() else { return }
         snapshot = next
+        groups.isHidden = next.learned
+        steady.isEnabled = !next.learned
         mode.selectedSegment = SmartZoomMode.allCases.firstIndex(of: next.mode) ?? 0
         if profile.titleOfSelectedItem != next.profile {
             profile.removeAllItems(); profile.addItem(withTitle: next.profile)
@@ -184,8 +219,14 @@ import LoupeCore
         refreshWeights()
     }
     @objc private func overflowChanged() { edit?("pan-overflow", overflow.selectedSegment == 0 ? "fit" : "keep") }
+    @objc private func intentChanged(_ sender: NSSegmentedControl) {
+        currentIntent = sender.selectedSegment == 0 ? .detail : .overview; chooseIntent?(currentIntent)
+    }
     @objc private func protectionChanged() { edit?("protection-scope", protection.selectedSegment == 0 ? "all" : "selected") }
     @objc private func steadyChanged() { edit?("steady-framing", steady.state == .on ? "yes" : "no") }
+    @objc private func objectFeedbackChanged() {
+        feedbackSettings?()?.objectFeedbackOnRightClick = objectFeedback.state == .on
+    }
 
     private func refreshWeights() {
         guard visible, weightsExpanded, let snapshot else { return }

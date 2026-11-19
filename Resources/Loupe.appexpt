@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>EXVersion</key><integer>2</integer>
+    <key>local.loupe.Playback</key>
+    <dict>
+        <key>EXExtensionPointName</key><string>Playback</string>
+        <key>_EXScopeRestriction</key><string>none</string>
+        <key>EXPresentsUserInterface</key><true/>
+        <key>EXRequiresEnhancedSecurity</key><false/>
+    </dict>
+</dict>
+</plist>

@@ -62,21 +62,38 @@ public struct SubjectComposition: Equatable, Sendable {
 
 extension SubjectFraming {
     public static func composition(_ boxes: SubjectBoxes, kind: SubjectKind,
-                                   options: CompositionOptions, imageSize: CGSize) -> SubjectComposition? {
+                                   options: CompositionOptions, imageSize: CGSize, framing: DetectorFraming? = nil) -> SubjectComposition? {
         guard imageSize.width.isFinite, imageSize.height.isFinite, imageSize.width > 0, imageSize.height > 0 else { return nil }
+        let context = framing ?? detector
+        var selected: [SubjectComposition.Region] = []
+        for part in kind.parts {
+            let rects = boxes.boxes(part, framing: context).compactMap(validRect)
+            guard !rects.isEmpty else { return nil }
+            selected += rects.map { .init(kind: part, rect: $0) }
+        }
+        return composition(boxes, selected: selected, expandHeads: kind.parts.count == 1,
+                           options: options, imageSize: imageSize, framing: context)
+    }
+
+    /// Shared geometry for an explicit set of instances. Learned selection and legacy groups use the same solver.
+    public static func composition(_ boxes: SubjectBoxes, selected: [SubjectComposition.Region], expandHeads: Bool,
+                                   options: CompositionOptions, imageSize: CGSize, framing: DetectorFraming) -> SubjectComposition? {
+        guard imageSize.width > 0, imageSize.height > 0, imageSize.width.isFinite, imageSize.height.isFinite else { return nil }
+        let context = framing
         var objects: [CGRect] = []
         var circles: [SubjectComposition.Region] = []
         var union = CGRect.null, sx = 0.0, sy = 0.0, total = 0.0
-        for part in kind.parts {
-            let rects = boxes.boxes(part).compactMap(validRect)
-            guard !rects.isEmpty else { return nil }
+        let byKind = Dictionary(grouping: selected, by: \.kind)
+        for part in byKind.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let rects = byKind[part]!.compactMap { validRect($0.rect) }
+            guard !rects.isEmpty else { continue }
             let configured = options.weights[part] ?? 1
             let weight = (configured.isFinite && configured > 0 ? configured : 1)
                 / (options.normalization == .class ? Double(rects.count) : 1)
             objects += rects
             for r in rects {
                 sx += r.midX * weight; sy += r.midY * weight; total += weight
-                let box = kind.parts.count == 1 && framesHead(part) ? head(r) : r
+                let box = expandHeads && (part == .face || context.heads.contains(part)) ? head(r) : r
                 let radius = options.radius(for: part) * min(box.width * imageSize.width, box.height * imageSize.height) / 2
                 let circle = CGRect(x: box.midX - radius / imageSize.width, y: box.midY - radius / imageSize.height,
                                     width: radius * 2 / imageSize.width, height: radius * 2 / imageSize.height)
@@ -93,11 +110,13 @@ extension SubjectFraming {
                                         panOverflow: options.panOverflow, objects: objects)
         result.support = validRect(union)
         result.circles = circles
-        let protectedKinds = options.protectionScope == .selected ? kind.parts : Array(Set(boxes.kinds)).sorted { $0.rawValue < $1.rawValue }
+        let protectedKinds = options.protectionScope == .selected ? Array(byKind.keys) : Array(Set(SubjectKind.vision + boxes.detections.map(\.kind))).sorted { $0.rawValue < $1.rawValue }
         for protectedKind in protectedKinds {
-            guard let cut = options.cropLimit(for: protectedKind) else { continue }
-            let padding = options.protectionPadding(for: protectedKind)
-            for raw in boxes.boxes(protectedKind).compactMap(validRect) {
+            guard let cut = options.cropLimit(for: protectedKind, framing: context) else { continue }
+            let padding = options.protectionPadding(for: protectedKind, framing: context)
+            let protectedBoxes = options.protectionScope == .selected
+                ? (byKind[protectedKind] ?? []).map(\.rect) : boxes.boxes(protectedKind, framing: context)
+            for raw in protectedBoxes.compactMap(validRect) {
                 guard let padded = validRect(raw.insetBy(dx: -raw.width * padding, dy: -raw.height * padding)) else { continue }
                 let required = padded.insetBy(dx: padded.width * cut, dy: padded.height * cut)
                 result.protectedRegions.append(.init(kind: protectedKind, rect: required))

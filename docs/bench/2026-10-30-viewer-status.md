@@ -69,3 +69,18 @@ The workflow/name correction passed all ten focused tests in the main checkout a
 ## Ultra-wide balance regression
 
 The previous screen-sized maximum let all surplus width accumulate in the third section. The toolbar maximum is now the sum of measured preferred file, capture and zoom-section widths. The same measurement drives native bounds and internal layout; space beyond that stays outside the glass. File/capture/zoom remain capped at 600/320/500 pt respectively and can compress below their preferred sizes. The folder measurement now includes the complete 88 pt counter/inset budget, avoiding a two-point truncation. Eleven focused tests pass, including native 2400/3000 pt widths, content-bound item size, growth for realistic longer names/groups, and full text fitting at its preferred width.
+
+## Numeric controls and compact file section — 2026-11-19
+
+The file section now fits its photo counter alongside the folder name. Numeric popovers focus and select the value every time they open. The native regression covers opening twice, dismissing a draft and pressing Return to apply a new value. The photo-number field keeps its text if a background listing supplies the count while it is open.
+
+Same arm64 debug benchmark on the M4 Max, macOS 27.2.1. Values are main-thread CPU milliseconds. Return ranges cover rounds 2–10.
+
+| Operation | Before, first / returns | After, first / returns |
+| --- | ---: | ---: |
+| Create window and toolbar | 105.727 / — | 90.820 / — |
+| Update status and lay out | 0.219 / 0.176–0.269 | 0.198 / 0.154–0.225 |
+| Resize and lay out | 13.852 / 11.589–15.159 | 13.828 / 12.444–14.541 |
+| Build profile menu | 0.187 / 0.062–0.091 | 0.053 / 0.031–0.055 |
+
+The updated popover took 38.188 ms on its first open in this run and 8.874–17.027 ms on returns. The previous run did not verify that each return reached an active field editor. Intel measurements are pending.

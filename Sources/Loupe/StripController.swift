@@ -78,6 +78,8 @@ extension Notification.Name {
     private let photosLibrary: any PhotosLibraryAccess
     private let aspects: StripAspects
     private var heightConstraint: NSLayoutConstraint!
+    private var revealBottom: NSLayoutConstraint?
+    private var playbackClearance: CGFloat = 0
 
     private var mode = StripWindowMode.beside
     private var cellHeight: CGFloat = 68
@@ -159,7 +161,8 @@ extension Notification.Name {
     func setPhotosWorkVisible(_ visible: Bool) {
         guard visible != photosWorkVisible else { return }
         photosWorkVisible = visible
-        if !visible, files.first.flatMap(PhotosLocation.asset(in:)) != nil {
+        if !visible, let first = files.first,
+           PhotosLocation.asset(in: first) != nil || WebImageLocation.owns(first) {
             loads.values.forEach { $0.cancel() }
             loads = [:]
         } else if visible { loadVisible() }
@@ -176,6 +179,7 @@ extension Notification.Name {
     var onToast: ((String) -> Void)?
     /// `isShown` changed (at the start of a fade): the info panel ends above a strip on screen.
     var onShownChange: (() -> Void)?
+    var onSessionScrubEnd: (() -> Void)?
     /// Whether the viewer's scroll guard says the rest of this precise scroll's gesture does nothing
     /// (`ViewerView.stripScrollIsSpent`, which also stops a glide of the photo): asked only for the strip's own scroll
     /// (`StripRoute.route`).
@@ -186,6 +190,13 @@ extension Notification.Name {
 
     /// The band's height: cells plus padding.
     var bandHeight: CGFloat { cellHeight + 2 * FilmstripView.padding }
+
+    func setPlaybackClearance(_ clearance: CGFloat) {
+        guard playbackClearance != clearance else { return }
+        playbackClearance = clearance
+        revealBottom?.constant = -Self.revealGap - clearance
+        pointer(nearBottom: false, nearEdge: false, overStrip: false)
+    }
 
     private var isMoving: Bool { scroll.isMoving || dragging }
 
@@ -259,16 +270,25 @@ extension Notification.Name {
         reveal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(reveal, positioned: .above, relativeTo: view)
         let leading = tools.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        let revealBottom = reveal.bottomAnchor.constraint(equalTo: container.bottomAnchor,
+                                                          constant: -Self.revealGap - playbackClearance)
+        self.revealBottom = revealBottom
         toolsLeading = leading
         NSLayoutConstraint.activate([
             leading,
             tools.centerYAnchor.constraint(equalTo: view.centerYAnchor),   // the cells are in the strip's middle
             reveal.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            reveal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.revealGap),
+            revealBottom,
             reveal.widthAnchor.constraint(equalToConstant: FilmstripRevealView.size.width),
             reveal.heightAnchor.constraint(equalToConstant: FilmstripRevealView.size.height),
         ])
         update()
+    }
+
+    /// These controls are siblings of the strip and would stay in the key loop behind Home.
+    func setControlsCovered(_ covered: Bool) {
+        tools.isHidden = covered
+        reveal.isHidden = covered
     }
 
     /// The window closes: no timers, no more notifications.
@@ -673,9 +693,10 @@ extension Notification.Name {
         if isShown { view.trackOutside(event) }
         let p = container.convert(event.locationInWindow, from: nil)
         let inside = container.bounds.contains(p)
-        let height = p.y - container.bounds.minY
+        let height = p.y - container.bounds.minY - playbackClearance
         let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && tools.frame.contains(p)))
-        pointer(nearBottom: inside && height <= bandHeight, nearEdge: inside && height <= Self.revealZone, overStrip: over)
+        pointer(nearBottom: inside && height >= 0 && height <= bandHeight,
+                nearEdge: inside && height >= 0 && height <= Self.revealZone, overStrip: over)
     }
 
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
@@ -915,7 +936,8 @@ extension Notification.Name {
     /// asks once, for the final pixel size). Pictures far from the window are dropped.
     private func loadVisible() {
         guard isShown, !resizing, !closed else { return }
-        if !photosWorkVisible, files.first.flatMap(PhotosLocation.asset(in:)) != nil { return }
+        if !photosWorkVisible, let first = files.first,
+           PhotosLocation.asset(in: first) != nil || WebImageLocation.owns(first) { return }
         let moving = isMoving, now = ContinuousClock.now
         for file in view.visibleItems where files.indices.contains(file) && loads[file] == nil && !isSettled(file) {
             if moving, let since = inViewSince[file], now - since < ViewerSession.dwellDelay { continue }
@@ -942,9 +964,14 @@ extension Notification.Name {
         let applies = appliesOrientation
         loads[file] = Task { [weak self] in
             let photo = PhotosLocation.asset(in: url) != nil
-            let image = if photo { try? await self?.photosLibrary.thumbnail(url, pixels: maxPixel) }
-                        else { await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies) }
-            let status = image == nil ? (photo ? .unavailable : await store.status(url)) : .ready
+            let web = WebImageLocation.owns(url)
+            let image: CGImage?
+            if photo { image = try? await self?.photosLibrary.thumbnail(url, pixels: maxPixel) }
+            else if web {
+                if let thumbnail = WebImageLocation.thumbnail(in: url) { image = try? await WebImageFiles.preview(thumbnail) }
+                else { image = nil }
+            } else { image = await store.cell(url, maxPixel: maxPixel, applyingOrientation: applies) }
+            let status = image == nil ? ((photo || web) ? .unavailable : await store.status(url)) : .ready
             guard let self, !Task.isCancelled else { return }
             self.loads[file] = nil
             // Another playlist meanwhile: this file is someone else's cell now.
@@ -955,7 +982,7 @@ extension Notification.Name {
                 self.aspects.cellPictureArrived(url)
             } else if status == .unavailable {
                 self.view.setUnavailable(forItem: file)
-                if !photo, await store.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.session.playlist?.stamps[url]) }
+                if !photo, !web, await store.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.session.playlist?.stamps[url]) }
             } else {
                 self.view.setImage(nil, forItem: file)
             }
@@ -997,7 +1024,10 @@ extension Notification.Name {
         guard sessionScrubbing else { return }
         sessionScrubbing = false
         DebugLog.log("strip scrub end on \((session.playlist?.index ?? 0) + 1)")
-        if !closed { session.endScrub() }
+        if !closed {
+            session.endScrub()
+            onSessionScrubEnd?()
+        }
     }
 
     /// The motion is over (momentum end, cancel, rest, release): the strip settles on the nearest file and expands

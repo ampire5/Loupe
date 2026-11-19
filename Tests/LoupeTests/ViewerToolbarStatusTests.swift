@@ -128,7 +128,20 @@ import Testing
                 }
             }
             let shown = descendants(view).compactMap { ($0 as? NSTextField).flatMap { $0.isHiddenOrHasHiddenAncestor ? nil : $0.stringValue } }
-            for part in exposure { #expect(shown.contains(part.text)) }
+            if width == 1800 {
+                for part in exposure { #expect(shown.contains(part.text)) }
+            } else {
+                #expect(exposure.contains { shown.contains($0.text) })
+                for label in descendants(view).compactMap({ $0 as? NSTextField })
+                    where !label.isHiddenOrHasHiddenAncestor && exposure.contains(where: { $0.text == label.stringValue }) {
+                    #expect(label.frame.width >= label.cell!.cellSize.width)
+                }
+                let info = descendants(view).compactMap { $0 as? NSButton }.first {
+                    !$0.isHiddenOrHasHiddenAncestor && $0.accessibilityLabel() == "Photo information"
+                }
+                #expect(info?.toolTip?.contains(value.title) == true)
+                #expect(info?.toolTip?.contains("ISO") == true)
+            }
         }
         for button in [view.metadataButton, view.zoomButton, view.modeButton, view.profileButton, view.groupButton] {
             #expect(button.alignment == .left)
@@ -230,6 +243,69 @@ import Testing
         #expect(actions == [.zoomPercent(275.5), .position(41)])
         position.update(index: 0, count: nil, zoom: nil)
         #expect(!position.applyValue("1"))
+    }
+
+    @Test func photoRangeCanArriveWhileTheTypedNumberIsPreserved() throws {
+        let position = ViewerStatusPopover(kind: .position)
+        position.update(index: 1, count: nil, zoom: nil)
+        let field = try #require(descendants(position.view).compactMap { $0 as? NSTextField }.first { $0.isEditable })
+        let go = try #require(descendants(position.view).compactMap { $0 as? NSButton }.first { $0.title == "Go" })
+        field.stringValue = "42"
+        #expect(!go.isEnabled)
+        position.updatePhotoCount(141)
+        #expect(go.isEnabled)
+        #expect(field.stringValue == "42")
+        var action: ViewerStatusAction?
+        position.onAction = { action = $0 }
+        #expect(position.applyValue(field.stringValue))
+        #expect(action == .position(41))
+    }
+
+    @Test func expandedStatusKeepsPhotoPositionVisibleWithAShortFilename() {
+        let view = ViewerToolbarStatusView()
+        view.update(sample())
+        view.frame = NSRect(x: 0, y: 0, width: 650, height: 46)
+        view.layout()
+        #expect(!view.positionButton.isHiddenOrHasHiddenAncestor)
+        #expect(view.positionButton.toolTip?.contains("1 / 141") == true)
+    }
+
+    @Test func nativeZoomPopoverSelectsTheNumberAndCommitsOnlyOnReturn() async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 480, height: 280),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.autorecalculatesKeyViewLoop = true
+        defer { window.close() }
+        let anchor = NSButton(frame: NSRect(x: 150, y: 180, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        window.makeKeyAndOrderFront(nil)
+        let page = ViewerStatusPopover(kind: .zoom)
+        page.update(index: 0, count: 141, zoom: sample().zoomDetails)
+        var actions: [ViewerStatusAction] = []
+        page.onAction = { actions.append($0) }
+        let popover = NSPopover()
+        popover.animates = false
+        popover.contentViewController = page
+        popover.delegate = page
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        defer { popover.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(popover.isShown)
+        let field = try #require(descendants(page.view).compactMap { $0 as? NSTextField }.first { $0.isEditable })
+        let editor = try #require(field.currentEditor())
+        #expect(editor.selectedRange == NSRange(location: 0, length: field.stringValue.utf16.count))
+        editor.insertText("150")
+        popover.close()
+        #expect(actions.isEmpty)
+
+        page.update(index: 0, count: 141, zoom: sample().zoomDetails)
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        try await Task.sleep(for: .milliseconds(100))
+        let reopenedEditor = try #require(field.currentEditor())
+        reopenedEditor.insertText("150")
+        reopenedEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        #expect(actions == [.zoomPercent(150)])
     }
 
     @Test func emptySessionClearsPriorZoomAndExif() {

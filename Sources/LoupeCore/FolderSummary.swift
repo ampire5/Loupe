@@ -50,7 +50,7 @@ public struct FolderSummary: Equatable, Sendable {
                 if !entry.isPackage { folders += 1 }
                 continue
             }
-            guard Playlist.imageExtensions.contains(entry.url.pathExtension.lowercased()) else { continue }
+            guard Playlist.mediaExtensions.contains(entry.url.pathExtension.lowercased()) else { continue }
             photos += 1
             if let stamp = entry.stamp { bytes += Int64(stamp.size) }
             if let date = entry.modified { dates.append(date) }

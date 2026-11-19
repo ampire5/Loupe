@@ -37,8 +37,8 @@ import LoupeCore
         self.source = source; self.store = store
         strip.frame = view.bounds; strip.autoresizingMask = [.width, .height]
         view.addSubview(strip); strip.card = card
-        strip.activeLabel = "Open folder"; strip.activeMarker = "●"
-        strip.selectionHint = "Selected · click or Return to open"
+        strip.activeLabel = "Current folder"; strip.activeMarker = "●"
+        strip.selectionHint = "Click or press Return to open"
         strip.onBrowse = { [weak self] row in
             guard let self else { return }; stopMotion(); scroll.settle(); browse(row); place(animated: false)
         }
@@ -124,7 +124,7 @@ import LoupeCore
     private func place(animated: Bool) {
         guard let index, rows.indices.contains(index) else { return }
         let row = rows[index]
-        view.setAccessibilityValue(row.title)
+        view.setAccessibilityValue(row.id == state.opened ? "Current folder: \(row.title)" : row.title)
         let info = metadata[row.id]
         card.update(text: info?.text ?? "", images: info?.images ?? [])
         if abs(strip.layout.cardHeight - min(Double(card.preferredHeight), max(0, Double(view.bounds.height) - FilmstripRowsView.currentCaptionHeight - 48))) > 0.5 {
@@ -251,9 +251,9 @@ import LoupeCore
                                 }
                             }
                             let visit = visit?(folder)
-                            if let visit { lines.append(visit.done ? "Viewed" : "\(visit.index + 1) / \(visit.count)") }
+                            if let visit { lines.append(visit.done ? "All photos viewed" : "Last viewed: \(visit.index + 1) of \(visit.count)") }
                             let names = rows.filter { $0.parent == .folder(folder) }.map(\.title)
-                            if !names.isEmpty { lines.append(names.joined(separator: " · ")) }
+                            if !names.isEmpty { lines.append("Subfolders: " + names.joined(separator: " · ")) }
                             metadata[.folder(folder)] = (lines.joined(separator: "\n"), Array(made.images.prefix(5)), made.summary?.photos, visit?.progress())
                             strip.setImage(cover, forItem: i)
                             strip.setRow(i, title: title(rows[i]), detail: made.summary.map { "\($0.photos) photos" } ?? "", progress: visit?.progress())
@@ -294,11 +294,11 @@ import LoupeCore
                 guard !Task.isCancelled, visible, rowsVersion == version else { return }
                 if metadata[row.id] != nil { continue }
                 let visit = visit?(folder), count = counts[folder]
-                var lines = [row.title]
+                var lines: [String] = []
                 if let count { lines.append("\(count) photos") }
-                if let visit { lines.append(visit.done ? "Viewed" : "\(visit.index + 1) / \(visit.count)") }
+                if let visit { lines.append(visit.done ? "All photos viewed" : "Last viewed: \(visit.index + 1) of \(visit.count)") }
                 let children = snapshot.filter { $0.parent == row.id }.map(\.title)
-                if !children.isEmpty { lines.append(children.joined(separator: " · ")) }
+                if !children.isEmpty { lines.append("Subfolders: " + children.joined(separator: " · ")) }
                 metadata[row.id] = (lines.joined(separator: "\n"), images, count, visit?.progress())
                 strip.setRow(i, title: title(row), detail: count.map { "\($0) photos" } ?? "", progress: visit?.progress())
                 strip.setImage(images.first, forItem: i)

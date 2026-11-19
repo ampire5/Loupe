@@ -62,6 +62,34 @@ import HomeScreenModel
         }
     }
 
+    @Test func videoPostersWithLegacyPhotoMetadataAreRefreshed() throws {
+        let directory = tempDir()
+        let db = try open(directory)
+        defer { try? fm.removeItem(at: directory) }
+        let names = ["legacy.mp4", "current.mp4", "photo.jpg"]
+        let ids = try db.sync(folder: folderX, files: listing(names))
+        let legacy = try #require(ids["legacy.mp4"])
+        let current = try #require(ids["current.mp4"])
+        let photo = try #require(ids["photo.jpg"])
+        let posterInfo = ImageInfo(pixelSize: PixelSize(width: 160, height: 90), typeIdentifier: "public.movie",
+                                   isProgressive: false, fileSize: stamp(of: names[0]).size, colorSpaceName: "sRGB")
+        var streamInfo = ImageInfo(pixelSize: PixelSize(width: 1280, height: 720), typeIdentifier: "public.movie",
+                                   isProgressive: false, fileSize: stamp(of: names[1]).size, colorSpaceName: nil)
+        streamInfo.facts = FileFacts(width: 1280, height: 720, duration: 1, codec: "H.264", fps: 25)
+        try db.put([(legacy, stamp(of: names[0]), jpeg(0), posterInfo),
+                    (current, stamp(of: names[1]), jpeg(1), streamInfo),
+                    (photo, stamp(of: names[2]), jpeg(2), info(2))])
+
+        #expect(try db.thumbnail(legacy) == nil)
+        #expect(try db.imageHeaders([legacy])[legacy]?.browserFacts == nil)
+        #expect(try db.thumbnail(photo)?.jpeg == jpeg(2))
+        let facts = try #require(db.facts([current], includingHeader: true)[current])
+        #expect(FileFactsText.stream(facts) == "HD · 25p · H.264")
+        #expect(facts.orientation == nil)
+        #expect(facts.progressive == nil)
+        #expect(try db.thumbnail(current)?.jpeg == jpeg(1))
+    }
+
     @Test func syncReturnsIDsAndKeepsThem() throws {
         let dir = tempDir()
         let names = ["a.jpg", "b.jpg", "c.jpg"]
@@ -498,6 +526,20 @@ import HomeScreenModel
 
     /// A folder's listing is kept by volume and path, replaced by the next one, and the least recently written go once
     /// there are more than the capacity.
+    @Test func recursiveListingSurvivesReopeningWithoutReplacingTheDirectListing() throws {
+        let directory = tempDir()
+        let db = try ThumbnailDatabase(directory: directory, thumbSize: 512, now: Clock().now)
+        let time = Date()
+        try db.putListing(Data([1]), at: folderX)
+        try db.putListing(Data([2]), at: folderX, recursive: true, scannedAt: time)
+        try db.putListing(Data([3]), at: folderX, recursive: true, scannedAt: time.addingTimeInterval(-1))
+
+        let reopened = try ThumbnailDatabase(directory: directory, thumbSize: 512)
+        #expect(try reopened.listing(at: folderX) == Data([1]))
+        #expect(try reopened.listing(at: folderX, recursive: true) == Data([2]))
+        #expect(try reopened.listing(at: folderY, recursive: true) == nil)
+    }
+
     @Test func listingsAreKeptAndBounded() throws {
         let db = try ThumbnailDatabase(directory: tempDir(), thumbSize: 512, now: Clock().now, listingCapacity: 2)
         try db.putListing(Data([1]), at: folderX)

@@ -260,6 +260,10 @@ import LoupeCore
     /// A right+button chord fired: until the right button is released, its drag must not zoom.
     var rightZoomSuppressed: Bool { gestures.rightZoomSuppressed }
 
+    var canCompleteRightClick: Bool {
+        gestures.rightHeld && !gestures.rightDragOwnsInput && !gestures.rightZoomSuppressed
+    }
+
     private func dispatch(_ fires: [ButtonGestures.Fire], at t: TimeInterval) {
         rearm()
         for fire in fires {

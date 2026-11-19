@@ -26,6 +26,8 @@ public enum WindowTitle {
         case .sessions: "Sessions"
         case .folders: "Folders"
         case .stash: "Stash"
+        case .everything: "Everything"
+        case .webImages: "Web Images"
         }
     }
 }
