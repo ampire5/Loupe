@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/EverythingMac.git",
       "state" : {
-        "revision" : "c9c671238e0cc3ffa43beb153a8092da4385594c",
-        "version" : "0.1.1"
+        "revision" : "75b9ba0030a9ad888f3346c045a0eaa3e2b7575e",
+        "version" : "0.1.2"
       }
     },
     {
