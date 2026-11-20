@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/SettingsKit.git",
       "state" : {
-        "revision" : "e0bb777ec16fbb1169d41fae9c357a11e7fbb27a",
-        "version" : "0.8.2"
+        "revision" : "77ef853a0e7186c247d7cbadfdac58df6ab6064b",
+        "version" : "0.9.0"
       }
     },
     {
