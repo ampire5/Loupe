@@ -14,7 +14,7 @@ jobs:
     env:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Homebrew tools
         run: brew install cmake ninja pkgconf
       - name: Decoders (prebuilt, or built from source)
@@ -58,7 +58,7 @@ jobs:
       TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
       DEPS_ARCH: x86_64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Rosetta and Xcode 26
         run: |
           /usr/bin/pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license

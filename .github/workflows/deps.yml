@@ -30,7 +30,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       DEPS_ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Already published?
         id: check
         run: |
