@@ -68,7 +68,7 @@ public struct SpreadPlan: Sendable {
     private let shift: Bool
 
     /// `sizes` are the visible sizes after orientation; nil (unknown) counts as portrait.
-    public init(sizes: [PixelSize?], options: SpreadOptions) {
+    public init(sizes: [PixelSize?], options: SpreadOptions, standalone: Set<Int> = []) {
         count = sizes.count
         shift = options.shift
         let wide = options.landscapeAlone ? sizes.map { Self.isLandscape($0, ratio: options.wideRatio) } : []
@@ -87,6 +87,7 @@ public struct SpreadPlan: Sendable {
         }
         while i < sizes.count {
             let pairs = i + 1 < sizes.count && !landscape(i) && !landscape(i + 1)
+                && !standalone.contains(i) && !standalone.contains(i + 1)
             starts.append(i)
             isPair.append(pairs)
             i += pairs ? 2 : 1

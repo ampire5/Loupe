@@ -20,12 +20,14 @@ private func action(_ code: UInt16, _ character: String? = nil, _ modifiers: Key
 }
 
 /// Actions with no key of their own by default: they are on the mouse (spec §4; the info panel also has ⌘I in the menu),
-/// and input.conf can add a key.
+/// and input.conf can add a key. Framing confirmations have menu-owned Option shortcuts.
 /// The tab and window actions have no key or button at all (⌘T, ⌘N, ⌘W, ⌘⇧] / ⌘⇧[ are the menu's): input.conf only.
 private let mouseOnlyByDefault: Set<KeyAction> = [.toggleInfoPanel, .newTab, .newWindow, .closeTab, .nextTab, .previousTab,
                                                        .openInNewTab, .openInNewWindow, .home,
                                                        .back, .reopenTab, .closeWindow,
-                                                       .screenShare, .manualZoom, .fillSubject]   // Explicit commands available to the toolbar and input.conf.
+                                                       .screenShare, .manualZoom, .fillSubject,
+                                                       .confirmDetail, .confirmOverview, .confirmDetailAndNext, .confirmOverviewAndNext,
+                                                       .undoFramingFeedback, .showFramingFeedback, .compareFraming, .toggleFramingIntent]   // Explicit commands available to the toolbar and input.conf.
 
 /// The browser's ⌘[, ⇧⌘T and ⇧⌘W as input.conf actions.
 @Test func browserTabActionNames() {

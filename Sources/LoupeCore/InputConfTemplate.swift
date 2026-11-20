@@ -170,6 +170,11 @@ public enum InputConfTemplate {
     # ── Mouse ─────────────────────────────────────────────────────────────────────────────────────────
     # MX_GESTURE toggle-smart-zoom                  # Manual / SmartZoom, retaining the selected profile
     # MBTN_BACK previous-target                     # previous detected group (File View: directory history)
+    #   MBTN_BACK confirm-detail                      # confirm a comfortable inspection view
+    #   MBTN_FORWARD confirm-overview                 # confirm overview composition
+    #   MBTN_MID show-framing-feedback              # corrections for the object under the pointer
+    # Other optional actions: confirm-detail-and-next, confirm-overview-and-next,
+    # undo-framing-feedback, compare-framing, toggle-framing-intent.
     # MBTN_FORWARD next-target                      # next detected group (File View: directory history)
     # MBTN_RIGHT+MBTN_BACK previous-detector-mode    # previous SmartZoom profile
     # MBTN_RIGHT+MBTN_FORWARD cycle-detector-mode    # next SmartZoom profile

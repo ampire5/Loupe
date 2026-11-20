@@ -24,11 +24,21 @@ import Foundation
     #expect(enabled.zoomStops == [.fitWidth, .percent(150)])
 }
 
-@Test func fullScreenTabsDefaultToShownAndCanAutoHide() {
-    #expect(Config().text(forKey: "fullscreen-tabs") == "shown")
-    let (config, warnings) = Config.parse("fullscreen-tabs=auto")
+@Test func zoomStopBreakawayRoundTripsAndRejectsOutOfRangeValues() {
+    #expect(Config().text(forKey: "zoom-stop-breakaway") == "0.04")
+    let (config, warnings) = Config.parse("zoom-stop-breakaway=0.005")
+    #expect(warnings.isEmpty && config.text(forKey: "zoom-stop-breakaway") == "0.005")
+    for value in ["-1", "0", "0.004", "0.51", "nan", "inf"] {
+        let (rejected, warnings) = Config.parse("zoom-stop-breakaway=" + value)
+        #expect(rejected == Config() && warnings.count == 1)
+    }
+}
+
+@Test func fullScreenTabsDefaultToAutoHideAndCanStayShown() {
+    #expect(Config().text(forKey: "fullscreen-tabs") == "auto")
+    let (config, warnings) = Config.parse("fullscreen-tabs=shown")
     #expect(warnings.isEmpty)
-    #expect(config.text(forKey: "fullscreen-tabs") == "auto")
+    #expect(config.text(forKey: "fullscreen-tabs") == "shown")
     #expect(!Config.parse("fullscreen-tabs=hidden").1.isEmpty)
 }
 
@@ -1176,7 +1186,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     // Unknown tokens are warned about by `parse`, not refused: the list always takes (spec §8.4).
     "zoom-stops": ("fit-height, 200%", nil), "zoom-stop-mode": ("fixed", "maybe"),
     "trackpad-navigation-haptics": ("no", "maybe"), "trackpad-haptic-pattern": ("alignment", "strong"),
-    "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
+    "zoom-stop-breakaway": ("0.125", "0"), "zoom-stop-haptics": ("no", "maybe"), "rmb-zoom-speed": ("2", "9"), "rmb-zoom-inertia": ("yes", "maybe"),
     "thumb-wheel-zoom": ("no", "maybe"), "thumb-zoom-speed": ("4", "9"), "thumb-zoom-stops": ("tick", "stop"),
     "thumb-zoom-invert": ("yes", "maybe"),
     "archive-folders": ("no", "maybe"),
@@ -1191,7 +1201,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "spread-wide-ratio": ("1.25", "2.1"),
     "pan-indicators": ("always", "sometimes"), "pan-indicators-hide": ("800", "5001"), "pan-indicators-on-switch": ("yes", "maybe"),
     "launch-reveal": ("immediate", "later"),
-    "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "appearance": ("dark", "sepia"),
+    "open-in": ("window", "new"), "new-window-fullscreen": ("no", "yes"), "playback-autoplay": ("yes", "maybe"), "appearance": ("dark", "sepia"),
     "home-tab": ("stash", "grid"), "home-start": ("folders", "home"), "home-sidebar": ("no", "maybe"), "home-path-bar": ("no", "maybe"), "home-sidebar-width": ("180", "1601"), "home-sidebar-compact": ("no", "maybe"), "home-sidebar-indent": ("even", "wide"), "home-sidebar-folders-first": ("no", "maybe"), "home-sidebar-reroot": ("3", "2"), "browser-card-size": ("60", "59"), "grid-style": ("aspect", "round"), "grid-names": ("photo", "above"), "folder-cover": ("stack", "mosaic"), "folder-cards": ("list", "huge"), "grid-style-memory": ("folder", "window"), "recent-count": ("12", "201"), "session-restore": ("last", "always"),
     "thumbs-ahead": ("visible", "nope"), "thumbs-depth": ("3", "4"), "thumbs-pill-delay": ("2.5", "-1"),
     "cache-idle-trim": ("45", "1441"), "cache-idle-keep": ("preview", "none"), "keep-share": ("30", "81"),
@@ -1228,7 +1238,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
     "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
-    "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("auto", "hidden"), "stats-modified": ("no", "perhaps"),
+    "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("shown", "hidden"), "stats-modified": ("no", "perhaps"),
     "stats-bar-autohide": ("yes", "perhaps"), "stats-bar-hide-delay": ("1500", "100"),
     "stats-icons": ("no", "perhaps"), "stats-monochrome": ("yes", "perhaps"), "icon-set": ("lucide", "tabler"),
     "app-icon": ("profile", "two words"),

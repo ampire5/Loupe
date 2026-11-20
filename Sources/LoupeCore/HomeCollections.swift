@@ -6,6 +6,7 @@ import HomeScreenModel
 /// says what it stands for (`target`); menu item ids are the actions the controller runs.
 public enum HomeCollections {
     public static let recent = "recent", sessions = "sessions", stash = "stash"
+    public static let everything = "everything", webImages = "web-images"
 
     /// What a card's id stands for.
     public enum Target: Equatable, Sendable {
@@ -19,6 +20,8 @@ public enum HomeCollections {
         case .recent: .source(recent)
         case .sessions: .source(sessions)
         case .stash: .source(stash)
+        case .everything: .source(everything)
+        case .webImages: .source(webImages)
         case .folders: nil
         }
     }
@@ -28,6 +31,8 @@ public enum HomeCollections {
         switch location {
         case .source(sessions): .sessions
         case .source(stash): .stash
+        case .source(everything): .everything
+        case .source(webImages): .webImages
         case .source: .recent
         case .places, .folder: .folders
         }

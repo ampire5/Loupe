@@ -242,10 +242,34 @@ extension ThumbnailStore {
     /// cannot give a sharp thumbnail, the whole file after all.
     static func generate(_ r: Recipe, _ t: inout Timing) async -> Outcome {
         do {
+            if PlaybackMedia.candidate(r.url) == .video {
+                t.source = "video poster"
+                let start = ContinuousClock.now
+                let stamp = try await r.reader.stamp(r.url, priority: ReadPriority(r.rank, isBackground: true))
+                t.read += ContinuousClock.now - start
+                let decodeStart = ContinuousClock.now
+                try await r.decodeLimit.acquireSlot(forCurrent: false, rank: r.rank)
+                defer { r.decodeLimit.releaseSlot(forCurrent: false) }
+                let (jpeg, info) = try await PlaybackMedia.videoThumbnail(r.url, maximumSide: r.maxSide, fileSize: stamp.size)
+                t.decode += ContinuousClock.now - decodeStart
+                await r.readEnded()
+                return .made(jpeg: jpeg, info: info, stamp: stamp)
+            }
             if let data = await r.cachedBytes(r.url, r.listedStamp) {
                 await r.readEnded()
                 let (jpeg, info) = try await decode(r, &t) { try Self.made(from: data, r) }
-                return .made(jpeg: jpeg, info: info, stamp: r.listedStamp)
+                let sourceInfo = PlaybackMedia.isFilesystemGIF(r.url) ? info.withFileSize(r.listedStamp.size) : info
+                return .made(jpeg: jpeg, info: sourceInfo, stamp: r.listedStamp)
+            }
+            if PlaybackMedia.isFilesystemGIF(r.url) {
+                let start = ContinuousClock.now
+                let bytes = try await PlaybackMedia.readPosterBytes(r.url, reader: r.reader,
+                    priority: ReadPriority(r.rank, isBackground: true))
+                t.read += ContinuousClock.now - start
+                t.source = "GIF poster"
+                await r.readEnded()
+                let (jpeg, info) = try await decode(r, &t) { try Self.made(from: bytes.data, r) }
+                return .made(jpeg: jpeg, info: info.withFileSize(bytes.stamp.size), stamp: bytes.stamp)
             }
             if let outcome = try await fromFirstRead(r, &t) { return outcome }
             await r.readAgain()
@@ -260,7 +284,7 @@ extension ThumbnailStore {
             return .made(jpeg: jpeg, info: info, stamp: bytes.stamp)
         } catch {
             return Task.isCancelled || error is CancellationError ? .cancelled
-                : .failed(broken: error as? DecodeError == .unreadable)
+                : .failed(broken: PlaybackMedia.candidate(r.url) != .video && error as? DecodeError == .unreadable)
         }
     }
 

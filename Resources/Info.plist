@@ -9,11 +9,16 @@
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.1</string>
-    <key>CFBundleVersion</key><string>6</string>
+    <key>CFBundleShortVersionString</key><string>0.5.0</string>
+    <key>CFBundleVersion</key><string>7</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleURLName</key><string>Loupe link</string>
+        <key>CFBundleURLSchemes</key><array><string>loupe</string></array>
+    </dict></array>
     <key>NSPhotoLibraryUsageDescription</key><string>Loupe displays your Photos albums and lets you browse their photos.</string>
     <!-- Stash on the local network over plain HTTP (Stash spec §2.1): its API calls go through URLSession. -->
     <key>NSAppTransportSecurity</key>
@@ -110,6 +115,12 @@
             <array>
                 <string>public.image</string>
             </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Video</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.movie</string></array>
         </dict>
         <!-- Zip archives open like a folder of photos (Stash spec §2.4); Open With only, never the default. -->
         <dict>

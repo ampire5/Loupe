@@ -1,7 +1,7 @@
 import Foundation
 
 /// `thumb-zoom-stops`: what the thumb-wheel zoom does at a `zoom-stops` stop. `tick`: it goes through, the mouse ticks
-/// (`haptic-zoom-stop`); `halt` (the default): slow turns land on a stop and faster turns pass with less resistance.
+/// (`haptic-zoom-stop`); `halt` (the default): slow turns latch until the wheel travels far enough and fast turns can pass through.
 public enum ThumbZoomStops: String, CaseIterable, Sendable {
     case tick, halt
 }
@@ -21,11 +21,12 @@ public struct ThumbZoom: Sendable {
     private var current: Double
     private var atLimit: Bool
 
-    public init(transform: ViewTransform, stops: [ZoomStop], mode: ThumbZoomStops, fixed: Bool = false) {
+    public init(transform: ViewTransform, stops: [ZoomStop], mode: ThumbZoomStops, fixed: Bool = false,
+                breakaway: Double = ZoomStopGesture.defaultBreakaway) {
         self.mode = fixed ? .halt : mode
         self.stops = ZoomStops.scales(of: stops, for: transform)
         limits = transform.scaleLimits
-        halting = ZoomStopGesture(startScale: transform.scale, stops: self.stops, limits: limits, fixed: fixed)
+        halting = ZoomStopGesture(startScale: transform.scale, stops: self.stops, limits: limits, fixed: fixed, breakaway: breakaway)
         proposed = transform.scale
         current = transform.scale
         atLimit = Self.onLimit(transform.scale, limits)

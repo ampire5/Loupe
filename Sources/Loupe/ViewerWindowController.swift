@@ -49,11 +49,17 @@ import UniformTypeIdentifiers
     }
     /// The Home tab a gallery being entered returns to (Recent when a Recent card opened it).
     private var galleryReturn = HomeTab.stash
+    private var webImageViewer: WebImageViewer?
+    private var webImageActionsView: WebImageActionsView?
     private var photosTask: Task<Void, Never>?
     private var photosObservation: (any PhotosChangeObservation)?
     private var photosAlbum: String?
     private var photosGeneration = 0
     private var photosIsVisible = true
+    private var playbackVisible = false
+    private var playbackActive = false
+    private var embeddedPlayback: EmbeddedPlayback?
+    private var playbackStripLayout = PlaybackTransportLayout(height: 0)
     private var photosNeedsRefresh = false
     private var photosWantedAsset: String?
     private var photosPendingOpen = false
@@ -93,6 +99,7 @@ import UniformTypeIdentifiers
     private let pillsAtTop: NSLayoutConstraint
     private let viewerAboveStrip: NSLayoutConstraint
     private let viewerAtBottom: NSLayoutConstraint
+    private let stripAtBottom: NSLayoutConstraint
     private let statsAtTop: NSLayoutConstraint
     private let viewerAtScreenTop: NSLayoutConstraint
     private let pillsAtScreenTop: NSLayoutConstraint
@@ -284,6 +291,7 @@ import UniformTypeIdentifiers
         pillsAtTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: top)
         viewerAboveStrip = viewerView.bottomAnchor.constraint(equalTo: strip.view.topAnchor)
         viewerAtBottom = viewerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        stripAtBottom = strip.view.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         statsAtTop = statsBar.topAnchor.constraint(equalTo: top)
         viewerAtScreenTop = viewerView.topAnchor.constraint(equalTo: container.topAnchor)
         pillsAtScreenTop = viewerView.panIndicatorsView.topAnchor.constraint(equalTo: container.topAnchor)
@@ -303,7 +311,7 @@ import UniformTypeIdentifiers
             statsBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             strip.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             strip.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            strip.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            stripAtBottom,
             warningsOverlay.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             overlayWidth, overlayFits, overlayShort,
             standInView.leadingAnchor.constraint(equalTo: viewerView.leadingAnchor),
@@ -336,6 +344,20 @@ import UniformTypeIdentifiers
         windowToolbarController.toolbar.isVisible = toolbarWasWanted
 
         session.onChange = { [weak self] in self?.sessionDidChange() }
+        session.onSourceStep = { [weak self] step, atBoundary in
+            guard let self, let viewer = self.webImageViewer else { return false }
+            return viewer.step(step, atBoundary: atBoundary, completed: self.webPageCompletion(for: viewer))
+        }
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: WebImagesPreferences.changed, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.webImagesPreferencesChanged() }
+        })
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: WebImagesPreferences.originalPrefetchChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateWebImageViewer() }
+        })
         session.cellPicture = { [weak self] in self?.strip.cellPicture(for: $0) }
         // A Stash list step: the tab now shows that gallery (`tabFacts`).
         session.onListFolder = { [weak self] id, folder in
@@ -442,6 +464,7 @@ import UniformTypeIdentifiers
             self?.infoPanel.place()
             self?.layoutFolderSlots()
         }
+        strip.onSessionScrubEnd = { [weak self] in self?.updatePlaybackStripLayout() }
         // A resize, full screen, the strip's height: the panel keeps to its corner of the new area.
         container.onLayout = { [weak self] in
             guard let self else { return }
@@ -449,6 +472,7 @@ import UniformTypeIdentifiers
             self.scheduleToolbarLayoutReconciliation()
         }
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
+        window.onPlaybackInput = { [weak self] event in self?.windowPlaybackInput(event) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
         strip.isScrollSpent = { [weak viewerView] in viewerView?.stripScrollIsSpent($0) ?? false }
@@ -468,10 +492,14 @@ import UniformTypeIdentifiers
         }
         observe(NSWindow.didExitFullScreenNotification) { $0.setFullScreen(false) }
         observe(NSWindow.didChangeScreenNotification) { $0.updateScreenSize() }
-        // The panel's diagnostics refresh only while the window can be seen.
-        observe(NSWindow.didMiniaturizeNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
-        observe(NSWindow.didDeminiaturizeNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
-        observe(NSWindow.didChangeOcclusionStateNotification) { $0.updateDiagnosticsTimer(); $0.layoutFolderSlots() }
+        let updateVisibility: @MainActor (ViewerWindowController) -> Void = {
+            $0.updateDiagnosticsTimer()
+            $0.layoutFolderSlots()
+            $0.loadingIndicator.refreshAnimation()
+        }
+        observe(NSWindow.didMiniaturizeNotification, updateVisibility)
+        observe(NSWindow.didDeminiaturizeNotification, updateVisibility)
+        observe(NSWindow.didChangeOcclusionStateNotification, updateVisibility)
         observe(NSWindow.didBecomeKeyNotification) {
             $0.session.isKeyWindow = true
             $0.syncFullScreen()   // a tab moved into or out of a full-screen window
@@ -481,6 +509,7 @@ import UniformTypeIdentifiers
         observe(NSWindow.didResignKeyNotification) {
             // A press whose release goes to another window must not fire later; a tab step's press goes on (`tabAction`).
             if !MouseButtons.shared.keepsPresses { MouseButtons.shared.cancelAll() }
+            $0.embeddedPlayback?.cancelRightClick()
             $0.session.isKeyWindow = false
             $0.strip.windowDidResignKey()
         }
@@ -570,6 +599,8 @@ import UniformTypeIdentifiers
 
     /// The window goes away: nothing it does from here on is the user's choice of full screen or not.
     func windowWillClose(_ notification: Notification) {
+        webImageViewer?.pause()
+        framingLearning?.close()
         stopPhotos()
         homeSources?.home.photos.stop()
         dropStash()
@@ -587,13 +618,20 @@ import UniformTypeIdentifiers
         applyInfoPanel()   // closed: its reads stop
         stopDiagnosticsTimer()
         folderSlots?.close()
+        embeddedPlayback?.reset()
         viewerView.teardown()
         strip.close()
         subjects.keepOnly([])
         session.close()
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        updatePlayback()
+        folderSlots?.refreshObjectFeedbackBinding()
+    }
+
     func windowDidEnterFullScreen(_ notification: Notification) {
+        updatePlayback()
         isEnteringFullScreen = false
         applyFullScreenToolbar()
         applyStatsLayout()
@@ -601,7 +639,10 @@ import UniformTypeIdentifiers
         viewerView.holdReveal(false)
         finishFullScreenEntry()
     }
-    func windowDidExitFullScreen(_ notification: Notification) { rememberFullScreen(false) }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        updatePlayback()
+        rememberFullScreen(false)
+    }
 
     /// The state the user last left the active window in, restored at the next launch (`restoreFullScreen`); the other
     /// windows' changes are not remembered (spec §2.4).
@@ -768,12 +809,19 @@ import UniformTypeIdentifiers
     /// A new tab or window with nothing to show: Home (Home spec §2.1).
     func startEmpty() { showHome() }
 
+    func startBrowsing(_ folder: URL) {
+        restoreBrowserAt = (folder, nil)
+        showHome(tab: .folders)
+    }
+
     /// File › Open…'s panel: one image or zip.
     static func makeOpenPanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.image, .zip]
+        panel.allowedContentTypes = [.image, .movie, .zip] + PlaybackMedia.videoExtensions.compactMap {
+            UTType(filenameExtension: $0)
+        }
         return panel
     }
 
@@ -791,11 +839,12 @@ import UniformTypeIdentifiers
     /// An open routed here (`WindowRegistry.open`): a file, or a folder to enter. A Stash gallery is opened by the click:
     /// `stashPick` is the ⌘-click (or the Recent card) that asked for this tab, entered here as it would be from Stash
     /// (spec §2.3). `returnTo`: the Home tab ⌘W goes back to (a Recent card opened it here); nil: as from Stash.
-    func open(_ target: OpenTarget, stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil) {
+    func open(_ target: OpenTarget, stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil,
+              recursive: RecursivePhotoListing? = nil) {
         switch target {
         case .photos(let album, let asset):
             openPhotos(album: album, asset: asset)
-        case .file(let url): open(url)
+        case .file(let url): open(url, recursive: recursive)
         case .folder(let url): openFolder(url)
         case .stashGallery:
             guard let stashPick else { break }
@@ -809,21 +858,23 @@ import UniformTypeIdentifiers
         }
     }
 
-    func open(_ url: URL) {
+    func open(_ url: URL, recursive: RecursivePhotoListing? = nil) {
         if let album = PhotosLocation.album(in: url), let asset = PhotosLocation.asset(in: url) {
             openPhotos(album: album, asset: asset)
             return
         }
         stopPhotos()
-        // A file from outside while Stash is shown: the viewer comes back, and ⌘W returns to Stash.
+        // Record the Home page that opened this file. A replacement from Finder has its own Back destination.
         if isShowingHome {
             returnsTo = shownTab
             hideHome()
+        } else if returnsTo == .everything || returnsTo == .webImages {
+            returnsTo = nil
         }
         stashPicks.cancel()
         restoredTab = nil
         session.entersFromOutside = true
-        session.open(url)
+        session.open(url, recursive: recursive)
     }
 
     /// A folder from outside (`open -a Loupe folder`, Open in New Tab on a folder card): entered as a zip is. One
@@ -990,7 +1041,7 @@ import UniformTypeIdentifiers
     private func showStartPage() {
         guard let homeView else { return }
         let start = Settings.shared.config.homeStart
-        let shown: HomeTab = start == .stash && StashLibrary.Source.current == nil ? .recent : start
+        let shown = availableHomeTab(start)
         homeView.browser.show(HomeCollections.location(of: shown) ?? .places, selecting: nil)
     }
 
@@ -1022,11 +1073,18 @@ import UniformTypeIdentifiers
         let returningFromViewer = !isShowingHome
         let config = Settings.shared.config
         let wanted = tab ?? config.homeTab
-        let shown: HomeTab = wanted == .stash && StashLibrary.Source.current == nil ? .recent : wanted
+        let shown = availableHomeTab(wanted)
+        if shown == .webImages, returningFromViewer || shownTab != .webImages {
+            DebugLog.measureTurn(hasShownHome ? "return to Web Images page" : "open Web Images page")
+        }
+        webImageActionsView?.isHidden = true
+        webImageViewer?.pause()
         let view = homeView ?? makeHome()
         if !isShowingHome { titleVisibilityBeforeHome = window.titleVisibility }
         attachHome(view)
         view.isHidden = false
+        if returningFromViewer { setViewerCoveredByHome(true) }
+        updatePlayback()
         // Photos' UXKit window also uses a unified, nontransparent titlebar:
         // AppKit owns its material backdrop. Transparency exposes a split fill.
         window.titlebarAppearsTransparent = false
@@ -1048,7 +1106,15 @@ import UniformTypeIdentifiers
            tab == nil || tab == .recent {
             browser.show(.source(PhotosLocation.collection(album)), selecting: current.absoluteString)
         } else if shown == .folders {
-            if let start = browseAt ?? (returningFromViewer ? session.playlist.map { BrowseTarget.location(for: $0.current) } : nil) {
+            let viewerLocation = returningFromViewer ? session.playlist.map { playlist in
+                let photo = playlist.current.standardizedFileURL
+                if browser.includesSubfolders, case .folder(let root) = browser.location,
+                   photo.isFileURL, photo.pathComponents.starts(with: root.standardizedFileURL.pathComponents) {
+                    return (location: browser.location, select: photo.path)
+                }
+                return BrowseTarget.location(for: playlist.current)
+            } : nil
+            if let start = browseAt ?? viewerLocation {
                 browser.lastOpenedID = start.select
                 browser.show(start.location, selecting: start.select)
             } else if let restore = restoreBrowserAt {
@@ -1061,13 +1127,14 @@ import UniformTypeIdentifiers
                 browser.show(browser.lastBrowsed, selecting: nil)
             }
         } else if let location = HomeCollections.location(of: shown) {
-            if browser.location == location, hasShownHome { browser.reload() } else { browser.show(location, selecting: nil) }
+            if browser.location != location { browser.show(location, selecting: nil) }
+            else if hasShownHome, shown != .everything, shown != .webImages { browser.reload() }
         }
         hasShownHome = true
         applyFullScreenToolbar()
         applyInfoPanel()
         updateBrowserInspectorActivity()
-        if shown != .stash { window.makeFirstResponder(browser) }
+        if shown != .stash, shown != .everything, shown != .webImages { window.makeFirstResponder(browser) }
         DebugLog.log("home shown: \(shown)")
         updateTitle()
         updateBackButton()
@@ -1077,6 +1144,8 @@ import UniformTypeIdentifiers
         folderSlots?.setActive(session.playlist?.current.isFileURL == true)
         guard let homeView, !homeView.isHidden else { return }
         homeView.isHidden = true
+        setViewerCoveredByHome(false)
+        updatePlayback()
         strip.setPhotosWorkVisible(photosIsVisible)
         session.setPhotosViewerVisible(photosIsVisible)
         homeView.isParked = true
@@ -1102,6 +1171,12 @@ import UniformTypeIdentifiers
         updateBackButton()
         window?.makeFirstResponder(viewerView)
         updateTitle()
+        updateWebImageViewer()
+    }
+
+    private func setViewerCoveredByHome(_ covered: Bool) {
+        loadingIndicator.isViewerShown = !covered
+        strip.setControlsCovered(covered)
     }
 
     private func applyToastPosition() {
@@ -1208,6 +1283,9 @@ import UniformTypeIdentifiers
         // Keep the browser inside its native safe area. Extending list/card
         // edges under the titlebar reflects their text into the toolbar backdrop.
         let view = HomeView(source: source)
+        source.webImagesTabVisible = browserWindowIsVisible
+        source.onWebImageOpen = { [weak self] result, search in self?.openWebImage(result, in: search) }
+        source.onEverythingOpen = { [weak self] url in self?.open(url) }
         view.browser.selectsOnHover = false
         let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
         view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
@@ -1271,6 +1349,10 @@ import UniformTypeIdentifiers
             down ? MouseButtons.shared.otherMouseDown(event) : MouseButtons.shared.otherMouseUp(event)
         }
         view.onSidebarToggle = { [weak self] in self?.toggleHomeSidebar(nil) }
+        view.onOpenSidebarFolderInNewTab = { [weak self] folder in
+            guard let self else { return }
+            self.registry?.browseInNewTab(folder, beside: self)
+        }
         view.onHome = { [weak self] in self?.showStartPage() }
         view.onSidebarWidthChange = { width in
             _ = Settings.shared.saveAsDefault(["home-sidebar-width": String(Int(width.rounded()))])
@@ -1281,9 +1363,10 @@ import UniformTypeIdentifiers
             let folder = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
             self.registry?.open(folder ? .folder(url) : .file(url), openIn: .replace, from: self)
         }
-        folders.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
+        folders.onOpen = { [weak self] target, how, recursive in self?.openFromBrowser(target, how, recursive: recursive) }
         source.photos.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
         folders.onPlacesChanged = { [weak view] in view?.reloadSidebar() }
+        folders.onSidebarAvailabilityChanged = { [weak view] in view?.reloadSidebar() }
         // The toolbar's pill: after `thumbs-pill-delay` of work, out a second after it is done. The popover (View ›
         // Thumbnails…) has the counts whether or not anything is being prepared (`ThumbsProgress.display`).
         folders.onProgress = { [weak browser] progress in
@@ -1306,11 +1389,12 @@ import UniformTypeIdentifiers
             guard let library = self?.attachedStash(), paths.indices.contains(i) else { return }
             library.page.navigate(to: paths[i])
         }
-        // A volume mounted or unmounted: the sidebar's places and the Places page again.
+        // A volume mounted or unmounted: check sidebar Favorites and Places again.
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
-            homeObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak view] _ in
+            homeObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak view, weak folders] _ in
                 MainActor.assumeIsolated {
+                    folders?.mountedVolumesChanged()
                     view?.reloadSidebar()
                     view?.browser.reloadPlaces()
                 }
@@ -1373,12 +1457,17 @@ import UniformTypeIdentifiers
 
     // MARK: Folders (file browser spec §4)
 
-    /// Return or a double click on a photo (`browse`): Home on its folder with it selected; with no photo, Folders
-    /// where it was.
+    /// Return or double click (`browse`) returns a web image to its search or selects a local photo in Folders.
     @objc func browseFolder(_ sender: Any?) {
+        if !isShowingHome, let current = session.playlist?.current, WebImageLocation.owns(current) {
+            goBack(sender)
+            return
+        }
         DebugLog.measureTurn("browse")
-        let target = session.playlist.map { BrowseTarget.location(for: $0.current) }
-        browseAt = target
+        // An open from the recursive grid returns there with the new photo selected.
+        if isShowingHome || session.playlist?.recursiveRoot == nil {
+            browseAt = session.playlist.map { BrowseTarget.location(for: $0.current) }
+        }
         showHome(tab: .folders)
         browseAt = nil
     }
@@ -1455,11 +1544,123 @@ import UniformTypeIdentifiers
     }
 
     /// A photo, folder or zip opened from the browser: here (unless another tab shows it), or in a new tab or window.
-    private func openFromBrowser(_ target: OpenTarget, _ how: HomeClick) {
+    private func openFromBrowser(_ target: OpenTarget, _ how: HomeClick, recursive: RecursivePhotoListing? = nil) {
         DebugLog.measureTurn("open from browser")
         let force: OpenForce? = how == .openNewTab ? .tab : how == .openNewWindow ? .window : nil
         let returnTo: HomeTab = if case .photos = target { .recent } else { .folders }
-        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: returnTo)
+        registry?.open(target, force: force, openIn: force == nil ? .replace : nil, from: self, returnTo: returnTo,
+                       recursive: recursive)
+    }
+
+    private func availableHomeTab(_ tab: HomeTab) -> HomeTab {
+        if tab == .stash, StashLibrary.Source.current == nil { return .recent }
+        if tab == .webImages, WebImagesPreferences.server == nil { return .recent }
+        return tab
+    }
+
+    private func webImagesPreferencesChanged() {
+        homeSources?.home.webImagesPreferencesChanged()
+        homeView?.reloadSidebar()
+        if isShowingHome, shownTab == .webImages, WebImagesPreferences.server == nil {
+            showHome(tab: .recent)
+        }
+    }
+
+    func openWebImage(_ result: WebImageResult, in search: WebImageSearch) {
+        DebugLog.measureTurn("open Web Images result")
+        webImageViewer?.pause()
+        webImageViewer = nil
+        // Hide the page before the viewer starts any new page request.
+        stopPhotos()
+        stashPicks.cancel()
+        restoredTab = nil
+        hideHome()
+        returnsTo = .webImages
+        let viewer = WebImageViewer(search: search)
+        webImageViewer = viewer
+        session.openSource(viewer.files, current: viewer.identity(for: result))
+    }
+
+    private func updateWebImageViewer() {
+        guard let viewer = webImageViewer else { return }
+        guard let list = session.playlist, WebImageLocation.owns(list.current) else {
+            viewer.pause()
+            webImageViewer = nil
+            return
+        }
+        guard !isShowingHome, browserWindowIsVisible else { return }
+        if viewer.search.results.count > list.files.count {
+            viewer.appendFiles()
+            session.openSource(viewer.files, current: list.current, refreshing: true)
+            return
+        }
+        viewer.show(list.current) { [weak self] in self?.updateLoadingIndicator() }
+        viewer.updateOriginalPrefetch(enabled: WebImagesPreferences.preloadOriginals,
+                                      currentReady: session.entry?.url == list.current && session.image != nil,
+                                      depth: WebImagesPreferences.originalPrefetchDepth,
+                                      concurrency: WebImagesPreferences.originalPrefetchConcurrency)
+        viewer.prefetch(near: list.index, completed: webPageCompletion(for: viewer))
+    }
+
+    private func webPageCompletion(for viewer: WebImageViewer) -> (URL?, String?) -> Void {
+        { [weak self, weak viewer] advance, error in
+            guard let self, let viewer, webImageViewer === viewer, !isShowingHome,
+                  let list = session.playlist, WebImageLocation.owns(list.current) else { return }
+            let willMove = advance == list.current && list.index + 1 < viewer.files.count
+            if viewer.files.count != list.files.count {
+                session.openSource(viewer.files, current: list.current, refreshing: true)
+            }
+            if willMove { session.go(by: 1) }
+            else if advance != nil { toast.show(error ?? "No more images") }
+            updateStatus()
+        }
+    }
+
+    private var currentWebImageCanSave: Bool {
+        guard !isShowingHome, let list = session.playlist, let entry = session.entry,
+              WebImageLocation.owns(list.current), entry.url == list.current else { return false }
+        return entry.failure == nil && entry.pyramid != nil
+    }
+
+    @objc func saveWebImage(_ sender: Any?) {
+        guard currentWebImageCanSave, let identity = session.playlist?.current,
+              let original = WebImageLocation.original(in: identity) else { return }
+        guard let folder = WebImagesPreferences.saveFolder else {
+            showWebImageSaveError("Choose a save folder in Web Images settings.")
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let bytes = await session.webImageBytes(identity)
+                let saved = try await WebImageFiles.shared.save(original, bytes: bytes, to: folder)
+                if !isClosed { toast.show("Saved \(saved.lastPathComponent)") }
+            } catch {
+                if !isClosed { showWebImageSaveError(error.localizedDescription) }
+            }
+        }
+    }
+
+    private func showWebImageSaveError(_ details: String) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t Save Original"
+        alert.informativeText = details
+        alert.addButton(withTitle: "Open Web Images Settings")
+        alert.addButton(withTitle: "Close")
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn { (NSApp.delegate as? AppDelegate)?.openSettings(page: "web-images") }
+        }
+    }
+
+    @objc func openWebImageSource(_ sender: Any?) {
+        guard !isShowingHome, let url = webImageViewer?.result?.sourceURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc func retryWebImageResults(_ sender: Any?) {
+        guard !isShowingHome, let viewer = webImageViewer else { return }
+        viewer.retry(completed: webPageCompletion(for: viewer))
     }
 
     private func stopPhotos() {
@@ -1864,7 +2065,7 @@ import UniformTypeIdentifiers
     private func updateBackButton() {
         let destination: String?
         if !canGoBack { destination = nil }
-        else if !isShowingHome, session.playlist?.isSourceOrdered == true { destination = "Photos" }
+        else if session.playlist.flatMap({ PhotosLocation.asset(in: $0.current) }) != nil { destination = "Photos" }
         else { destination = backTarget.map(Self.tabTitle) }
         viewerToolbar.setBackDestination(destination)
     }
@@ -1874,7 +2075,8 @@ import UniformTypeIdentifiers
     private func updateStatus() {
         updateBackButton()
         folderSlots?.refreshSmartZoom()
-        let status = session.imageStatus
+        var status = session.imageStatus
+        status.mayLoadMore = webImageViewer?.search.hasMore == true
         askPhotoFacts(status.photo)
         statsBar.update(status)
         let shownMode = (session.zoomTarget ?? session.transform).mode
@@ -1891,7 +2093,8 @@ import UniformTypeIdentifiers
     /// The photo's EXIF for the status chip and the stats bar: its thumbnail's facts (memory or the catalog), else its
     /// header (ImageIO reads only that; the viewer is reading the file anyway). Once per photo.
     private func askPhotoFacts(_ url: URL?) {
-        guard let url, url.isFileURL, session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
+        guard let url, url.isFileURL, PlaybackMedia.candidate(url) != .video,
+              session.photoFacts[url] == nil, !factsAsked.contains(url) else { return }
         if factsAsked.count > 300 { factsAsked = []; session.photoFacts = [:] }
         factsAsked.insert(url)
         let store = thumbnails
@@ -2147,10 +2350,12 @@ import UniformTypeIdentifiers
     private var subjectsAsked: String?
 
     private func sessionDidChange() {
+        updateWebImageViewer()
         folderSlots?.synchronize(folder: session.playlist?.current.isFileURL == true ? session.playlist?.current.deletingLastPathComponent() : nil)
         folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true)
         updateFolder()
         viewerView.sessionDidChange()
+        updatePlayback()
         askSubjects()
         updateStatus()
         strip.sessionDidChange()
@@ -2215,6 +2420,7 @@ import UniformTypeIdentifiers
         }
         let modelChanged = effectiveConfig.detectorSetup.analysisID != config.detectorSetup.analysisID
         effectiveConfig = config
+        updatePlayback()
         viewerView.zoomStopMode = config.zoomStopMode
         if modelChanged {
             viewerView.holdSmartZoomView(); subjectsAsked = nil; subjects.keepOnly([])
@@ -2251,11 +2457,45 @@ import UniformTypeIdentifiers
     /// The stand-in over the viewer (`switch-preview`), and the spinner: always over the blank placeholder (nothing
     /// else says a photo is coming), and as `strip-loading-indicator` says while only a thumbnail stands for it.
     private func updateLoadingIndicator() {
-        let standIn = session.standIn
+        let web = webImageViewer
+        let current = session.playlist?.current
+        let needsWebPreview = web?.current != nil && web?.current == current
+            && (session.entry?.url != current || session.image == nil)
+        let standIn: SwitchStandIn? = if needsWebPreview, let current, let picture = web?.preview {
+            SwitchStandIn(url: current, picture: picture)
+        } else if current.flatMap(PlaybackMedia.candidate) == .video {
+            nil
+        } else { session.standIn }
         standInView.show(standIn, background: appliedBackground.cgColor)
-        let thumbnailOnly = session.showsThumbnailOnly || standIn?.picture != nil
-        loadingIndicator.isSpinning = (standIn != nil && standIn?.picture == nil)
+        updateWebImageActions()
+        let thumbnailOnly = session.error == nil && (session.showsThumbnailOnly || standIn?.picture != nil)
+        loadingIndicator.isLoading = (standIn != nil && standIn?.picture == nil)
             || (thumbnailOnly && Settings.shared.config.stripLoadingIndicator)
+    }
+
+    private func updateWebImageActions() {
+        guard !isShowingHome, let current = session.playlist?.current, WebImageLocation.owns(current),
+              let viewer = webImageViewer, let container = window?.contentView else {
+            webImageActionsView?.isHidden = true
+            return
+        }
+        let actions: WebImageActionsView
+        if let webImageActionsView { actions = webImageActionsView }
+        else {
+            actions = WebImageActionsView(target: self, openSource: #selector(openWebImageSource(_:)),
+                                          save: #selector(saveWebImage(_:)))
+            webImageActionsView = actions
+            container.addSubview(actions, positioned: .above, relativeTo: standInView)
+            NSLayoutConstraint.activate([
+                actions.centerXAnchor.constraint(equalTo: viewerView.centerXAnchor),
+                actions.leadingAnchor.constraint(greaterThanOrEqualTo: viewerView.leadingAnchor, constant: 12),
+                actions.trailingAnchor.constraint(lessThanOrEqualTo: viewerView.trailingAnchor, constant: -12),
+                actions.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
+                actions.bottomAnchor.constraint(equalTo: strip.view.topAnchor, constant: -52),
+            ])
+        }
+        actions.show(error: session.entry?.url == current ? session.error : nil,
+                     canOpenSource: viewer.result?.sourceURL != nil, canSave: currentWebImageCanSave)
     }
 
     /// The pixel size of the screen the window is on (the main screen before it is placed): previews are sized
@@ -2339,6 +2579,15 @@ import UniformTypeIdentifiers
     private func windowKey(_ event: NSEvent) -> Bool {
         if folderSlots?.key(event) == true { return true }
         guard let window, window.isKeyWindow, !cheatSheet.isOpen else { return false }
+        if !isShowingHome, let playback = embeddedPlayback, playback.isViewLoaded, !playback.view.isHidden,
+           event.keyCode == 123 || event.keyCode == 124 {
+            let modifiers = event.modifierFlags.intersection([.shift, .option, .command, .control])
+            if modifiers == [.option, .shift], playback.hasRemotePicture {
+                playback.step(event.keyCode == 123 ? -1 : 1)
+                return true
+            }
+            if viewerView.handleKey(event) { return true }
+        }
         let responder = window.firstResponder
         guard responder !== viewerView, !(responder is NSTextInputClient) else { return false }
         // A name being typed in the grid ("Sofa") takes its F: full screen only as a first letter.
@@ -2358,6 +2607,46 @@ import UniformTypeIdentifiers
         return true
     }
 
+    private func windowPlaybackInput(_ event: NSEvent) -> Bool {
+        guard let playback = embeddedPlayback, !cheatSheet.isOpen else { return false }
+        switch event.type {
+        case .flagsChanged:
+            guard !(window?.firstResponder is NSTextInputClient) else {
+                playback.cancelInputChord()
+                return false
+            }
+            playback.playbackModifiers(event)
+        case .keyDown:
+            if event.keyCode != 53, let responder = window?.firstResponder as? NSView,
+               responder !== viewerView, playback.isViewLoaded,
+               responder is NSControl || (responder !== playback.view && !responder.isDescendant(of: playback.view)) {
+                playback.cancelInputChord()
+                return false
+            }
+            return playback.playbackKey(event)
+        case .scrollWheel:
+            return playback.playbackScroll(event, viewer: viewerView)
+        case .rightMouseDragged:
+            playback.moveRightClick(event)
+            return playback.isRightWheelScrubbing
+        case .rightMouseUp:
+            playback.endRightClick(event, viewer: viewerView)
+        case .leftMouseDown where playback.isPictureDoubleClick(event):
+            playback.cancelRightClick()
+            playback.cancelInputChord()
+            browseFolder(nil)
+            return true
+        case .rightMouseDown:
+            playback.beginRightClick(event, viewer: viewerView)
+        case .leftMouseDown, .otherMouseDown:
+            playback.cancelRightClick()
+            playback.cancelInputChord()
+        default:
+            break
+        }
+        return false
+    }
+
     /// `?`: opens or closes the cheat sheet.
     func toggleCheatSheet() { setCheatSheet(open: !cheatSheet.isOpen) }
 
@@ -2365,6 +2654,7 @@ import UniformTypeIdentifiers
     /// shows the arrow; the viewer's remembered hand would otherwise not be set again).
     private func setCheatSheet(open: Bool) {
         guard open != cheatSheet.isOpen else { return }
+        embeddedPlayback?.cancelRightClick()
         if open { cheatSheet.show() } else { cheatSheet.hide() }
         strip.staysShown = open
         viewerView.overlayDidChange()
@@ -2442,6 +2732,10 @@ import UniformTypeIdentifiers
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(undoFramingFeedback(_:)): return framingLearning?.canUndoFeedback == true
+        case #selector(saveDetailCrop(_:)), #selector(saveOverviewCrop(_:)),
+             #selector(saveDetailCropAndNext(_:)), #selector(saveOverviewCropAndNext(_:)), #selector(saveFramingReference(_:)):
+            return !isShowingHome && session.image != nil && session.currentPages?.second == nil
         case #selector(toggleLeftSlot(_:)), #selector(toggleRightSlot(_:)), #selector(toggleBottomSlot(_:)):
             return !isShowingHome && session.playlist?.current.isFileURL == true
         case #selector(chooseCardStyle(_:)):
@@ -2462,6 +2756,12 @@ import UniformTypeIdentifiers
         case #selector(goBack(_:)):
             item.title = backTarget.map { "Back to \(Self.tabTitle($0))" } ?? "Back"
             return canGoBack
+        case #selector(saveWebImage(_:)):
+            return currentWebImageCanSave
+        case #selector(openWebImageSource(_:)):
+            return !isShowingHome && webImageViewer?.result?.sourceURL != nil
+        case #selector(retryWebImageResults(_:)):
+            return !isShowingHome && webImageViewer?.search.error != nil
         case #selector(toggleThumbnailStrip(_:)):
             item.state = strip.isPinned ? .on : .off
             return strip.canTogglePin
@@ -2511,8 +2811,9 @@ import UniformTypeIdentifiers
         guard let container = window?.contentView else { return }
         folderSlots?.setActive(!isShowingHome && session.playlist?.current.isFileURL == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true)
         let top = statsBar.isHidden ? viewerView.frame.maxY : min(viewerView.frame.maxY, statsBar.frame.minY)
+        let stripHeight = strip.isShown || strip.reservesSpace ? strip.bandHeight : 0
         folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - top),
-                            bottom: strip.isShown || strip.reservesSpace ? strip.bandHeight : 0)
+                            bottom: stripHeight + playbackStripLayout.height)
     }
     @objc func toggleLeftSlot(_ sender: Any?) { folderSlots?.toggle(.left) }
     @objc func toggleRightSlot(_ sender: Any?) { folderSlots?.toggle(.right) }
@@ -2520,6 +2821,9 @@ import UniformTypeIdentifiers
 
     private func applyStripLayout() {
         folderSlots?.applySettings(Settings.shared.config)
+        let clearance = playbackStripLayout.stripClearance(reservesSpace: strip.reservesSpace, bottomInset: slotInsets.bottom)
+        stripAtBottom.constant = -clearance
+        strip.setPlaybackClearance(clearance)
         viewerAtBottom.constant = slotInsets.bottom
         viewerAboveStrip.constant = max(0, slotInsets.bottom - strip.bandHeight)
 
@@ -2701,7 +3005,7 @@ import UniformTypeIdentifiers
     /// button while it is shown for a panel in the top left corner.
     private func infoPanelArea(in container: NSView) -> CGRect {
         let viewer = viewerView.frame
-        var top = viewer.maxY, bottom = viewer.minY
+        var top = viewer.maxY, bottom = viewer.minY + playbackStripLayout.height
         if !statsBar.isHidden {
             top = min(top, statsBar.frame.minY)
         }
@@ -2795,7 +3099,70 @@ import UniformTypeIdentifiers
     /// WindowRegistry includes native tab selection, whose occlusion notifications alone are unreliable.
     func browserVisibilityChanged(_ visible: Bool) {
         browserWindowIsVisible = visible
+        homeSources?.home.webImagesTabVisible = visible
+        if !visible { webImageViewer?.pause() }
+        else { updateWebImageViewer() }
         updateBrowserInspectorActivity()
+    }
+
+    func playbackVisibilityChanged(_ visible: Bool, active: Bool) {
+        playbackVisible = visible
+        playbackActive = active
+        updatePlayback()
+    }
+
+    private func updatePlayback() {
+        // Reading the native tab group can synchronously lay out the window.
+        guard let current = session.playlist?.current, PlaybackMedia.candidate(current) != nil else {
+            if let embeddedPlayback {
+                embeddedPlayback.update(url: nil, mayPlay: false, active: false, autoplay: false)
+                updatePlaybackStripLayout()
+            }
+            return
+        }
+        guard let window else { return }
+        let selectedTab = (window.tabGroup?.windows.count ?? 0) < 2 || window.tabGroup?.selectedWindow === window
+        let showing = (window.isVisible || window.isKeyWindow) && selectedTab && !window.isMiniaturized
+            && !isShowingHome && !isClosed && registry?.isQuitting != true && !session.isScrubbing
+        let url = showing ? current : nil
+        if url != nil, embeddedPlayback == nil,
+           let container = viewerView.superview {
+            DebugLog.log("playback: attaching viewer surface")
+            let content = NSViewController()
+            content.view = container
+            let playback = EmbeddedPlayback()
+            playback.onTransportVisibilityChange = { [weak self] in self?.updatePlaybackStripLayout() }
+            playback.onTrackpadNavigation = { [weak viewerView] in viewerView?.trackPlaybackNavigation($0, at: $1) }
+            playback.onCancelTrackpadNavigation = { [weak viewerView] in viewerView?.cancelPlaybackNavigation() }
+            content.addChild(playback)
+            let surface = playback.view
+            surface.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(surface, positioned: .above, relativeTo: standInView)
+            NSLayoutConstraint.activate([
+                surface.leadingAnchor.constraint(equalTo: viewerView.leadingAnchor),
+                surface.trailingAnchor.constraint(equalTo: viewerView.trailingAnchor),
+                surface.topAnchor.constraint(equalTo: viewerView.topAnchor),
+                surface.bottomAnchor.constraint(equalTo: viewerView.bottomAnchor),
+            ])
+            embeddedPlayback = playback
+            // ExtensionKit needs a controller hierarchy. Install it around the already laid-out viewer.
+            window.contentViewController = content
+        }
+        let mayPlay = showing && (playbackVisible || window.isKeyWindow)
+        embeddedPlayback?.update(url: url, mayPlay: mayPlay, active: playbackActive, autoplay: effectiveConfig.playbackAutoplay)
+        updatePlaybackStripLayout()
+    }
+
+    private func updatePlaybackStripLayout() {
+        let layout = embeddedPlayback?.transportLayout ?? .init(height: 0)
+        // The timeline can disappear while the strip previews another file. Keep the cells under
+        // the pointer until the drag settles, then restore the normal layout for the new file.
+        guard layout.height != playbackStripLayout.height,
+              layout.height != 0 || !session.isScrubbing else { return }
+        playbackStripLayout = layout
+        applyStripLayout()
+        infoPanel.place()
+        layoutFolderSlots()
     }
 
     private func updateBrowserInspectorActivity() {
@@ -3005,6 +3372,19 @@ import UniformTypeIdentifiers
     /// does not change.
     @discardableResult
     private func zoomKey(_ action: KeyAction) -> Bool {
+        switch action {
+        case .confirmDetail: saveDetailCrop(nil); return true
+        case .confirmOverview: saveOverviewCrop(nil); return true
+        case .confirmDetailAndNext: saveDetailCropAndNext(nil); return true
+        case .confirmOverviewAndNext: saveOverviewCropAndNext(nil); return true
+        case .undoFramingFeedback: undoFramingFeedback(nil); return true
+        case .compareFraming: showFramingLearning(nil); return true
+        case .toggleFramingIntent:
+            guard let framingLearning else { return false }
+            let next: FramingIntent = framingLearning.intent == .detail ? .overview : .detail
+            framingLearning.selectIntent(next); toast.show("Framing · " + next.title); return true
+        default: break
+        }
         if action == .toggleSmartZoom || action == .toggleZoomSet {
             var state = session.smartZoom; state.togglePower()
             setSmartZoomMode(state.mode)
@@ -3152,7 +3532,7 @@ import UniformTypeIdentifiers
         }
     }
 
-    private func makeSmartZoomPanel() -> SmartZoomPanel {
+    func makeSmartZoomPanel() -> SmartZoomPanel {
         let panel = SmartZoomPanel()
         panel.source = { [weak self] in
             guard let self else { return .init(mode: .off, profile: "Vision", profiles: [], groups: [], selected: nil,
@@ -3179,11 +3559,14 @@ import UniformTypeIdentifiers
                 if !missing.isEmpty { note += "\nFirst priority missing: " + missing.map(\.title).joined(separator: ", ") }
             }
             let kinds = Array(Set(rules.chain.flatMap(\.parts))).sorted { $0.rawValue < $1.rawValue }
+            let learned = framingLearning?.policy() != nil
+            if learned { note = "Learned \(framingLearning?.intent.title ?? "") framing · individual photos"
+                + (session.smartZoom.mode == .off ? "\nManual view · learned profile retained" : "") }
             return .init(mode: session.smartZoom.mode, profile: rules.detector?.name ?? "Vision",
                 profiles: ["Vision"] + effectiveConfig.detectorSetup.modes.map(\.name), groups: groups, selected: selected,
                 kinds: kinds, options: rules.composition, size: rules.subjectSize, note: note,
                 showsBoxes: viewerView.subjectOverlayView.isOn, modelPath: effectiveConfig.detectorSetup.model,
-                models: detectorModels, modelLoading: detectorModelLoading || detectorCatalogLoading, modelNote: detectorModelNote, canEditProfile: rules.detector != nil)
+                models: detectorModels, modelLoading: detectorModelLoading || detectorCatalogLoading, modelNote: detectorModelNote, canEditProfile: rules.detector != nil, learned: learned)
         }
         panel.modelsRequested = { [weak self] in self?.refreshDetectorModels() }
         panel.chooseModel = { [weak self] in self?.chooseDetectorModel($0) }
@@ -3210,6 +3593,10 @@ import UniformTypeIdentifiers
         panel.toggleBoxes = { [weak self] in self?.toggleSubjects(nil); self?.folderSlots?.refreshSmartZoom() }
         panel.saveFolder = { [weak self] in self?.saveZoomFolder(smart: true) }
         panel.saveProfile = { [weak self] in self?.saveSmartZoomProfile() }
+        panel.saveReference = { [weak self] intent, advance in self?.framingLearning?.save(intent: intent, advance: advance) }
+        panel.learn = { [weak self] in self?.showFramingLearning(nil) }
+        panel.chooseIntent = { [weak self] intent in self?.framingLearning?.selectIntent(intent) }
+        panel.feedbackSettings = { [weak self] in self?.framingLibrary }
         return panel
     }
 
@@ -3240,6 +3627,68 @@ import UniformTypeIdentifiers
     }
 
     private var profileEditor: DetectorProfileEditor?
+    private var framingLearning: ViewerFramingLearning?
+    private lazy var referenceSubjects: SubjectFinder = {
+        let store = thumbnails
+        return SubjectFinder(stored: { url in await store.subjects([url])[url] },
+                             keep: { url, boxes in await store.keepSubjects([url: boxes]) })
+    }()
+    var framingLibrary: FramingLearningLibrary? {
+        didSet {
+            guard let library = framingLibrary else { return }
+            func current(_ controller: ViewerWindowController) -> FramingProfile {
+                let r = ZoomRules(config: controller.effectiveConfig)
+                return .init(name: r.detector?.name ?? "vision", chain: r.chain, size: r.subjectSize, composition: r.composition)
+            }
+            let fallback = current(self)
+            framingLearning = ViewerFramingLearning(library: library,
+                profile: { [weak self] in self.map(current) ?? fallback }, source: { [weak self] in self?.session.entry?.url },
+                capture: { [weak self] in
+                    guard let self, let url = session.entry?.url, url == session.playlist?.current,
+                          url.isFileURL, ArchivePath.split(url) == nil,
+                          session.currentPages?.second == nil, session.appliesOrientation, let image = session.image,
+                          session.entry?.pyramidIsSeeded == false, let stamp = session.entry?.sourceStamp else { throw FramingLearningError.capture }
+                    let target = viewerView.settleForFramingReference()
+                    let origin = FramingCaptureOrigin.forCapture(session.framingCaptureOrigin, source: url,
+                        profile: current(self), shown: target)
+                    let setup = effectiveConfig.detectorSetup, orientation = session.drawOrientation
+                    return FramingCaptureRequest(origin: origin, target: target,
+                        evidence: FramingEvidence(setup), expectedRevision: .init(bytes: Int64(stamp.size), modified: stamp.modified), boxes: { [referenceSubjects] in
+                            await withCheckedContinuation { continuation in
+                                referenceSubjects.requestFresh(url, image: image, orientation: orientation, applied: true,
+                                    setup: setup) { continuation.resume(returning: $0) }
+                            }
+                        }, resumeAutomaticMode: session.smartZoom.mode != .off)
+                }, apply: { [weak self] profile in
+                    guard let self else { return }
+                    var options = effectiveConfig.smartZoomOptions; options[profile.name] = profile.values
+                    session.browse.forgetSizes(); session.browse.forgetLeft(); session.browse.followed = nil
+                    setTabZoom("smart-zoom-options", Config.smartZoomOptionsText(options))
+                }, reframe: { [weak self] in
+                    guard let self, session.smartZoom.mode != .off, session.manualZoomPhoto != session.entry?.url else { return }
+                    viewerView.frameSubjectNow()
+                }, next: { [weak self] in _ = self?.viewerView.debugPerform(.next) },
+                message: { [weak self] in self?.toast.show($0) }, stamp: { [weak self] in self?.session.entry?.sourceStamp },
+                evidence: { [weak self] in FramingEvidence(self?.effectiveConfig.detectorSetup ?? DetectorSetup()) })
+            framingLearning?.bindObjectFeedback(to: viewerView)
+            folderSlots?.refreshObjectFeedbackBinding()
+            framingLearning?.resumeForNext = { [weak self] behavior in self?.setSmartZoomMode(behavior == .auto ? .frame : .pan) }
+            session.learnedFraming = { [weak self] input, boxes, _, behavior in
+                guard let self else { return nil }
+                return framingLearning?.predict(input: input, boxes: boxes,
+                    evidence: FramingEvidence(effectiveConfig.detectorSetup), behavior: behavior)
+            }
+        }
+    }
+    @objc func undoFramingFeedback(_ sender: Any?) { framingLearning?.undoFeedback() }
+    @objc func saveDetailCrop(_ sender: Any?) { framingLearning?.save(intent: .detail, advance: false) }
+    @objc func saveOverviewCrop(_ sender: Any?) { framingLearning?.save(intent: .overview, advance: false) }
+    @objc func saveDetailCropAndNext(_ sender: Any?) { framingLearning?.save(intent: .detail, advance: true) }
+    @objc func saveOverviewCropAndNext(_ sender: Any?) { framingLearning?.save(intent: .overview, advance: true) }
+    @objc func saveFramingReference(_ sender: Any?) {
+        if let framingLearning { framingLearning.save(intent: framingLearning.intent, advance: false) }
+    }
+    @objc func showFramingLearning(_ sender: Any?) { framingLearning?.show() }
     private func openProfileEditor(creating: Bool) {
         if let editor = profileEditor { editor.window?.makeKeyAndOrderFront(nil); return }
         let rules = ZoomRules(config: effectiveConfig)
@@ -3256,6 +3705,11 @@ import UniformTypeIdentifiers
         var categories = [SubjectKind]()
         for kind in (applyingToTab ? SubjectKind.vision : setup.kinds + SubjectKind.vision) where !categories.contains(kind) { categories.append(kind) }
         let editor = DetectorProfileEditor(draft: draft, categories: categories, creating: creating, applyingToTab: applyingToTab)
+        editor.learn = { [weak self] in
+            guard let self else { return }
+            if let sheet = profileEditor?.window { self.window?.endSheet(sheet); profileEditor?.close() }
+            showFramingLearning(nil)
+        }
         profileEditor = editor
         folderSlots?.setSmartZoomEditing(true)
         editor.didClose = { [weak self] in self?.profileEditor = nil; self?.folderSlots?.setSmartZoomEditing(false) }
@@ -3399,8 +3853,15 @@ import UniformTypeIdentifiers
 /// `performKeyEquivalent` is no place for that: AppKit offers it only keys with ⌘ or ⌃.
 private final class ViewerWindow: NSWindow {
     var onKeyDown: ((NSEvent) -> Bool)?
+    var onPlaybackInput: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onPlaybackInput?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func sendEvent(_ event: NSEvent) {
+        if onPlaybackInput?(event) == true { return }
         if event.type == .keyDown, onKeyDown?(event) == true { return }
         super.sendEvent(event)
     }

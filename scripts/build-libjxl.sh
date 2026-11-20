@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# Loupe's libjxl (github.com/ampire5/libjxl, branch `loupe`) is built with the other decoders, static, for
+# libjxl with Loupe's DC preview patch is built with the other decoders, static, for
 # $DEPS_ARCH: scripts/build-deps.sh, through scripts/deps.sh (prebuilt when published).
 exec "$(dirname "$0")/deps.sh" fetch

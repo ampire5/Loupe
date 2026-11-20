@@ -26,6 +26,9 @@ import UniformTypeIdentifiers
     /// `Loupe.db` (positions and folder settings). Opened only by the primary instance: a secondary launch
     /// neither reads nor writes it.
     private var stateDatabase: StateDatabase?
+    private let framingLibrary = FramingLearningLibrary(store: FramingReferenceStore(
+        directory: (StateDatabase.defaultDirectory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".loupe"))
+            .appendingPathComponent("Learning", isDirectory: true)))
     /// The photo last viewed in each folder, kept across launches; flushed on quit. In memory only until the
     /// primary instance has opened the database.
     private var positions = FolderPositions(database: nil)
@@ -73,6 +76,12 @@ import UniformTypeIdentifiers
         sessions = SessionStore(database: stateDatabase)
         sessions?.beginRun()   // the run before becomes Last Session; this run saves beside it
         registry.sessions = sessions
+        registry.framingLibrary = framingLibrary
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await framingLibrary.reload() }
+            catch { DebugLog.log("Framing references: \(error.localizedDescription)") }
+        }
         let folderSettings = FolderSettings(database: stateDatabase)
         self.folderSettings = folderSettings
         Settings.shared.folderSettings = folderSettings
@@ -87,7 +96,8 @@ import UniformTypeIdentifiers
         // One reader for photos and thumbnails: the generator's lowest priority then really yields to the viewer
         // (spec §3.6). Four threads: the viewer's two, and two only background reads may use. The thumbnails decode
         // in a pool of their own, at utility QoS.
-        let reader = PhotosReader(fallback: FileReader(threads: 4)), pool = DecodePool()
+        let reader = WebImageReader(fallback: PhotosReader(fallback: FileReader(threads: 4)))
+        let pool = DecodePool()
         // pyramid-filter: read by the loader at each upload, set again on every reload (Settings).
         let pyramidFilter = PyramidFilterSetting(config.pyramidFilter)
         Settings.shared.pyramidFilter = pyramidFilter
@@ -104,7 +114,7 @@ import UniformTypeIdentifiers
         self.thumbnails = thumbnails
         registry.pathStores.append(thumbnails)   // a folder renamed in the browser keeps its card's summary
         Settings.shared.thumbnails = thumbnails
-        thumbnailsReady = Self.connect(cache, to: thumbnails)
+        thumbnailsReady = Self.connect(cache, to: thumbnails, framingGate: framingLibrary.gate)
         registry.makeController = { [unowned self] in self.makeController() }
         // Active as it is added: its first photo is planned at once.
         let controller = makeController()
@@ -202,7 +212,7 @@ import UniformTypeIdentifiers
     /// status changes to every strip. The task returned finishes once the first activity reached the store: the
     /// store starts out `.idle`, so the sessions hold their first request until then. Nonisolated: the forwarding
     /// never waits for the main thread.
-    nonisolated private static func connect(_ cache: ImageCache<MetalPyramidLoader>, to store: ThumbnailStore) -> Task<Void, Never> {
+    nonisolated private static func connect(_ cache: ImageCache<MetalPyramidLoader>, to store: ThumbnailStore, framingGate: FramingWorkGate) -> Task<Void, Never> {
         let (activities, sink) = AsyncStream.makeStream(of: CacheActivity.self)
         return Task {
             await store.setOnThumbnail { url in
@@ -221,6 +231,7 @@ import UniformTypeIdentifiers
                     await cache.setOnActivity { sink.yield($0) }   // yields the current activity at once
                     var waiting: CheckedContinuation<Void, Never>? = first
                     for await activity in activities {
+                        await framingGate.setBusy(activity == .current)
                         await store.setViewerActivity(activity)
                         waiting?.resume()
                         waiting = nil
@@ -246,9 +257,9 @@ import UniformTypeIdentifiers
         return nil
     }
 
-    /// Finder "Open With", `open -a Loupe file…` and drops on the Dock icon: every file, the first of each folder
-    /// (spec §2.2), each to its tab (`WindowRegistry.open`).
+    /// Finder, the Dock and loupe://open links share the same tab routing.
     func application(_ application: NSApplication, open urls: [URL]) {
+        let urls = urls.compactMap { OpenLink.fileURL(for: $0) }
         guard !urls.isEmpty else { return }
         if isSecondary { Self.postHandOver(paths: urls.map(\.path)); return }
         guard !registry.controllers.isEmpty else {
@@ -283,9 +294,19 @@ import UniformTypeIdentifiers
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isSecondary else { return .terminateNow }
+        Task {
+            await WebImageFiles.clearTemporaryFiles()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
         registry.isQuitting = true   // each window closing would make the next one active and start its reads
+        for controller in registry.controllers { controller.playbackVisibilityChanged(false, active: false) }
         if let handOverObserver { DistributedNotificationCenter.default().removeObserver(handOverObserver) }
         if !isSecondary {
             // Every tab's photo keeps its zoom and position; the active window's full screen is the one restored.
@@ -374,6 +395,7 @@ import UniformTypeIdentifiers
             guard let self, !self.isTerminating else { return }
             DebugLog.log("last viewer closed: settings window closes too")
             SettingsPanel.close()
+            PlaybackExtensionSettings.close()
         }
     }
 
@@ -452,7 +474,7 @@ import UniformTypeIdentifiers
         openSettings(page: nil)
     }
 
-    private func openSettings(page: String?) {
+    func openSettings(page: String?) {
         let settings = Settings.shared
         if settingsStore == nil {
             settingsStore = ConfigSettingsStore(
@@ -481,7 +503,7 @@ import UniformTypeIdentifiers
                                            catalogDirectory: Self.thumbnailDirectory,
                                            clearThumbnails: { [weak self] in
                                                await self?.confirmAndClearThumbnails() ?? false
-                                           })
+                                           }, showPlaybackExtensions: { PlaybackExtensionSettings.show() })
         store.folderContextDidChange()
         SettingsPanel.show(store: store, context: context, page: page)
     }
@@ -629,7 +651,8 @@ import UniformTypeIdentifiers
         if let controller = NSApp.keyWindow?.windowController as? ViewerWindowController, controller.isShowingHome {
             controller.homeThumbWheel(delta: delta, stepsPerRevolution: perTurn)
         }
-        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn, began: phase == .began, at: time)
+        MouseButtons.shared.target()?.thumbWheelZoom(delta: delta, stepsPerRevolution: perTurn,
+                                                     began: phase == .began, ended: phase == .ended, at: time)
     }
 
 
@@ -681,6 +704,9 @@ import UniformTypeIdentifiers
                      keyEquivalent: "p").keyEquivalentModifierMask = [.option, .command]
         // Retitled Back to Recent / Back to Stash (ViewerWindowController validates it); in Stash's page ⌘[ is the page's.
         file.addItem(withTitle: "Back", action: #selector(ViewerWindowController.goBack(_:)), keyEquivalent: "[")
+        file.addItem(withTitle: "Save Web Image Original", action: #selector(ViewerWindowController.saveWebImage(_:)), keyEquivalent: "")
+        file.addItem(withTitle: "Open Web Image Source Page", action: #selector(ViewerWindowController.openWebImageSource(_:)), keyEquivalent: "")
+        file.addItem(withTitle: "Retry Web Image Results", action: #selector(ViewerWindowController.retryWebImageResults(_:)), keyEquivalent: "")
         file.addItem(withTitle: "Clear Recent", action: #selector(clearRecent(_:)), keyEquivalent: "")
         // Home's own keys (⌘= / ⌘− / ⌘0, ⌘ + wheel, pinch, the MX side wheel); listed here to be found in Help.
         file.addItem(withTitle: "Larger Cards", action: #selector(ViewerWindowController.largerCards(_:)), keyEquivalent: "")
@@ -734,7 +760,7 @@ import UniformTypeIdentifiers
         // How Home's browser draws a folder's folders and archives (folder cards spec): ⌥⌘1–⌥⌘3 (`CardStyleKeys`; ⌘
         // digits are the tabs'), on Home on a folder only, checked at its style (ViewerWindowController validates
         // them; `CardStyleMenuReset` unchecks them where no viewer answers). Elsewhere `MainMenu` lets the keys go on.
-        for (index, title) in ["as Posters", "as Cards", "as List"].enumerated() {
+        for (index, title) in ["Folder Posters", "Folder Cards", "Folder List"].enumerated() {
             let item = view.addItem(withTitle: title, action: #selector(ViewerWindowController.chooseCardStyle(_:)),
                                     keyEquivalent: String(index + 1))
             item.keyEquivalentModifierMask = [.option, .command]
@@ -825,7 +851,7 @@ import UniformTypeIdentifiers
     }
 }
 
-/// The menu bar. It matches only keys with ⌘ or ⌃: every item of its own (Hide, Quit, Open…, Show in Finder, Close,
+/// The menu bar admits ⌘/⌃ shortcuts and explicit ⌥1/⌥2 crop commands. Other items (Hide, Quit, Open…, Show in Finder, Close,
 /// Enter Full Screen, Show Info) carries one, and the plain keys the View, Zoom, Scaling and Colour items show (`T`, `S`,
 /// `0`, …) are the viewer's, which it claims before the menu is asked (`ViewerView.performKeyEquivalent`). Declining
 /// them here keeps them typing in any other key window: the modal Open panel's search field and Go To Folder sheet would
@@ -841,8 +867,12 @@ final class MainMenu: NSMenu {
     var canChooseCardStyle: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard !event.modifierFlags.isDisjoint(with: [.command, .control]) else { return false }
         let flags = event.modifierFlags
+        // Only the explicit Option-digit crop commands enter the menus without Command/Control.
+        // Their delegate still requires a key photo viewer and leaves text input alone.
+        let cropKey = event.type == .keyDown && [UInt16(18), 19].contains(event.keyCode)
+            && flags.intersection([.command, .control, .option]) == [.option]
+        guard !flags.isDisjoint(with: [.command, .control]) || cropKey else { return false }
         if event.type == .keyDown,
            CardStyleKeys.match(keyCode: event.keyCode, command: flags.contains(.command), shift: flags.contains(.shift),
                                option: flags.contains(.option), control: flags.contains(.control)) != nil,

@@ -52,7 +52,8 @@ public struct SpreadState: Sendable {
             planFiles = files
             plan = files.isEmpty ? nil
                 : SpreadPlan(sizes: SpreadSizes.sizes(files: files, aspects: aspects(files), headers: headers),
-                             options: self.rules.options)
+                             options: self.rules.options,
+                             standalone: Set(files.indices.filter { PlaybackMedia.candidate(files[$0]) == .video }))
         }
         navigation = SpreadNavigation(plan: plan, showsTwo: showsTwo)
         let companion = index.flatMap { navigation.companion(of: $0) }

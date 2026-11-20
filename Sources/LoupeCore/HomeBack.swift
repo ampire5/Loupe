@@ -29,7 +29,7 @@ public enum HomeBack {
     public static func target(returnsTo: HomeTab?, showingHome: Bool, hasPhoto: Bool, stashAvailable: Bool) -> HomeTab? {
         guard !showingHome, hasPhoto else { return nil }
         if returnsTo == .stash, stashAvailable { return .stash }
-        if returnsTo == .folders { return .folders }
+        if let returnsTo, [.folders, .everything, .webImages].contains(returnsTo) { return returnsTo }
         return .recent
     }
 }

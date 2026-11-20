@@ -56,15 +56,15 @@ public struct SubjectBoxes: Codable, Equatable, Sendable {
 
     /// The boxes of `kind`: a custom class's at the detector's score or more; a target of several classes, the ones
     /// `SubjectFraming.pick` frames (empty when they are not all found or too far apart).
-    public func boxes(_ kind: SubjectKind) -> [CGRect] {
-        if kind.isCombination { return SubjectFraming.pick(self, kind) ?? [] }
+    public func boxes(_ kind: SubjectKind, framing: DetectorFraming? = nil) -> [CGRect] {
+        if kind.isCombination { return SubjectFraming.pick(self, kind, framing: framing) ?? [] }
         switch kind {
         case .face: return faces
         case .person: return people
         case .object: return objects
         case .saliency: return saliency
         default:
-            let score = SubjectFraming.detector.score
+            let score = (framing ?? SubjectFraming.detector).score
             return detections.filter { $0.kind == kind && $0.score >= score }.map(\.rect)
         }
     }

@@ -13,11 +13,14 @@ extension SettingsPanel {
                 .choice("zoom-stop-mode", "Zoom stop mode", [
                     (word: "fixed", title: "Fixed"), (word: "adaptive", title: "Adaptive"), (word: "off", title: "Off"),
                 ], symbol: "dot.scope",
-                        description: "Fixed stops the gesture at each mark. Adaptive lets you push through. "
+                        description: "Fixed holds at each mark in the approach direction. Adaptive lets you push through. "
                             + "U cycles modes for this tab. Shift+U saves the current mode as default."),
                 .text("zoom-stops", "Zoom stops", placeholder: "fit-width,fit-height,100%", symbol: "scope",
-                      description: "Slow pinch and right-button zoom settle on these stops. Faster gestures pass with less resistance. "
+                      description: "Slow pinch and right-button zoom hold at these stops in Adaptive mode. A fast sweep can pass through. "
                         + "Use fit-width, fit-height and percentages, separated by commas, or none. Default fit-width,fit-height,100%."),
+                .number("zoom-stop-breakaway", "Zoom stop breakaway", step: 0.005, symbol: "arrow.left.and.right.circle",
+                        description: "Travel needed to leave an Adaptive stop, in scale doublings. "
+                            + "Higher values hold the stop longer as you move. 0.005–0.5, default 0.04."),
                 .toggle("zoom-stop-haptics", "Haptic click at a stop", symbol: "hand.tap",
                         description: "A light trackpad click when the zoom reaches a stop. Default on."),
             ]),

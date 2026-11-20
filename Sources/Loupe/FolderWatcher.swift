@@ -91,8 +91,8 @@ import LoupeCore
         schedulePoll()
     }
 
-    /// The session is closing: no more callbacks.
-    func stop() {
+    /// The viewer switched to a supplied list. Keep lifecycle observers for the next regular folder.
+    func unwatch() {
         folder = nil
         opener.cancel()
         source?.cancel()
@@ -100,6 +100,11 @@ import LoupeCore
         debounceTask?.cancel()
         debounceTask = nil
         cancelPoll()
+    }
+
+    /// The session is closing: no more callbacks.
+    func stop() {
+        unwatch()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
     }

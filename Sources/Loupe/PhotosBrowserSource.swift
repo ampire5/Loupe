@@ -47,13 +47,15 @@ import LoupeCore
     func info(_ source: String) -> HomeSourceInfo {
         let id = PhotosLocation.collectionID(source)
         if id == PhotosLocation.library {
-            return HomeSourceInfo(title: "Library", sortKeys: [.name, .date], noun: "photo", emptyHint: "No photos in your library")
+            return HomeSourceInfo(title: "Library", sortKeys: [.name, .date], noun: "photo",
+                                  emptyHint: "Add photos in the Photos app to see them here.")
         }
         let folder = id == nil || id.flatMap { collections[$0]?.isFolder } == true
         return HomeSourceInfo(title: id.flatMap { collections[$0]?.title } ?? "Photos",
                               sortKeys: folder ? [.name] : [.name, .date],
                               noun: folder ? "collection" : "photo",
-                              emptyHint: folder ? "No albums in Photos" : "No photos in this album")
+                              emptyHint: folder ? "There are no albums here in Photos."
+                                  : "Add photos to this album in the Photos app.")
     }
 
     func list(_ source: String) -> AsyncThrowingStream<BrowserListing, Error> {

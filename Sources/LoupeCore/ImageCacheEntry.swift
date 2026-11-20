@@ -33,9 +33,11 @@ public struct CacheEntryView<Pyramid>: Sendable where Pyramid: Sendable {
     /// `pyramid` is the one seeded from the thumbnail (resident level or not): laid out oriented, so it is drawn
     /// with `ImageInfo.drawOrientation(seeded: true)`. Decoded levels go into another pyramid, which replaces it.
     public let pyramidIsSeeded: Bool
+    /// Revision of the bytes backing decoded pixels; consumers must not stamp old pixels with a later stat.
+    public let sourceStamp: FileStamp?
 
     public init(url: URL, info: ImageInfo?, pyramid: Pyramid?, failure: String?, decoderName: String?,
-                timings: LoadTimings, state: CacheGoal?, isSeededOnly: Bool = false, pyramidIsSeeded: Bool = false) {
+                timings: LoadTimings, state: CacheGoal?, isSeededOnly: Bool = false, pyramidIsSeeded: Bool = false, sourceStamp: FileStamp? = nil) {
         self.url = url
         self.info = info
         self.pyramid = pyramid
@@ -45,6 +47,7 @@ public struct CacheEntryView<Pyramid>: Sendable where Pyramid: Sendable {
         self.state = state
         self.isSeededOnly = isSeededOnly
         self.pyramidIsSeeded = pyramidIsSeeded
+        self.sourceStamp = sourceStamp
     }
 }
 

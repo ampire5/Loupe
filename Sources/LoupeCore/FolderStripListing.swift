@@ -71,7 +71,7 @@ public actor FolderStripListing: FolderStripSource {
             catch is CancellationError { throw CancellationError() }
             catch FolderStripError.busy { throw FolderStripError.busy }
             catch { if next == folder.standardizedFileURL { throw error }; continue }
-            let images = values.filter { !$0.isDirectory && Playlist.imageExtensions.contains($0.url.pathExtension.lowercased()) }
+            let images = values.filter { !$0.isDirectory && Playlist.mediaExtensions.contains($0.url.pathExtension.lowercased()) }
             if !images.isEmpty {
                 let ordered = (await sort(next)).order(images.map {
                     BrowserEntry(url: $0.url, name: $0.url.lastPathComponent, kind: .file,

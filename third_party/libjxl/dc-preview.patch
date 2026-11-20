@@ -1,0 +1,783 @@
+diff --git a/lib/include/jxl/decode.h b/lib/include/jxl/decode.h
+index 3c27bf25..4d0f3fc1 100644
+--- a/lib/include/jxl/decode.h
++++ b/lib/include/jxl/decode.h
+@@ -1451,6 +1451,45 @@ JXL_EXPORT size_t JxlDecoderGetIntendedDownsamplingRatio(JxlDecoder* dec);
+  */
+ JXL_EXPORT JxlDecoderStatus JxlDecoderFlushImage(JxlDecoder* dec);
+
++/** Version of the Loupe additions (JxlDecoderGetDCImage,
++ * JxlDecoderGetDCByteCount); only present in Loupe's libjxl build.
++ */
++JXL_EXPORT uint32_t JxlDecoderLoupeVersion(void);
++
++/** Writes the current frame's DC image, the 1:8 picture that is complete once
++ * ::JXL_DEC_FRAME_PROGRESSION fires with ::kDC detail, into @p buffer:
++ * ceil(xsize / 8) x ceil(ysize / 8) pixels (swapped when the orientation is
++ * undone and turns the image), one per 8x8 block, without upsampling. Colours
++ * go through the same conversion as the full image would. The decoder's state
++ * is not changed: decoding can go on to ::JXL_DEC_FULL_IMAGE.
++ *
++ * Only VarDCT frames qualify: a single still frame with no upsampling, no
++ * blending, patches, splines or extra channels. @p format must be 4 channels
++ * of ::JXL_TYPE_UINT8; rows are @p format align apart, as for
++ * @ref JxlDecoderSetImageOutBuffer.
++ *
++ * @return ::JXL_DEC_SUCCESS, or ::JXL_DEC_ERROR when the DC is not decoded
++ *     yet, the frame does not qualify, the format is not supported or the
++ *     buffer is too small.
++ */
++JXL_EXPORT JxlDecoderStatus JxlDecoderGetDCImage(JxlDecoder* dec,
++                                                 const JxlPixelFormat* format,
++                                                 void* buffer, size_t size);
++
++/** How many leading bytes of the file @p data starts are enough for the first
++ * frame's DC image (@ref JxlDecoderGetDCImage): the end of its last DC section
++ * by the frame's table of contents. Needs only the headers and the TOC, so a
++ * prefix of the file is enough to ask. Uses a decoder of its own.
++ *
++ * @return ::JXL_DEC_SUCCESS with @p count set; ::JXL_DEC_NEED_MORE_INPUT while
++ *     the TOC is not in @p data yet; ::JXL_DEC_ERROR when the frame cannot give
++ *     a DC image (see @ref JxlDecoderGetDCImage), its codestream is split
++ *     over several boxes, or the data is not JPEG XL.
++ */
++JXL_EXPORT JxlDecoderStatus JxlDecoderGetDCByteCount(const uint8_t* data,
++                                                     size_t size,
++                                                     uint64_t* count);
++
+ /**
+  * Sets the bit depth of the output buffer or callback.
+  *
+diff --git a/lib/jxl/dec_cache.cc b/lib/jxl/dec_cache.cc
+index bf505244..8b1382f3 100644
+--- a/lib/jxl/dec_cache.cc
++++ b/lib/jxl/dec_cache.cc
+@@ -366,7 +366,7 @@ Status PassesDecoderState::PreparePipeline(const FrameHeader& frame_header,
+     }
+   }
+   JXL_ASSIGN_OR_RETURN(render_pipeline,
+-                       std::move(builder).Finalize(shared->frame_dim));
++                       std::move(builder).Finalize(pipeline_dim ? *pipeline_dim : shared->frame_dim));
+   return render_pipeline->IsInitialized();
+ }
+
+diff --git a/lib/jxl/dec_cache.h b/lib/jxl/dec_cache.h
+index f728f883..d5036596 100644
+--- a/lib/jxl/dec_cache.h
++++ b/lib/jxl/dec_cache.h
+@@ -135,6 +135,8 @@ struct PassesDecoderState {
+
+   // Rendering pipeline.
+   std::unique_ptr<RenderPipeline> render_pipeline;
++  // The pipeline's frame size when not the frame's own (the 1:8 DC image).
++  const FrameDimensions* pipeline_dim = nullptr;
+
+   // Storage for the current frame if it can be referenced by future frames.
+   ImageBundle frame_storage_for_referencing;
+diff --git a/lib/jxl/dec_frame.cc b/lib/jxl/dec_frame.cc
+index 71aea845..21d61c43 100644
+--- a/lib/jxl/dec_frame.cc
++++ b/lib/jxl/dec_frame.cc
+@@ -13,6 +13,7 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstdlib>
++#include <cstring>
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -732,6 +733,103 @@ Status FrameDecoder::ProcessSections(const SectionInfo* sections, size_t num,
+   return true;
+ }
+
++bool FrameDecoder::CanRenderDC(const FrameHeader& header,
++                               const ImageMetadata& metadata) {
++  return header.encoding == FrameEncoding::kVarDCT && header.upsampling == 1 &&
++         metadata.num_extra_channels == 0 && !metadata.have_animation &&
++         header.frame_type == FrameType::kRegularFrame && header.is_last &&
++         header.dc_level == 0 &&
++         header.blending_info.mode == BlendMode::kReplace &&
++         !header.custom_size_or_origin &&
++         (header.flags & (FrameHeader::kPatches | FrameHeader::kSplines)) == 0;
++}
++
++Status FrameDecoder::RenderDC(const JxlPixelFormat& format, void* buffer,
++                              size_t size, bool undo_orientation) {
++  if (!finalized_dc_ || !CanRenderDC(frame_header_, *decoded_->metadata())) {
++    return JXL_FAILURE("No DC image to render");
++  }
++  if (format.data_type != JXL_TYPE_UINT8 || format.num_channels != 4) {
++    return JXL_FAILURE("DC image: only RGBA8");
++  }
++  JxlMemoryManager* memory_manager = dec_state_->memory_manager();
++  // The DC image as a frame of its own: one pixel per block, no padding.
++  // Subsampled chroma DC goes through the frame's chroma upsampling stages, as
++  // the full image does.
++  FrameDimensions dim;
++  dim.Set(DivCeil(frame_dim_.xsize, kBlockDim),
++          DivCeil(frame_dim_.ysize, kBlockDim), frame_header_.group_size_shift,
++          frame_header_.chroma_subsampling.MaxHShift(),
++          frame_header_.chroma_subsampling.MaxVShift(),
++          /*modular_mode=*/true, /*upsampling=*/1);
++
++  PassesDecoderState state(memory_manager);
++  state.shared = dec_state_->shared;
++  state.output_encoding_info = dec_state_->output_encoding_info;
++  state.pipeline_dim = &dim;
++  state.width = dim.xsize;
++  state.height = dim.ysize;
++  state.fast_xyb_srgb8_conversion = false;
++  state.unpremul_alpha = false;
++  state.undo_orientation = Orientation::kIdentity;
++  size_t out_xsize = dim.xsize;
++  size_t out_ysize = dim.ysize;
++  if (undo_orientation) {
++    state.undo_orientation = decoded_->metadata()->GetOrientation();
++    if (static_cast<int>(state.undo_orientation) > 4) {
++      std::swap(out_xsize, out_ysize);
++    }
++  }
++  state.main_output.format = format;
++  state.main_output.bits_per_sample = 8;
++  state.main_output.callback = PixelCallback();
++  state.main_output.buffer = buffer;
++  state.main_output.buffer_size = size;
++  JXL_ASSIGN_OR_RETURN(state.main_output.stride, GetStride(out_xsize, format));
++  if (size < state.main_output.stride * (out_ysize - 1) + out_xsize * 4) {
++    return JXL_FAILURE("DC image: buffer too small");
++  }
++
++  // Colour stages only: no loop filters, noise, patches or splines.
++  FrameHeader header = frame_header_;
++  header.loop_filter.gab = false;
++  header.loop_filter.epf_iters = 0;
++  header.flags = 0;
++  PassesDecoderState::PipelineOptions options;
++  options.use_slow_render_pipeline = false;
++  options.coalescing = false;
++  options.render_spotcolors = false;
++  options.render_noise = false;
++  JXL_RETURN_IF_ERROR(
++      state.PreparePipeline(header, decoded_->metadata(), decoded_, options));
++
++  const Image3F& dc = *dec_state_->shared->dc;
++  const YCbCrChromaSubsampling& cs = frame_header_.chroma_subsampling;
++  const auto prepare = [&](size_t num_threads) -> Status {
++    return state.render_pipeline->PrepareForThreads(num_threads,
++                                                    /*use_group_ids=*/false);
++  };
++  const auto draw = [&](uint32_t group, size_t thread) -> Status {
++    RenderPipelineInput input =
++        state.render_pipeline->GetInputBuffers(group, thread);
++    const size_t gx = group % dim.xsize_groups;
++    const size_t gy = group / dim.xsize_groups;
++    for (size_t c = 0; c < 3; c++) {
++      const std::pair<ImageF*, Rect>& out = input.GetBuffer(c);
++      const size_t x0 = gx * (dim.group_dim >> cs.HShift(c));
++      const size_t y0 = gy * (dim.group_dim >> cs.VShift(c));
++      for (size_t y = 0; y < out.second.ysize(); y++) {
++        memcpy(out.second.Row(out.first, y), dc.PlaneRow(c, y0 + y) + x0,
++               out.second.xsize() * sizeof(float));
++      }
++    }
++    return input.Done();
++  };
++  JXL_RETURN_IF_ERROR(
++      RunOnPool(pool_, 0, dim.num_groups, prepare, draw, "RenderDC"));
++  return true;
++}
++
+ Status FrameDecoder::Flush() {
+   bool has_blending = frame_header_.blending_info.mode != BlendMode::kReplace ||
+                       frame_header_.custom_size_or_origin;
+diff --git a/lib/jxl/dec_frame.h b/lib/jxl/dec_frame.h
+index 00ea2b0b..7493d967 100644
+--- a/lib/jxl/dec_frame.h
++++ b/lib/jxl/dec_frame.h
+@@ -127,6 +127,13 @@ class FrameDecoder {
+   // Returns whether a DC image has been decoded, accessible at low resolution
+   // at passes.shared_storage.dc_storage
+   bool HasDecodedDC() const { return finalized_dc_; }
++
++  // Whether RenderDC can draw frames with this header.
++  static bool CanRenderDC(const FrameHeader& header,
++                          const ImageMetadata& metadata);
++  // Draws the decoded DC image at 1:8 (one pixel per block) into buffer.
++  Status RenderDC(const JxlPixelFormat& format, void* buffer, size_t size,
++                  bool undo_orientation);
+   bool HasDecodedAll() const { return toc_.size() == num_sections_done_; }
+
+   size_t NumCompletePasses() const {
+diff --git a/lib/jxl/decode.cc b/lib/jxl/decode.cc
+index 969b380d..98895e59 100644
+--- a/lib/jxl/decode.cc
++++ b/lib/jxl/decode.cc
+@@ -2481,6 +2481,91 @@ JxlDecoderStatus JxlDecoderFlushImage(JxlDecoder* dec) {
+   return JXL_DEC_SUCCESS;
+ }
+
++uint32_t JxlDecoderLoupeVersion(void) { return 1; }
++
++JxlDecoderStatus JxlDecoderGetDCImage(JxlDecoder* dec,
++                                      const JxlPixelFormat* format,
++                                      void* buffer, size_t size) {
++  if (!dec->frame_dec || dec->frame_stage != FrameStage::kFull || !format ||
++      !buffer) {
++    return JXL_DEC_ERROR;
++  }
++  if (!dec->frame_dec->RenderDC(*format, buffer, size,
++                                !dec->keep_orientation)) {
++    return JXL_DEC_ERROR;
++  }
++  return JXL_DEC_SUCCESS;
++}
++
++namespace {
++
++// Whether file bytes [begin, end) lie inside one box (or a bare codestream),
++// so codestream bytes there map one to one onto file bytes.
++bool InOneBox(const uint8_t* data, size_t size, uint64_t begin, uint64_t end) {
++  static const uint8_t kSignature[] = {0, 0, 0, 0xC, 'J', 'X', 'L', ' '};
++  if (size < sizeof(kSignature) ||
++      memcmp(data, kSignature, sizeof(kSignature)) != 0) {
++    return true;  // bare codestream
++  }
++  uint64_t pos = 0;
++  while (pos + 8 <= size) {
++    uint64_t box = LoadBE32(data + pos);
++    uint64_t header = 8;
++    if (box == 1) {
++      if (pos + 16 > size) return false;
++      box = LoadBE64(data + pos + 8);
++      header = 16;
++    }
++    uint64_t box_end = box == 0 ? UINT64_MAX : pos + box;
++    if (box != 0 && box < header) return false;
++    if (begin < box_end) return begin >= pos + header && end <= box_end;
++    if (box == 0) return false;
++    pos = box_end;
++  }
++  return false;
++}
++
++}  // namespace
++
++JxlDecoderStatus JxlDecoderGetDCByteCount(const uint8_t* data, size_t size,
++                                          uint64_t* count) {
++  if (!data || !count) return JXL_DEC_ERROR;
++  JxlDecoder* dec = JxlDecoderCreate(nullptr);
++  if (!dec) return JXL_DEC_ERROR;
++  JxlDecoderStatus result = JXL_DEC_ERROR;
++  if (JxlDecoderSubscribeEvents(dec, JXL_DEC_FRAME) == JXL_DEC_SUCCESS &&
++      JxlDecoderSetInput(dec, data, size) == JXL_DEC_SUCCESS) {
++    // Input stays open: a short prefix asks for more instead of failing.
++    JxlDecoderStatus st = JxlDecoderProcessInput(dec);
++    if (st == JXL_DEC_NEED_MORE_INPUT) {
++      result = JXL_DEC_NEED_MORE_INPUT;
++    } else if (st == JXL_DEC_FRAME && dec->frame_dec &&
++               jxl::FrameDecoder::CanRenderDC(*dec->frame_header,
++                                              dec->metadata.m)) {
++      // The frame header and TOC are consumed: what is left of the input
++      // starts with the frame's sections.
++      const uint64_t sections = size - JxlDecoderReleaseInput(dec);
++      const auto& toc = dec->frame_dec->Toc();
++      const size_t num_dc_groups =
++          dec->frame_header->ToFrameDimensions().num_dc_groups;
++      uint64_t offset = 0;
++      uint64_t needed = 0;
++      for (const auto& entry : toc) {
++        offset += entry.size;
++        // DC global is section 0, the DC groups 1..num_dc_groups; a frame
++        // with a single section has everything in it.
++        if (toc.size() == 1 || entry.id <= num_dc_groups) needed = offset;
++      }
++      if (InOneBox(data, size, sections, sections + needed)) {
++        *count = sections + needed;
++        result = JXL_DEC_SUCCESS;
++      }
++    }
++  }
++  JxlDecoderDestroy(dec);
++  return result;
++}
++
+ JXL_EXPORT JxlDecoderStatus JxlDecoderSetCms(JxlDecoder* dec,
+                                              const JxlCmsInterface cms) {
+   if (!dec->passes_state) {
+diff --git a/lib/jxl/decode_dc_test.cc b/lib/jxl/decode_dc_test.cc
+new file mode 100644
+index 00000000..7cfa48a4
+--- /dev/null
++++ b/lib/jxl/decode_dc_test.cc
+@@ -0,0 +1,459 @@
++// Copyright (c) the JPEG XL Project Authors. All rights reserved.
++//
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++// Loupe: JxlDecoderGetDCImage, the frame's DC image at 1:8 without upsampling.
++
++#include <jxl/codestream_header.h>
++#include <jxl/decode.h>
++#include <jxl/decode_cxx.h>
++#include <jxl/encode.h>
++#include <jxl/encode_cxx.h>
++#include <jxl/types.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#include "lib/jxl/test_utils.h"
++#include "lib/jxl/testing.h"
++
++namespace {
++
++struct PixelOptions {
++  size_t xsize = 512;
++  size_t ysize = 384;
++  uint32_t channels = 3;  // 1 gray, 3 RGB, 4 RGBA
++  float distance = 1.0f;
++  int64_t resampling = 1;
++  int frames = 1;
++};
++
++// A smooth picture: the mean of a decoded 8x8 block is then close to its DC.
++std::vector<uint8_t> SmoothPixels(const PixelOptions& o, int frame) {
++  std::vector<uint8_t> px(o.xsize * o.ysize * o.channels);
++  for (size_t y = 0; y < o.ysize; y++) {
++    for (size_t x = 0; x < o.xsize; x++) {
++      for (uint32_t c = 0; c < o.channels; c++) {
++        double v = 128 + 90 * std::sin((x + 3 * c + 7 * frame) / 37.0) *
++                             std::cos((y + 5 * c) / 53.0);
++        if (c == 3) v = 255 - (x * 200) / o.xsize;
++        px[(y * o.xsize + x) * o.channels + c] =
++            static_cast<uint8_t>(std::lround(v));
++      }
++    }
++  }
++  return px;
++}
++
++std::vector<uint8_t> Finish(JxlEncoder* enc) {
++  JxlEncoderCloseInput(enc);
++  std::vector<uint8_t> out(64);
++  uint8_t* next = out.data();
++  size_t avail = out.size();
++  JxlEncoderStatus st;
++  while ((st = JxlEncoderProcessOutput(enc, &next, &avail)) ==
++         JXL_ENC_NEED_MORE_OUTPUT) {
++    size_t used = next - out.data();
++    out.resize(out.size() * 2);
++    next = out.data() + used;
++    avail = out.size() - used;
++  }
++  EXPECT_EQ(JXL_ENC_SUCCESS, st);
++  out.resize(next - out.data());
++  return out;
++}
++
++std::vector<uint8_t> EncodePixels(const PixelOptions& o) {
++  JxlEncoderPtr enc = JxlEncoderMake(nullptr);
++  JxlBasicInfo info;
++  JxlEncoderInitBasicInfo(&info);
++  info.xsize = o.xsize;
++  info.ysize = o.ysize;
++  info.bits_per_sample = 8;
++  info.num_color_channels = o.channels >= 3 ? 3 : 1;
++  info.num_extra_channels = o.channels == 4 ? 1 : 0;
++  info.alpha_bits = o.channels == 4 ? 8 : 0;
++  info.uses_original_profile = o.distance == 0 ? JXL_TRUE : JXL_FALSE;
++  if (o.frames > 1) {
++    info.have_animation = JXL_TRUE;
++    info.animation.tps_numerator = 10;
++    info.animation.tps_denominator = 1;
++  }
++  EXPECT_EQ(JXL_ENC_SUCCESS, JxlEncoderSetBasicInfo(enc.get(), &info));
++  JxlColorEncoding color;
++  JxlColorEncodingSetToSRGB(&color, o.channels < 3 ? JXL_TRUE : JXL_FALSE);
++  EXPECT_EQ(JXL_ENC_SUCCESS, JxlEncoderSetColorEncoding(enc.get(), &color));
++  JxlEncoderFrameSettings* fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
++  if (o.distance == 0) {
++    JxlEncoderSetFrameLossless(fs, JXL_TRUE);
++  } else {
++    JxlEncoderSetFrameDistance(fs, o.distance);
++  }
++  if (o.resampling != 1) {
++    JxlEncoderFrameSettingsSetOption(fs, JXL_ENC_FRAME_SETTING_RESAMPLING,
++                                     o.resampling);
++  }
++  JxlPixelFormat format = {o.channels, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
++  for (int f = 0; f < o.frames; f++) {
++    if (o.frames > 1) {
++      JxlFrameHeader header;
++      JxlEncoderInitFrameHeader(&header);
++      header.duration = 1;
++      JxlEncoderSetFrameHeader(fs, &header);
++    }
++    std::vector<uint8_t> px = SmoothPixels(o, f);
++    EXPECT_EQ(JXL_ENC_SUCCESS,
++              JxlEncoderAddImageFrame(fs, &format, px.data(), px.size()));
++  }
++  return Finish(enc.get());
++}
++
++std::vector<uint8_t> TranscodeJPEG(const std::string& path) {
++  std::vector<uint8_t> jpeg = jxl::test::ReadTestData(path);
++  JxlEncoderPtr enc = JxlEncoderMake(nullptr);
++  EXPECT_EQ(JXL_ENC_SUCCESS, JxlEncoderUseContainer(enc.get(), JXL_TRUE));
++  EXPECT_EQ(JXL_ENC_SUCCESS, JxlEncoderStoreJPEGMetadata(enc.get(), JXL_TRUE));
++  JxlEncoderFrameSettings* fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
++  EXPECT_EQ(JXL_ENC_SUCCESS,
++            JxlEncoderAddJPEGFrame(fs, jpeg.data(), jpeg.size()));
++  return Finish(enc.get());
++}
++
++struct Decoded {
++  JxlDecoderStatus dc_status = JXL_DEC_ERROR;
++  bool got_progression = false;
++  bool full_done = false;
++  size_t xsize = 0, ysize = 0;
++  std::vector<uint8_t> dc;    // RGBA8, ceil(x/8) x ceil(y/8)
++  std::vector<uint8_t> full;  // RGBA8
++};
++
++// Decodes to the full image, asking for the DC image at the first DC event
++// (or, without one, when the output buffer is set) with a buffer of
++// dc_size_delta bytes more than needed and in data type `type`.
++Decoded Decode(const std::vector<uint8_t>& data, int dc_size_delta = 0,
++               JxlDataType type = JXL_TYPE_UINT8) {
++  Decoded d;
++  JxlDecoderPtr dec = JxlDecoderMake(nullptr);
++  EXPECT_EQ(JXL_DEC_SUCCESS,
++            JxlDecoderSubscribeEvents(dec.get(), JXL_DEC_BASIC_INFO |
++                                                     JXL_DEC_FRAME_PROGRESSION |
++                                                     JXL_DEC_FULL_IMAGE));
++  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetProgressiveDetail(dec.get(), kDC));
++  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetKeepOrientation(dec.get(), JXL_TRUE));
++  EXPECT_EQ(JXL_DEC_SUCCESS,
++            JxlDecoderSetInput(dec.get(), data.data(), data.size()));
++  JxlDecoderCloseInput(dec.get());
++  JxlPixelFormat format = {4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
++  bool asked = false;
++  auto ask = [&]() {
++    if (asked) return;
++    asked = true;
++    size_t dx = (d.xsize + 7) / 8, dy = (d.ysize + 7) / 8;
++    size_t bytes = (type == JXL_TYPE_FLOAT ? 4 : 1) * 4 * dx * dy;
++    d.dc.assign(bytes + dc_size_delta, 0);
++    JxlPixelFormat f = format;
++    f.data_type = type;
++    d.dc_status = JxlDecoderGetDCImage(dec.get(), &f, d.dc.data(), d.dc.size());
++  };
++  for (;;) {
++    JxlDecoderStatus st = JxlDecoderProcessInput(dec.get());
++    if (st == JXL_DEC_BASIC_INFO) {
++      JxlBasicInfo info;
++      EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderGetBasicInfo(dec.get(), &info));
++      d.xsize = info.xsize;
++      d.ysize = info.ysize;
++    } else if (st == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
++      size_t size;
++      EXPECT_EQ(JXL_DEC_SUCCESS,
++                JxlDecoderImageOutBufferSize(dec.get(), &format, &size));
++      d.full.assign(size, 0);
++      EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetImageOutBuffer(
++                                     dec.get(), &format, d.full.data(), size));
++    } else if (st == JXL_DEC_FRAME_PROGRESSION) {
++      d.got_progression = true;
++      ask();
++    } else if (st == JXL_DEC_FULL_IMAGE) {
++      ask();
++      d.full_done = true;
++      // Only the first frame matters here.
++      break;
++    } else {
++      ADD_FAILURE() << "status " << st;
++      break;
++    }
++  }
++  return d;
++}
++
++struct Diff {
++  int max = 0;
++  double p99 = 0;
++  double mean = 0;
++};
++
++enum class Measure { kRGB, kLuma };
++
++double Value(const uint8_t* p, Measure m) {
++  return 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
++}
++
++// Whether a block touches 0 or 255 in the full image: there the full decode's
++// per-pixel clamping moves the block mean away from the DC.
++bool Clamped(const Decoded& d, size_t bx, size_t by) {
++  for (size_t y = by * 8; y < std::min(d.ysize, by * 8 + 8); y++) {
++    for (size_t x = bx * 8; x < std::min(d.xsize, bx * 8 + 8); x++) {
++      for (size_t c = 0; c < 3; c++) {
++        uint8_t v = d.full[(y * d.xsize + x) * 4 + c];
++        if (v == 0 || v == 255) return true;
++      }
++    }
++  }
++  return false;
++}
++
++// The full image averaged over 8x8 blocks against the DC image, per channel
++// (kRGB) or on BT.601 luma (kLuma). Edge blocks the image only partly covers
++// are left out when the file is a JPEG: its DC averages the encoder's padding.
++Diff CompareWithFull(const Decoded& d, Measure m = Measure::kRGB,
++                     bool skip_partial = false, bool skip_clamped = false) {
++  size_t dx = (d.xsize + 7) / 8, dy = (d.ysize + 7) / 8;
++  std::vector<int> diffs;
++  double total = 0;
++  for (size_t by = 0; by < dy; by++) {
++    for (size_t bx = 0; bx < dx; bx++) {
++      if (skip_partial && (bx * 8 + 8 > d.xsize || by * 8 + 8 > d.ysize)) {
++        continue;
++      }
++      if (skip_clamped && Clamped(d, bx, by)) continue;
++      size_t channels = m == Measure::kLuma ? 1 : 3;
++      for (size_t c = 0; c < channels; c++) {
++        double sum = 0;
++        int n = 0;
++        for (size_t y = by * 8; y < std::min(d.ysize, by * 8 + 8); y++) {
++          for (size_t x = bx * 8; x < std::min(d.xsize, bx * 8 + 8); x++) {
++            const uint8_t* p = &d.full[(y * d.xsize + x) * 4];
++            sum += m == Measure::kLuma ? Value(p, m) : p[c];
++            n++;
++          }
++        }
++        const uint8_t* q = &d.dc[(by * dx + bx) * 4];
++        double dc = m == Measure::kLuma ? Value(q, m) : q[c];
++        int diff = static_cast<int>(std::lround(std::fabs(sum / n - dc)));
++        diffs.push_back(diff);
++        total += diff;
++      }
++    }
++  }
++  std::sort(diffs.begin(), diffs.end());
++  Diff r;
++  r.max = diffs.back();
++  r.p99 = diffs[diffs.size() * 99 / 100];
++  r.mean = total / diffs.size();
++  return r;
++}
++
++Decoded DecodeDC(const std::vector<uint8_t>& data) {
++  Decoded d = Decode(data);
++  EXPECT_TRUE(d.got_progression);
++  EXPECT_EQ(JXL_DEC_SUCCESS, d.dc_status);
++  EXPECT_TRUE(d.full_done);
++  return d;
++}
++
++void ExpectDCMatches(const std::vector<uint8_t>& data,
++                     bool skip_partial = false) {
++  Decoded d = DecodeDC(data);
++  if (d.dc_status != JXL_DEC_SUCCESS) return;
++  Diff diff = CompareWithFull(d, Measure::kRGB, skip_partial);
++  EXPECT_LE(diff.max, 2) << "p99 " << diff.p99 << " mean " << diff.mean;
++}
++
++void ExpectRefused(const std::vector<uint8_t>& data) {
++  Decoded d = Decode(data);
++  EXPECT_EQ(JXL_DEC_ERROR, d.dc_status);
++  EXPECT_TRUE(d.full_done);
++}
++
++TEST(DecodeDCTest, LoupeVersion) { EXPECT_EQ(1u, JxlDecoderLoupeVersion()); }
++
++JXL_TRANSCODE_JPEG_TEST(DecodeDCTest, TranscodedJPEG444) {
++  ExpectDCMatches(TranscodeJPEG("jxl/flower/flower.png.im_q85_444.jpg"),
++                  /*skip_partial=*/true);
++}
++
++// 4:2:0 chroma DC covers 16x16 pixels: only luma is exact at 1:8 (where no
++// pixel is clamped), colour is as close as the file allows (a shifted or
++// misplaced chroma plane is far off).
++JXL_TRANSCODE_JPEG_TEST(DecodeDCTest, TranscodedJPEG420) {
++  Decoded d = DecodeDC(TranscodeJPEG("jxl/flower/flower.png.im_q85_420.jpg"));
++  ASSERT_EQ(JXL_DEC_SUCCESS, d.dc_status);
++  Diff luma = CompareWithFull(d, Measure::kLuma, /*skip_partial=*/true,
++                              /*skip_clamped=*/true);
++  // 3, not 2: luma is taken from 8-bit RGB, rounded three times.
++  EXPECT_LE(luma.max, 3) << "p99 " << luma.p99;
++  Diff rgb = CompareWithFull(d, Measure::kRGB, /*skip_partial=*/true);
++  EXPECT_LE(rgb.mean, 4.5);
++}
++
++JXL_TRANSCODE_JPEG_TEST(DecodeDCTest, TranscodedJPEGGray) {
++  ExpectDCMatches(TranscodeJPEG("jxl/flower/flower.png.im_q85_gray.jpg"),
++                  /*skip_partial=*/true);
++}
++
++TEST(DecodeDCTest, VarDCT) { ExpectDCMatches(EncodePixels(PixelOptions())); }
++
++TEST(DecodeDCTest, VarDCTOddSize) {
++  PixelOptions o;
++  o.xsize = 1001;
++  o.ysize = 777;
++  std::vector<uint8_t> data = EncodePixels(o);
++  Decoded d = Decode(data);
++  ASSERT_EQ(JXL_DEC_SUCCESS, d.dc_status);
++  EXPECT_EQ(126u * 98u * 4u, d.dc.size());
++  EXPECT_LE(CompareWithFull(d).max, 2);
++}
++
++TEST(DecodeDCTest, VarDCTGray) {
++  PixelOptions o;
++  o.channels = 1;
++  ExpectDCMatches(EncodePixels(o));
++}
++
++TEST(DecodeDCTest, RefusesModularLossless) {
++  PixelOptions o;
++  o.distance = 0;
++  ExpectRefused(EncodePixels(o));
++}
++
++TEST(DecodeDCTest, RefusesUpsampledFrame) {
++  PixelOptions o;
++  o.resampling = 2;
++  ExpectRefused(EncodePixels(o));
++}
++
++TEST(DecodeDCTest, RefusesAnimation) {
++  PixelOptions o;
++  o.frames = 2;
++  ExpectRefused(EncodePixels(o));
++}
++
++// Alpha is a modular extra channel with no DC: the full decode gives it.
++TEST(DecodeDCTest, RefusesAlpha) {
++  PixelOptions o;
++  o.channels = 4;
++  ExpectRefused(EncodePixels(o));
++}
++
++TEST(DecodeDCTest, RefusesShortBuffer) {
++  Decoded d = Decode(EncodePixels(PixelOptions()), -1);
++  EXPECT_EQ(JXL_DEC_ERROR, d.dc_status);
++  EXPECT_TRUE(d.full_done);
++}
++
++TEST(DecodeDCTest, RefusesFloat) {
++  Decoded d = Decode(EncodePixels(PixelOptions()), 0, JXL_TYPE_FLOAT);
++  EXPECT_EQ(JXL_DEC_ERROR, d.dc_status);
++  EXPECT_TRUE(d.full_done);
++}
++
++}  // namespace
++
++namespace {
++
++// Whether exactly `n` leading bytes of data give the DC event and image.
++bool DCReadyWith(const std::vector<uint8_t>& data, size_t n) {
++  JxlDecoderPtr dec = JxlDecoderMake(nullptr);
++  JxlDecoderSubscribeEvents(dec.get(), JXL_DEC_BASIC_INFO |
++                                           JXL_DEC_FRAME_PROGRESSION |
++                                           JXL_DEC_FULL_IMAGE);
++  JxlDecoderSetProgressiveDetail(dec.get(), kDC);
++  JxlDecoderSetInput(dec.get(), data.data(), n);
++  JxlDecoderCloseInput(dec.get());
++  JxlPixelFormat format = {4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
++  JxlBasicInfo info = {};
++  for (;;) {
++    JxlDecoderStatus st = JxlDecoderProcessInput(dec.get());
++    if (st == JXL_DEC_BASIC_INFO) {
++      JxlDecoderGetBasicInfo(dec.get(), &info);
++    } else if (st == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
++      JxlDecoderSetImageOutCallback(
++          dec.get(), &format,
++          [](void*, size_t, size_t, size_t, const void*) {}, nullptr);
++    } else if (st == JXL_DEC_FRAME_PROGRESSION) {
++      size_t dx = (info.xsize + 7) / 8, dy = (info.ysize + 7) / 8;
++      std::vector<uint8_t> dc(dx * dy * 4);
++      return JxlDecoderGetDCImage(dec.get(), &format, dc.data(), dc.size()) ==
++             JXL_DEC_SUCCESS;
++    } else {
++      return false;
++    }
++  }
++}
++
++void ExpectExactByteCount(const std::vector<uint8_t>& data) {
++  uint64_t count = 0;
++  ASSERT_EQ(JXL_DEC_SUCCESS,
++            JxlDecoderGetDCByteCount(data.data(), data.size(), &count));
++  EXPECT_LE(count, data.size());
++  EXPECT_TRUE(DCReadyWith(data, count));
++  EXPECT_FALSE(DCReadyWith(data, count - 1));
++  // The prefix alone answers the same.
++  uint64_t again = 0;
++  ASSERT_EQ(JXL_DEC_SUCCESS,
++            JxlDecoderGetDCByteCount(data.data(), count, &again));
++  EXPECT_EQ(count, again);
++}
++
++// Big enough for several DC groups' worth of sections ahead of the AC ones.
++PixelOptions LargeVarDCT() {
++  PixelOptions o;
++  o.xsize = 2600;
++  o.ysize = 2200;
++  return o;
++}
++
++JXL_TRANSCODE_JPEG_TEST(DecodeDCTest, ByteCountTranscodedJPEG) {
++  ExpectExactByteCount(TranscodeJPEG("jxl/flower/flower.png.im_q85_420.jpg"));
++}
++
++TEST(DecodeDCTest, ByteCountVarDCT) { ExpectExactByteCount(EncodePixels(LargeVarDCT())); }
++
++TEST(DecodeDCTest, ByteCountNeedsTheHeaders) {
++  std::vector<uint8_t> data = EncodePixels(LargeVarDCT());
++  uint64_t count = 0;
++  EXPECT_EQ(JXL_DEC_NEED_MORE_INPUT,
++            JxlDecoderGetDCByteCount(data.data(), 100, &count));
++  // Cut inside the frame header / TOC: the frame starts after the image
++  // headers, which a 2600x2200 sRGB image keeps under 40 bytes.
++  EXPECT_EQ(JXL_DEC_NEED_MORE_INPUT,
++            JxlDecoderGetDCByteCount(data.data(), 40, &count));
++}
++
++TEST(DecodeDCTest, ByteCountRefusesGarbage) {
++  std::vector<uint8_t> junk(4096);
++  for (size_t i = 0; i < junk.size(); i++) junk[i] = (i * 7919 + 13) & 0xFF;
++  uint64_t count = 0;
++  EXPECT_EQ(JXL_DEC_ERROR,
++            JxlDecoderGetDCByteCount(junk.data(), junk.size(), &count));
++}
++
++TEST(DecodeDCTest, ByteCountRefusesModularAndAnimation) {
++  PixelOptions modular;
++  modular.distance = 0;
++  PixelOptions animation;
++  animation.frames = 2;
++  for (const PixelOptions& o : {modular, animation}) {
++    std::vector<uint8_t> data = EncodePixels(o);
++    uint64_t count = 0;
++    EXPECT_EQ(JXL_DEC_ERROR,
++              JxlDecoderGetDCByteCount(data.data(), data.size(), &count));
++  }
++}
++
++}  // namespace
+diff --git a/lib/jxl_lists.cmake b/lib/jxl_lists.cmake
+index 1f2b510e..10025689 100644
+--- a/lib/jxl_lists.cmake
++++ b/lib/jxl_lists.cmake
+@@ -509,6 +509,7 @@ set(JPEGXL_INTERNAL_TESTS
+   jxl/convolve_test.cc
+   jxl/data_parallel_test.cc
+   jxl/dct_test.cc
++  jxl/decode_dc_test.cc
+   jxl/decode_test.cc
+   jxl/enc_bit_writer_test.cc
+   jxl/enc_external_image_test.cc

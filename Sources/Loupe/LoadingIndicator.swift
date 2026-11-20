@@ -11,21 +11,15 @@ import QuartzCore
     private static let lineWidth: CGFloat = 2
     private let arc = CAShapeLayer()
 
-    /// Shown and turning, or hidden with no animation.
-    var isSpinning = false {
+    var isLoading = false {
         didSet {
-            guard isSpinning != oldValue else { return }
-            isHidden = !isSpinning
-            if isSpinning {
-                let turn = CABasicAnimation(keyPath: "transform.rotation.z")
-                turn.fromValue = 0
-                turn.toValue = -2 * Double.pi   // clockwise in a y-up layer
-                turn.duration = 0.9
-                turn.repeatCount = .infinity
-                arc.add(turn, forKey: "spin")
-            } else {
-                arc.removeAnimation(forKey: "spin")
-            }
+            if isLoading != oldValue { updateVisibility() }
+        }
+    }
+
+    var isViewerShown = true {
+        didSet {
+            if isViewerShown != oldValue { updateVisibility() }
         }
     }
 
@@ -33,6 +27,11 @@ import QuartzCore
         super.init(frame: frame)
         wantsLayer = true
         isHidden = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("Loading image")
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refreshAnimation),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         arc.fillColor = nil
         arc.strokeColor = Chrome.Palette.overMedia.text.cgColor
         arc.lineWidth = Self.lineWidth
@@ -51,6 +50,32 @@ import QuartzCore
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func updateVisibility() {
+        isHidden = !isLoading || !isViewerShown
+        refreshAnimation()
+    }
+
+    @objc func refreshAnimation() {
+        guard !isHidden, let window, !window.isMiniaturized, window.occlusionState.contains(.visible),
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        else {
+            arc.removeAnimation(forKey: "spin")
+            return
+        }
+        guard arc.animation(forKey: "spin") == nil else { return }
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = -2 * Double.pi
+        turn.duration = 0.9
+        turn.repeatCount = .infinity
+        arc.add(turn, forKey: "spin")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshAnimation()
+    }
 
     override func layout() {
         super.layout()

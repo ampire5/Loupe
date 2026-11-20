@@ -134,6 +134,7 @@ import HomeScreenModel
         if area.frame != frame { area.frame = frame; host.refreshLayout() }
     }
     func refreshSmartZoom() { smartPanel?.refresh() }
+    func refreshObjectFeedbackBinding() { smartPanel?.refreshObjectFeedbackBinding() }
     func setSmartZoomEditing(_ editing: Bool) { smartPanel?.setProfileEditing(editing) }
     func showSmartZoom() {
         guard active else { return }

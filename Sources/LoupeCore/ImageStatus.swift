@@ -91,6 +91,7 @@ public struct ImageStatus: Equatable, Sendable {
     public var progress = 0.0
     /// Changes with a move to another photo or folder, not with a load, a zoom or a pan.
     public var navigationKey = ""
+    public var mayLoadMore = false
 
     public init() {}
 

@@ -1,6 +1,7 @@
 .build/
 build/
 Tests/Fixtures/*
+!Tests/Fixtures/blue-720p.mp4
 !Tests/Fixtures/input-user.conf
 .DS_Store
 .deps/

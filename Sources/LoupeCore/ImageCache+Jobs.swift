@@ -21,7 +21,7 @@ extension ImageCache {
             let start = ContinuousClock.now
             do {
                 emit(url, .readRequested, priority: priority.value)
-                let bytes = try await reader.read(url, priority: priority)
+                let bytes = try await PlaybackMedia.readPosterBytes(url, reader: reader, priority: priority)
                 if entries[url] === e && e.readID == id {
                     emit(url, .readDelivered)
                     e.read = nil
@@ -309,6 +309,7 @@ extension ImageCache {
                        phase: JobPhase) async throws -> (any ImageDecoder, ImageInfo) {
         if let decoder = e.decoder, let info = e.info { return (decoder, info) }
         let makeDecoder = self.makeDecoder
+        let sourceSize = PlaybackMedia.isFilesystemGIF(url) ? e.stamp?.size : nil
         let p = priority(url, goal, phase)
         let trace = self.trace
         emit(url, .probeWait, goal)
@@ -316,7 +317,8 @@ extension ImageCache {
             phase.markBusy()
             trace?(CacheTraceEvent(url: url, kind: .probeStart, goal: goal))
             let decoder = makeDecoder(data)
-            return Probed(decoder: decoder, info: try decoder.probe(data))
+            let info = try decoder.probe(data)
+            return Probed(decoder: decoder, info: info.withFileSize(sourceSize ?? info.fileSize))
         }
         emit(url, .probeDone, goal)
         // Another job of the entry may have probed meanwhile; either result is the same header.

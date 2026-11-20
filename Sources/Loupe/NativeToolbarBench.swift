@@ -7,7 +7,8 @@ import LoupeRender
 /// Uses an empty session and disposable configuration; never opens user media.
 @MainActor enum NativeToolbarBench {
     static func run() async -> Never {
-        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("loupe-native-toolbar-bench")
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("loupe-native-toolbar-bench-\(ProcessInfo.processInfo.processIdentifier)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         // Do not browse NSTemporaryDirectory: following its ancestors can expose
         // tens of thousands of host build directories in the sidebar. Keep the
@@ -17,7 +18,7 @@ import LoupeRender
             ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("build/NativeToolbarBench", isDirectory: true)
         try? FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
-        let preferenceKeys = ["viewerToolbar", "fullScreenToolbar", "fullScreenStatus", "statsMode"]
+        let preferenceKeys = ["viewerToolbar", "fullScreenToolbar", "fullScreenStatus", "fullScreen", "statsMode"]
         let savedPreferences = Dictionary(uniqueKeysWithValues: preferenceKeys.compactMap { key in
             UserDefaults.standard.object(forKey: key).map { (key, $0) }
         })
@@ -200,6 +201,49 @@ import LoupeRender
         check("entered full screen directly from Home", entered)
         check("direct Home entry reserves native toolbar safe area", (window.contentView?.safeAreaInsets.top ?? 0) > 0)
         check("direct Home entry draws the native titlebar backdrop", !window.titlebarAppearsTransparent)
+        let registry = WindowRegistry()
+        registry.add(controller)
+        registry.makeController = { [weak registry] in
+            let viewer = ViewerWindowController(cache: cache, thumbnails: thumbs, thumbnailsReady: nil,
+                positions: FolderPositions(database: nil), folderSettings: FolderSettings(database: nil), recent: nil)
+            registry?.add(viewer)
+            return viewer
+        }
+        let photo = scratch.appendingPathComponent("sample.png")
+        let sample = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor.systemBlue.setFill()
+            rect.fill()
+            return true
+        }
+        let png = sample.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?
+            .representation(using: .png, properties: [:])
+        try? png?.write(to: photo)
+        // A folder with a photo goes through the same external-open route as a file,
+        // with the directory listing completing asynchronously.
+        for (name, target) in [("photo", OpenTarget.file(photo)), ("folder", .folder(scratch))] {
+            registry.open(target)
+            if let viewer = registry.active, viewer !== controller, let photoWindow = viewer.window {
+                for _ in 0..<50 {
+                    if viewer.session.playlist?.current.path == photo.standardizedFileURL.path { break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                photoWindow.contentView?.superview?.layoutSubtreeIfNeeded()
+                check("external \(name) joins fullscreen File View in a new tab",
+                      photoWindow.styleMask.contains(.fullScreen) && photoWindow.tabGroup?.selectedWindow === photoWindow
+                        && window.tabGroup?.windows.contains(photoWindow) == true
+                        && viewer.session.playlist?.current.path == photo.standardizedFileURL.path)
+                check("external \(name) starts with the fullscreen header collapsed",
+                      photoWindow.contentView?.safeAreaInsets.top == 0 && photoWindow.toolbar?.isVisible == true)
+                controller.bringToFront()
+                try? await Task.sleep(for: .milliseconds(300))
+                check("return from external \(name) restores File View's pinned toolbar",
+                      (window.contentView?.safeAreaInsets.top ?? 0) > 0)
+                photoWindow.close()
+            } else {
+                check("external \(name) opens a new viewer tab", false)
+            }
+        }
+        registry.makeController = nil
         controller.hideHome()
         window.contentView?.superview?.layoutSubtreeIfNeeded()
         check("viewer after direct Home entry auto-hides", window.contentView?.safeAreaInsets.top == 0)

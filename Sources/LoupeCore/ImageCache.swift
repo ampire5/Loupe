@@ -127,6 +127,11 @@ public actor ImageCache<Loader: PyramidLoader> {
         return e.data
     }
 
+    public func webImageBytes(_ url: URL) -> Data? {
+        guard WebImageLocation.owns(url) else { return nil }
+        return entries[url]?.data
+    }
+
     public func setLimits(_ limits: CacheLimits) {
         self.limits = limits
         updateIdleTimer()
@@ -173,7 +178,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         let seededOnly = e.seeded && e.pyramid.flatMap { loader.finestResidentLevel(of: $0) } != nil
         return CacheEntryView(url: url, info: e.info, pyramid: e.pyramid, failure: e.failure,
                               decoderName: e.decoder?.name, timings: e.timings, state: state(of: url, e),
-                              isSeededOnly: seededOnly, pyramidIsSeeded: e.seeded && e.pyramid != nil)
+                              isSeededOnly: seededOnly, pyramidIsSeeded: e.seeded && e.pyramid != nil, sourceStamp: e.stamp)
     }
 
     /// `usedBytes`: every entry's resident bytes (the pinned photo's included) plus the levels uploads are building;
@@ -263,8 +268,8 @@ public actor ImageCache<Loader: PyramidLoader> {
         onActivity?(now)
     }
 
-    /// Test hook: nothing in flight (no read, job task — cancelled ones included — or stamp check).
-    var isIdle: Bool { stampChecks == 0 && runningJobs == 0 && entries.values.allSatisfy { $0.read == nil } }
+    /// Test and replay hook: nothing in flight (no registered read, job task or stamp check).
+    package var isIdle: Bool { stampChecks == 0 && runningJobs == 0 && entries.values.allSatisfy { $0.read == nil } }
 
     // MARK: Levels and state
 
@@ -347,7 +352,10 @@ public actor ImageCache<Loader: PyramidLoader> {
                                            estimate: keepEstimate)
         var planLimits = limits
         planLimits.memory = max(0, effectiveMemory - keptElsewhere().reduce(0) { $0 + keepEstimate($1.key, $1.value) })
-        let plan = focus.map { focus in CachePlan.make(focus: focus, limits: planLimits) { facts(files[$0]) } } ?? []
+        let plan = focus.map { focus in
+            CachePlan.make(focus: focus, limits: planLimits,
+                           isExcluded: { PlaybackMedia.candidate(files[$0]) == .video }) { facts(files[$0]) }
+        } ?? []
         let keep = keepPlans()
         var wants: [URL: [CacheGoal: Int]] = [:]
         var first: [URL: CacheGoal] = [:]
@@ -389,17 +397,22 @@ public actor ImageCache<Loader: PyramidLoader> {
         let neighboursRead = focus?.dwelling == true && currentPreviewUp()
         for item in plan {
             let url = files[item.index]
-            start(url, item.goal, mayRead: isCurrent(url) || neighboursRead)
+            start(url, item.goal, mayRead: isCurrent(url) || (neighboursRead && !WebImageLocation.owns(url)))
         }
         // A keep set reads as the active session's neighbours do, but the photo a visible session has on screen
         // reads at once.
-        for item in keep { start(item.url, item.goal, mayRead: neighboursRead || item.onScreen) }
+        for item in keep {
+            start(item.url, item.goal, mayRead: item.onScreen || (neighboursRead && !WebImageLocation.owns(item.url)))
+        }
+        let visibleWebImages = Set(keep.compactMap { $0.onScreen && WebImageLocation.owns($0.url) ? $0.url : nil })
         for (url, e) in entries {
             // A read nothing waits for any more is stopped (its bytes would only be kept, not needed), unless most of
             // the file is in (`FileReader.finishReadAbove`): it is finished at its unplanned rank, behind everything,
             // and its bytes are kept like any other.
-            if wants[url]?[.bytes] == nil, e.jobs.isEmpty, let read = e.read,
-               (e.readPriority?.progress ?? 0) < FileReader.finishReadAbove {
+            let leftWebImage = WebImageLocation.owns(url) && !isCurrent(url) && !visibleWebImages.contains(url)
+            let unneeded = wants[url]?[.bytes] == nil && e.jobs.isEmpty
+                && (e.readPriority?.progress ?? 0) < FileReader.finishReadAbove
+            if let read = e.read, leftWebImage || unneeded {
                 read.cancel()
                 e.read = nil
                 e.readID += 1   // a late result of the cancelled read is ignored
@@ -422,6 +435,7 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// for them): neighbours may read now.
     private func currentPreviewUp() -> Bool {
         [currentURL, companionURL].compactMap { $0 }.allSatisfy { url in
+            if PlaybackMedia.candidate(url) == .video { return true }
             guard let e = entries[url] else { return false }
             return e.failure != nil || isSatisfied(url, e, .preview)
         }
@@ -489,6 +503,7 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// Starts what `goal` of `url` still needs; `mayRead`: a read of the file may start for it (without, nothing of
     /// an entry not held can start, and none is made for it).
     private func start(_ url: URL, _ goal: CacheGoal, mayRead: Bool) {
+        guard PlaybackMedia.candidate(url) != .video else { return }
         // Photos image data is requested only for a selected page. A local-only neighbour request cannot be
         // promoted in place to download from iCloud; selection starts a fresh, network-capable source request.
         // Existing resident bytes may still be decoded/kept under the usual memory budget.

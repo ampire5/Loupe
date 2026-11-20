@@ -63,7 +63,7 @@ struct ViewerStatusChoices {
         }
         titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
         for label in [folderLabel, profileLabel, groupLabel] { label.textColor = ProCameraStyle.secondary }
-        configure(positionButton, "Photo position", #selector(positionClicked))
+        configure(positionButton, "Go to Photo", #selector(positionClicked))
         configure(previous, "Previous photo", #selector(previousClicked), symbol: "chevron.left")
         configure(next, "Next photo", #selector(nextClicked), symbol: "chevron.right")
         configure(compactInfo, "Photo information", #selector(infoClicked), symbol: "info.circle")
@@ -125,7 +125,12 @@ struct ViewerStatusChoices {
     func update(_ new: ImageStatus) {
         guard !hasStatus || new != status else { return }
         hasStatus = true
-        if !status.navigationKey.isEmpty, new.navigationKey != status.navigationKey { dismissPopover() }
+        if new.photo != status.photo {
+            dismissPopover()
+        } else if new.count != status.count, popover?.isShown == true,
+                  let page = popover?.contentViewController as? ViewerStatusPopover, page.kind == .position {
+            page.updatePhotoCount(new.count)
+        }
         status = new
         if !new.pending.contains(.exposure) || exposure == nil { exposure = new.facts.first { $0.kind == .exposure } }
         zoomDetails = new.zoomDetails
@@ -136,11 +141,15 @@ struct ViewerStatusChoices {
         folderLabel.textColor = ProCameraStyle.color(new.note == nil ? .quiet : new.noteTone, monochrome: false)
         folderLabel.toolTip = new.note ?? new.folder?.path
         set(positionButton, new.value(.position) ?? "—")
+        positionButton.toolTip = new.value(.position).map { "Go to Photo (\($0))" } ?? "Go to Photo"
         let metadata = [ImageStatus.Kind.size, .megapixels, .format, .fileSize]
-            .compactMap { new.value($0) }.joined(separator: "  ")
-        metadataText = metadata.isEmpty ? "Info" : metadata
+            .compactMap { new.value($0) }.joined(separator: " · ")
+        metadataText = metadata.isEmpty ? "Photo info" : metadata
         set(metadataButton, metadataText)
-        metadataButton.toolTip = [metadata, exposure?.value, "Show Info (⌘I)"].compactMap { $0 }.joined(separator: "\n")
+        let infoTip = [new.title.isEmpty ? nil : new.title, metadata.isEmpty ? nil : metadata,
+                       exposure?.value, "Show Info (⌘I)"].compactMap { $0 }.joined(separator: "\n")
+        metadataButton.toolTip = infoTip
+        compactInfo.toolTip = infoTip
         let parts = exposure?.parts.map(\.text) ?? []
         for i in exposureLabels.indices {
             set(exposureLabels[i], i < parts.count ? parts[i] : "")
@@ -160,14 +169,21 @@ struct ViewerStatusChoices {
         } else {
             set(modeButton, "Manual"); set(zoomButton, "—")
             set(profileButton, "—"); set(groupButton, "—")
+            profileButton.toolTip = "SmartZoom profile"
+            profileButton.setAccessibilityLabel("SmartZoom profile")
+            groupButton.toolTip = "Subject group"
+            groupButton.setAccessibilityLabel("Subject group")
         }
         zoomButton.toolTip = new.value(.zoom) ?? "Zoom presets and exact percentage"
         let hasPhoto = new.photo != nil
-        for button in [previous, next, positionButton, modeButton, zoomButton, profileButton, groupButton] {
+        for button in [previous, next, positionButton, compactInfo, metadataButton] {
             button.isEnabled = hasPhoto
         }
+        for button in [modeButton, zoomButton, profileButton, groupButton] {
+            button.isEnabled = hasPhoto && zoomDetails != nil
+        }
         previous.isEnabled = hasPhoto && (new.index ?? 0) > 0
-        next.isEnabled = hasPhoto && (new.count.map { (new.index ?? 0) + 1 < $0 } ?? true)
+        next.isEnabled = hasPhoto && (new.mayLoadMore || (new.count.map { (new.index ?? 0) + 1 < $0 } ?? true))
         // Progress is a frame change only; it never resizes the item or wakes the image renderer.
         needsLayout = true
     }
@@ -188,8 +204,13 @@ struct ViewerStatusChoices {
         let capture = max(210, min(320, max(metadataWidth, exposureWidth) + 16))
         let zoom = min(500, max(280, ceil(groupButton.cell!.cellSize.width) + 70,
             ceil(profileButton.cell!.cellSize.width) + 176))
-        let file = min(600, max(280, titleLabel.cell!.cellSize.width + 18, folderLabel.cell!.cellSize.width + 88))
+        let file = min(600, max(280, titleLabel.cell!.cellSize.width + 18,
+            folderLabel.cell!.cellSize.width + positionWidth + 24))
         return (ceil(file), ceil(capture), ceil(zoom))
+    }
+
+    private var positionWidth: CGFloat {
+        min(120, max(48, ceil(positionButton.cell!.cellSize.width) + 4))
     }
 
     /// NSToolbar may compress below this, but extra window space belongs outside the glass surface.
@@ -200,23 +221,24 @@ struct ViewerStatusChoices {
 
     override func layout() {
         super.layout()
-        let width = min(bounds.width, preferredWidth)
+        let preferred = preferredSections
+        let width = min(bounds.width, preferred.file + preferred.capture + preferred.zoom)
         glass.frame = NSRect(x: 0, y: 0, width: width, height: Self.height)
         for label in exposureLabels { label.isHidden = exposure?.parts.isEmpty != false || label.stringValue.isEmpty }
         if width < 270 { layoutMinimal(width: width); return }
         let compact = width < 430
         let fileCollapsed = width < 550
-        let preferred = preferredSections
         let capturePreferred = preferred.capture
         let groupPreferred = preferred.zoom
         let filePreferred = preferred.file
-        let fileWidth: CGFloat = fileCollapsed ? 24 : min(filePreferred, max(180, width - capturePreferred - groupPreferred))
+        let fileWidth: CGFloat = fileCollapsed ? (compact ? 24 : 0) : min(filePreferred, max(180, width - capturePreferred - groupPreferred))
         let captureWidth: CGFloat = compact ? min(164, max(126, (width - fileWidth) * 0.48))
             : min(capturePreferred, max(210, width - fileWidth - 230))
         let zoomWidth = max(0, width - fileWidth - captureWidth)
         let captureRect = NSRect(x: fileWidth, y: 0, width: captureWidth, height: Self.height)
         let zoomRect = NSRect(x: fileWidth + captureWidth, y: 0, width: zoomWidth, height: Self.height)
-        dividers.forEach { $0.isHidden = false }
+        dividers[0].isHidden = fileWidth == 0
+        dividers[1].isHidden = false
         modeButton.isHidden = false
         for (divider, x) in zip(dividers, [captureRect.minX, zoomRect.minX]) {
             divider.frame = NSRect(x: x, y: 6, width: 1, height: 34)
@@ -224,12 +246,12 @@ struct ViewerStatusChoices {
         let top: CGFloat = 24, bottom: CGFloat = 5, row: CGFloat = 17
         // ChromeGlass's content is unflipped. Both rows are placed explicitly in its coordinates.
         for view in [titleLabel, folderLabel, positionButton, previous, next] { view.isHidden = fileCollapsed }
-        compactInfo.isHidden = !fileCollapsed
+        compactInfo.isHidden = !compact
         compactInfo.frame = NSRect(x: 2, y: 7, width: 20, height: 32)
         if !fileCollapsed {
-            let positionWidth: CGFloat = 64
+            let positionWidth = positionWidth
             titleLabel.frame = NSRect(x: 9, y: top, width: max(0, fileWidth - 18), height: row)
-            positionButton.isHidden = fileWidth < 320
+            positionButton.isHidden = status.index == nil
             positionButton.frame = NSRect(x: fileWidth - positionWidth - 6, y: bottom, width: positionWidth, height: row)
             previous.isHidden = true; next.isHidden = true // Native navigation buttons already live to the left.
             folderLabel.frame = NSRect(x: 9, y: bottom, width: max(0, fileWidth - (positionButton.isHidden ? 18 : positionWidth + 24)), height: row)
@@ -258,7 +280,7 @@ struct ViewerStatusChoices {
         let valueX = left + caption
         profileLabel.frame = NSRect(x: left, y: top, width: caption, height: row)
         groupLabel.frame = NSRect(x: left, y: bottom, width: caption, height: row)
-        let percentWidth: CGFloat = min(49, inner * 0.25)
+        let percentWidth = min(max(49, ceil(zoomButton.cell!.cellSize.width) + 4), inner * 0.40)
         let modeWidth: CGFloat = inner >= 250 ? 45 : 0
         modeButton.isHidden = modeWidth == 0
         zoomButton.frame = NSRect(x: right - percentWidth, y: top, width: percentWidth, height: row)
@@ -270,18 +292,18 @@ struct ViewerStatusChoices {
     /// Below the normal three-column budget the two essential sections use one row each. AppKit reserves
     /// titlebar space for traffic lights and overflow too, so a 320 pt window can leave less than 270 pt here.
     private func layoutMinimal(width: CGFloat) {
-        for view in [titleLabel, folderLabel, positionButton, previous, next, compactInfo, profileLabel, groupLabel, progress] {
+        for view in [titleLabel, folderLabel, positionButton, previous, next, profileLabel, groupLabel, progress] {
             view.isHidden = true
         }
         dividers.forEach { $0.isHidden = true }
         modeButton.isHidden = true
-        metadataButton.isHidden = false
-        set(metadataButton, "")
-        metadataButton.frame = NSRect(x: 3, y: 24, width: max(0, width - 6), height: 17)
+        metadataButton.isHidden = true
+        compactInfo.isHidden = false
+        compactInfo.frame = NSRect(x: 4, y: 24, width: 16, height: 17)
         let hasParts = exposure?.parts.isEmpty == false
         noExposure.isHidden = hasParts
-        noExposure.frame = metadataButton.frame
-        layoutExposure(exposureLabels, x: 4, y: 24, width: width - 8, gap: 1)
+        noExposure.frame = NSRect(x: 24, y: 24, width: max(0, width - 32), height: 17)
+        layoutExposure(exposureLabels, x: 24, y: 24, width: width - 32, gap: 4)
         profileButton.isHidden = false; groupButton.isHidden = false; zoomButton.isHidden = false
         let profileWidth = max(40, (width - 50) * 0.43)
         profileButton.frame = NSRect(x: 4, y: 5, width: profileWidth, height: 17)
@@ -289,20 +311,15 @@ struct ViewerStatusChoices {
         groupButton.frame = NSRect(x: profileWidth + 7, y: 5, width: max(0, width - profileWidth - 55), height: 17)
     }
 
-    /// Compress every value proportionally, so a long ISO/focal length cannot cover the next section.
-    /// Full values remain available to VoiceOver and in the EXIF tooltip, including the narrowest window.
+    /// Keep each visible setting intact. The info control's tooltip and the Info panel keep the full values.
     private func layoutExposure(_ labels: [NSTextField], x origin: CGFloat, y: CGFloat, width: CGFloat, gap: CGFloat) {
-        let shown = labels.filter { !$0.isHidden }
-        let measured = shown.map { ceil($0.cell!.cellSize.width) + 1 }
-        let available = max(0, width - gap * CGFloat(max(0, shown.count - 1)))
-        let total = measured.reduce(0, +)
-        let ratio = total > 0 ? min(1, available / total) : 1
+        let end = origin + width
         var x = origin
-        for (label, natural) in zip(shown, measured) {
-            let width = natural * ratio
-            label.frame = NSRect(x: x, y: y, width: width, height: 17)
-            label.toolTip = label.stringValue
-            x += width + gap
+        for label in labels where !label.isHidden {
+            let measured = ceil(label.cell!.cellSize.width) + 1
+            guard x + measured <= end else { label.isHidden = true; continue }
+            label.frame = NSRect(x: x, y: y, width: measured, height: 17)
+            x += measured + gap
         }
     }
 
@@ -338,10 +355,14 @@ struct ViewerStatusChoices {
         let page: ViewerStatusPopover
         if let existing = numericPanels[kind] { page = existing }
         else { page = ViewerStatusPopover(kind: kind); numericPanels[kind] = page }
-        page.onAction = { [weak self] action in self?.popover?.performClose(nil); self?.onAction?(action) }
+        page.onAction = { [weak self] action in
+            if action != .key(.toggleKeepZoom) { self?.popover?.performClose(nil) }
+            self?.onAction?(action)
+        }
         page.update(index: status.index, count: status.count, zoom: zoomDetails)
         if popover == nil { let p = NSPopover(); p.behavior = .transient; popover = p }
         popover?.contentViewController = page
+        popover?.delegate = page
         popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     func dismissPopover() { popover?.performClose(nil) }

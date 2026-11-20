@@ -6,13 +6,11 @@ extension SettingsPanel {
     /// has no keys: it remembers its size itself.
     static let interface = SettingsPage("interface", "Interface", symbol: "macwindow", sections: [
         SettingsSection("Stats Bar", rows: [
-            .toggle("stats-bar-with-toolbar", "Show with the toolbar", symbol: "menubar.rectangle",
-                    description: "Off: in a window the bar shows only when the toolbar is hidden (⌥⌘T), since the "
-                        + "toolbar carries the same facts; in full screen, where the toolbar only slides in on "
-                        + "demand, it shows as I says. Default off."),
-            .number("stats-bar-opacity", "Darkness", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
-                    description: "How dark the strip is under the text. White text needs about 0.6 to read over a "
-                        + "bright photo, the coloured values 0.7. 0.3–1, default 0.7."),
+            .toggle("stats-bar-with-toolbar", "Show alongside toolbar", symbol: "menubar.rectangle",
+                    description: "Show the stats bar alongside the toolbar in a window. Press I to toggle the stats "
+                        + "bar or ⌥⌘T to toggle the toolbar. Default off."),
+            .number("stats-bar-opacity", "Background opacity", step: 0.01, symbol: "circle.lefthalf.striped.horizontal",
+                    description: "Higher values make the text easier to read over bright photos. 0.3–1, default 0.7."),
             .choice("stats-bar-rows", "Rows", [(word: "2", title: "Two"), (word: "1", title: "One")],
                     symbol: "rectangle.split.1x2",
                     description: "Two: the facts in the first row, the file's name and the folder's in the second. One: "
@@ -27,13 +25,13 @@ extension SettingsPanel {
                                     + "opacity. 0.02–0.6, default 0.15."),
                     ]),
             .toggle("stats-modified", "Modification date", symbol: "calendar",
-                    description: "The file's modification date, under the folder's name on the right. Default on."),
-            .toggle("stats-bar-autohide", "Hide by itself", symbol: "eye.circle",
-                    description: "The bar fades out after the delay and comes back with the next photo or when "
-                        + "you switch it with I. Default off.",
+                    description: "Show when the file was last modified. Default on."),
+            .toggle("stats-bar-autohide", "Hide after a delay", symbol: "eye.circle",
+                    description: "The stats bar returns when you change photos or show it with I. Default off.",
                     nested: [
                         .number("stats-bar-hide-delay", "Delay (ms)", step: 100,
-                                description: "How long it stays after a photo came. 500–30000, default 3000."),
+                                description: "How long the stats bar stays visible after you change photos. "
+                                    + "500–30000 ms, default 3000 ms."),
                     ]),
             .toggle("stats-icons", "Icons", symbol: "chart.bar.doc.horizontal",
                     description: "A small symbol in front of each fact: place, size, weight, format, zoom, date, "
@@ -55,11 +53,11 @@ extension SettingsPanel {
             ], symbol: "rectangle.topthird.inset.filled",
                     description: "Always visible keeps the upper toolbar and tab bar expanded while tabs are shown, "
                         + "so they stay in place for switching. Auto-hide reveals both together at the screen edge. "
-                        + "B temporarily switches pinning. Default Always visible."),
+                        + "B temporarily switches pinning. Default Auto-hide with toolbar."),
         ]),
         SettingsSection("Toasts", rows: [
             .choice("toast-position", "Position", Self.toastPositions, symbol: "align.horizontal.center",
-                    description: "Where the one-line answer of a key sits. Default Bottom."),
+                    description: "Where shortcut feedback appears in the viewer. Default Bottom."),
         ]),
         SettingsSection("Two Pages", rows: [
             .toggle("spread", "Two pages", symbol: "book.pages",

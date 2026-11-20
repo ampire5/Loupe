@@ -12,6 +12,7 @@ import LoupeCore
     private let subtitle = NSTextField(labelWithString: "")
     private let message = NSTextField(wrappingLabelWithString: "")
     private let preview = NSImageView()
+    private let snapshot = NSStackView()
     private let summary = InspectorRows()
     private var sections: [String: InspectorSection] = [:]
     private let content = NSStackView()
@@ -54,7 +55,7 @@ import LoupeCore
         root.blendingMode = .withinWindow
         root.state = .followsWindowActiveState
         view = root
-        let heading = NSTextField(labelWithString: "Information")
+        let heading = NSTextField(labelWithString: "Info")
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Hide Info")!,
                              target: self, action: #selector(closeClicked))
@@ -86,15 +87,15 @@ import LoupeCore
         scroll.documentView = document
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 14
+        content.spacing = 16
         content.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(content)
         NSLayoutConstraint.activate([
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            content.topAnchor.constraint(equalTo: document.topAnchor, constant: 2),
+            content.topAnchor.constraint(equalTo: document.topAnchor),
             content.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 16),
             content.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -16),
-            content.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -18),
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -16),
         ])
         name.font = .systemFont(ofSize: 15, weight: .semibold)
         name.isSelectable = true
@@ -105,9 +106,10 @@ import LoupeCore
         preview.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([preview.widthAnchor.constraint(equalToConstant: 64), preview.heightAnchor.constraint(equalToConstant: 64)])
         let identity = NSStackView(views: [name, subtitle])
-        identity.orientation = .vertical; identity.alignment = .leading; identity.spacing = 3
-        let snapshot = NSStackView(views: [preview, identity])
+        identity.orientation = .vertical; identity.alignment = .leading; identity.spacing = 4
         snapshot.orientation = .horizontal; snapshot.spacing = 12
+        snapshot.addArrangedSubview(preview)
+        snapshot.addArrangedSubview(identity)
         add(snapshot)
         message.textColor = .secondaryLabelColor
         message.font = .systemFont(ofSize: 12)
@@ -147,6 +149,7 @@ import LoupeCore
                 let data = value.sections.first { $0.title == title }
                 section.show(data?.rows ?? [], present: data != nil, pending: value.pendingSections.contains(title))
             }
+            snapshot.isHidden = loader.entry == nil
             let hasPath = loader.entry?.url.isFileURL == true
             reveal.isHidden = !hasPath; copyPath.isHidden = !hasPath
             displayed = value
@@ -234,19 +237,24 @@ private final class FlippedInspectorView: NSView {
         status.heightAnchor.constraint(equalToConstant: 16).isActive = true
         addArrangedSubview(status)
         status.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
-        status.isHidden = disclosure.state != .on
+        status.isHidden = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     func show(_ values: [InfoRow], present: Bool, pending: Bool) {
         if isHidden == present { isHidden = !present }
         rows.show(values)
-        let text = pending ? "Requesting information…" : values.isEmpty ? "No information in file." : ""
+        let text = pending ? "Reading metadata…" : values.isEmpty ? "No metadata in this section" : ""
         if status.stringValue != text { status.stringValue = text }
+        updateStatusVisibility()
     }
     @objc private func toggle() {
         rows.isHidden = disclosure.state != .on
-        status.isHidden = disclosure.state != .on
+        updateStatusVisibility()
         defaults.set(disclosure.state == .on, forKey: key)
+    }
+    private func updateStatusVisibility() {
+        let hidden = disclosure.state != .on || status.stringValue.isEmpty
+        if status.isHidden != hidden { status.isHidden = hidden }
     }
     @objc private func toggleLabel() { disclosure.state = disclosure.state == .on ? .off : .on; toggle() }
 }

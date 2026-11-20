@@ -183,7 +183,7 @@ public actor FolderNavigator {
 
     private static func target(_ folder: URL, _ entries: [DirectoryEntry]) -> FolderTarget? {
         let imageEntries = entries
-            .filter { !$0.isDirectory && Playlist.imageExtensions.contains($0.url.pathExtension.lowercased()) }
+            .filter { !$0.isDirectory && Playlist.mediaExtensions.contains($0.url.pathExtension.lowercased()) }
         guard !imageEntries.isEmpty else { return nil }
         var stamps: [URL: FileStamp] = [:]
         for entry in imageEntries { stamps[entry.url.standardizedFileURL] = entry.stamp }

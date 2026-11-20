@@ -384,6 +384,22 @@ extension Notification.Name {
         menu.addItem(off)
         menu.addItem(.viewerKey("Save Size for This Mode", .saveDetectorSize))
         menu.addItem(.viewerKey("Next Target", .nextTarget))
+        for (title, selector, key, advance) in [
+            ("Confirm Comfortable Detail View", #selector(ViewerWindowController.saveDetailCrop(_:)), "1", false),
+            ("Confirm Overview Composition", #selector(ViewerWindowController.saveOverviewCrop(_:)), "2", false),
+            ("Confirm Detail and Next Photo", #selector(ViewerWindowController.saveDetailCropAndNext(_:)), "1", true),
+            ("Confirm Overview and Next Photo", #selector(ViewerWindowController.saveOverviewCropAndNext(_:)), "2", true)
+        ] {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
+            item.identifier = .init("framing.save")
+            item.keyEquivalentModifierMask = advance ? [.option, .shift] : [.option]
+            menu.addItem(item)
+        }
+        menu.addItem(NSMenuItem(title: "Undo Last Framing Feedback", action: #selector(ViewerWindowController.undoFramingFeedback(_:)), keyEquivalent: ""))
+        menu.addItem(.viewerKey("Object Feedback under Pointer…", .showFramingFeedback))
+        menu.addItem(.viewerKey("Switch Detail / Overview", .toggleFramingIntent))
+        menu.addItem(NSMenuItem(title: "Save Reference Crop", action: #selector(ViewerWindowController.saveFramingReference(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Learn from Reference Crops…", action: #selector(ViewerWindowController.showFramingLearning(_:)), keyEquivalent: ""))
         // The keys and these choices are the tab's (`ViewerWindowController.tabZoomValues`): ⌥L keeps them for the
         // folder, the item below for every folder.
         menu.addItem(.viewerKey("Save Active Zoom Settings for This Folder", .rememberZoom))
@@ -409,13 +425,25 @@ extension Notification.Name {
         return menu
     }
 
-    /// The menus are delegated here for their contents (`menuNeedsUpdate`) and so that they never match a key: the Zoom,
-    /// Scaling and Colour menus have no ⌘ keys, only the viewer's plain ones, which they show and the viewer handles itself
-    /// (`ViewerView.performKeyEquivalent`). Declining here keeps those keys typing in any other window (the Open panel's
-    /// type-select) instead of a menu item taking them.
+    /// Plain viewer keys remain display-only here, so other windows keep their typing keys.
+    /// Explicit modified crop commands use the key viewer only, never a viewer behind a sheet/window.
     func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
                               action: UnsafeMutablePointer<Selector?>) -> Bool {
-        false
+        guard let viewer = NSApp.keyWindow?.windowController as? ViewerWindowController,
+              NSApp.keyWindow?.attachedSheet == nil,
+              !(NSApp.keyWindow?.firstResponder is NSTextInputClient),
+              let item = Self.framingShortcut(in: menu, event: event), viewer.validateMenuItem(item) else { return false }
+        target.pointee = viewer; action.pointee = item.action
+        return true
+    }
+    static func framingShortcut(in menu: NSMenu, event: NSEvent) -> NSMenuItem? {
+        guard event.type == .keyDown, !event.isARepeat else { return nil }
+        // Match physical digits regardless of Option/Shift symbols or the active keyboard layout.
+        let key: String
+        switch event.keyCode { case 18: key = "1"; case 19: key = "2"; default: return nil }
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        return menu.items.first { $0.identifier?.rawValue == "framing.save"
+            && $0.keyEquivalent == key && $0.keyEquivalentModifierMask == flags }
     }
 
     /// The tags of the Zoom menu's Custom Detector header and of its mode items, made again each time it opens.

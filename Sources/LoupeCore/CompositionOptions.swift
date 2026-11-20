@@ -85,14 +85,16 @@ public struct CompositionOptions: Equatable, Sendable {
         return value.isFinite ? min(max(value, 0.25), 2) : 1
     }
 
-    public func cropLimit(for kind: SubjectKind) -> Double? {
-        let value = maxCrop[kind] ?? (SubjectFraming.framesHead(kind) ? (maxCrop[.face] ?? 0) : nil)
+    public func cropLimit(for kind: SubjectKind, framing: DetectorFraming? = nil) -> Double? {
+        let isHead = kind == .face || (framing ?? SubjectFraming.detector).heads.contains(kind)
+        let value = maxCrop[kind] ?? (isHead ? (maxCrop[.face] ?? 0) : nil)
         guard let value, value.isFinite, (0...0.49).contains(value) else { return nil }
         return value
     }
 
-    public func protectionPadding(for kind: SubjectKind) -> Double {
-        let value = protectionMargins[kind] ?? (SubjectFraming.framesHead(kind) ? protectionMargins[.face] : nil) ?? protectionMargin
+    public func protectionPadding(for kind: SubjectKind, framing: DetectorFraming? = nil) -> Double {
+        let isHead = kind == .face || (framing ?? SubjectFraming.detector).heads.contains(kind)
+        let value = protectionMargins[kind] ?? (isHead ? protectionMargins[.face] : nil) ?? protectionMargin
         return value.isFinite ? min(max(value, 0), 0.5) : 0
     }
 

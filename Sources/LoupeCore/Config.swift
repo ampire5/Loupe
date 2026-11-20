@@ -86,7 +86,8 @@ public enum OpenIn: String, Sendable {
 /// spec §3.1): Recent, Sessions, a folder (`folders`) or Stash. Not written back from the user's moves: every launch
 /// opens on Recent unless the file says otherwise (the owner's wish of 2026-10-27).
 public enum HomeTab: String, Sendable, Codable {
-    case recent, sessions, folders, stash
+    case recent, sessions, folders, stash, everything
+    case webImages = "web-images"
 }
 
 /// `keep-zoom-as`: what a free zoom (a pinch, a wheel, `=` / `-`) keeps when another photo comes or the window changes
@@ -247,6 +248,8 @@ public struct Config: Equatable, Sendable {
     /// its own token and leaves a typo or a token from a newer Loupe where it was.
     private var zoomStopTokens = defaultZoomStops.map(Config.text(of:))
     public var zoomStopMode = ZoomStopMode.adaptive
+    /// `zoom-stop-breakaway`: travel in scale doublings to leave an Adaptive stop.
+    public var zoomStopBreakaway = ZoomStopGesture.defaultBreakaway
     /// `zoom-stop-haptics`: a trackpad tick when a gesture lands on a stop.
     public var zoomStopHaptics = true
     /// `zoom-animation`: milliseconds a zoom step (key, menu, double click, stop) glides, 0...1000 (`no`: 0, a jump;
@@ -508,7 +511,7 @@ public struct Config: Equatable, Sendable {
     /// `fullscreen-toolbar`: the viewer's toolbar in full screen (`FullScreenToolbar`).
     public var fullScreenToolbar = FullScreenToolbar.remember
     /// `fullscreen-tabs`: keep the native header stable while tabs are shown, or hide it as one block.
-    public var fullScreenTabs = FullScreenTabs.shown
+    public var fullScreenTabs = FullScreenTabs.auto
     /// `stats-modified`: the photo's modification date in the stats bar.
     public var statsModified = true
     /// `stats-bar-autohide`: the stats bar fades out by itself after `stats-bar-hide-delay` and comes back with a photo.
@@ -530,6 +533,8 @@ public struct Config: Equatable, Sendable {
     public var openIn = OpenIn.tab
     /// `new-window-fullscreen`: a new window opened from a full-screen one goes to full screen too (`NewWindowFullScreen`).
     public var newWindowFullScreen = NewWindowFullScreen.follow
+    /// `playback-autoplay`: start the enabled playback provider when media becomes active and visible.
+    public var playbackAutoplay = false
     /// `home-tab`: the source Home opens on (`HomeTab`).
     public var homeTab = HomeTab.recent
     /// `home-start`: Home's start page, where the toolbar's house and ⇧⌘H on Home go (`HomeTab`; `folders`: Places).
@@ -687,7 +692,7 @@ public struct Config: Equatable, Sendable {
     }
 
     /// Every key loupe.conf understands, in file order.
-    public static let keys = ["zoom-stops", "zoom-stop-mode", "zoom-stop-haptics",
+    public static let keys = ["zoom-stops", "zoom-stop-mode", "zoom-stop-breakaway", "zoom-stop-haptics",
                               "zoom-animation", "zoom-rubber-band", "keep-zoom-position", "keep-zoom-as", "step-pan", "step-zoom", "subject-target", "subject-size", "subject-pull", "subject-recheck", "subject-analysis", "default-zoom-mode", "fit-upscale",
                               "smart-zoom", "smart-zoom-gesture", "smart-zoom-options", "zoom-anchor", "zoom-anchor-center",
                               "rmb-zoom-speed", "rmb-zoom-inertia",
@@ -699,7 +704,7 @@ public struct Config: Equatable, Sendable {
                               "cache-full", "cache-previews", "cache-far-previews", "cache-files", "cache-memory", "keep-share", "cache-idle-trim", "cache-idle-keep",
                               "jxl-threads-current", "jxl-threads-other", "jxl-dc-preview",
                               "show-blurry", "switch-preview",
-                              "wheel-step", "key-step", "wheel-direction", "cursor-autohide", "launch-reveal", "open-in",
+                              "wheel-step", "key-step", "wheel-direction", "cursor-autohide", "playback-autoplay", "launch-reveal", "open-in",
                               "new-window-fullscreen", "background",
                               "transparency", "checker-size", "checker-colors",
                               "upscale", "upscale-high", "upscale-high-from", "downscale", "lanczos-antiring", "pixel-art",
@@ -782,6 +787,7 @@ public struct Config: Equatable, Sendable {
         switch key {
         case "zoom-stops": return zoomStopTokens.isEmpty ? "none" : zoomStopTokens.joined(separator: ",")
         case "zoom-stop-mode": return zoomStopMode.rawValue
+        case "zoom-stop-breakaway": return formatNumber(zoomStopBreakaway)
         case "zoom-stop-haptics": return zoomStopHaptics ? "yes" : "no"
         case "zoom-animation": return String(zoomAnimationMilliseconds)
         case "zoom-rubber-band": return zoomRubberBand ? "yes" : "no"
@@ -896,6 +902,7 @@ public struct Config: Equatable, Sendable {
         case "launch-reveal": return launchReveal.rawValue
         case "open-in": return openIn.rawValue
         case "new-window-fullscreen": return newWindowFullScreen.rawValue
+        case "playback-autoplay": return playbackAutoplay ? "yes" : "no"
         case "home-tab": return homeTab.rawValue
         case "home-start": return homeStart.rawValue
         case "home-sidebar": return homeSidebar ? "yes" : "no"
@@ -988,6 +995,9 @@ public struct Config: Equatable, Sendable {
             zoomStopTokens = Self.zoomStopTokens(value)
         case "zoom-stop-mode":
             if let v = ZoomStopMode(rawValue: value.lowercased()) { zoomStopMode = v } else { return .badValue }
+        case "zoom-stop-breakaway":
+            guard let v = Double(value), (0.005...0.5).contains(v) else { return .badValue }
+            zoomStopBreakaway = v
         case "zoom-stop-haptics":
             if let v = Self.bool(value) { zoomStopHaptics = v } else { return .badValue }
         case "zoom-animation":
@@ -1038,6 +1048,9 @@ public struct Config: Equatable, Sendable {
                 for (key, value) in profile {
                     if key == "size" {
                         guard let v = DetectorSetup.share(value), v.isFinite, (0.2...1).contains(v) else { return .badValue }
+                    } else if key == "chain" {
+                        let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+                        guard !parts.isEmpty, parts.allSatisfy({ SubjectKind(rawValue: String($0)) != nil }) else { return .badValue }
                     } else if options.set(key, value) != true { return .badValue }
                 }
             }
@@ -1261,6 +1274,8 @@ public struct Config: Equatable, Sendable {
             if let v = OpenIn(rawValue: value.lowercased()) { openIn = v } else { return .badValue }
         case "new-window-fullscreen":
             if let v = NewWindowFullScreen(rawValue: value.lowercased()) { newWindowFullScreen = v } else { return .badValue }
+        case "playback-autoplay":
+            if let v = Self.bool(value) { playbackAutoplay = v } else { return .badValue }
         case "home-tab":
             if let v = HomeTab(rawValue: value.lowercased()) { homeTab = v } else { return .badValue }
         case "home-start":

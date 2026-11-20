@@ -133,6 +133,7 @@ import LoupeRender
         plan = ColorOrder.order(count: files.count, current: current, direction: direction, reach: reach,
                                 companion: companion)
             .map { files[$0] }
+            .filter { PlaybackMedia.candidate($0) != .video }
         planned = Set(plan)
         for url in plan {
             if let old = self.stamps[url], let new = stamps[url], old != new {

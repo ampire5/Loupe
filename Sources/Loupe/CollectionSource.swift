@@ -53,12 +53,12 @@ enum SessionCardAction {
         switch id {
         case HomeCollections.sessions:
             HomeSourceInfo(title: "Sessions", sortKeys: [.date, .name], noun: "session",
-                           emptyHint: "No saved sessions — File › Save Session As…")
+                           emptyHint: "To keep your open tabs, choose File › Save Session As…")
         case HomeCollections.stash:
             HomeSourceInfo(title: "Stash", page: stashPage(), pageFilters: ["Scenes", "Images", "Galleries"])
         default:
             HomeSourceInfo(title: "Recent", sortKeys: [.date, .name], groupsByDate: true, noun: "item",
-                           emptyHint: "Drop a photo here or press ⌘O to open one")
+                           emptyHint: "Drop a photo or folder here, or press ⌘O to open one.")
         }
     }
 
@@ -181,6 +181,11 @@ enum SessionCardAction {
     }
 
     // MARK: Clicks and menus
+
+    func recentFolder(for entry: BrowserEntry) -> URL? {
+        guard let recent = shownRecent[entry.id], recent.kind == .folder, recent.gallery == nil else { return nil }
+        return URL(fileURLWithPath: recent.path, isDirectory: true)
+    }
 
     func menu(for entry: BrowserEntry) -> [HomeMenuItem] {
         switch HomeCollections.target(entry.id) {

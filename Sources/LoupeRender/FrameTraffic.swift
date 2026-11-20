@@ -35,7 +35,12 @@ public final class FrameTraffic: Sendable {
     var waiting: Int { state.withLock { $0.waiters.count } }
 
     /// Returns once no tracked frame is in flight (at once when none is), or after `wait` seconds at most.
-    func quiet(wait: Double = FrameTraffic.longestWait) async {
+    func quiet(
+        wait: Double = FrameTraffic.longestWait,
+        scheduleTimeout: @Sendable (Double, @escaping @Sendable () -> Void) -> Void = { delay, expire in
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay, execute: expire)
+        }
+    ) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let id = state.withLock { s -> UInt64? in
                 guard s.inFlight > 0 else { return nil }
@@ -44,7 +49,7 @@ public final class FrameTraffic: Sendable {
                 return s.nextWaiter
             }
             guard let id else { return continuation.resume() }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + wait) { [self] in
+            scheduleTimeout(wait) { [self] in
                 state.withLock { $0.waiters.removeValue(forKey: id) }?.resume()
             }
         }

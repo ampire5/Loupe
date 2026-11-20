@@ -23,6 +23,13 @@ import Testing
         #expect(HomeBack.target(returnsTo: .recent, showingHome: false, hasPhoto: true, stashAvailable: true) == .recent)
     }
 
+    @Test func backToEverythingRestoresItsPage() {
+        let location = HomeCollections.location(of: .everything)
+        #expect(location == .source("everything"))
+        #expect(location.map(HomeCollections.tab(of:)) == .everything)
+        #expect(HomeBack.target(returnsTo: .everything, showingHome: false, hasPhoto: true, stashAvailable: false) == .everything)
+    }
+
     @Test func backToFolders() {
         #expect(HomeBack.target(returnsTo: .folders, showingHome: false, hasPhoto: true, stashAvailable: false) == .folders)
     }

@@ -6,7 +6,7 @@ import LoupeCore
 import LoupeRender
 import Metal
 
-// LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|all|a,b,...] [--screen 6144x3456]
+// LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|close|all|a,b,...] [--screen 6144x3456]
 //                   [--video out.mov] [--raw out.tsv] [--conf loupe.conf] [--nocache] [--trace out.txt]
 //                   [--seed] [--limit N] <folder>
 //
@@ -120,6 +120,7 @@ final class FrameBox: @unchecked Sendable {
 /// `previous` in the focus (the index current before the step, ↔ `previousIndex`), and a strip click (`strip` steps,
 /// ↔ `scrub(to:)` with `seedCurrent()`, then `endScrub()`; `stripJump` ↔ `jumpedFromStrip`).
 actor ReplayDriver {
+    private let session: CacheSessionID
     static let dwellDelay: Duration = .milliseconds(150)
 
     let cache: ImageCache<MetalPyramidLoader>
@@ -155,7 +156,7 @@ actor ReplayDriver {
     private(set) var peakReady = 0
 
     init(cache: ImageCache<MetalPyramidLoader>, files: [URL], zoom: ReplayZoom, screen: PixelSize, box: FrameBox,
-         showBlurry: ShowBlurry, seeds: ThumbnailStore? = nil) {
+         showBlurry: ShowBlurry, seeds: ThumbnailStore? = nil, session: CacheSessionID = .solo) {
         self.showBlurry = showBlurry
         self.seeds = seeds
         self.cache = cache
@@ -163,6 +164,7 @@ actor ReplayDriver {
         self.zoom = zoom
         self.screen = screen
         self.box = box
+        self.session = session
     }
 
     /// Navigates to `index` (step `number`) and returns the step's start instant. A `strip` step is a click on the
@@ -225,15 +227,16 @@ actor ReplayDriver {
             $0.graphicsLimitBytes = stats.graphicsLimitBytes
         }
         guard stepNo >= 0, url == files[index] else { return }
-        if let e = await cache.entry(url) { await consider(e) }
+        if let e = await cache.entry(url), stepNo >= 0 { await consider(e) }
     }
 
     /// Drops what is on screen (the viewer closes) and its pin, so the teardown measures what the cache itself
     /// still holds.
     func close() async {
+        stepNo = -1
         shown = nil
         box.set { $0.shown = nil }
-        await cache.setPinned(nil)
+        await cache.setPinned(session, nil)
     }
 
     /// Records the end-of-step state and metrics.
@@ -299,7 +302,7 @@ actor ReplayDriver {
                                needsFull: needsFull(), screen: screen, previous: previousIndex, scrubbing: scrubbing)
         guard focus != sentFocus else { return }
         sentFocus = focus
-        await cache.setFocus(files: files, focus: focus)
+        await cache.setFocus(session, files: files, focus: focus)
     }
 
     /// `jumpPreview`: a seeded thumbnail the strip jumped to goes on screen at once (ViewerSession.consider).
@@ -337,7 +340,8 @@ actor ReplayDriver {
         if onScreen || qualifies(e, mode: showBlurry, jumpPreview: stripJump && e.isSeededOnly) {
             let pin = shown?.url != e.url
             shown = e
-            if pin { await cache.setPinned(e.url) }   // ViewerSession.show pins the photo going on screen
+            if pin { await cache.setPinned(session, e.url) }
+            guard stepNo >= 0 else { return }
             if r.shownMs == nil {
                 r.shownMs = ms
                 r.sharpAtShow = sharp
@@ -429,7 +433,7 @@ struct ScriptResult {
 }
 
 enum Replay {
-    static let usage = "usage: LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|all|a,b,...] "
+    static let usage = "usage: LoupeBench replay [--script fit|100|burst|pingpong|jump10|jump10-100|jumpfar|backfast|close|all|a,b,...] "
         + "[--screen WxH] [--video out.mov] [--raw out.tsv] [--conf loupe.conf] [--nocache] [--trace out.txt] [--seed] "
         + "[--limit N] <folder>"
 
@@ -490,6 +494,10 @@ enum Replay {
         }
         guard let folder else { fail(usage) }
         o.folder = folder
+        if o.scripts.contains("close"),
+           o.scripts != ["close"] || o.raw != nil || o.video != nil || o.trace != nil || o.seed {
+            fail("close runs by itself and writes its cycle table to standard output")
+        }
         return o
     }
 
@@ -506,6 +514,10 @@ enum Replay {
         // The app's playlist order and extension filter.
         let files = Array(Playlist(files: listed, current: first).files.prefix(o.limit))
         _ = MetalContext.shared   // shader compilation is not part of the first step
+        if o.scripts == ["close"], let script = ReplayScript.named("close") {
+            await CloseReplay.run(script, files: files, options: o)
+            return
+        }
         var seeds: ReplaySeeds?
         if o.seed {
             warn("replay: making the thumbnails of \(files.count) files to seed from (not timed)…")
@@ -651,8 +663,8 @@ enum Replay {
             since = landings[i].stop
         }
 
-        // Teardown: the viewer closes (the handler held the driver, the driver the cache: break that cycle) and an
-        // empty playlist plans nothing, so every entry is evicted; memory should return to where it started.
+        // Break the driver/cache callback cycle and clear the playlist. The close replay separately measures
+        // unregistering the session and releasing its entries.
         await cache.setOnUpdate { _ in }
         await seedStore?.close(cache)
         await driver.close()

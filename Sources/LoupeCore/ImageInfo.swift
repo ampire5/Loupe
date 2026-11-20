@@ -1,5 +1,6 @@
 import CoreGraphics
 import HomeScreenModel
+import UniformTypeIdentifiers
 
 /// What a file header says about an image, cheap enough to read before committing to a decode.
 public struct ImageInfo: Equatable, Sendable {
@@ -59,6 +60,8 @@ public struct ImageInfo: Equatable, Sendable {
 
     /// The browser's columns combine EXIF with the header already held beside the thumbnail.
     public var browserFacts: FileFacts? {
+        // The movie poster's dimensions and JPEG properties are unrelated to its stream facts.
+        if typeIdentifier == UTType.movie.identifier { return facts }
         var value = facts ?? FileFacts()
         value.width = value.width ?? orientedSize.width
         value.height = value.height ?? orientedSize.height
@@ -67,6 +70,15 @@ public struct ImageInfo: Equatable, Sendable {
         value.progressive = isProgressive
         value.typeIdentifier = typeIdentifier
         return value
+    }
+
+    /// A still extracted from a source file retains the source's byte count.
+    func withFileSize(_ size: Int) -> ImageInfo {
+        guard size != fileSize else { return self }
+        var info = ImageInfo(pixelSize: pixelSize, typeIdentifier: typeIdentifier, isProgressive: isProgressive,
+                             fileSize: size, colorSpaceName: colorSpaceName, orientation: orientation, colorSpace: colorSpace)
+        info.facts = facts
+        return info
     }
 
     /// The header as the thumbnail catalog keeps it: the colour space by name only (the orientation is kept).

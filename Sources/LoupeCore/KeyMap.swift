@@ -13,6 +13,9 @@ public enum KeyAction: String, CaseIterable, Sendable {
     /// SmartZoom profiles: M / ⇧M cycle forward / backward; ⌥⇧M saves the framed size in detector.conf.
     /// N / ⇧N cycle the groups detected on the current photo.
     case cycleDetectorMode, previousDetectorMode, saveDetectorSize, nextTarget, previousTarget
+    /// Optional explicit feedback; also assignable to mouse buttons through input.conf.
+    case confirmDetail, confirmOverview, confirmDetailAndNext, confirmOverviewAndNext
+    case undoFramingFeedback, showFramingFeedback, compareFraming, toggleFramingIntent
     case toggleToolbarPin
     /// Show Subjects: what Vision found over the photo (`SubjectOverlay`), for the window.
     case toggleSubjects
@@ -258,6 +261,14 @@ public struct KeyMap: Sendable, Equatable {
 
     /// Every action has its entry (a test checks): the fallback in `label` is never meant to show.
     static let titles: [KeyAction: (title: String, group: KeyGroup)] = [
+        .confirmDetail: ("Confirm comfortable detail view", .zoom),
+        .confirmOverview: ("Confirm overview composition", .zoom),
+        .confirmDetailAndNext: ("Confirm detail and next photo", .zoom),
+        .confirmOverviewAndNext: ("Confirm overview and next photo", .zoom),
+        .undoFramingFeedback: ("Undo last framing feedback", .zoom),
+        .showFramingFeedback: ("Object feedback under pointer", .zoom),
+        .compareFraming: ("Compare framing variants", .zoom),
+        .toggleFramingIntent: ("Switch detail / overview", .zoom),
         .previous: ("Previous photo", .navigation),
         .next: ("Next photo", .navigation),
         .previousFolder: ("Previous folder", .navigation),

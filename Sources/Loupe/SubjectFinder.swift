@@ -164,6 +164,18 @@ final class SubjectFinder: @unchecked Sendable {
         state.withLockUnchecked { $0.generation == generation }
     }
 
+    /// A reference describes the captured decoded pixels, not URL-cached results from an older file revision.
+    func requestFresh(_ url: URL, image: TiledImage, orientation: ImageOrientation, applied: Bool,
+                      setup: DetectorSetup, done: @escaping @MainActor (SubjectBoxes?) -> Void) {
+        let job = Job(url: url, image: image, orientation: orientation, applied: applied, setup: setup,
+                      ahead: false, urgent: false, done: [])
+        let generation = state.withLockUnchecked { $0.generation }
+        work.async { [self] in
+            let boxes = analyse(job, shouldContinue: { self.isCurrent(generation) })
+            DispatchQueue.main.async { done(self.isCurrent(generation) ? boxes : nil) }
+        }
+    }
+
     /// Starts the next job unless one runs, the foreground is busy or nothing waits.
     private func next() {
         guard let (job, generation) = state.withLockUnchecked({ s -> (Job, Int)? in

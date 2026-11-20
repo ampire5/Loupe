@@ -2,7 +2,6 @@ import CoreGraphics
 import Foundation
 import LoupeCore
 import Metal
-import QuartzCore
 import Testing
 @testable import LoupeRender
 
@@ -46,45 +45,44 @@ func pyramidInPiecesMatchesOneCommandBuffer(filter: PyramidFilter, alpha: Bool) 
     }
 }
 
-/// The number of `traffic`'s waiters, once `quiet` has registered one: polled with yields, as the waiter registers
-/// on another task.
-private func waitForWaiter(_ traffic: FrameTraffic) async {
-    while traffic.waiting == 0 { await Task.yield() }
-}
-
 @Test func quietReturnsAtOnceWithoutFrames() async {
-    let traffic = FrameTraffic(), start = CACurrentMediaTime()
-    await traffic.quiet(wait: 10)
-    #expect(CACurrentMediaTime() - start < 1)
+    let traffic = FrameTraffic()
+    await traffic.quiet { _, expire in
+        Issue.record("An idle GPU should not schedule a timeout")
+        expire()
+    }
     #expect(traffic.inFlight == 0 && traffic.waiting == 0)
 }
 
-@Test func quietWaitsForTheTrackedFrame() async throws {
+@Test(.timeLimit(.minutes(1))) func quietWaitsForTheTrackedFrame() async throws {
     let traffic = FrameTraffic()
     let frame = try #require(MetalContext.shared.queue.makeCommandBuffer())
     traffic.track(frame)
     #expect(traffic.inFlight == 1)
-    let quiet = Task { () -> Double in
-        await traffic.quiet(wait: 10)
-        return CACurrentMediaTime()
+    let (registered, registration) = AsyncStream<Void>.makeStream()
+    let quiet = Task {
+        await traffic.quiet { _, _ in registration.yield(()) }
     }
-    await waitForWaiter(traffic)
-    let committed = CACurrentMediaTime()
+    var registrations = registered.makeAsyncIterator()
+    try #require(await registrations.next() != nil)
+    #expect(traffic.waiting == 1)
     frame.commit()
-    let returned = await quiet.value
-    #expect(returned >= committed && returned - committed < 1)
+    await quiet.value
     #expect(traffic.inFlight == 0 && traffic.waiting == 0)
 }
 
-/// A frame tracked and never committed holds an upload up for `wait` at most.
 @Test func quietGivesUpAfterTheWait() async throws {
     let traffic = FrameTraffic()
     let frame = try #require(MetalContext.shared.queue.makeCommandBuffer())
     traffic.track(frame)
-    let start = CACurrentMediaTime()
-    await traffic.quiet(wait: 0.05)
-    let waited = CACurrentMediaTime() - start
-    #expect(waited >= 0.05 && waited < 1)
+    await confirmation("Timeout requested") { requested in
+        await traffic.quiet(wait: 0.05) { delay, expire in
+            requested()
+            #expect(delay == 0.05)
+            #expect(traffic.waiting == 1)
+            expire()
+        }
+    }
     #expect(traffic.inFlight == 1 && traffic.waiting == 0)
     frame.commit()
     await frame.completed()
