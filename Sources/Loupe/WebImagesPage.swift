@@ -155,7 +155,7 @@ private struct WebImagesContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                TextField("Search images", text: Binding(get: { state.query }, set: { text in
+                TextField("Search images", text: Binding(get: { state.query }, set: { text, _ in
                     guard state.query != text else { return }
                     state.query = text
                     state.invalidateSearch()
@@ -202,11 +202,11 @@ private struct WebImagesContent: View {
     private var engineMenu: some View {
         Menu {
             Toggle("Server Defaults", isOn: Binding(get: { state.selection == .serverDefaults },
-                                                     set: { if $0 { state.choose(.serverDefaults) } }))
+                                                     set: { enabled, _ in if enabled { state.choose(.serverDefaults) } }))
             if let engines = state.engines, !engines.isEmpty {
                 Divider()
                 ForEach(engines, id: \.name) { engine in
-                    Toggle(engine.name, isOn: Binding(get: { selected.contains(engine.name) }, set: { enabled in
+                    Toggle(engine.name, isOn: Binding(get: { selected.contains(engine.name) }, set: { enabled, _ in
                         var names = selected.filter { $0 != engine.name }
                         if enabled { names.append(engine.name) }
                         state.choose(names.isEmpty ? .serverDefaults : .explicit(names))
@@ -222,7 +222,7 @@ private struct WebImagesContent: View {
     private var resolutionMenu: some View {
         Menu {
             Picker("Minimum resolution", selection: Binding(get: { state.minimumResolution },
-                                                            set: state.chooseMinimumResolution)) {
+                                                            set: { value, _ in state.chooseMinimumResolution(value) })) {
                 ForEach(WebImageMinimumResolution.allCases, id: \.self) { resolution in
                     Text(resolution.title).tag(resolution)
                 }
