@@ -12,6 +12,7 @@ import HomeScreenModel
     private let folders: FolderStripController
     private let session: ViewerSession
     private var smartPanel: SmartZoomPanel?
+    private var plugins: [SlotPluginConfiguration] = []
     private var active = true
     private var gallerySource: StashFolderStripSource?
     private var galleryFolder: URL?
@@ -25,7 +26,7 @@ import HomeScreenModel
     private var appliedSlots = FolderSlotSettings.defaults
     private var insets = ViewerSlotLayout.Insets.zero
 
-    init(container: NSView, above: NSView, session: ViewerSession, store: ThumbnailStore, positions: FolderPositions, makeSmartZoom: @escaping () -> SmartZoomPanel) {
+    init(container: NSView, above: NSView, session: ViewerSession, store: ThumbnailStore, positions: FolderPositions, makeSmartZoom: @escaping () -> SmartZoomPanel, upscale: ViewerUpscale) {
         self.session = session
         let source = FolderStripListing(archives: Settings.shared.config.archiveFolders, sort: { folder in
             await MainActor.run { BrowserSort.forFolder(folder, settings: Settings.shared.folderSettings) }
@@ -57,7 +58,18 @@ import HomeScreenModel
             panel.interactionChanged = { [weak self] in self?.host.refreshLayout() }
             return page
         })
-        appliedSlots = FolderSlotSettings.normalized(Settings.shared.config.slots)
+        host.register(SlotTabDescriptor(id: FolderSlotSettings.upscale, title: "Neural Upscale",
+                                        symbol: "arrow.up.left.and.arrow.down.right", singleton: true) { _ in
+            let panel = UpscaleSlotPanel(upscale: upscale)
+            let page = SlotPage(view: panel, visibilityChanged: { [weak panel] shown in
+                panel?.setVisible(shown)
+            })
+            page.isTyping = { [weak panel] in panel?.isInteracting == true }
+            panel.interactionChanged = { [weak self] in self?.host.refreshLayout() }
+            return page
+        })
+        configurePlugins(Settings.shared.config.plugins)
+        appliedSlots = FolderSlotSettings.normalized(Settings.shared.config.slots, plugins: plugins)
         for edge in SlotEdge.allCases { host.configure(appliedSlots[edge] ?? SlotConfiguration(), edge: edge) }
         host.onLayout = { [weak self] video, _ in
             guard let self else { return }
@@ -65,7 +77,9 @@ import HomeScreenModel
             guard next != insets else { return }; insets = next; onInsets?(next)
         }
         host.onPersist = { [weak self] edge, value in
-            self?.appliedSlots[edge] = value
+            guard let self, appliedSlots[edge] != value else { return }
+            appliedSlots[edge] = value
+            prepareAssignedPlugins()
             Settings.shared.setSlot(edge, value)
         }
         host.onFocusContent = { [weak self] in self?.onFocus?() }
@@ -92,6 +106,7 @@ import HomeScreenModel
             }
         }
         host.start()
+        prepareAssignedPlugins()
     }
     func applySettings(_ config: Config) {
         if config.archiveFolders != archives {
@@ -103,11 +118,57 @@ import HomeScreenModel
                 folders.replaceSource(diskSource, opened: .folder(folder))
             }
         }
-        let incoming = FolderSlotSettings.normalized(config.slots)
+        let pluginsChanged = plugins != config.plugins
+        if pluginsChanged { configurePlugins(config.plugins) }
+        let incoming = FolderSlotSettings.normalized(config.slots, plugins: plugins)
         let changed = SlotEdge.allCases.filter { incoming[$0] != appliedSlots[$0] }
         appliedSlots = incoming
         for edge in changed { if let setting = incoming[edge] { host.configure(setting, edge: edge) } }
+        if pluginsChanged || !changed.isEmpty { prepareAssignedPlugins() }
     }
+
+    private func configurePlugins(_ incoming: [SlotPluginConfiguration]) {
+        for removed in plugins where !incoming.contains(removed) { host.unregister(removed.slotID) }
+        for plugin in incoming where !plugins.contains(plugin) {
+            host.register(SlotTabDescriptor(id: plugin.slotID, title: plugin.name, symbol: "puzzlepiece", singleton: true) { [weak self] _ in
+                guard let self else { return nil }
+                let panel = SlotPluginPanel(plugin: plugin)
+                panel.onMessage = { [weak self] in self?.onMessage?($0) }
+                let page = SlotPage(view: panel, dropped: { [weak panel] in panel?.stop() })
+                page.focus = { [weak panel] in panel?.focusPage() }
+                page.isTyping = { [weak panel] in panel?.isTyping == true }
+                page.reload = { [weak panel] in panel?.reload() }
+                return page
+            })
+        }
+        plugins = incoming
+    }
+
+    private func prepareAssignedPlugins() {
+        let ids = Set(plugins.map(\.slotID))
+        for edge in SlotEdge.allCases {
+            for id in host.tabIDs(in: edge) where ids.contains(id) && host.page(id, edge: edge) == nil {
+                host.prepare(id, edge: edge)
+            }
+        }
+    }
+
+    func pluginActions(for scope: SlotPluginScope) -> [(id: String, label: String)] {
+        host.livePages.flatMap { _, id, page -> [(id: String, label: String)] in
+            guard let panel = page.view as? SlotPluginPanel else { return [] }
+            return panel.actions.filter { $0.scope == scope }.map { ("\(id.rawValue)/\($0.name)", $0.label) }
+        }
+    }
+
+    func invokePluginAction(_ id: String, scope: SlotPluginScope, items: [SlotPluginItem]) {
+        for (_, tabID, page) in host.livePages {
+            guard let panel = page.view as? SlotPluginPanel,
+                  let action = panel.actions.first(where: { $0.scope == scope && id == "\(tabID.rawValue)/\($0.name)" }) else { continue }
+            panel.invoke(action, items: items)
+            return
+        }
+    }
+
     func useGalleries(_ source: StashFolderStripSource, id: String, folder: URL) {
         gallerySource = source; galleryID = id; galleryFolder = folder.standardizedFileURL
         folders.replaceSource(source, opened: .gallery(id))
@@ -145,7 +206,10 @@ import HomeScreenModel
     }
     func toggle(_ edge: SlotEdge) { if active { host.toggle(edge) } }
     func cancelInteraction() { folders.cancelInteraction() }
-    func close() { host.cancelInteraction(); folders.setVisible(false); area.removeFromSuperview(); preview.removeFromSuperview() }
+    func close() {
+        for plugin in plugins { host.unregister(plugin.slotID) }
+        host.cancelInteraction(); folders.setVisible(false); area.removeFromSuperview(); preview.removeFromSuperview()
+    }
     func key(_ event: NSEvent) -> Bool {
         guard active else { return false }
         if event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command, .control] {

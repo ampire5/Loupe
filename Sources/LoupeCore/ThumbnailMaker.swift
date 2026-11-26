@@ -180,6 +180,17 @@ public enum ThumbnailMaker {
         return LevelImage(image: pixels, level: level)
     }
 
+    /// Turns full-size pixels on the caller's worker, using the thumbnail's exact EXIF transforms.
+    package static func orientedPixels(_ image: DecodedImage, by orientation: ImageOrientation) throws -> DecodedImage {
+        guard orientation != .up else { return image }
+        let size = orientation.orientedSize(image.pixelSize)
+        let (buffer, stride) = try ImageIODecoder.allocateBGRA(width: size.width, height: size.height)
+        guard turn(image, by: orientation, into: buffer.bytes, bytesPerRow: stride,
+                   flags: vImage_Flags(kvImageDoNotTile)) else { throw ThumbnailMakerError.cannotResample }
+        return DecodedImage(pixelSize: size, bytesPerRow: stride, buffer: buffer, colorSpace: image.colorSpace,
+                            hasAlphaChannel: image.hasAlphaChannel)
+    }
+
     /// `image` resampled to exactly `size` (vImage high quality, on the premultiplied BGRA it expects) in a fresh
     /// page-aligned buffer, as the decoders hand levels to the cache.
     static func resample(_ image: DecodedImage, to size: PixelSize) throws -> DecodedImage {
@@ -224,7 +235,7 @@ public enum ThumbnailMaker {
     /// The destination context is opaque (`noneSkipFirst`) and ignores the alpha byte, rather than leaving the encoder
     /// to decide what a transparent pixel becomes; when the pixels have an alpha channel, the turned and scaled
     /// pixels with alpha < 255 are first composited onto the checkerboard (`compositeOnChecker`).
-    private static func encode(_ pixels: DecodedImage, size: PixelSize, orientation: ImageOrientation) throws -> Data {
+    static func encode(_ pixels: DecodedImage, size: PixelSize, orientation: ImageOrientation) throws -> Data {
         let bitmapInfo = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         let shown = orientation.orientedSize(size)
         guard let context = CGContext(data: nil, width: shown.width, height: shown.height, bitsPerComponent: 8,
@@ -300,13 +311,13 @@ extension ThumbnailMaker {
     /// transpose (5) and the transverse (7) as a left-right mirror and then a turn. The thumbnail is the picture
     /// CoreGraphics shows for the file (`thumbnailOrientedLikeCoreGraphics`). False when vImage fails.
     private static func turn(_ image: DecodedImage, by orientation: ImageOrientation,
-                             into destination: UnsafeMutableRawPointer, bytesPerRow: Int) -> Bool {
+                             into destination: UnsafeMutableRawPointer, bytesPerRow: Int,
+                             flags: vImage_Flags = vImage_Flags(kvImageNoFlags)) -> Bool {
         let shown = orientation.orientedSize(image.pixelSize)
         var source = vImage_Buffer(data: image.buffer.bytes, height: vImagePixelCount(image.pixelSize.height),
                                    width: vImagePixelCount(image.pixelSize.width), rowBytes: image.bytesPerRow)
         var target = vImage_Buffer(data: destination, height: vImagePixelCount(shown.height),
                                    width: vImagePixelCount(shown.width), rowBytes: bytesPerRow)
-        let flags = vImage_Flags(kvImageNoFlags)
         let none: [UInt8] = [0, 0, 0, 0]
         func rotate(_ from: inout vImage_Buffer, _ turn: Int) -> vImage_Error {
             vImageRotate90_ARGB8888(&from, &target, UInt8(turn), none, flags)

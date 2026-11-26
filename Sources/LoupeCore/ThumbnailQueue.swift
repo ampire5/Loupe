@@ -8,6 +8,9 @@ public struct ThumbnailRequest: Sendable, Equatable {
     /// File indices shown by the visible strip cells, left to right (the strip samples a long folder, so these
     /// are not consecutive). Empty when the strip is hidden. Indices outside `files.indices` are ignored.
     public var visible: [Int]
+    /// The leading visible indices currently on screen. File View can append a speculative margin;
+    /// nil means the whole visible list is on screen.
+    public var inViewCount: Int?
     public var isKey: Bool
     /// How recently the window was key (`WindowRegistry.activityRank`): larger = more recently, 0 = never.
     public var lastActive: Int
@@ -19,11 +22,12 @@ public struct ThumbnailRequest: Sendable, Equatable {
     /// window are as ever.
     public var visibleOnly: Bool
 
-    public init(files: [URL], current: Int, visible: [Int], isKey: Bool, lastActive: Int = 0, isHome: Bool = false,
+    public init(files: [URL], current: Int, visible: [Int], inViewCount: Int? = nil, isKey: Bool, lastActive: Int = 0, isHome: Bool = false,
                 visibleOnly: Bool = false) {
         self.files = files
         self.current = current
         self.visible = visible
+        self.inViewCount = inViewCount
         self.isKey = isKey
         self.lastActive = lastActive
         self.isHome = isHome

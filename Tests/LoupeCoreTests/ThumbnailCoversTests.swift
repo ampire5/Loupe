@@ -188,6 +188,34 @@ private final class FakeListing: @unchecked Sendable {
         for name in names { reader.add(URL(fileURLWithPath: folder).appendingPathComponent(name), TestJPEGs.gradient(width: 40, height: 30)) }
     }
 
+    @Test func localCoverOverlapsTwoReadsAndKeepsThePickInOrder() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader(), listing = FakeListing()
+        let folder = URL(fileURLWithPath: "/photos/f")
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg"]
+        photos(reader, in: folder.path, names)
+        let first = folder.appendingPathComponent(names[0])
+        reader.add(first, TestJPEGs.gradient(width: 30, height: 60))
+        listing.set(folder.path, files: names)
+        let firstGate = reader.hold(first)
+        let secondGate = reader.hold(folder.appendingPathComponent(names[1]))
+        let store = ThumbnailStore(directory: dir, reader: reader, thumbSize: 32, limitBytes: 1 << 30,
+                                   idleDelay: .zero, decodes: 2)
+        await store.setCoverListing(listing.lister)
+        let location = loc(folder.path)
+        let task = Task {
+            await store.folderCard(folder, archive: false, in: location, maxPixel: 64)
+        }
+        #expect(await eventually { reader.peakConcurrent == 2 })
+        #expect(Set(reader.reads.map(\.lastPathComponent)) == Set(names.prefix(2)))
+        secondGate.open()
+        firstGate.open()
+        let card = try #require(await task.value)
+        #expect(card.images.map { $0.width < $0.height } == [true, false, false, false])
+        #expect(reader.peakConcurrent <= 2)
+    }
+
     @Test func spreadsFourAcrossTheFolder() async {
         let dir = tempDir()
         defer { try? fm.removeItem(at: dir) }
@@ -216,10 +244,11 @@ private final class FakeListing: @unchecked Sendable {
         listing.set("/photos/f", files: names)
         let store = store(reader, dir: dir)
         await store.setCoverListing(listing.lister)
+        reader.add(URL(fileURLWithPath: "/photos/f/05.jpg"), TestJPEGs.gradient(width: 30, height: 60))
         let images = await store.folderCover(URL(fileURLWithPath: "/photos/f"), archive: false, in: loc("/photos/f"), maxPixel: 64,
                                              lastViewed: "05.jpg")
         #expect(images?.count == 4)
-        #expect(reader.reads.first?.lastPathComponent == "05.jpg")
+        #expect(images?.first.map { $0.width < $0.height } == true)
     }
 
     /// Review Focus 4: a folder whose four samples the catalog has is not listed again, and no file is read (folder
@@ -1860,6 +1889,32 @@ final class LockedErrors: @unchecked Sendable {
         #expect(next.images.count == 4 && !next.summaryPending)
         #expect(next.summary?.photos == 4)
         #expect(calls.count == 1)
+    }
+
+    @Test func partialCatalogCoverIsPublishedBeforeListing() async throws {
+        let dir = tempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let reader = ThumbReader()
+        let store = await store(reader, dir: dir)
+        let path = "/p/f"
+        let folder = URL(fileURLWithPath: path)
+        let names = ["1.jpg", "2.jpg", "3.jpg", "4.jpg"]
+        for name in names {
+            reader.add(folder.appendingPathComponent(name), TestJPEGs.gradient(width: 40, height: 30))
+        }
+        #expect(await store.cover(folder.appendingPathComponent(names[0]), maxPixel: 64) != nil)
+        let previews = Locked<[Int]>([])
+        await store.setCoverListing { _, _, _ in
+            #expect(previews.get == [1])
+            return CoverNames(files: names, folders: [])
+        }
+        let card = try #require(await store.folderCard(folder, archive: false, in: loc(path), maxPixel: 64,
+                                                      onCachedPreview: { images in
+                                                          previews.update { $0.append(images.count) }
+                                                      }))
+        #expect(previews.get == [1])
+        #expect(card.images.count == 4)
+        #expect(reader.reads.count == 4)
     }
 
     /// A card whose follow-up is cancelled (it left the screen) keeps its try: the next follow-up lists.

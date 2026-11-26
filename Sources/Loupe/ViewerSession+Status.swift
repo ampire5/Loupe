@@ -53,6 +53,7 @@ extension ViewerSession {
                                           detectorMode: currentRules.detector?.name)
             // The facts of the photo before stay while the new one loads (the views grey them when the load is felt).
             let zoom = StatsLine.modeText(zoomTarget ?? transform, carry: currentRules.carry)
+            status.compactZoom = zoom
             let boxes = subjectBoxes(shown.url)
             let group = boxes.flatMap { boxes in
                 browse.chain(currentRules.chain).first { SubjectFraming.composition(boxes, kind: $0, options: currentRules.composition, imageSize: transform.imageSize) != nil }

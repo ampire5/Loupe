@@ -12,9 +12,8 @@ import LoupeCore
 /// the middle of the bar between the two ends. It is a separate view from the Metal surface, so a text change never wakes
 /// the render loop.
 ///
-/// Nothing in it changes size or appears and goes with a status: the two columns have widths of their own that depend
-/// on the bar alone, every slot (the date's and the decode time's too) is as wide as its longest value, and a step only
-/// changes texts: `ImageStatus` keeps the facts and the decode time through a load, the exposure while the EXIF is
+/// Slots reserve the width of their usual values. Upscale adds the result dimensions, a zoom indicator and, when
+/// freshly computed, its own timing. `ImageStatus` keeps the original facts and the decode time through a load, the exposure while the EXIF is
 /// read, and the date stays until the new photo's is in. The photo before's are greyed only when the load is felt. The darkness is `stats-bar-opacity`; the strip is lightened, up to the photo's place in the
 /// folder, by `stats-progress-opacity` of white (`stats-progress`). Laid out by frames, not constraints, and only what
 /// changed.
@@ -25,8 +24,6 @@ import LoupeCore
     private static let columnGap: CGFloat = 16
     /// The room the names keep in the middle of one row before the ends give up slots.
     private static let namesRoom: CGFloat = 240
-    /// A bar narrower than this has the left end only.
-    private static let narrowest: CGFloat = 520
     /// Keep the filename visible on the single-row bar, even when that means dropping a fact.
     private static let compactNamesRoom: CGFloat = 112
     /// The kinds at each end.
@@ -46,7 +43,13 @@ import LoupeCore
     private var detailWidths: (date: CGFloat, decode: CGFloat, options: ProCameraStyle.Options)?
     private static let detailGap: CGFloat = 16
     private let titleLabel = NSTextField(labelWithString: "")
+    private let nameSeparator = NSTextField(labelWithString: "")
     private let folderLabel = NSTextField(labelWithString: "")
+    private static let nameSeparatorWidth: CGFloat = 16
+    private var titleWidth: CGFloat = 0
+    private var folderWidth: CGFloat = 0
+    private var fullZoomWidth: CGFloat = 0
+    private var usesCompactZoom = false
 
     private var status = ImageStatus()
     private var heightConstraint: NSLayoutConstraint!
@@ -74,7 +77,8 @@ import LoupeCore
     override init(frame: NSRect) {
         let config = Config()
         options = ProCameraStyle.Options(size: 11.5, icons: config.statsIcons, monochrome: config.statsMonochrome, shadow: true)
-        factsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .left), kinds: Self.leftKinds)
+        factsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .left), kinds: Self.leftKinds,
+                               priority: [.position, .size, .exposure, .megapixels])
         rightFactsRow = FactsRowView(style: .init(options: options, hairlines: false, alignment: .right),
                                      kinds: Self.rightKinds)
         super.init(frame: frame)
@@ -87,10 +91,14 @@ import LoupeCore
         titleLabel.lineBreakMode = .byTruncatingMiddle
         folderLabel.lineBreakMode = .byTruncatingMiddle
         for label in [dateLabel, decodeLabel] { label.lineBreakMode = .byTruncatingTail }
-        for label in [titleLabel, folderLabel, dateLabel, decodeLabel] {
+        for label in [titleLabel, nameSeparator, folderLabel, dateLabel, decodeLabel] {
             label.maximumNumberOfLines = 1
             addSubview(label)
         }
+        nameSeparator.attributedStringValue = Self.aligned(ProCameraStyle.name("·", size: 12, weight: .medium,
+                                                                                color: ProCameraStyle.secondary), .center)
+        nameSeparator.setAccessibilityElement(false)
+        nameSeparator.isHidden = true
         addSubview(factsRow)
         addSubview(rightFactsRow)
         factsRow.onGreyedChange = { [weak self] in self?.refreshDetail() }
@@ -131,6 +139,7 @@ import LoupeCore
             options.monochrome = config.statsMonochrome
             factsRow.style.options = options
             rightFactsRow.style.options = options
+            measureFullZoom()
             refreshNames()
             refreshDetail()
         }
@@ -144,11 +153,25 @@ import LoupeCore
     func reveal() {
         hideTimer?.invalidate()
         hideTimer = nil
-        if alphaValue != 1 { NSAnimationContext.runAnimationGroup { $0.duration = 0.14; animator().alphaValue = 1 } }
+        setPresentationAlpha(1)
         guard let delay = autohideDelay else { return }
         hideTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                NSAnimationContext.runAnimationGroup { $0.duration = 0.4; self?.animator().alphaValue = 0 }
+                self?.hideTimer = nil
+                self?.setPresentationAlpha(0)
+            }
+        }
+    }
+
+    private func setPresentationAlpha(_ value: CGFloat) {
+        guard alphaValue != value else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            alphaValue = value
+        } else {
+            NSAnimationContext.runAnimationGroup {
+                $0.duration = 0.15
+                $0.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                animator().alphaValue = value
             }
         }
     }
@@ -158,16 +181,45 @@ import LoupeCore
         guard new != status else { return }
         let old = status
         status = new
-        if new.title != old.title || new.titleTone != old.titleTone { refreshNames() }
-        factsRow.update(new.facts, stale: new.stale, pending: new.pending)
-        rightFactsRow.update(new.facts, stale: new.stale, pending: new.pending)
+        if new.title != old.title || new.titleTone != old.titleTone || new.folder != old.folder
+            || new.note != old.note || new.noteTone != old.noteTone { refreshNames() }
+        if new.value(.zoom) != old.value(.zoom) { measureFullZoom() }
+        if new.facts != old.facts || new.upscale != old.upscale || new.compactZoom != old.compactZoom
+            || new.pending != old.pending || new.stale != old.stale {
+            let facts = displayFacts(new)
+            factsRow.update(facts, stale: new.stale, pending: new.pending)
+            rightFactsRow.update(facts, stale: new.stale, pending: new.pending)
+            needsLayout = true
+        }
         if new.progress != old.progress { needsLayout = true }
-        if new.folder != old.folder || new.note != old.note || new.noteTone != old.noteTone { refreshNames() }
         if new.photo != old.photo { loadModified() }
-        if new.decodeMilliseconds != old.decodeMilliseconds { refreshDetail() }
+        if new.decodeMilliseconds != old.decodeMilliseconds || new.upscale?.milliseconds != old.upscale?.milliseconds {
+            refreshDetail()
+            needsLayout = true
+        }
     }
 
     // MARK: Texts
+
+    private func measureFullZoom() {
+        let zoom = status.facts.first { $0.kind == .zoom }
+        fullZoomWidth = zoom.map { ceil(ProCameraStyle.text($0, options).size().width) + 8 } ?? 0
+    }
+
+    private func displayFacts(_ status: ImageStatus) -> [ImageStatus.Fact] {
+        guard usesCompactZoom || status.upscale != nil else { return status.facts }
+        return status.facts.map { fact in
+            if status.upscale != nil, fact.kind == .size, let size = status.resolutionText {
+                return .init(.size, size, tone: fact.tone)
+            }
+            if fact.kind == .zoom {
+                let zoom = status.compactZoom ?? fact.value
+                let value = status.upscale.map { "\(zoom) · \($0.indicator)" } ?? zoom
+                return .init(.zoom, value, tone: fact.tone)
+            }
+            return fact
+        }
+    }
 
     /// The folder's name, or the news about the folder in its place.
     private var folderText: (text: String, color: NSColor) {
@@ -177,34 +229,19 @@ import LoupeCore
         return (showsFolderName ? status.folder.map(FolderLabel.name(of:)) ?? "" : "", ProCameraStyle.secondary)
     }
 
-    /// The names: in two rows the file's under the facts and the folder's at the right end; in one row both in the middle,
-    /// the file, a dot with room round it, the folder.
+    /// Give each name its own truncation so that a long path cannot consume the filename or a folder notice.
     private func refreshNames() {
         let titleColor = ProCameraStyle.color(status.titleTone, monochrome: options.monochrome)
         let folder = folderText
-        if rows == 1 {
-            let line = NSMutableAttributedString(attributedString: ProCameraStyle.name(
-                status.title, size: 12, weight: .medium, color: titleColor))
-            if !folder.text.isEmpty {
-                line.append(ProCameraStyle.name("  ·  ", size: 12, weight: .regular, color: ProCameraStyle.secondary))
-                line.append(ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color))
-            }
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.alignment = .center
-            paragraph.lineBreakMode = .byTruncatingMiddle
-            line.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: line.length))
-            titleLabel.attributedStringValue = line
-            titleLabel.toolTip = [status.title, status.note ?? status.folder?.path].compactMap { $0 }.joined(separator: "\n")
-            folderLabel.attributedStringValue = NSAttributedString()
-            folderLabel.toolTip = nil
-        } else {
-            titleLabel.attributedStringValue = ProCameraStyle.name(status.title, size: 12, weight: .medium, color: titleColor)
-            titleLabel.toolTip = status.title
-            folderLabel.attributedStringValue = folder.text.isEmpty ? NSAttributedString()
-                : Self.aligned(ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color), .right,
-                               .byTruncatingMiddle)
-            folderLabel.toolTip = status.note ?? status.folder?.path
-        }
+        titleLabel.attributedStringValue = Self.aligned(
+            ProCameraStyle.name(status.title, size: 12, weight: .medium, color: titleColor), .left, .byTruncatingMiddle)
+        titleLabel.toolTip = status.title.isEmpty ? nil : status.title
+        folderLabel.attributedStringValue = Self.aligned(
+            ProCameraStyle.name(folder.text, size: 12, weight: .regular, color: folder.color),
+            rows == 1 ? .left : .right, .byTruncatingMiddle)
+        folderLabel.toolTip = folder.text.isEmpty ? nil : (status.note ?? status.folder?.path)
+        titleWidth = status.title.isEmpty ? 0 : ceil(titleLabel.cell!.cellSize.width)
+        folderWidth = folder.text.isEmpty ? 0 : ceil(folderLabel.cell!.cellSize.width)
         needsLayout = true
     }
 
@@ -217,13 +254,16 @@ import LoupeCore
         } else {
             dateLabel.attributedStringValue = NSAttributedString()
         }
+        let timing = NSMutableAttributedString()
         if let ms = status.decodeMilliseconds {
             let tone = factsRow.greyed ? .quiet : ImageStatus.decodeTone(milliseconds: ms)
-            decodeLabel.attributedStringValue = Self.aligned(ProCameraStyle.detail(
-                ProCameraStyle.decodeSymbol, Self.decodeText(ms), tone: tone, options), .right)
-        } else {
-            decodeLabel.attributedStringValue = NSAttributedString()
+            timing.append(ProCameraStyle.detail(ProCameraStyle.decodeSymbol, Self.decodeText(ms), tone: tone, options))
         }
+        if let ms = status.upscale?.milliseconds {
+            let text = "\(timing.length > 0 ? " · " : "")Upscale \(ms) ms"
+            timing.append(ProCameraStyle.plain(text, options.size, .medium, ProCameraStyle.secondary, options))
+        }
+        decodeLabel.attributedStringValue = Self.aligned(timing, .right)
     }
 
     private static func decodeText(_ ms: Int) -> String { "Decode \(ms) ms" }
@@ -295,58 +335,95 @@ import LoupeCore
         }
         let rowHeight: CGFloat = 16
         let available = max(0, bounds.width - 2 * Self.inset)
-        let showsRight = bounds.width >= Self.narrowest
+        let hasZoom = fullZoomWidth > 0
+        let hasNames = titleWidth > 0 || folderWidth > 0
+        let inlineWidth = titleWidth + Self.nameSeparatorWidth + folderWidth
+        let shortNamesRoom = folderWidth > 0 && inlineWidth <= 160 ? inlineWidth : 0
+        let noticeRoom = status.note == nil ? 0 : min(Self.namesRoom, folderWidth + 64)
+        let namesBudget = rows == 1 && hasNames
+            ? min(Self.namesRoom, max(Self.compactNamesRoom, available * 0.24, shortNamesRoom, noticeRoom)) : 0
+        let gaps = namesBudget > 0 ? 2 * Self.columnGap : Self.columnGap
+        let factsRoom = max(0, available - namesBudget - gaps)
+        let side = floor(factsRoom / 2)
+        let compactZoom = status.upscale == nil && status.compactZoom != nil && fullZoomWidth > side
+        if usesCompactZoom != compactZoom {
+            usesCompactZoom = compactZoom
+            rightFactsRow.update(displayFacts(status), stale: status.stale, pending: status.pending)
+        }
+
+        // Give zoom first claim on the right. Diagnostics yield as the window narrows.
+        let zoomWidth = hasZoom ? rightFactsRow.width(for: [.zoom]) - 12 : 0
+        let leftTarget = status.upscale == nil ? side : max(side, factsRow.width(for: [.position, .size]) - 12)
+        let leftRoom = min(factsRow.naturalWidth - 12, leftTarget, max(0, factsRoom - zoomWidth))
+        let rightRoom = max(0, factsRoom - leftRoom)
+        let detailRoom = max(0, rightRoom - zoomWidth - Self.columnGap)
         let slots = detailSlots
-        let detail = showsRight ? slots.date + Self.detailGap + slots.decode : 0
-        dateLabel.isHidden = !showsRight
-        decodeLabel.isHidden = !showsRight
-        rightFactsRow.isHidden = !showsRight
-        // Each end gets at most half of what the names leave (one row) or of the bar (two rows); a row that does not fit
-        // gives up slots by its priority. The slots carry their own padding (6 a side), which the edges give back.
-        let side = max(0, (available - (rows == 1 ? Self.namesRoom : Self.columnGap)) / 2)
-        let compactLeft = rows == 1 && !status.title.isEmpty
-            ? max(0, available - Self.compactNamesRoom - Self.columnGap) : available
-        let left = min(factsRow.naturalWidth - 12, showsRight ? side : compactLeft)
-        let rightFacts = showsRight ? min(rightFactsRow.naturalWidth - 12, max(0, side - detail - Self.columnGap)) : 0
-        let rightEnd = showsRight ? detail + (rightFacts > 0 ? Self.columnGap + rightFacts : 0) : 0
+        let timingWidth = status.upscale?.milliseconds == nil ? slots.decode
+            : max(slots.decode, ceil(decodeLabel.attributedStringValue.size().width) + 8)
+        let decode = timingWidth <= detailRoom ? timingWidth : 0
+        let dateRoom = detailRoom - decode - (decode > 0 ? Self.detailGap : 0)
+        let date = showsModified && status.photo != nil && slots.date <= dateRoom ? slots.date : 0
+        dateLabel.isHidden = date == 0
+        decodeLabel.isHidden = decode == 0
+        let detail = date + (date > 0 && decode > 0 ? Self.detailGap : 0) + decode
+        let rightFactRoom = max(0, rightRoom - detail - (detail > 0 ? Self.columnGap : 0))
+        // The rows reserve a few points around each fact. Return unused slot space to the names.
+        let left = max(0, factsRow.fittingWidth(in: leftRoom + 12) - 12)
+        let rightFacts = max(0, rightFactsRow.fittingWidth(in: rightFactRoom + 12) - 12)
+        let rightEnd = detail + rightFacts + (detail > 0 && rightFacts > 0 ? Self.columnGap : 0)
         let heights = Self.rowHeights
         let padding = (Self.height(rows: 2) - heights.top - heights.bottom) / 2
         let y = rows == 1 ? (Self.height(rows: 1) - rowHeight) / 2 : padding + heights.bottom
         let height = rows == 1 ? rowHeight : heights.top
         factsRow.isHidden = left <= 0
+        rightFactsRow.isHidden = rightFacts <= 0
         factsRow.frame = backingAlignedRect(NSRect(x: Self.inset - 6, y: y, width: left + 12, height: height),
                                             options: .alignAllEdgesNearest)
         rightFactsRow.frame = backingAlignedRect(NSRect(x: bounds.width - Self.inset - rightEnd - 6, y: y,
                                                         width: rightFacts + 12, height: height),
                                                  options: .alignAllEdgesNearest)
-        placeDetail(y: y, height: height)
+        placeDetail(y: y, height: height, date: date, decode: decode)
         if rows == 1 {
-            // The names in the middle of the bar, as wide as the room on its narrower side allows (in what is left
-            // between the ends when that is too little).
             let middleStart = Self.inset + (left > 0 ? left + Self.columnGap : 0)
-            let middleEnd = bounds.width - Self.inset - rightEnd - (showsRight ? Self.columnGap : 0)
-            let half = min(bounds.midX - middleStart, middleEnd - bounds.midX)
-            let (start, room) = half * 2 >= Self.namesRoom ? (bounds.midX - half, half * 2)
-                : (middleStart, middleEnd - middleStart)
-            titleLabel.isHidden = room <= 0
-            folderLabel.isHidden = true
-            place(titleLabel, x: start, y: y, width: max(0, room), height: rowHeight)
-            return
+            let middleEnd = bounds.width - Self.inset - rightEnd - (rightEnd > 0 ? Self.columnGap : 0)
+            layoutInlineNames(x: middleStart, y: y, room: max(0, middleEnd - middleStart), height: rowHeight)
+        } else {
+            nameSeparator.isHidden = true
+            let namesGap = titleWidth > 0 && folderWidth > 0 ? Self.columnGap : 0
+            let folderRoom = titleWidth > 0 ? min(folderWidth, max(0, (available - namesGap) * 0.45)) : available
+            let titleRoom = available - folderRoom - namesGap
+            titleLabel.isHidden = titleWidth == 0 || titleRoom <= 0
+            folderLabel.isHidden = folderWidth == 0 || folderRoom <= 0
+            place(titleLabel, x: Self.inset, y: padding, width: max(0, titleRoom), height: heights.bottom)
+            place(folderLabel, x: bounds.width - Self.inset - folderRoom, y: padding, width: folderRoom, height: heights.bottom)
         }
-        // Two rows: the names below, the file's on the left half, the folder's on the right one.
-        let half = max(0, (available - Self.columnGap) / 2)
-        titleLabel.isHidden = false
-        place(titleLabel, x: Self.inset, y: padding, width: showsRight ? half : available, height: heights.bottom)
-        folderLabel.isHidden = !showsRight
-        place(folderLabel, x: bounds.width - Self.inset - half, y: padding, width: half, height: heights.bottom)
+    }
+
+    private func layoutInlineNames(x: CGFloat, y: CGFloat, room: CGFloat, height: CGFloat) {
+        let separator = Self.nameSeparatorWidth
+        let namesFit = titleWidth + separator + folderWidth <= room
+        let keepsFolder = folderWidth > 0 && (titleWidth == 0 || status.note != nil || namesFit || room >= 140)
+        let gap = keepsFolder && titleWidth > 0 ? separator : 0
+        let textRoom = max(0, room - gap)
+        // A folder notice needs to survive while the user is waiting. Ordinary folder names yield to the filename.
+        let folderLimit = titleWidth == 0 ? textRoom : max(textRoom * (status.note == nil ? 0.4 : 0.6), textRoom - titleWidth)
+        let folder = keepsFolder ? min(folderWidth, floor(folderLimit)) : 0
+        let title = min(titleWidth, textRoom - folder)
+        let groupWidth = title + gap + folder
+        let start = min(max(x, bounds.midX - groupWidth / 2), x + max(0, room - groupWidth))
+        titleLabel.isHidden = title <= 0
+        nameSeparator.isHidden = title <= 0 || folder <= 0
+        folderLabel.isHidden = folder <= 0
+        place(titleLabel, x: start, y: y, width: title, height: height)
+        place(nameSeparator, x: start + title, y: y, width: gap, height: height)
+        place(folderLabel, x: start + title + gap, y: y, width: folder, height: height)
     }
 
     /// The decode time at the right end, the date before it; a cell's inset is given back at the edge.
-    private func placeDetail(y: CGFloat, height: CGFloat) {
-        let slots = detailSlots
+    private func placeDetail(y: CGFloat, height: CGFloat, date: CGFloat, decode: CGFloat) {
         let end = bounds.width - Self.inset + 4
-        place(decodeLabel, x: end - slots.decode, y: y, width: slots.decode, height: height)
-        place(dateLabel, x: end - slots.decode - Self.detailGap - slots.date, y: y, width: slots.date, height: height)
+        place(decodeLabel, x: end - decode, y: y, width: decode, height: height)
+        place(dateLabel, x: end - decode - (decode > 0 ? Self.detailGap : 0) - date, y: y, width: date, height: height)
     }
 
     private func place(_ label: NSTextField, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {

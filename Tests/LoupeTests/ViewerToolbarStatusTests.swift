@@ -18,6 +18,23 @@ import Testing
         #expect(title?.textColor == ProCameraStyle.primary)
     }
 
+    @Test func upscaleStatusKeepsFolderAndShowsZoomAndEnhancedDimensions() throws {
+        _ = NSApplication.shared
+        let view = ViewerToolbarStatusView()
+        view.frame.size = NSSize(width: 900, height: 46)
+        var status = sample()
+        status.decodeMilliseconds = 34
+        status.upscale = .init(indicator: "Upscale 2×", size: .init(width: 4000, height: 6000), milliseconds: 450)
+        view.update(status)
+        view.layout()
+        let labels = descendants(view).compactMap { $0 as? NSTextField }
+        #expect(labels.contains { $0.stringValue == "Studio session" && !$0.isHidden })
+        let zoom = try #require(descendants(view).compactMap { $0 as? NSButton }.first { $0.title == "275% · Upscale 2×" })
+        #expect(zoom.frame.width >= zoom.cell!.cellSize.width)
+        #expect(view.metadataButton.title.hasPrefix("2000×3000 → 4000×6000"))
+        #expect(view.metadataButton.toolTip?.contains("Decode 34 ms · Upscale 450 ms") == true)
+    }
+
     private func toolbar() -> ViewerToolbarController {
         ViewerToolbarController(actions: .init(back: {}, step: { _ in }, zoom: { _ in }, colour: { _ in },
             setValue: { _, _ in }, stats: {}, strip: {}, info: {}, smartZoom: {}))
@@ -128,6 +145,8 @@ import Testing
                 }
             }
             let shown = descendants(view).compactMap { ($0 as? NSTextField).flatMap { $0.isHiddenOrHasHiddenAncestor ? nil : $0.stringValue } }
+            #expect(shown.contains(value.title), "Current filename at \(width) pt")
+            #expect(view.zoomButton.frame.width >= view.zoomButton.cell!.cellSize.width)
             if width == 1800 {
                 for part in exposure { #expect(shown.contains(part.text)) }
             } else {
@@ -422,21 +441,46 @@ import Testing
         preview.title = "Studio_Portrait_Session_2026_001.jpg"
         preview.folder = URL(fileURLWithPath: "/Demo/Portrait session — selected photographs")
         preview.zoomDetails?.group = "Person · Full body · Standing"
+        preview.compactZoom = "275 %"
+        preview.facts = preview.facts.map { $0.kind == .zoom ? .init(.zoom, $0.value, tone: .adjusted) : $0 }
+        preview.decodeMilliseconds = 84
+        preview.progress = 0.42
         controller.updateStatus(preview)
+        let backdrop = NSView()
+        backdrop.wantsLayer = true
+        let gradient = CAGradientLayer()
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        gradient.colors = [NSColor(white: 0.08, alpha: 1).cgColor, NSColor.white.cgColor]
+        backdrop.layer?.addSublayer(gradient)
+        window.contentView?.addSubview(backdrop)
+        let stats = StatsBar()
+        backdrop.addSubview(stats)
+        var statsConfig = Config()
+        statsConfig.statsModified = false
+        stats.apply(statsConfig)
+        stats.update(preview)
+
+        func snapshot(_ view: NSView, to name: String) throws {
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/\(name).png"))
+        }
+
         for width in [3000, 2400, 1800, 1280, 640, 320] {
             window.setContentSize(NSSize(width: width, height: 420))
             window.contentView?.superview?.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(100))
-            if width == 3000, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                view.cacheDisplay(in: view.bounds, to: bitmap)
-                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/loupe-status-detail.png"))
-            }
-            if let frame = window.contentView?.superview {
-                let rect = NSRect(x: 0, y: frame.bounds.maxY - 100, width: frame.bounds.width, height: 100)
-                if let bitmap = frame.bitmapImageRepForCachingDisplay(in: rect) {
-                    frame.cacheDisplay(in: rect, to: bitmap)
-                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/loupe-status-native-\(width).png"))
-                }
+            try snapshot(view, to: "loupe-status-native-\(width)")
+            if width == 3000 { try snapshot(view, to: "loupe-status-detail") }
+            for rows in [1, 2] {
+                statsConfig.statsBarRows = rows
+                stats.apply(statsConfig)
+                backdrop.frame = NSRect(x: 0, y: 150, width: CGFloat(width), height: StatsBar.height(rows: rows))
+                gradient.frame = backdrop.bounds
+                stats.frame = backdrop.bounds
+                backdrop.layoutSubtreeIfNeeded()
+                try snapshot(backdrop, to: "loupe-stats-\(width)-\(rows)")
             }
         }
     }

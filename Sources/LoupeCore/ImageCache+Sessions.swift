@@ -33,6 +33,7 @@ extension ImageCache {
     public func unregister(_ session: CacheSessionID) {
         guard let state = sessions.removeValue(forKey: session) else { return }
         state.stampCheck?.cancel()
+        state.companionStampCheck?.cancel()
         if active == session { active = nil }
         let shownElsewhere = Set(sessions.values.flatMap(\.pinnedPages))
         var freed = 0
@@ -106,6 +107,8 @@ extension ImageCache {
     private func deactivate(_ session: CacheSessionID) {
         sessions[session]?.stampCheck?.cancel()
         sessions[session]?.stampCheck = nil
+        sessions[session]?.companionStampCheck?.cancel()
+        sessions[session]?.companionStampCheck = nil
         sessions[session]?.arrived = false
         sessions[session]?.lastActive = .now
     }
@@ -171,13 +174,16 @@ extension ImageCache {
         }
         s.focus = focus
         let current = files.indices.contains(focus.current) ? files[focus.current] : nil
-        s.companionURL = focus.companion.flatMap { files.indices.contains($0) ? files[$0] : nil }
-        if current != s.currentURL {
+        let companion = focus.companion.flatMap { files.indices.contains($0) ? files[$0] : nil }
+        if current != s.currentURL || (focus.revalidatesCompanion && companion != s.companionURL) {
             s.stampCheck?.cancel()
             s.stampCheck = nil
+            s.companionStampCheck?.cancel()
+            s.companionStampCheck = nil
             s.currentURL = current
             s.arrived = false
         }
+        s.companionURL = companion
         let arrives = session == active && !s.arrived && !focus.scrubbing && current != nil
         if arrives { s.arrived = true }
         sessions[session] = s
@@ -279,6 +285,7 @@ struct CacheSessionState {
     /// The current photo's stamp check; cancelled when another photo becomes current or the session stops being
     /// active.
     var stampCheck: Task<Void, Never>?
+    var companionStampCheck: Task<Void, Never>?
     var isVisible = false
     /// When the session last stopped being active (or was registered).
     var lastActive = ContinuousClock.now

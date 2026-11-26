@@ -233,6 +233,21 @@ final class Locked<T>: @unchecked Sendable {
         #expect(ContinuousClock.now - idleAt >= .milliseconds(300))
     }
 
+    @Test func visibleThumbnailCanReadBeforeTheBackgroundDelay() async throws {
+        let reader = ThumbReader()
+        let files = photos(3, in: reader)
+        let store = store(reader, dir: nil, idleDelay: .seconds(10))
+        await store.setViewerActivity(.current)
+        let visible = ThumbnailRequest(files: files, current: 0, visible: [2, 1], inViewCount: 1, isKey: true, isHome: true)
+        await store.setRequest(window: 1, visible, stamps: reader.stamps)
+        #expect(reader.reads.isEmpty)
+
+        await store.setViewerActivity(.neighbours)
+        #expect(await eventually(.milliseconds(300)) { await store.status(files[2]) == .ready })
+        #expect(reader.reads == [files[2]])
+        await store.setViewerActivity(.current)
+    }
+
     @Test func currentCancelsAll() async throws {
         let reader = ThumbReader()
         let files = photos(3, in: reader)
@@ -748,6 +763,37 @@ final class Locked<T>: @unchecked Sendable {
     }
 
     // MARK: - Windows and order
+
+    @Test func visibleKeyWindowFileDoesNotBuildTheFullQueue() async throws {
+        let reader = ThumbReader()
+        let files = photos(5, in: reader)
+        let store = store(reader, dir: nil)
+        await store.setViewerActivity(.current)
+        await store.setRequest(window: 1, request(files, visible: [3]), stamps: reader.stamps)
+
+        #expect(await store.nextFile() == files[3])
+        #expect(await store.queue.isEmpty)
+    }
+
+    @Test func concurrentReadersShareOneDecodedCell() async throws {
+        let reader = ThumbReader()
+        let url = URL(fileURLWithPath: "/photos/a/cell.jpg")
+        reader.add(url, TestJPEGs.gradient(width: 2200, height: 1600))
+        let files = [url]
+        let store = store(reader, dir: nil, thumbSize: 2048)
+        await store.setRequest(window: 1, request(files), stamps: reader.stamps)
+        #expect(await eventually { await allReady(store, files) })
+
+        let images = await withTaskGroup(of: CGImage?.self, returning: [CGImage].self) { group in
+            for _ in 0..<32 { group.addTask { await store.cell(url, maxPixel: 1024) } }
+            var result: [CGImage] = []
+            for await image in group { if let image { result.append(image) } }
+            return result
+        }
+        let first = try #require(images.first)
+        #expect(images.count == 32)
+        #expect(images.allSatisfy { $0 === first })
+    }
 
     @Test func twoWindowsOneRead() async throws {
         let reader = ThumbReader()

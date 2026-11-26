@@ -12,8 +12,7 @@ import LoupeCore
 //                   of a fetch (the playlist's first fetch and its first cell picture only)
 //   strip layout    StripController.relayout's FilmstripLayout for those aspects and its compare with the one shown
 //   folder open     FolderRequest.playlist in the folder's sort (date-desc) on a remembered photo
-//   folder reread   ViewerSession.apply's work on a re-read: the listed playlist in the folder's sort, replacing,
-//                   the compare
+//   folder reread   ViewerSession.apply's work on a re-read: replacing, then comparing the prepared listing
 //   home index      the Home grid's index of the shown files, built for one visible-range request
 //   cache plan      CachePlan.make on a step, the facts looked up by URL as ImageCache does
 //   zoom rules      a folder's ZoomRules from its values (Config.applying), as the viewer asks several times a frame
@@ -79,10 +78,10 @@ enum HotPathsBench {
             FolderRequest.playlist(for: target, sort: sort) { _, _ in remembered }.files.count
         }
         let open = FolderRequest.playlist(for: target, sort: sort) { _, _ in remembered }
-        // A re-read lists in the standard order (`Playlist.relist`) and changed nothing.
-        let listed = Playlist(files: files, current: files[0], stamps: stamps)
+        // A re-read already uses the folder's sort and changed nothing.
+        let listed = Playlist(files: files, current: files[0], stamps: stamps, sort: sort)
         measure("folder reread") {
-            let new = open.replacing(with: listed.sorted(sort))
+            let new = open.replacing(with: listed)
             return new.files != open.files || new.stamps != open.stamps ? 1 : 0
         }
         measure("home index") {

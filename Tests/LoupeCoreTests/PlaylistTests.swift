@@ -289,6 +289,29 @@ import Foundation
     #expect(await Playlist.quickList(current: d.appendingPathComponent("gone/a.jpg")) == nil)
 }
 
+@Test func directoryListingsPrepareTheRequestedSortAroundTheOpenedFile() async throws {
+    let fm = FileManager.default
+    let folder = fm.temporaryDirectory.appendingPathComponent("loupe-listing-sort-\(UUID().uuidString)")
+    try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: folder) }
+    let small = folder.appendingPathComponent("img2.jpg")
+    let large = folder.appendingPathComponent("img10.jpg")
+    try Data([1]).write(to: small)
+    try Data([1, 2]).write(to: large)
+
+    let sort = BrowserSort(key: .size, ascending: false)
+    let names = try #require(await Playlist.quickList(current: small, sort: sort))
+    #expect(names.sort == sort)
+    #expect(names.current == small.standardizedFileURL)
+    #expect(names.stamps.isEmpty)
+
+    let full = try #require(await Playlist.relist(current: small, sort: sort))
+    #expect(full.sort == sort)
+    #expect(full.files == [large.standardizedFileURL, small.standardizedFileURL])
+    #expect(full.current == small.standardizedFileURL)
+    #expect(full.stamps[large.standardizedFileURL]?.size == 2)
+}
+
 // MARK: Browser order (file browser spec §4.4)
 
 import HomeScreenModel

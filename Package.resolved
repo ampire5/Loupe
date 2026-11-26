@@ -1,5 +1,5 @@
 {
-  "originHash" : "7f3036c826f3b238037ebbebab3a3e1ea27ed764b67ecdf334d2dbdd2cf40c6e",
+  "originHash" : "ce7eec17a85b02d8bab83286df5f0342f19908228ea324f8f2bd4e5c828a77f7",
   "pins" : [
     {
       "identity" : "everythingmac",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/HomeScreenKit.git",
       "state" : {
-        "revision" : "d9f6e5aa8c45822bf9802eeeb42f485951f8e01c",
-        "version" : "0.15.2"
+        "revision" : "2fa67425464ba9c4a0ad719f7d9059076c270065",
+        "version" : "0.16.0"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/InfoPanelKit.git",
       "state" : {
-        "revision" : "28b6b575b196c68271e70e4abbc4fe6e37ae3c54",
-        "version" : "0.2.0"
+        "revision" : "f6b5af8d976543d336530949a75a1c87a3e7d525",
+        "version" : "0.2.1"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/MouseService.git",
       "state" : {
-        "revision" : "7db6d7fd24f4b8cbcb9e15266f72605b463245e7",
-        "version" : "0.3.1"
+        "revision" : "9081a6680c32644424579b7a441a93720d7de108",
+        "version" : "0.4.0"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/SettingsKit.git",
       "state" : {
-        "revision" : "e0bb777ec16fbb1169d41fae9c357a11e7fbb27a",
-        "version" : "0.8.2"
+        "revision" : "77ef853a0e7186c247d7cbadfdac58df6ab6064b",
+        "version" : "0.9.0"
       }
     },
     {

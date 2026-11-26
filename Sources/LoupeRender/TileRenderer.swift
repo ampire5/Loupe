@@ -34,17 +34,21 @@ public final class TileRenderer {
     private var debandFailures:[DebandFailure]=[]
 
 
+    /// Enhanced source pixels per original pixel. Grain remains anchored to the stored original.
+    public var grainSourceScale = 1.0
+
     func grainState(_ frame: LevelFrame) -> (GrainParams, MTLTexture) {
         let settings = resample.grain
         guard settings.active, let texture = context.grainTemplate(settings.style) else {
             return (GrainParams(), context.emptyGrain)
         }
-        let footprint: Float = settings.stage == .before ? Float(1/frame.transform.drawnScale) : 1
+        let sourceScale = Float(grainSourceScale)
+        let footprint: Float = settings.stage == .before ? Float(1 / (frame.transform.drawnScale * grainSourceScale)) : 1
         // One uniform radius per frame, rather than a square root per output pixel.
         let radius: Float = footprint > 1 ? sqrt(footprint*footprint-1)*0.25 : 0
         return (GrainParams(amount: Float(min(settings.amount,3)), size: Float(min(max(settings.size,0.5),4)), filterRadius: radius,
-                            sourceSize: SIMD2(Float(frame.grid.imageSize.width),Float(frame.grid.imageSize.height)),
-                            levelFactor: Float(frame.factor), sourceFootprint: footprint, stage: settings.stage == .after ? 1 : 0), texture)
+                            sourceSize: SIMD2(Float(frame.grid.imageSize.width), Float(frame.grid.imageSize.height)) / sourceScale,
+                            levelFactor: Float(frame.factor) / sourceScale, sourceFootprint: footprint, stage: settings.stage == .after ? 1 : 0), texture)
     }
 
     /// What shows through the transparent pixels of a photo with alpha (`TiledImage.hasAlpha`, M3b spec §3): the

@@ -353,6 +353,9 @@ extension Notification.Name {
             ("200 %", .actual200), ("400 %", .actual400), ("Fit ↔ 100 %", .toggleFitActual),
         ]
         for (title, action) in keys { menu.addItem(.viewerKey(title, action)) }
+        menu.addItem(.viewerKey("Neural Upscale", .toggleNeuralUpscale))
+        menu.addItem(.viewerKey("Show Original", .toggleUpscaleOriginal))
+        menu.addItem(.viewerKey("Save Neural Upscale as Default", .saveNeuralUpscale))
         menu.addItem(.separator())
         menu.addItem(.viewerKey("Cycle Zoom Stop Mode", .cycleZoomStops))
         menu.addItem(.viewerKey("Save Zoom Stops as Default", .saveZoomStops))
@@ -566,6 +569,10 @@ extension Notification.Name {
                 switch item.representedObject as? String {
                 case KeyAction.cycleZoomStops.rawValue: item.title = "Zoom Stops: \(effective.zoomStopMode.title)"
                 case KeyAction.toggleKeepZoom.rawValue: item.state = effective.keepZoomPosition ? .on : .off
+                case KeyAction.toggleNeuralUpscale.rawValue:
+                    item.state = viewer?.viewerView.neuralUpscale.isEnabled == true ? .on : .off
+                case KeyAction.toggleUpscaleOriginal.rawValue:
+                    item.state = viewer?.viewerView.neuralUpscale.showsOriginal == true ? .on : .off
                 default: break
                 }
                 if let id = item.identifier?.rawValue, id.hasPrefix("smart-zoom|") {

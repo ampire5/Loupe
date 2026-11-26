@@ -523,7 +523,7 @@ import Foundation
 
 @Test func stripAndThumbDefaults() {
     let c = Config()
-    #expect(c.stripWindow == .over && c.stripHeight == 105 && c.stripHideDelayMilliseconds == 250)
+    #expect(c.stripWindow == .over && c.stripHeight == 105 && c.stripHideDelayMilliseconds == 150)
     #expect(c.stripCellMax == 1.5 && c.stripCornerRadius == 8 && c.stripScrollDirection == .natural)
     #expect(c.stripJumpPreview && c.stripLoadingIndicator)
     #expect(c.thumbSize == 512 && c.thumbCacheBytes == 2 << 30)
@@ -548,10 +548,10 @@ import Foundation
 }
 
 @Test func stripHidesQuicklyByDefault() {
-    #expect(Config().stripHideDelayMilliseconds == 250)
-    #expect(Config().text(forKey: "strip-hide-delay") == "250")
-    #expect(Config().stripFadeOutMilliseconds == 250)
-    #expect(Config().text(forKey: "strip-fade-out") == "250")
+    #expect(Config().stripHideDelayMilliseconds == 150)
+    #expect(Config().text(forKey: "strip-hide-delay") == "150")
+    #expect(Config().stripFadeOutMilliseconds == 150)
+    #expect(Config().text(forKey: "strip-fade-out") == "150")
 }
 
 @Test func stripHideDelayAcceptsZero() {
@@ -562,7 +562,7 @@ import Foundation
 
 @Test func stripFadeKeysParseAndRoundTrip() throws {
     let defaults = Config()
-    #expect(defaults.stripFadeInMilliseconds == 150 && defaults.stripFadeOutMilliseconds == 250)
+    #expect(defaults.stripFadeInMilliseconds == 250 && defaults.stripFadeOutMilliseconds == 150)
     let (c, w) = Config.parse("strip-fade-in=0\nstrip-fade-out=2000")
     #expect(c.stripFadeInMilliseconds == 0 && c.stripFadeOutMilliseconds == 2000 && w.isEmpty)
     #expect(c.text(forKey: "strip-fade-in") == "0" && c.text(forKey: "strip-fade-out") == "2000")
@@ -689,6 +689,20 @@ import Foundation
     ])
     let text = Config.keys.compactMap { k in c.text(forKey: k).map { "\(k)=\($0)" } }.joined(separator: "\n")
     #expect(Config.parse(text) == (c, []))
+}
+
+@Test func informationPanelTextSizeMatchesFrameScrubDefaultsAndRange() {
+    #expect(Config().text(forKey: "info-panel-font-size") == "12")
+    for size in [8, 14, 40] {
+        let (config, warnings) = Config.parse("info-panel-font-size=\(size)")
+        #expect(warnings.isEmpty)
+        #expect(config.text(forKey: "info-panel-font-size") == String(size))
+    }
+    for size in ["7", "41", "14.5"] {
+        let (config, warnings) = Config.parse("info-panel-font-size=\(size)")
+        #expect(warnings.count == 1)
+        #expect(config == Config())
+    }
 }
 
 // MARK: App icon
@@ -1236,6 +1250,7 @@ private let keySamples: [String: (valid: String, invalid: String?)] = [
     "haptic-long-armed": ("knock", "bzzz"), "haptic-detent": ("none", "bzzz"),
     "mx-side-buttons": ("take", "steal"), "haptic-strong-strength": ("81", "keep"),
     "stats-progress": ("no", "maybe"), "stats-progress-opacity": ("0.3", "0.9"), "stats-folder-name": ("no", "maybe"),
+    "info-panel-font-size": ("14", "41"),
     "toast-position": ("right", "middle"), "stats-bar-opacity": ("0.5", "0.1"),
     "stats-bar-rows": ("2", "3"), "stats-bar-with-toolbar": ("yes", "perhaps"),
     "fullscreen-toolbar": ("shown", "sliding"), "fullscreen-tabs": ("shown", "hidden"), "stats-modified": ("no", "perhaps"),

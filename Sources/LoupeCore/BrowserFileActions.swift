@@ -24,8 +24,7 @@ public enum BrowserTrashError: Error, Equatable, Sendable {
     case noTrash
 }
 
-/// The file browser's Rename and Move to Trash (file browser spec §4.3). After a rename the stores that keep paths
-/// (positions, Recent, sessions, folder settings, pins) follow it. Blocking: run off the main thread.
+/// File View's filesystem operations. Path stores follow moves and renames. Run off the main thread.
 public struct BrowserFileActions: Sendable {
     public typealias Trasher = @Sendable (URL) throws -> Void
 
@@ -66,6 +65,58 @@ public struct BrowserFileActions: Sendable {
         }
         for store in stores { store.movePaths(from: url, to: target) }
         return target
+    }
+
+    /// Returns the new path, or nil when moving an item to its existing folder.
+    /// Copies and moves never replace an existing item.
+    public func transfer(_ url: URL, into folder: URL, moving: Bool) throws -> URL? {
+        let fm = FileManager.default
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let destination = folder.resolvingSymlinksInPath()
+        if info.st_mode & S_IFMT == S_IFDIR {
+            var relationship: FileManager.URLRelationship = .other
+            try fm.getRelationship(&relationship, ofDirectoryAt: url.resolvingSymlinksInPath(), toItemAt: destination)
+            guard relationship == .other else { throw TransferError.insideSource }
+        }
+        var relationship: FileManager.URLRelationship = .other
+        try fm.getRelationship(&relationship, ofDirectoryAt: url.deletingLastPathComponent().resolvingSymlinksInPath(),
+                               toItemAt: destination)
+        let sameFolder = relationship == .same
+        if sameFolder, moving { return nil }
+
+        var target = folder.appendingPathComponent(url.lastPathComponent)
+        if sameFolder {
+            let name = url.lastPathComponent as NSString
+            let ext = name.pathExtension
+            let stem = ext.isEmpty ? name as String : name.deletingPathExtension
+            var number = 1
+            repeat {
+                let suffix = number == 1 ? " copy" : " copy \(number)"
+                target = folder.appendingPathComponent(stem + suffix + (ext.isEmpty ? "" : "." + ext))
+                number += 1
+            } while lstat(target.path, &info) == 0
+        }
+        guard lstat(target.path, &info) != 0 else { throw RenameProblem.exists }
+        if moving {
+            try fm.moveItem(at: url, to: target)
+            for store in stores { store.movePaths(from: url, to: target) }
+        } else {
+            // Publish the finished copy under its final name. A failed recursive copy may leave a partial tree.
+            let temporary = folder.appendingPathComponent(".loupe-copy-\(UUID().uuidString)")
+            defer { try? fm.removeItem(at: temporary) }
+            try fm.copyItem(at: url, to: temporary)
+            try fm.moveItem(at: temporary, to: target)
+        }
+        return target
+    }
+
+    private enum TransferError: LocalizedError {
+        case insideSource
+
+        var errorDescription: String? { "A folder can’t be copied or moved into itself." }
     }
 
     /// To the Trash; `permanently` deletes for good (after the app asked). A volume without a Trash is `noTrash`.

@@ -108,6 +108,15 @@ public final class StateDatabase: @unchecked Sendable {
         }
     }
 
+    /// A token for optimistic session changes. Older rows start with an empty token and get one on their next write.
+    private static func addSessionRevision(_ db: SQLiteConnection) throws {
+        var columns: Set<String> = []
+        try db.query("SELECT name FROM pragma_table_info('sessions')", []) { columns.insert($0.text(0)) }
+        if !columns.isEmpty, !columns.contains("revision") {
+            try db.execute("ALTER TABLE sessions ADD COLUMN revision BLOB NOT NULL DEFAULT X''")
+        }
+    }
+
     private static func prepare(_ db: SQLiteConnection) throws {
         var version: Int64 = 0
         try db.query("PRAGMA user_version", []) { version = $0.int(0) }
@@ -122,6 +131,7 @@ public final class StateDatabase: @unchecked Sendable {
             }
         }
         try addVisitColumns(db)
+        try addSessionRevision(db)
         try db.execute(browserTables)
     }
 }

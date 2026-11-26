@@ -1,4 +1,5 @@
 import Foundation
+import HomeScreenModel
 
 /// Settings (key → text value, as in `loupe.conf`) that apply to a folder and everything below it, so a
 /// folder of scans can scale differently from a folder of phone shots. A folder's effective values are its
@@ -123,7 +124,7 @@ public final class FolderSettings: @unchecked Sendable {
 
     /// `folder` itself, then each parent up to the root; under `/Volumes/<name>` up to that volume only.
     static func chain(of folder: URL) -> [String] {
-        let components = folder.standardizedFileURL.pathComponents      // ["/", "Volumes", "share", …]
+        let components = folder.quicklyStandardized.pathComponents     // ["/", "Volumes", "share", …]
         let floor = components.count > 2 && components[1] == "Volumes" ? 3 : 1
         var chain: [String] = []
         var depth = components.count

@@ -29,38 +29,92 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
   Raw trackpad contacts distinguish held folder and toolbar swipes from unpressed photo and filmstrip swipes.
   Primary click handling pairs light contacts for the status bar and plain presses for the browser. Force
   pressure invalidates both candidates before the mouse button is released. Horizontal
-  swipes can reverse along the locked axis without lifting. Filmstrip scrolling previews a candidate
-  without changing the viewer session until the strip settles. AppKit feedback marks panel changes, zoom
+  swipes can reverse along the locked axis without lifting. Viewer slots sit in front of filmstrip chrome.
+  While the pointer is in a shown slot, the floating filmstrip keeps its visibility so the slot's frame stays stable.
+  `StripController` previews the trackpad candidate with a fixed centre mark and position count, then commits the
+  viewer session on release from momentum or rest. The short visible snap can be interrupted from its last frame.
+  A hover caption adds cached photo facts only after a longer dwell and discards stale reads on pointer movement.
+  Trackpad travel past a folder boundary is capped relative to the end thumbnail, so a fling preserves the centre
+  target and can reverse promptly. The tools occupy the area above the right edge and yield to an active scrub.
+  `StripController` fits the configured height to the viewport and restores it on growth without writing settings.
+  The floating strip's reveal zone follows the fitted thumbnail height, within 20–44 pt above the window edge
+  or playback transport. The strip holds while the pointer is over its controls, slightly past the bottom of
+  the window or using an interaction. Outside pointer monitoring exists only for that hold.
+  `StripVisibilityMotion` animates the row and its tool capsule on their layers, leaving the overlay layout in place.
+  AppKit feedback marks panel changes, zoom
   stops and limits, photo boundaries and committed folder changes. Logitech feedback uses MouseService.
 - `WindowToolbarController` retains the native toolbar and applies the native bottom tab accessory's fullscreen
-  minimum height. `ViewerWindowController` reconciles `fullscreen-tabs`, the temporary B override and stats layout
+  minimum height. Switching sources preserves common native spacers and items shared by identity in the same order.
+  `ViewerWindowController` reconciles `fullscreen-tabs`, the temporary B override and stats layout
   on native tab layout, selection and settings changes. In the viewer, the default auto mode hides tabs and toolbar
   together. The shown mode keeps the whole header stable, and File View keeps its toolbar pinned.
   Layout requests coalesce into one deferred main-queue update, skipped after close or
   fullscreen exit, to avoid mutating AppKit chrome during layout. This adds no polling or recurring timers.
 - `ViewerSession` owns playlist, displayed cache entries, transform, spread and navigation intent. Loading and
   residency belong to the shared cache. `close()` stops watchers/tasks and unregisters its cache/thumbnail requests.
+  Manual zoom keeps a bounded history of displayed framings per tab and carries a separate reference from the last
+  manual zoom within the folder. `PhotoSwitchView` applies the active carry mode on a first visit. Revisits restore
+  their own compatible framing, and cache refinements keep the view already on screen.
 - `EmbeddedPlayback` is created per viewer only for filesystem media. Loupe owns media selection, the
   poster, provider activation and standalone handoff. FrameScrub supplies the remote picture, transport
   and playback engine through the separately installed `local.framescrub.playback` extension.
 - `ViewerMetadataLoader` owns the viewer info panel's selected file, stat/result and read/pending task lifetime.
-  The controller owns panel layout, hold policy and diagnostics. `BrowserInspectorLoader` is the separate browser
+  The controller owns panel layout, hold policy and diagnostics. It applies the global information panel font size
+  from `Config` at setup and when settings reload. `BrowserInspectorLoader` is the separate browser
   selection pipeline; it must not be confused with the viewer loader.
+
+- `CheatSheetBindings` adapts `InputMap`, native menu shortcuts and gestures to the shared SettingsKit
+  `CheatSheetView`. SettingsKit owns the dark HUD, search focus, scrolling and reflow. `ViewerWindowController`
+  routes Escape and page scrolling while it is open. Settings uses the same `KeyMap.gestures` descriptions as
+  read-only mouse table rows.
 
 ## Important flows
 
 1. Finder/menu/argument or `loupe://open?path=…` → `AppDelegate` → `WindowRegistry.open` → controller → session playlist/focus.
    `OpenLink` decodes the percent-encoded absolute file or folder path before tab routing or instance handover.
+   `OpenRequests` classifies external paths and drops on shared blocking slots. External events reach the router
+   in their arrival order, with up to two batches probing ahead and 64 total pending. A drop retains its
+   originating tab and is cancelled if that tab closes. [Open path measurements](bench/2026-11-26-open-requests.md).
+   After delivering an external open event to the viewer, AppDelegate can request application activation on
+   the next main-queue turn if the same app still has focus. Delayed results recheck the foreground app before
+   bringing windows forward. The app menu uses the bundled image document
+   types for its default-app commands and checks the application URL selected by Launch Services.
+   Directory opens and sibling navigation prepare the playlist on `FolderPlaylistPreparation`. A named photo
+   opens immediately while the names-only and stamped listings prepare the folder's selected sort off main.
+   If the preference changes while listing, the shared preparation worker reorders the snapshot. The session
+   checks its playlist generation and current folder before applying it. An explicit open can replace a
+   snapshot of the same folder.
+   A superseded direct folder open skips listing if it has yet to start. If its filesystem call is already
+   running, cancellation discards the returned entries before filtering or preparing its playlist.
 2. Session focus → `ImageCache` planning → file read/decode/Metal pyramid → qualifying entry → session →
    `ViewerView`/`RenderLoop` snapshot → `TileRenderer`. Keep the shown image pinned until its replacement is ready.
+   The loader supplies Metal allocation estimates for planning and upload reservations, and actual allocation sizes
+   for resident levels. The cache uses them for its limits and eviction. Full eviction clears the textures
+   before dropping the pyramid, including when a hidden viewer still holds a reference to it. The process
+   footprint also includes rendering surfaces and resources held by other subsystems.
 3. Home browser → `LoupeHomeSource`, `FolderBrowserSource` or `PhotosBrowserSource` → streamed listings and
    thumbnail requests. The app supplies data; HomeScreenKit owns browser UI, selection and sorting interaction.
+   File View uses the kit's ordered multi-selection for context and Edit menu commands. `FileViewCommands`
+   reads and writes file URLs through the system clipboard. `FolderBrowserSource` runs one filesystem batch
+   at a time off the main thread through `BrowserFileActions`. Moves update the same path stores as renames.
+   Trash failures on volumes without a Trash share one permanent-delete confirmation. Changed folders
+   refresh through the current listing stream, or through a single reload for recursive views.
+   Local File View folders send one stamped filesystem listing. Shares can still send names ahead of stamps.
+   A remembered or catalog listing can supply the grid while live enumeration runs. Closing or changing the
+   listing discards a finished enumeration that has lost its request.
+   File View checks the filesystem type of `.zip` paths in its listing worker. `ArchivePath` shares the last
+   known types with file readers and UI callers so a directory with that suffix can use ordinary file entries
+   without synchronous filesystem checks during presentation. ZIP entries keep their existing URL and catalog keys.
    `FolderBrowserSource` normalizes the URLs used by photo marks in the background task that orders them.
    A new listing cancels that preparation and only the current listing can publish its marks.
    Grid and sidebar favorite commands share `BrowserPlaces`. It keeps the existing ordered `browser_pins` rows,
    commits changes before publishing them, and notifies every Home window sharing the store. The sidebar separates
    Favorites from system Places and exposes the same ordered folders as a separate Favorites source.
    The source uses the normal folder cover queue and resolves each favorite's catalog location independently.
+   File View displays a partial cover from the catalog before listing a folder whose full cover is missing.
+   The same queue request completes the cover, and the preview follows the request's cancellation and layout checks.
+   A local folder cover can prepare two selected images concurrently within the existing background reader and
+   decode pools. It publishes them in selection order. Share and archive covers prepare one at a time.
    Recursive browsing sends flattened image entries through the existing thumbnail and viewing-history flow.
    Opening a photo from that grid passes its listing, root sort and name filter through WindowRegistry to the
    viewer. ViewerSession shows the photo while a shared worker prepares the sequence. Later opens and navigation
@@ -70,8 +124,15 @@ abstractions. System modules CTurboJPEG and CJXL expose native decoders; CHeif i
    result in a separate table by volume and folder and serves it provisionally during a fresh walk.
    Opening a folder from the sidebar in a new tab uses WindowRegistry and starts that native tab in Home's browser.
 4. Viewer info selection → `ViewerMetadataLoader` → stat → thumbnail catalog metadata or `PhotoMetadataCache` →
-   panel refresh. A replaced/stopped request cannot publish, even after returning to the same URL.
-5. Session/position changes → app-owned stores → `StateDatabase`; explicit flushes and shutdown preserve state.
+   panel refresh. Size can publish before metadata. A replaced/stopped request cannot publish, even after returning
+   to the same URL.
+5. Session/position changes → app-owned stores → `StateDatabase`. The primary app opens the database and promotes
+   the previous run on a worker before handing the stores to AppKit. AppKit captures window snapshots on the main
+   actor. The session store runs listings, restoration reads and explicit mutations on its serial queue.
+   Startup reads the previous run's snapshot only. It and the Sessions listing leave the current run's debounced
+   snapshot alone. Save Session As checks the name and writes in the same transaction. Replacement confirmation
+   is tied to the record's revision, so a later edit or recreation requires confirmation again.
+   [Session command measurements](bench/2026-11-26-sessions-and-metadata.md#session-commands).
 6. Shared subject detections → `CompositionOptions` and `SubjectFraming.composition` → physical circle support and
    protected regions → `SubjectComposition.resolve` → feasible pan before minimum outzoom. `BrowseFraming` owns
    cross-photo centre memory; current-photo constraints always win. The profile editor owns only its draft;
@@ -130,9 +191,44 @@ The package uses Swift 6 language mode without blanket default actor isolation.
 `ViewerSession` and AppKit coordination run on the main actor. `ImageCache`, `ThumbnailStore` and
 `PhotoMetadataCache` isolate shared state in actors. `FileReader` and `DecodePool` bound I/O/decoding. Thumbnail
 activity follows foreground cache work; keep the existing foreground/background priority relationship.
+`ThumbnailStore` can start the key window's visible thumbnail jobs before building the rest of a stale plan.
+Once current-photo work ends, one on-screen thumbnail job can start during the background delay.
+The File View margin and work for other windows still wait for the normal delay.
+Cell readers share an in-flight decode at the same URL, pixel size and orientation. Changing the source revision
+or clearing the cache invalidates the corresponding decode result as well as its cached cells.
 `RenderLoop` passes locked snapshots to its own thread, pauses the display link at rest and stops it on close.
 The viewer loading indicator stops animating while Home covers it or the window is hidden. Reduce Motion
 keeps its loading mark static.
+Neural Upscale inference is an opt-in viewer mode. `ViewerUpscale` submits the settled current photo first.
+The process-wide service runs foreground requests alone and bounds speculative inference to the next configured
+playlist entries in the direction of travel. Navigation, scrubbing, hiding the viewer, and model or mode changes
+withdraw obsolete requests. Navigation retains requests still ahead and adopts an in-flight request for the
+destination. A serialized saved-copy lookup runs separately from inference. Lookahead reuses the image cache's
+resident source or its shared reader and utility decode pool. The viewer can present a completed texture before
+its AVIF is committed. A worker that has rendered a requested copy finishes saving it across navigation. The background budget drops under memory pressure, and the measured Mac can run two saving
+2× CPU + GPU lookahead requests. Cancellation is checked between Core ML tiles and before committing a file.
+The process-wide LRU budgets retained output texture slices, including aprons and reduced levels.
+The shared catalog reads model interfaces off the main thread and caches model factors by revision.
+Each viewer chooses a model for 2× and 4×. Model overrides, lookahead depth, automatic saving and the explicitly saved default mode persist locally.
+`SavedUpscale` writes source-revision-keyed AVIFs in the parent folder's hidden `.loupe-upscales` directory.
+For a ZIP member, this directory sits beside the archive, and the key includes both the archive name and member path.
+The AVIF stores upright pixels and records the source orientation in EXIF; the viewer restores the stored axes
+for its alternate pyramid. The viewer prefers a valid saved alternate when opening a photo. Show Original is a
+per-photo presentation override and preserves the viewing geometry.
+The status bar pairs upscale state with zoom and reports the displayed result's oriented dimensions beside the
+source dimensions. The worker measures processing through texture creation. The timing follows the in-memory
+result and is absent for a copy decoded from disk.
+Changing the model, scale or model settings explicitly can rebuild the open photo. Automatic saving defaults on.
+File View checks the directory once per folder during listing and shows the enhanced thumbnail on the marked original card.
+File View also submits an explicit batch with the current viewer's model and scale. The shared scheduler
+runs one batch image at a time. Foreground inference and memory pressure interrupt the current batch item,
+which retries when the scheduler is available. Lookahead waits while the batch runs. The batch saves AVIFs
+independently of the viewer's automatic-save setting, skips saved or promoted revisions, and refreshes affected
+File View folders on completion or cancellation.
+`UpscaleReplacement` confirms and serializes same-format JPEG and PNG replacement, keeping the original in
+`.loupe-upscales/Originals`. A revision marker prevents a promoted file from being picked up by another automated
+upscale. See [local model setup and controls](upscale.md).
+
 A / Shift-A control the existing Lanczos limiter and its default. MetalFX uses the system spatial scaler
 without an additional anti-ringing stage. Retired experimental MetalFX-limiter config and folder keys
 are ignored when reading old state; they are absent from the schema, UI and render snapshots.
@@ -192,7 +288,11 @@ Clearing a window’s `SubjectFinder` queue (Manual mode or close) invalidates r
 queued photos. Generation checks suppress stale callbacks, skip work after catalog/proxy reads and stop between
 Vision stages and model crops, including before loading a model after waiting for its serial queue. A Vision call
 already executing can finish; no subsequent stage starts for that request.
-Metadata stat work is utility work; synchronous filesystem reads do not belong in a main-actor callback.
+Viewer inspectors share a utility `DecodePool` for stat and EXIF. Where the machine budget permits, one slot stays
+available for stat when EXIF reads have filled their slots. Replacing a selection withdraws its queued stat and
+metadata wait. `PhotoMetadataCache` coalesces readers of the same source version and cancels a queued read when
+its last waiter leaves. Cold catalog location lookups share the same pool. A blocking call already started retains
+its slot until it returns. [Viewer metadata measurements](bench/2026-11-26-sessions-and-metadata.md#viewer-metadata).
 Navigation uses cancellation plus request identity checks because a cancelled filesystem/decode call may finish.
 For playback, WindowRegistry reports native tab visibility and activity. Navigation, leaving the viewer,
 hiding, and disconnect invalidate the remote scene and XPC connection. Cancelling an open also invalidates
@@ -287,6 +387,18 @@ Use `scripts/test.sh` for everyday tests and `scripts/test.sh full` before mergi
 see [testing policy](testing.md). Run `python3 scripts/kits-check.py --no-fetch` after local dependency work.
 UI performance requires real-window CPU measurements; a model-only microbench cannot establish window latency.
 
+## Slot plugins
+
+`ViewerSlotsController` registers configured HTTPS plugin pages as HomeScreenKit slot tabs. It prepares each
+assigned page even when the slot starts hidden and keeps it loaded until the tab is dropped. The shared slot
+chrome draws the panel backdrop. `SlotPluginPanel` gives the configured main-frame origin a versioned bridge
+for action declarations, completion and opening same-origin HTTPS pages in the default browser. A committed
+navigation or web process termination clears declarations and pending actions.
+
+File › Plugins and the File View context menu dispatch through the same controller. The viewer supplies the
+displayed photo, and File View supplies its ordered local selection. The page first receives paths when a user
+invokes its action. See [slot plugin configuration and bridge](slot-plugins.md).
+
 ## Gesture ownership
 
 `GestureAxisLock` in Core fixes the first intentional scroll axis through momentum; a new non-momentum
@@ -309,3 +421,18 @@ releases on a stop. The minimum and maximum zoom remain limits, with the existin
 the window loses key status or changes fullscreen state.
 Pinch and thumb-wheel end events discard their state. Right-button release can hand its state to mouse inertia.
 See the [Soft Detents / Semantic Stops](../AGENTS.md#soft-detents--semantic-stops) interaction guidelines.
+
+## Photo comparison
+
+File View's ordered selection and the viewer's two-step File menu actions route to `WindowRegistry`.
+The registry holds the selected photo URL and opens a transient viewer tab for a fixed pair. Session
+snapshots and Reopen Closed Tab skip comparison tabs. Source viewers keep their own playlists and transforms.
+
+`PhotoComparisonView` gives each photo a clipped Metal surface with its own `ViewTransform`.
+`PhotoComparison` owns matching proportions, common zoom limits and the common pan delta. Both URLs
+are current in the tab's existing `ImageCache` session, using its current and companion slots. The normal
+bounded decode and render paths supply previews and full pyramids. Comparison uses the configured
+orientation and rendering defaults. Hiding the tab clears both render snapshots and withdraws its
+foreground plan. Activating the tab revalidates both source revisions. Closing unregisters its cache
+session and stops both render loops. See `PhotoComparisonTests` and the real-window
+[`--photo-comparison-bench` workload](bench/2026-11-24-photo-comparison.md).

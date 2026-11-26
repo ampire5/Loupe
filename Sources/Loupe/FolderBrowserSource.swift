@@ -16,7 +16,7 @@ extension Notification.Name {
 /// kept in memory, so Back and Up show at once), a `FolderWatcher` on the open folder, thumbnails from the strip's
 /// store (the folder's files as one more window's request), folder and zip cards from the store's cover queue (folder
 /// covers and folder cards specs: the cover and the facts), the sort and the card style in folder settings, and rename
-/// and Trash through `BrowserFileActions`.
+/// and file operations through `BrowserFileActions`.
 @MainActor final class FolderBrowserSource {
     weak var view: HomeBrowserView?
     /// Opens a photo, a folder or a zip in the viewer, here or in a new tab or window.
@@ -25,7 +25,8 @@ extension Notification.Name {
     var onPlacesChanged: (() -> Void)?
     var onSidebarAvailabilityChanged: (() -> Void)?
     /// Asks before deleting for good (a volume without a Trash); the answer comes back on the main actor.
-    var confirmDelete: ((String, @escaping (Bool) -> Void) -> Void)?
+    var confirmDelete: ((Int, String, @escaping (Bool) -> Void) -> Void)?
+    var onBatchUpscale: (([URL]) -> Void)?
 
     private let thumbnails: ThumbnailStore
     private let places: BrowserPlaces
@@ -39,6 +40,7 @@ extension Notification.Name {
     /// Where Recent has a folder's photo, for a card whose folder has no visit yet (`FolderCardFacts.visit`).
     private let recent: RecentStore?
     private let actions: BrowserFileActions
+    private static var fileOperationInProgress = false
     /// The thumbnail store's id for the browser's request: apart from every viewer session's.
     private let thumbnailWindow: Int
     private static var nextWindow = 1 << 40
@@ -71,6 +73,8 @@ extension Notification.Name {
     /// The ancestors' probe after a failed relist of the open folder (`FolderRelistFailure`): one in flight at most.
     private let ancestorProbe = AncestorProbe()
     private var watchChanges: AsyncStream<Void>.Continuation?
+    private var savedUpscalesChanged = false
+    private var fileListingChangedWhilePaused = false
     /// A failed first listing of the place on screen waiting to be tried again (`retryFirstListing`); `retryWhenShown`:
     /// its time came while the tab was hidden.
     private var retryTask: Task<Void, Never>?
@@ -136,6 +140,14 @@ extension Notification.Name {
     private var noCover: Set<String> = []
     /// The view's last ask as it came (before `thumbs-ahead = off` trims it), asked again when the setting changes.
     private var lastWant: (ids: [String], visible: Int, width: CGFloat)?
+
+    var benchThumbnails: (ready: Int, visible: Int) {
+        guard let view else { return (0, 0) }
+        let urls = view.visibleIDs.compactMap { id in
+            shown[id].flatMap { $0.kind == .file ? $0.url : nil }
+        }
+        return (urls.lazy.filter { self.pictured.contains($0) }.count, urls.count)
+    }
     /// `thumbs-ahead` as the asks so far followed it.
     private var thumbsAhead = Settings.shared.config.thumbsAhead
     private var observers: [NSObjectProtocol] = []
@@ -161,6 +173,14 @@ extension Notification.Name {
         })
         observers.append(center.addObserver(forName: BrowserPlaces.favoriteAvailabilityDidChange, object: places, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.onSidebarAvailabilityChanged?() }
+        })
+        observers.append(center.addObserver(forName: .savedUpscaleChanged, object: nil, queue: .main) { [weak self] note in
+            guard let photo = note.object as? URL else { return }
+            MainActor.assumeIsolated { self?.savedUpscaleChanged(photo) }
+        })
+        observers.append(center.addObserver(forName: .fileViewListingChanged, object: nil, queue: .main) { [weak self] note in
+            guard let folders = note.object as? Set<String> else { return }
+            MainActor.assumeIsolated { self?.fileListingChanged(in: folders) }
         })
         observers.append(center.addObserver(forName: .thumbnailChanged, object: nil, queue: .main) { [weak self] note in
             guard let url = note.object as? URL else { return }
@@ -210,6 +230,8 @@ extension Notification.Name {
                     return retryNow()
                 }
                 // Back from the viewer: the visits and the two-page keys may have changed.
+                if fileListingChangedWhilePaused { refreshFileListing() }
+                if savedUpscalesChanged { refreshSavedUpscales() }
                 showSummaries()
                 sendPhotoMarks()
                 progressMayHaveChanged()
@@ -397,7 +419,9 @@ extension Notification.Name {
         switch entry.kind {
         case .folder: return "folder"
         case .archive: return "doc.zipper"
-        case .file: return PlaybackMedia.candidate(entry.url) == .video ? "film" : "photo"
+        case .file:
+            if entry.badge == SavedUpscale.badge { return "arrow.up.left.and.arrow.down.right" }
+            return PlaybackMedia.candidate(entry.url) == .video ? "film" : "photo"
         case .collection: return "rectangle.stack"
         case .place:
             if entry.url.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL { return "house" }
@@ -449,8 +473,9 @@ extension Notification.Name {
                 guard !Task.isCancelled else { return }
                 let scannedAt = Date()
                 let read = Task.detached(priority: .userInitiated) {
-                    try RecursiveFolderFiles.read(in: folder, extensions: Playlist.mediaExtensions,
-                                                  cancelled: { Task.isCancelled })
+                    let entries = try RecursiveFolderFiles.read(in: folder, extensions: Playlist.mediaExtensions,
+                                                                cancelled: { Task.isCancelled })
+                    return BrowserListingSource.markSavedUpscales(entries)
                 }
                 do {
                     let entries = try await withTaskCancellationHandler {
@@ -528,6 +553,8 @@ extension Notification.Name {
                     var took: Duration?
                     for try await listing in BrowserListingSource.listings(folder, archives: archives) {
                         guard let self, wanted() else { return }
+                        let coverLocation: BrowserLocation? = ArchivePath.isArchive(folder) ? nil : .folder(folder)
+                        if self.coverLocation != coverLocation { self.showCovers(at: coverLocation) }
                         deliver(listing)
                         if !listing.complete, !listing.more {
                             // All the names: kept for the next opening (on a cold share the dates may take a minute).
@@ -614,6 +641,7 @@ extension Notification.Name {
     /// A new place for the browser (`gate`): a retry of the last one's failed listing goes too.
     private func begin(_ path: String?) -> Int {
         showsUnchecked = false
+        fileListingChangedWhilePaused = false
         retryTask?.cancel()
         retryTask = nil
         retryWhenShown = false
@@ -663,12 +691,31 @@ extension Notification.Name {
     /// A listing of the place on screen to the source's state and the view; a names-only part after a complete listing
     /// of the same place (a relist's first pass on a share) goes nowhere: it would drop the stamps, the dates and the
     /// follow-ups the complete one gave (`BrowserListingGate.admits`).
+    private func savedUpscaleChanged(_ photo: URL) {
+        guard shown[photo.path]?.isFile == true else { return }
+        view?.setImage(nil, for: photo.path)
+        savedUpscalesChanged = true
+        if !isPaused { refreshSavedUpscales() }
+    }
+
+    private func refreshSavedUpscales() {
+        savedUpscalesChanged = false
+        if let watchChanges { watchChanges.yield() }
+        else if let view, case .folder(let folder) = view.location,
+                view.includesSubfolders || ArchivePath.isArchive(folder) { view.reload() }
+    }
+
     private func deliver(_ listing: BrowserListing, token: Int,
                          to continuation: AsyncThrowingStream<BrowserListing, Error>.Continuation) {
         guard gate.admits(complete: listing.complete, token: token) else { return }
         DebugLog.log("folder listing to the view: \(listing.entries.count) entries" + (listing.complete ? ", complete" : ""))
+        let live = listing.complete ? (view?.liveIDs ?? []) : []
+        let priorUpscales = Set(live.filter { shown[$0]?.badge == SavedUpscale.badge })
         if listing.complete { showsUnchecked = false }
         remember(listing.entries)
+        for id in live where priorUpscales.contains(id) != (shown[id]?.badge == SavedUpscale.badge) {
+            view?.setImage(nil, for: id)
+        }
         let wasDated = shownDated
         shownDated = listing.complete
         listingAnswered(listing.complete)
@@ -822,7 +869,8 @@ extension Notification.Name {
         let wanted = ids.compactMap { shown[$0] }
         let inView = Set(ids.prefix(visible))
         let files = wanted.filter { $0.kind == .file }
-        sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: Set(files.filter { inView.contains($0.id) }.map(\.url))))
+        let visibleFiles = Set(files.lazy.filter { inView.contains($0.id) }.map(\.url))
+        sendRequest(ThumbnailRequest.inViewFirst(files.map(\.url), inView: visibleFiles), inView: visibleFiles)
         let cardIDs = wanted.filter { !$0.isDimmed && ($0.kind == .folder || $0.kind == .archive) }.map(\.id)
         // The folder cards' picture: a poster's slot, a compact card's 76 pt square (its layout kept there, as board B
         // draws it), a row's cover; with photos in the grid too, `width` is theirs.
@@ -850,10 +898,10 @@ extension Notification.Name {
             var withPicture: [BrowserEntry] = []
             for entry in files {
                 guard let self, !Task.isCancelled else { return }
-                let url = entry.url.standardizedFileURL
+                let url = entry.url.quicklyStandardized
                 // Register before the actor hop so a thumbnail arriving during the read is delivered to the card.
                 self.waiting[url] = entry.id
-                let image = await self.thumbnails.cell(entry.url, maxPixel: maxPixel)
+                let image = await self.fileCell(entry, maxPixel: maxPixel)
                 guard !Task.isCancelled else { return }
                 if let image {
                     self.waiting.removeValue(forKey: url)
@@ -867,6 +915,15 @@ extension Notification.Name {
             }
             await self?.sendFacts(withPicture, inView: inView)
         }
+    }
+
+    private func fileCell(_ entry: BrowserEntry, maxPixel: Int) async -> CGImage? {
+        if entry.badge == SavedUpscale.badge, let copy = Self.savedCopy(entry),
+           let enhanced = await thumbnails.upscaledCell(copy, maxPixel: maxPixel) {
+            return enhanced
+        }
+        guard !Task.isCancelled else { return nil }
+        return await thumbnails.cell(entry.url, maxPixel: maxPixel)
     }
 
     /// Photos' facts on their cards (pixels, EXIF; file-cards spec): those kept with the thumbnails, at once; then,
@@ -1012,10 +1069,24 @@ extension Notification.Name {
                 self.view?.stopWaiting(for: [id])
             }
             // A mosaic of another layout or size is not kept.
-            guard let mosaic, self.shownCoverLayout == layout, self.coverSize?.width == side,
+            guard self.shownCoverLayout == layout, self.coverSize?.width == side,
                   self.coverSize?.scale == scale else { return }
-            self.cards.delivered(id, mosaic)
-            self.view?.setImage(mosaic, for: id)
+            if let mosaic {
+                self.cards.delivered(id, mosaic)
+                self.view?.setImage(mosaic, for: id)
+            } else if noCover {
+                self.view?.setImage(nil, for: id)
+            }
+        }
+        let mosaic: @Sendable ([CGImage]) -> CGImage? = { images in
+            HomeMosaic.make(images, size: CGSize(width: side, height: side), layout: layout, scale: scale,
+                            compact: compact)
+        }
+        let showPreview: @MainActor (String, CGImage) -> Void = { [weak self] id, picture in
+            guard !Task.isCancelled, let self, self.coverLocation == coverLocation, self.cards.pending.contains(id),
+                  self.shownCoverLayout == layout, self.coverSize?.width == side,
+                  self.coverSize?.scale == scale else { return }
+            self.view?.setImage(picture, for: id)
         }
         let subfolderWork = aheadWork(network: network, coverLocation: coverLocation)
         let work: @Sendable (String) async -> Bool = { id in
@@ -1036,9 +1107,14 @@ extension Notification.Name {
                 (location, cardNetwork) = (shownLocation?.subfolder(entry.url.lastPathComponent), network)
             }
             guard !Task.isCancelled else { return true }
+            let preview: @Sendable ([CGImage]) async -> Void = { images in
+                guard !Task.isCancelled, let picture = mosaic(images) else { return }
+                await showPreview(id, picture)
+            }
             guard let made = await thumbnails.folderCard(entry.url, archive: entry.kind == .archive, in: location,
                                                          network: cardNetwork, maxPixel: cellPixels,
-                                                         lastViewed: card.lastViewed, modified: entry.date) else { return false }
+                                                         lastViewed: card.lastViewed, modified: entry.date,
+                                                         onCachedPreview: card.picture ? preview : nil) else { return false }
             guard !Task.isCancelled else { return true }
             var inside: ChildSummaries?
             if let location, let summary = made.summary, summary.folders > 0 {
@@ -1049,14 +1125,10 @@ extension Notification.Name {
                                         photoDates: made.photoDates.map { NewPhotoDates($0, since: card.since) },
                                         problem: made.problem)
             // No photos: the card keeps its symbol.
-            var mosaic: CGImage?
-            if card.picture, !made.images.isEmpty {
-                mosaic = HomeMosaic.make(made.images, size: CGSize(width: side, height: side), layout: layout, scale: scale,
-                                         compact: compact)
-            }
+            let picture = card.picture ? mosaic(made.images) : nil
             let again = made.summaryPending || (made.problem == .offline && made.images.isEmpty)
             guard !Task.isCancelled else { return true }
-            await deliver(id, mosaic, facts, again, card.picture && mosaic == nil && !again)
+            await deliver(id, picture, facts, again, card.picture && picture == nil && !again)
             return !again
         }
         let favoriteURLs = favorites ? Dictionary(ids.compactMap { id in
@@ -1346,7 +1418,7 @@ extension Notification.Name {
 
     /// The folder's photos as a window's request: the store makes the missing thumbnails, those in view first.
     /// `files`: those in view first, then the margin's.
-    private func sendRequest(_ files: [URL]) {
+    private func sendRequest(_ files: [URL], inView: Set<URL>) {
         guard !isPaused, !shownFiles.isEmpty else { return }
         requestedVisible = files
         let index = shownIndex ?? Dictionary(shownFiles.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
@@ -1354,6 +1426,7 @@ extension Notification.Name {
         let shownIndices = files.compactMap { index[$0] }
         let request = ThumbnailRequest(files: shownFiles, current: shownIndices.first ?? -1,
                                        visible: shownIndices,
+                                       inViewCount: files.prefix(while: inView.contains).lazy.filter { index[$0] != nil }.count,
                                        isKey: view?.window?.isKeyWindow ?? false, isHome: true,
                                        // `thumbs-ahead = visible | off`: what is asked for, never the rest of the folder.
                                        visibleOnly: Settings.shared.config.thumbsAhead != .folder)
@@ -1374,20 +1447,23 @@ extension Notification.Name {
             pictured.remove(url)
             guard let entry = shown[url.path], entry.kind == .file else { continue }
             view?.setImage(nil, for: entry.id)
-            waiting[url.standardizedFileURL] = entry.id
+            waiting[url.quicklyStandardized] = entry.id
         }
         if !changed.isEmpty { progressMayHaveChanged() }
     }
 
     private func thumbnailChanged(_ url: URL) {
         markAspects?.thumbnailArrived(url)
-        guard let id = waiting.removeValue(forKey: url.standardizedFileURL) else { return }
+        let key = url.quicklyStandardized
+        guard let id = waiting[key] else { return }
         let maxPixel = maxPixel
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            let image = await self.thumbnails.cell(url, maxPixel: maxPixel)
-            guard self.shown[id]?.url.standardizedFileURL == url.standardizedFileURL else { return }
+            guard let self, let entry = shown[id], entry.url.quicklyStandardized == key else { return }
+            let image = await fileCell(entry, maxPixel: maxPixel)
+            guard self.waiting[key] == id, self.maxPixel == maxPixel,
+                  self.shown[id]?.url.quicklyStandardized == key else { return }
             if let image {
+                self.waiting.removeValue(forKey: key)
                 self.view?.setImage(image, for: id)
                 UnreadableFiles.app.clear(url)
                 self.pictured.insert(url)
@@ -1401,7 +1477,6 @@ extension Notification.Name {
                 // A file the decoders cannot read is marked for the app (its card faint, the arrow keys and the viewer's
                 // steps go past it); a read that failed is not. Waited for still, so a picture that comes later lifts it.
                 if await self.thumbnails.isBroken(url) { UnreadableFiles.app.mark(url, stamp: self.stamps[url]) }
-                self.waiting[url.standardizedFileURL] = id
             }
         }
     }
@@ -1409,6 +1484,9 @@ extension Notification.Name {
     // MARK: Menus
 
     func menu(for entry: BrowserEntry, in location: BrowserLocation) -> [HomeMenuItem] {
+        let selection = menuSelection(for: entry)
+        let fileItems = fileMenu(for: selection, in: location)
+        if selection.count > 1 { return fileItems }
         var items: [HomeMenuItem] = []
         if entry.kind != .place {
             items += [HomeMenuItem(id: "open", title: "Open"), HomeMenuItem(id: "openNewTab", title: "Open in New Tab"),
@@ -1424,9 +1502,14 @@ extension Notification.Name {
         if entry.kind == .folder || entry.kind == .archive, case .folder = location {
             items.append(HomeMenuItem(id: "refresh-cover", title: "Refresh cover"))
         }
+        if entry.isFile, entry.badge == SavedUpscale.badge, Self.savedCopy(entry)?.replacementType != nil {
+            items.append(HomeMenuItem(id: "replace-upscale", title: "Replace Original with Upscale…"))
+        }
+        if entry.kind == .folder {
+            items.append(HomeMenuItem(id: "replace-folder-upscales", title: "Replace Originals with Upscales…"))
+        }
         if entry.canRename { items.append(HomeMenuItem(id: "rename", title: "Rename…")) }
-        if entry.canTrash { items.append(HomeMenuItem(id: "trash", title: "Move to Trash")) }
-        return items
+        return items + fileItems
     }
 
     func perform(_ item: String, on entry: BrowserEntry, in location: BrowserLocation) {
@@ -1438,11 +1521,53 @@ extension Notification.Name {
         case "reveal": reveal(entry.url)
         case "copyPath": copyPath(entry.url)
         case "rename": view?.beginRename()
-        case "trash": view?.trashSelected()
+        case "copy-files": FileViewCommands.copy(FileViewCommands.files(menuSelection(for: entry)))
+        case "paste-files", "move-files":
+            if let folder = FileViewCommands.destination(in: location) {
+                pasteFiles(into: folder, moving: item == "move-files")
+            }
+        case "trash": trashFiles(menuSelection(for: entry).filter(\.canTrash).map(\.url))
+        case "batch-upscale":
+            let urls = FileViewCommands.images(menuSelection(for: entry))
+            if !urls.isEmpty { onBatchUpscale?(urls) }
         case "prepare-subtree": prepareSubtree(entry)
         case "refresh-cover": refreshCover(entry)
+        case "replace-upscale":
+            if let copy = Self.savedCopy(entry), let window = view?.window {
+                UpscaleReplacement.shared.confirm([copy], in: window)
+            }
+        case "replace-folder-upscales":
+            if let window = view?.window { UpscaleReplacement.shared.confirmFolder(entry.url, in: window) }
         default: break
         }
+    }
+
+    private func menuSelection(for entry: BrowserEntry) -> [BrowserEntry] {
+        guard let selection = view?.selectedEntries, selection.contains(where: { $0.id == entry.id }) else { return [entry] }
+        return selection
+    }
+
+    private func fileMenu(for selection: [BrowserEntry], in location: BrowserLocation) -> [HomeMenuItem] {
+        var items: [HomeMenuItem] = []
+        if !FileViewCommands.files(selection).isEmpty {
+            items.append(HomeMenuItem(id: "copy-files", title: "Copy"))
+        }
+        if FileViewCommands.destination(in: location) != nil, FileViewCommands.hasClipboardFiles {
+            items += [HomeMenuItem(id: "paste-files", title: "Paste Items"),
+                      HomeMenuItem(id: "move-files", title: "Move Items Here")]
+        }
+        if onBatchUpscale != nil, !FileViewCommands.images(selection).isEmpty {
+            items.append(HomeMenuItem(id: "batch-upscale", title: "Batch Upscale"))
+        }
+        if selection.contains(where: \.canTrash) {
+            items.append(HomeMenuItem(id: "trash", title: "Move to Trash"))
+        }
+        return items
+    }
+
+    private static func savedCopy(_ entry: BrowserEntry) -> SavedUpscale? {
+        guard let date = entry.date, let size = entry.size else { return nil }
+        return SavedUpscale(source: entry.url, stamp: .init(modified: date, size: Int(size)))
     }
 
     /// The app's one subtree walk (thumbs-ahead spec, stage 5) on the store's cover queue, as a client of its own: a
@@ -1602,7 +1727,139 @@ extension Notification.Name {
 
     // MARK: Changes
 
+    private struct FileOperationBusy: LocalizedError {
+        var errorDescription: String? { "A file operation is already in progress." }
+    }
+
+    private struct FileOperationReport: Sendable {
+        var completed = 0
+        var unchanged = 0
+        var failures = 0
+        var firstError: String?
+        var folders: Set<String> = []
+
+        mutating func failed(_ url: URL, _ error: Error) {
+            failures += 1
+            if firstError == nil { firstError = "\(url.lastPathComponent) — \(error.localizedDescription)" }
+        }
+
+        mutating func changed(_ folder: URL) {
+            folders.insert(folder.standardizedFileURL.path)
+        }
+    }
+
+    func pasteFiles(into folder: URL, moving: Bool) {
+        guard beginFileOperation() else { return }
+        let urls = FileViewCommands.clipboardFiles()
+        let actions = self.actions
+        Task {
+            let report = await Task.detached(priority: .utility) {
+                var report = FileOperationReport()
+                var seen: Set<String> = []
+                for url in urls where seen.insert(url.standardizedFileURL.path).inserted {
+                    autoreleasepool {
+                        do {
+                            if let target = try actions.transfer(url, into: folder, moving: moving) {
+                                report.completed += 1
+                                report.changed(target.deletingLastPathComponent())
+                                if moving { report.changed(url.deletingLastPathComponent()) }
+                            } else {
+                                report.unchanged += 1
+                            }
+                        } catch { report.failed(url, error) }
+                    }
+                }
+                return report
+            }.value
+            finishFileOperation(report, verb: moving ? "Moved" : "Copied")
+        }
+    }
+
+    func trashFiles(_ urls: [URL]) {
+        guard !urls.isEmpty, beginFileOperation() else { return }
+        let actions = self.actions
+        Task {
+            let (result, needsConfirmation) = await Task.detached(priority: .utility) {
+                var report = FileOperationReport()
+                var needsConfirmation: [URL] = []
+                for url in urls {
+                    autoreleasepool {
+                        do {
+                            try actions.trash(url, permanently: false)
+                            report.completed += 1
+                            report.changed(url.deletingLastPathComponent())
+                        } catch BrowserTrashError.noTrash {
+                            needsConfirmation.append(url)
+                        } catch { report.failed(url, error) }
+                    }
+                }
+                return (report, needsConfirmation)
+            }.value
+            var report = result
+            if let first = needsConfirmation.first {
+                if await askDelete(needsConfirmation.count, first.lastPathComponent) {
+                    report = await Task.detached(priority: .utility) {
+                        var report = result
+                        for url in needsConfirmation {
+                            autoreleasepool {
+                                do {
+                                    try actions.trash(url, permanently: true)
+                                    report.completed += 1
+                                    report.changed(url.deletingLastPathComponent())
+                                } catch { report.failed(url, error) }
+                            }
+                        }
+                        return report
+                    }.value
+                } else {
+                    report.unchanged = needsConfirmation.count
+                }
+            }
+            finishFileOperation(report, verb: "Removed")
+        }
+    }
+
+    private func beginFileOperation() -> Bool {
+        guard !Self.fileOperationInProgress else {
+            view?.showToast(FileOperationBusy().localizedDescription)
+            return false
+        }
+        Self.fileOperationInProgress = true
+        return true
+    }
+
+    private func finishFileOperation(_ report: FileOperationReport, verb: String) {
+        Self.fileOperationInProgress = false
+        if !report.folders.isEmpty {
+            NotificationCenter.default.post(name: .fileViewListingChanged, object: report.folders)
+        }
+        var lines = ["\(verb) \(report.completed) \(report.completed == 1 ? "item" : "items")"]
+        if report.unchanged > 0 { lines.append("\(report.unchanged) unchanged") }
+        if let error = report.firstError { lines.append("\(report.failures) failed · \(error)") }
+        view?.showToast(lines.joined(separator: "\n"), for: report.failures == 0 ? 3 : 6)
+    }
+
+    private func fileListingChanged(in folders: Set<String>) {
+        memory.removeAll { folders.contains($0.path) }
+        guard let view, case .folder(let folder) = view.location else { return }
+        let path = folder.standardizedFileURL.path
+        let prefix = path == "/" ? path : path + "/"
+        guard folders.contains(path) || (view.includesSubfolders && folders.contains(where: { $0.hasPrefix(prefix) }))
+        else { return }
+        if isPaused { fileListingChangedWhilePaused = true }
+        else { refreshFileListing() }
+    }
+
+    private func refreshFileListing() {
+        fileListingChangedWhilePaused = false
+        if let watchChanges { watchChanges.yield() }
+        else { view?.reload() }
+    }
+
     func rename(_ entry: BrowserEntry, to name: String) async throws -> BrowserEntry {
+        guard !Self.fileOperationInProgress else { throw FileOperationBusy() }
+        Self.fileOperationInProgress = true
+        defer { Self.fileOperationInProgress = false }
         let actions = self.actions, url = entry.url
         let new = try await Task.detached { try actions.rename(url, to: name) }.value
         forget(url.deletingLastPathComponent())
@@ -1620,20 +1877,23 @@ extension Notification.Name {
     }
 
     func trash(_ entry: BrowserEntry) async throws {
+        guard !Self.fileOperationInProgress else { throw FileOperationBusy() }
+        Self.fileOperationInProgress = true
+        defer { Self.fileOperationInProgress = false }
         let actions = self.actions, url = entry.url
         do {
             try await Task.detached { try actions.trash(url, permanently: false) }.value
         } catch BrowserTrashError.noTrash {
-            guard await askDelete(entry.name) else { throw CancellationError() }
+            guard await askDelete(1, entry.name) else { throw CancellationError() }
             try await Task.detached { try actions.trash(url, permanently: true) }.value
         }
         forget(url.deletingLastPathComponent())
         if view?.includesSubfolders == true { shown[entry.id] = nil }
     }
 
-    private func askDelete(_ name: String) async -> Bool {
+    private func askDelete(_ count: Int, _ name: String) async -> Bool {
         guard let confirmDelete else { return false }
-        return await withCheckedContinuation { c in confirmDelete(name) { c.resume(returning: $0) } }
+        return await withCheckedContinuation { c in confirmDelete(count, name) { c.resume(returning: $0) } }
     }
 
     func sort(for location: BrowserLocation) -> BrowserSort {

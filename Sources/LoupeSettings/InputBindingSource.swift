@@ -74,7 +74,11 @@ public final class InputBindingSource: KeyBindingSource {
                 canRestore: fromFile, canRemove: !off)
         }
         let keys = file.filter { !$0.isMouse }
-        return keys + menu + file.filter(\.isMouse)
+        let gestures = KeyMap.gestures.map { gesture in
+            KeyBindingRowModel(id: "gesture " + gesture.input, input: gesture.input, action: gesture.title,
+                               source: "gesture", isMouse: true, canRemove: false, isEditable: false)
+        }
+        return keys + menu + file.filter(\.isMouse) + gestures
     }
 
     /// A menu row's id: no input of the file starts so, so `remove` and `restoreBuiltIn` pass it by.
@@ -89,7 +93,8 @@ public final class InputBindingSource: KeyBindingSource {
         let file = bindingRows().filter { $0.isMouse == mouse }.flatMap { row in
             [row.input, InputConf.text(of: row.trigger), row.title, InputConf.text(of: row.action)]
         }
-        return mouse ? file : file + menuRows().flatMap { [$0.input, $0.title] }
+        let reference = mouse ? KeyMap.gestures : menuRows()
+        return file + reference.flatMap { [$0.input, $0.title] }
     }
 
     // MARK: Sheet

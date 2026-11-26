@@ -240,6 +240,13 @@ final class EmbeddedPlayback: NSViewController, NSMenuDelegate {
         remote?.step(count)
     }
 
+    var hasPendingFrameSteps: Bool { remote?.hasPendingFrameSteps == true }
+
+    func readPresentedTime(_ reply: @escaping @Sendable (Double) -> Void) {
+        guard ready, let service = remote?.service else { reply(-1); return }
+        service.playbackTime(reply)
+    }
+
     var isRightWheelScrubbing: Bool { rightWheel.isScrubbing }
 
     func releaseRightWheel() {
@@ -811,6 +818,8 @@ private final class RemoteScene: EXHostViewController, EXHostViewControllerDeleg
     private var pendingSteps = 0
     private var scrollInFlight = false
     private var pendingScroll: Scroll?
+
+    var hasPendingFrameSteps: Bool { stepInFlight }
 
     /// Frame steps wait for the provider to present a frame. Keep only the net travel
     /// accumulated during that request so fast wheel input cannot queue up XPC messages.

@@ -2,7 +2,7 @@ import Foundation
 
 /// The file's modification time and size when it was read: a changed stamp means the cached
 /// entry is stale.
-public struct FileStamp: Equatable, Sendable {
+public struct FileStamp: Hashable, Sendable {
     public let modified: Date
     public let size: Int
 
@@ -233,20 +233,17 @@ public final class FileReader: FileReading, @unchecked Sendable {
 
     private func read(_ url: URL, priority: ReadPriority, isEnough: (@Sendable (Data) -> Bool)?) async throws -> FileBytes {
         let isLocal = self.isLocal, chunkReader = self.chunkReader
-        if ArchivePath.split(url) != nil {
-            // An entry of a zip (Stash spec §2.4): ranged reads of the archive in the same pool job, so the queue,
-            // cancellation and the watchdog work as for a file; a prefix read gives the whole entry.
-            return try await submit(url, priority: priority) { job in
-                try ArchiveReader.shared.read(url, io: ArchiveReader.IO(chunkReader) {
+        return try await submit(url, priority: priority) { job in
+            if ArchivePath.isArchiveEntryOnDisk(url) {
+                // An archive entry uses the same pool, cancellation and watchdog; a prefix read gives the whole entry.
+                return try ArchiveReader.shared.read(url, io: ArchiveReader.IO(chunkReader) {
                     try job.betweenChunks()
                     job.touch()
                 })
             }
-        }
-        return try await submit(url, priority: priority) { job in
             // Even `volumeIsLocal` can hang on SMB, so it is asked on the pool thread.
-            isLocal(url) ? try Self.readMapped(url)
-                         : try Self.readChunked(url, job: job, chunkReader: chunkReader, isEnough: isEnough)
+            return isLocal(url) ? try Self.readMapped(url)
+                                : try Self.readChunked(url, job: job, chunkReader: chunkReader, isEnough: isEnough)
         }
     }
 
@@ -274,7 +271,7 @@ public final class FileReader: FileReading, @unchecked Sendable {
                       started: @escaping @Sendable () -> Void) async throws -> FileStamp {
         try await submit(url, priority: priority) { _ in
             started()
-            if ArchivePath.split(url) != nil { return try ArchiveReader.shared.stamp(url) }
+            if ArchivePath.isArchiveEntryOnDisk(url) { return try ArchiveReader.shared.stamp(url) }
             var st = stat()
             guard stat(url.path, &st) == 0 else { throw Self.posixError() }
             return FileStamp(st)

@@ -59,7 +59,7 @@ final class MountedFiles {
         // A zip's rows are its entries (Stash spec §2.4): listing the file as a folder would fail with ENOTDIR and
         // count them as gone.
         let url = URL(fileURLWithPath: folder)
-        if ArchivePath.isArchive(url), (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+        if ArchivePath.hasZipExtension(url), (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
             guard let entries = try? ArchiveReader.shared.entries(of: url) else { return nil }
             return Set(entries.map(\.url.lastPathComponent))
         }

@@ -107,6 +107,13 @@ public final class TiledImage: @unchecked Sendable {
         }
     }
 
+    /// Actual allocation sizes for the base textures. Their sampling views share the same memory.
+    var allocatedBytes: Int {
+        state.withLockUnchecked { levels in
+            levels.textures.reduce(0) { $0 + ($1?.allocatedSize ?? 0) }
+        }
+    }
+
     /// Every level texture, indexed by level (internal, for tests). Only valid on a fully resident image:
     /// traps otherwise, so an index can never silently name a different level.
     var levels: [MTLTexture] {

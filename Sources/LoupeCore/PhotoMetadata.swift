@@ -84,7 +84,7 @@ public struct PhotoMetadata: Equatable, Sendable, Codable {
     /// zip is read whole from the archive (Stash spec §2.4): its size and mtime are the entry's stamp, its creation
     /// date the archive's.
     public static func read(_ url: URL) -> PhotoMetadata {
-        if ArchivePath.split(url) != nil { return readEntry(url) }
+        if ArchivePath.isArchiveEntryOnDisk(url) { return readEntry(url) }
         let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey, .fileSizeKey])
         let created = values?.creationDate, modified = values?.contentModificationDate
         func failed(_ message: String) -> PhotoMetadata {

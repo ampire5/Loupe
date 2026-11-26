@@ -13,7 +13,7 @@ extension SettingsPanel {
                     + "itself; Hidden: no strip. ⇧T switches Beside and Over, T hides or pins. Full screen always has it "
                     + "over. Default Over."),
                 .number("strip-height", "Height", unit: "pt", step: 4, symbol: "arrow.up.and.down",
-                        description: "Thumbnail height; also by dragging the strip's top edge. 40–240 pt, default 105."),
+                        description: "Preferred thumbnail height. Drag the strip's top edge to change it. The strip fits smaller windows. 40–240 pt, default 105."),
                 .slider("strip-cell-max", "Widest thumbnail", range: Config.stripCellMaxRange, marks: [
                     (value: 0.5625, title: "9:16"), (value: 0.75, title: "3:4"), (value: 1, title: "1:1"),
                     (value: 4.0 / 3, title: "4:3"), (value: 1.5, title: "3:2"),
@@ -32,12 +32,11 @@ extension SettingsPanel {
             ]),
             SettingsCard([
                 .number("strip-hide-delay", "Hide after", unit: "ms", step: 50, symbol: "hourglass",
-                        description: "How long the overlay stays after the mouse leaves it. 0–10000 ms, 0 = at once; "
-                            + "default 250."),
-                .number("strip-fade-in", "Fade in", unit: "ms", step: 25, symbol: "eye",
-                        description: "0–2000 ms, 0 = no animation; default 150."),
-                .number("strip-fade-out", "Fade out", unit: "ms", step: 25, symbol: "eye.slash",
-                        description: "0–2000 ms, 0 = no animation; default 250."),
+                        description: "How long the overlay stays after the pointer leaves it. 0–10000 ms. Default 150."),
+                .number("strip-fade-in", "Show animation", unit: "ms", step: 25, symbol: "eye",
+                        description: "0–2000 ms. Set to 0 for an instant reveal. Default 250."),
+                .number("strip-fade-out", "Hide animation", unit: "ms", step: 25, symbol: "eye.slash",
+                        description: "0–2000 ms. Set to 0 for an instant hide. Default 150."),
             ]),
             SettingsCard([
                 .toggle("strip-jump-preview", "Preview on a jump", symbol: "forward.end",

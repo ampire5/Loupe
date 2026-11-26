@@ -7,6 +7,7 @@ public struct SavedSession: Equatable, Sendable {
     public var saved: Date
     public var isLast: Bool
     public var snapshot: SessionSnapshot
+    var revision = Data()
 }
 
 /// The sessions (Home spec §2.6) in `Loupe.db` (`sessions`): named ones, written at once, and Last Session. Last
@@ -15,6 +16,22 @@ public struct SavedSession: Equatable, Sendable {
 /// becomes Last Session at the next launch (`beginRun`). So a photo opened right after a launch never costs the
 /// session before it.
 public final class SessionStore: @unchecked Sendable {
+    public enum MutationResult: Equatable, Sendable {
+        case saved
+        case nameTaken
+        case confirmationRequired(Replacement)
+        case missing
+        case changed
+        case unavailable
+        case writeFailed
+    }
+
+    /// Identifies the version displayed in a Save As replacement prompt.
+    public struct Replacement: Equatable, Sendable {
+        fileprivate let id: Int64
+        fileprivate let revision: Data
+    }
+
     public static let lastName = "Last Session"
     private static let previousRun = 1, thisRun = 2
 
@@ -69,71 +86,133 @@ public final class SessionStore: @unchecked Sendable {
         }
     }
 
-    /// Saves `s` as `name`, replacing a session of that name.
-    public func save(_ s: SessionSnapshot, name: String) {
-        perform { db in
+    /// Saves a new name, or replaces exactly the version the caller confirmed. A newly occupied
+    /// name or an intervening edit requires fresh confirmation, without loading the existing snapshot.
+    public func save(_ snapshot: SessionSnapshot, name: String, replacing confirmed: Replacement? = nil) async -> MutationResult {
+        await onQueue {
+            self.mutate { db in
+                var existing: Replacement?
+                try db.query("SELECT id, revision FROM sessions WHERE name = ? AND is_last = 0", [.text(name)]) {
+                    existing = Replacement(id: $0.int(0), revision: $0.blob(1))
+                }
+                if let existing {
+                    guard existing == confirmed else { return .confirmationRequired(existing) }
+                    return try self.writeSnapshot(snapshot, id: existing.id, in: db)
+                }
+
+                let json = snapshot.encoded()
+                guard !json.isEmpty else { return .writeFailed }
+                return try Self.write(
+                    "INSERT INTO sessions(name, saved, is_last, json, revision) VALUES(?, ?, 0, ?, randomblob(16)) RETURNING id",
+                    [.text(name), .double(self.now().timeIntervalSinceReferenceDate), .blob(json)], in: db
+                )
+            }
+        }
+    }
+
+    public func rename(_ session: SavedSession, to name: String) async -> MutationResult {
+        await onQueue {
+            self.mutate(session) { db in
+                var taken = false
+                try db.query("SELECT 1 FROM sessions WHERE name = ? AND is_last = 0 AND id != ?",
+                             [.text(name), .int(session.id)]) { _ in taken = true }
+                guard !taken else { return .nameTaken }
+                return try Self.write("UPDATE sessions SET name = ?, revision = randomblob(16) WHERE id = ? AND is_last = 0 RETURNING id",
+                                      [.text(name), .int(session.id)], in: db)
+            }
+        }
+    }
+
+    public func replace(_ session: SavedSession, with snapshot: SessionSnapshot) async -> MutationResult {
+        await onQueue {
+            self.mutate(session) { db in try self.writeSnapshot(snapshot, id: session.id, in: db) }
+        }
+    }
+
+    public func delete(_ session: SavedSession) async -> MutationResult {
+        await onQueue {
+            self.mutate(session) { db in
+                try Self.write("DELETE FROM sessions WHERE id = ? RETURNING id", [.int(session.id)], in: db)
+            }
+        }
+    }
+
+    private func writeSnapshot(_ snapshot: SessionSnapshot, id: Int64, in db: SQLiteConnection) throws -> MutationResult {
+        let json = snapshot.encoded()
+        guard !json.isEmpty else { return .writeFailed }
+        return try Self.write("UPDATE sessions SET json = ?, saved = ?, revision = randomblob(16) WHERE id = ? AND is_last = 0 RETURNING id",
+                              [.blob(json), .double(now().timeIntervalSinceReferenceDate), .int(id)], in: db)
+    }
+
+    private static func write(_ sql: String, _ args: [SQLiteValue], in db: SQLiteConnection) throws -> MutationResult {
+        var wrote = false
+        try db.query(sql, args) { _ in wrote = true }
+        return wrote ? .saved : .writeFailed
+    }
+
+    private func mutate(_ session: SavedSession? = nil, _ body: (SQLiteConnection) throws -> MutationResult) -> MutationResult {
+        guard database != nil else { return .unavailable }
+        var result = MutationResult.writeFailed
+        let ok = perform { db in
             try db.transaction {
-                try db.run("DELETE FROM sessions WHERE name = ? AND is_last = 0", [.text(name)])
-                _ = try db.run("INSERT INTO sessions(name, saved, is_last, json) VALUES(?, ?, 0, ?)",
-                               [.text(name), .double(now().timeIntervalSinceReferenceDate), .blob(s.encoded())])
+                if let session {
+                    var revision: Data?
+                    try db.query("SELECT revision FROM sessions WHERE id = ? AND is_last = ?",
+                                 [.int(session.id), .int(Int64(session.isLast ? Self.previousRun : 0))]) { revision = $0.blob(0) }
+                    guard let revision else { result = .missing; return }
+                    guard revision == session.revision else { result = .changed; return }
+                }
+                result = try body(db)
             }
         }
-    }
-
-    /// False when another session has that name.
-    public func rename(_ id: Int64, to name: String) -> Bool {
-        var taken = false
-        perform { db in
-            try db.query("SELECT 1 FROM sessions WHERE name = ? AND is_last = 0 AND id != ?", [.text(name), .int(id)]) { _ in
-                taken = true
-            }
-            if !taken { _ = try db.run("UPDATE sessions SET name = ? WHERE id = ?", [.text(name), .int(id)]) }
-        }
-        return !taken
-    }
-
-    public func replace(_ id: Int64, with s: SessionSnapshot) {
-        perform { db in
-            _ = try db.run("UPDATE sessions SET json = ?, saved = ? WHERE id = ?",
-                           [.blob(s.encoded()), .double(now().timeIntervalSinceReferenceDate), .int(id)])
-        }
-    }
-
-    public func delete(_ id: Int64) {
-        perform { db in _ = try db.run("DELETE FROM sessions WHERE id = ?", [.int(id)]) }
+        return ok ? result : .writeFailed
     }
 
     /// Last Session first, then the newest saved; rows whose JSON does not decode are left out.
-    public func all() -> [SavedSession] {
-        flushIfPending()
-        var out: [SavedSession] = []
-        perform { db in
-            try db.query("SELECT id, name, saved, is_last, json FROM sessions WHERE is_last != ? ORDER BY is_last DESC, saved DESC",
-                         [.int(Int64(Self.thisRun))]) { r in
-                guard let snapshot = SessionSnapshot.decode(r.blob(4)) else { return }
-                let isLast = r.int(3) != 0
-                out.append(SavedSession(id: r.int(0), name: isLast ? Self.lastName : r.text(1),
-                                        saved: Date(timeIntervalSinceReferenceDate: r.double(2)), isLast: isLast,
-                                        snapshot: snapshot))
+    public func all() async -> [SavedSession] {
+        await onQueue {
+            if self.database == nil, let last = self.lock.withLock({ self.lastInMemory }) {
+                return [SavedSession(id: 0, name: Self.lastName, saved: self.now(), isLast: true, snapshot: last)]
             }
+            var out: [SavedSession] = []
+            self.perform { db in
+                try db.query("SELECT id, name, saved, is_last, json, revision FROM sessions WHERE is_last != ? ORDER BY is_last DESC, saved DESC",
+                             [.int(Int64(Self.thisRun))]) { r in
+                    guard let snapshot = SessionSnapshot.decode(r.blob(4)) else { return }
+                    let isLast = r.int(3) != 0
+                    out.append(SavedSession(id: r.int(0), name: isLast ? Self.lastName : r.text(1),
+                                            saved: Date(timeIntervalSinceReferenceDate: r.double(2)), isLast: isLast,
+                                            snapshot: snapshot, revision: r.blob(5)))
+                }
+            }
+            return out
         }
-        if database == nil, let last = lock.withLock({ lastInMemory }) {
-            out.append(SavedSession(id: 0, name: Self.lastName, saved: now(), isLast: true, snapshot: last))
-        }
-        return out
     }
 
-    public func last() -> SessionSnapshot? {
-        all().first { $0.isLast }?.snapshot
+    /// Reads only the previous run. A pending write belongs to this run and has its own deadline.
+    public func last() async -> SessionSnapshot? {
+        await onQueue {
+            guard self.database != nil else { return self.lock.withLock { self.lastInMemory } }
+            var last: SessionSnapshot?
+            self.perform { db in
+                try db.query("SELECT json FROM sessions WHERE is_last = ? ORDER BY saved DESC",
+                             [.int(Int64(Self.previousRun))]) { r in
+                    if last == nil { last = SessionSnapshot.decode(r.blob(0)) }
+                }
+            }
+            return last
+        }
+    }
+
+    private func onQueue<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async(qos: .userInitiated) { continuation.resume(returning: body()) }
+        }
     }
 
     /// Writes a pending Last Session now and waits for it; for quitting.
-    public func flush() {
-        queue.sync { writeLast() }
-    }
-
-    private func flushIfPending() {
-        if lock.withLock({ pendingLast != nil }) { flush() }
+    public func flush() async {
+        await onQueue { self.writeLast() }
     }
 
     private func writeLast() {
@@ -143,7 +222,7 @@ public final class SessionStore: @unchecked Sendable {
         let ok = perform { db in
             try db.transaction {
                 try db.run("DELETE FROM sessions WHERE is_last = ?", [.int(Int64(Self.thisRun))])
-                _ = try db.run("INSERT INTO sessions(name, saved, is_last, json) VALUES(?, ?, ?, ?)",
+                _ = try db.run("INSERT INTO sessions(name, saved, is_last, json, revision) VALUES(?, ?, ?, ?, randomblob(16))",
                                [.text(Self.lastName), .double(now().timeIntervalSinceReferenceDate),
                                 .int(Int64(Self.thisRun)), .blob(s.encoded())])
             }
@@ -179,19 +258,22 @@ extension SessionStore: PathMoving {
             }
             return s
         }
-        lock.withLock {
-            pendingLast = pendingLast.map(moved)
-            lastInMemory = lastInMemory.map(moved)
-        }
-        perform { db in
-            var rows: [(Int64, SessionSnapshot)] = []
-            try db.query("SELECT id, json FROM sessions", []) { r in
-                if let s = SessionSnapshot.decode(r.blob(1)) { rows.append((r.int(0), s)) }
+        // Keep the path rewrite together with Last Session writes on the session queue.
+        queue.sync {
+            lock.withLock {
+                pendingLast = pendingLast.map(moved)
+                lastInMemory = lastInMemory.map(moved)
             }
-            try db.transaction {
-                for (id, s) in rows {
-                    let new = moved(s)
-                    if new != s { _ = try db.run("UPDATE sessions SET json = ? WHERE id = ?", [.blob(new.encoded()), .int(id)]) }
+            perform { db in
+                var rows: [(Int64, SessionSnapshot)] = []
+                try db.query("SELECT id, json FROM sessions", []) { r in
+                    if let s = SessionSnapshot.decode(r.blob(1)) { rows.append((r.int(0), s)) }
+                }
+                try db.transaction {
+                    for (id, s) in rows {
+                        let new = moved(s)
+                        if new != s { _ = try db.run("UPDATE sessions SET json = ?, revision = randomblob(16) WHERE id = ?", [.blob(new.encoded()), .int(id)]) }
+                    }
                 }
             }
         }

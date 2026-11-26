@@ -361,7 +361,7 @@ extension ImageCache {
             emit(url, .uploadSkipped, goal, level: image.level)
             return
         }
-        let reserve = grid.byteCount(levels: image.level..<grid.levelCount)
+        let reserve = loader.estimatedPyramidBytes(for: grid, levels: image.level..<grid.levelCount)
         if planned[url]?[goal] != nil {
             e.uploadReserve += reserve   // first, so making room never touches this entry
             evictToFit()

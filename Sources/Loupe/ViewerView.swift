@@ -2,6 +2,7 @@ import AppKit
 import LoupeCore
 import LoupeRender
 import QuartzCore
+import UniformTypeIdentifiers
 
 /// The photo surface: an `NSView` backed by a `CAMetalLayer` that a `RenderLoop` draws into off the
 /// main thread. The view keeps the layer's drawable size and the session's view size equal (both in
@@ -27,6 +28,18 @@ import QuartzCore
     let subjectOverlayView = SubjectOverlayView()
     /// What was last handed to the render loop, so session changes that do not affect the picture
     /// (a load starting, the playlist arriving) do not wake the display link for an identical frame.
+    let neuralUpscale = ViewerUpscale()
+    private weak var shownUpscaleImage: TiledImage?
+    var upscaleStatus: ImageStatus.Upscale? {
+        let displayed = showedUpscaleAtFit || (showedNeuralUpscale && session.transform.drawnScale > 1)
+        return neuralUpscale.imageStatus(displaying: displayed ? shownUpscaleImage : nil,
+                                         orientation: session.drawOrientation)
+    }
+    private var showedNeuralUpscale = false
+    private var showedUpscaleAtFit = false
+    private var permitsUpscale = true
+    private var activeForUpscale = false
+    private var visibleForUpscale = false
     private var shownImage: TiledImage?
     /// The photo `shownImage` is of (`session.entry`'s URL), nil without an image: a new image of the same photo (the
     /// decoded pyramid replacing a seeded thumbnail) is not a new photo (`imageDidChange`).
@@ -104,7 +117,6 @@ import QuartzCore
     var isCheatSheetOpen: () -> Bool = { false }
     /// The key that closed the cheat sheet, while it is held: its auto-repeat must not go on to act (an arrow would
     /// step photos right after the sheet went).
-    private var keyThatClosedSheet: UInt16?
     /// Cursor position (view pixels) at the previous drag event; nil outside a drag.
     private var dragPoint: CGPoint?
     /// The transform when the left button went down, for a folder step to put back what the drag did.
@@ -290,6 +302,19 @@ import QuartzCore
             .next(shown: shownCompanionColor, url: url, cube: session.colorCube(for: url), now: CACurrentMediaTime(),
                   durationMs: Settings.shared.config.autoColorFadeMilliseconds)
         }
+        let movie = session.entry?.info?.typeIdentifier == UTType.movie.identifier
+        let upscaleVisible = permitsUpscale && visibleForUpscale && !session.isScrubbing
+        let enhanced = neuralUpscale.update(entry: session.entry, current: session.playlist?.current,
+                                            scale: session.transform.drawnScale,
+                                            visible: upscaleVisible,
+                                            active: activeForUpscale,
+                                            excluded: layout != nil || movie)
+        let prefersUpscale = neuralUpscale.isEnabled && !neuralUpscale.showsOriginal && permitsUpscale && layout == nil && !movie
+        let showsUpscaleAtFit = enhanced != nil && (enhanced === neuralUpscale.storedImage
+            || neuralUpscale.autoSave || neuralUpscale.lookaheadDepth > 0)
+        let lookahead = neuralUpscale.isEnabled && upscaleVisible && activeForUpscale && layout == nil && !movie
+        neuralUpscale.updateLookahead(lookahead ? session.upscaleLookahead(depth: neuralUpscale.lookaheadDepth) : [],
+                                      cache: session.cache, eligible: lookahead)
         let primaryURL = image == nil ? nil : session.entry?.url
         let companionURL = companion == nil ? nil : session.shownCompanion?.url
         let historyVisible = window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor
@@ -322,7 +347,8 @@ import QuartzCore
             || orientation != shownOrientation || color != shownColor
             || companion !== shownCompanion || companionRevision != shownCompanionRevision
             || companionOrientation != shownCompanionOrientation || companionColor != shownCompanionColor
-            || layout != shownLayout
+            || layout != shownLayout || enhanced !== shownUpscaleImage || prefersUpscale != showedNeuralUpscale
+            || showsUpscaleAtFit != showedUpscaleAtFit
         if changed {
             if image !== shownImage {
                 let photo = image.flatMap { _ in session.entry?.url }
@@ -341,9 +367,15 @@ import QuartzCore
             shownCompanionColor = companionColor
             shownLayout = layout
             let transform = session.transform
-            let page = RenderPage(image: image, orientation: orientation, color: color,
+            shownUpscaleImage = enhanced
+            showedNeuralUpscale = prefersUpscale
+            showedUpscaleAtFit = showsUpscaleAtFit
+            var page = RenderPage(image: image, orientation: orientation, color: color,
                                   rect: CGRect(origin: .zero, size: transform.imageSize),
                                   viewReceipt: primaryURL.flatMap { viewReceipts[$0] })
+            page.upscaleImage = enhanced
+            page.prefersNeuralUpscale = prefersUpscale
+            page.showsUpscaleAtFit = showsUpscaleAtFit
             if let layout, layout.rects.count == 2 {
                 // Two pages, left to right on screen, each in its rect of the virtual picture the transform shows.
                 let other = RenderPage(image: companion, orientation: companionOrientation, color: companionColor,
@@ -803,7 +835,21 @@ import QuartzCore
     /// Stops every display link the view owns, the render thread last, and lets the images shown go (their levels are
     /// graphics memory, which the cache frees with the window's session); the window controller calls it when the
     /// window closes.
+    func setUpscaleVisibility(_ visible: Bool, active: Bool) {
+        guard visible != visibleForUpscale || active != activeForUpscale else { return }
+        visibleForUpscale = visible
+        activeForUpscale = active
+        neuralUpscale.onChange?()
+    }
+
+    func setUpscaleCovered(_ covered: Bool) {
+        guard permitsUpscale == covered else { return }
+        permitsUpscale = !covered
+        neuralUpscale.onChange?()
+    }
+
     func teardown() {
+        neuralUpscale.close()
         feedbackMenuTask?.cancel()
         stopInertiaAtZoomTarget()
         stopWheelLink()
@@ -1809,7 +1855,7 @@ import QuartzCore
     /// it is the first responder (as `keyDown` needs): a key without ⌘ ⌃ that the table binds (or any key while the
     /// cheat sheet is open) goes through `handleKey`, the same dispatcher as `keyDown`, and is claimed, so the main menu
     /// never sees it and nothing fires twice. Its rules hold as before: a held one-shot key repeats into nothing, an
-    /// open sheet takes the key and closes. ⌘ / ⌃ keys and unbound ones go on to the menus. The menu items do their
+    /// open sheet takes ordinary keys. ⌘ / ⌃ keys and unbound ones go on to the menus. The menu items do their
     /// action by click (`performKeyAction`); the menu bar never matches a plain key in any window (`MainMenu`, and for
     /// the Zoom, Scaling and Colour menus `Settings.menuHasKeyEquivalent`).
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -1820,7 +1866,7 @@ import QuartzCore
     }
 
     /// A Zoom, Scaling, Colour or View menu item made by `NSMenuItem.viewerKey(_:_:)`: the action its key does, by click. An
-    /// open cheat sheet closes first (a key would only close it; a click is deliberate, so it then acts too), and
+    /// open cheat sheet closes first, and
     /// Keyboard Shortcuts, which toggles the sheet, just closes it.
     @objc func performKeyAction(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String, let action = KeyAction(rawValue: name) else { return }
@@ -1838,18 +1884,8 @@ import QuartzCore
         // keys are unbound and fall through to the menus).
         let flags = event.modifierFlags
         guard flags.isDisjoint(with: [.command, .control]) else { return false }
-        if let held = keyThatClosedSheet {
-            if event.isARepeat, event.keyCode == held { return true }
-            keyThatClosedSheet = nil
-        }
-        // Any key closes an open cheat sheet and does nothing else: Esc does not leave full screen, nothing navigates
-        // behind the sheet. A held `?` that opened it repeats into nothing.
-        if isCheatSheetOpen() {
-            guard !event.isARepeat else { return true }
-            keyThatClosedSheet = event.keyCode
-            onToggleCheatSheet?()
-            return true
-        }
+        // The search field owns ordinary keys while the help is open.
+        if isCheatSheetOpen() { return true }
         var modifiers: KeyModifiers = []
         if flags.contains(.shift) { modifiers.insert(.shift) }
         if flags.contains(.option) { modifiers.insert(.option) }
@@ -1971,13 +2007,13 @@ import QuartzCore
     func thumbWheelZoom(delta: Int, stepsPerRevolution: Int, began: Bool, ended: Bool, at timestamp: TimeInterval) {
         if began { thumbZoom = nil }
         defer { if ended { thumbZoom = nil } }
-        session.noteManualZoom()
-        invalidateSmartZoomRequest()
         guard !isCheatSheetOpen() else { return }
         let config = Settings.shared.config
         let doublings = ThumbZoom.doublings(delta: config.thumbZoomInvert ? delta : -delta,
                                             stepsPerRevolution: stepsPerRevolution, speed: config.thumbZoomSpeed)
         guard doublings != 0 else { return }
+        session.noteManualZoom()
+        invalidateSmartZoomRequest()
         stopInertia()
         let t = session.transform
         if thumbZoom?.last != t {
@@ -2007,6 +2043,20 @@ import QuartzCore
         let t = zoomBase
         if Self.zoomCommands.contains(action) { session.noteManualZoom(); invalidateSmartZoomRequest(); session.subjectZoom = false; subjectZoomPress = nil }
         switch action {
+        case .toggleNeuralUpscale:
+            guard permitsUpscale, session.image != nil else { return false }
+            neuralUpscale.setEnabled(!neuralUpscale.isEnabled)
+            return true
+        case .toggleUpscaleOriginal:
+            guard permitsUpscale, session.image != nil else { return false }
+            neuralUpscale.setShowsOriginal(!neuralUpscale.showsOriginal)
+            return true
+        case .saveNeuralUpscale:
+            guard permitsUpscale else { return false }
+            neuralUpscale.saveModeAsDefault()
+            let mode = neuralUpscale.isEnabled ? "on" : "off"
+            onToast?("Neural Upscale default: \(mode)")
+            return true
         case .showFramingFeedback: showFramingFeedbackMenu(); return true
         case .confirmDetail, .confirmOverview, .confirmDetailAndNext, .confirmOverviewAndNext,
              .undoFramingFeedback, .compareFraming, .toggleFramingIntent: return onZoomKey?(action) ?? false
@@ -2019,6 +2069,7 @@ import QuartzCore
             // The zoom on screen becomes a free one, whose share of the screen the folder now keeps.
             session.subjectZoom = false
             stopInertiaAtZoomTarget()
+            session.noteManualZoom()
             session.transform = t.withMode(.free(t.scale / t.fitScale))
             return onZoomKey?(action) ?? false
         case .fillSubject:

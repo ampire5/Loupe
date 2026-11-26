@@ -3,8 +3,10 @@ import Foundation
 extension ThumbnailStore {
     /// Establish the file version before its source read. Runs on the store actor; volume resolution is off-actor.
     /// Directly opened photos work without first generating a thumbnail or listing their folder.
-    public func photoMetadata(for url: URL, stamp: FileStamp) async -> PhotoMetadata? {
-        guard wantsDisk, let location = await location(of: url.deletingLastPathComponent(), sample: url) else { return nil }
+    public func photoMetadata(for url: URL, stamp: FileStamp, resolvingWith pool: DecodePool? = nil) async -> PhotoMetadata? {
+        guard wantsDisk, pool == nil || !Task.isCancelled,
+              let location = await location(of: url.deletingLastPathComponent(), sample: url, resolvingWith: pool),
+              pool == nil || !Task.isCancelled else { return nil }
         return perform("photo metadata", { db in
             let file = ThumbnailLocation(volume: location.volume, folder: location.folder, name: url.lastPathComponent)
             let row = try db.file(at: file)

@@ -10,6 +10,6 @@ public enum OpenLink {
               components.path.isEmpty, components.fragment == nil,
               let items = components.queryItems, items.count == 1, items[0].name == "path",
               let path = items[0].value, path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
-        return URL(fileURLWithPath: path)
+        return URL(fileURLWithPath: path, isDirectory: path.hasSuffix("/"))
     }
 }

@@ -315,3 +315,61 @@ The viewer information controls also no longer have their own ChromeGlass layer 
 Verification adds a status appearance/material regression and native Home rounds asserting the absence of a background extension under the toolbar. Final verification: `scripts/test.sh` exit 0, 30 app / 63 settings / 3 render-smoke / 2245 core tests passed (7 skipped). Debug product build succeeded. Native fullscreen bench passed all 67 checks, including three browser safe-area rounds and absence of background extension. The old outer-frame assertions assumed the removed wrapper; the bench now checks the browser's actual safeAreaLayoutGuide.frame against the window contentLayoutRect, ensuring one toolbar inset. B pin/unpin main-thread CPU: 0.750/0.406 ms; Home rounds 45.725/44.755/47.347 ms; viewer returns 6.121/39.413/37.419 ms; sort 1.306 ms on the same M4 Max/macOS 27.2 debug setup.
 
 The enabled `nativeWindowBenchAndSnapshot` test passed and generated neutral-fixture snapshots at multiple widths. The 1280 pt native toolbar capture was visually inspected: system backdrop, inherited appearance and no separate information glass panel. This is not a reproduction of the user's private browser data. No new installation was performed by this task.
+
+## Grid to single photo in Photos 12.0
+
+REA identified Photos build 916.58.114 on macOS 27.2.1 (26B131), ARM64e UUID
+`175E80A1-98F5-31A7-B915-2BF03AD83F2C`. The corresponding UXKit image in the
+dyld shared cache has UUID `63E3FCB9-5335-3E86-957B-4671F624F025`.
+
+- `IPXAssetsGridViewController` and `IPXCuratedLibraryViewController` enter One Up
+  by pushing a controller on their navigation stack. The One Up return path
+  pops the top controller. Photos enables individual native toolbar items in
+  its default settings and passes that setting to UXKit at launch.
+- `UXWindowController._updateToolbarNavigationItem` derives the destination
+  from the top view controller's `navigationItem`. `_updateToolbar` calls
+  `NSWindow.setToolbar:` on the initialization branch, then updates the retained
+  `UXWindowToolbarController` on subsequent calls.
+- `UXWindowToolbarController.updateToolbar` walks the mounted items. It compares
+  identifiers and custom views, handles the shared search item separately, and
+  calls `removeItemAtIndex:` and `insertItemWithItemIdentifier:atIndex:` when
+  contents or ordering require it. The toolbar item builder also propagates
+  per-item visibility. This path does not switch modes by toggling the
+  visibility of two complete sets of controls.
+
+A standalone test with synthetic Grid and Photo navigation items called the
+installed UXKit controller directly. It verified that the same native toolbar,
+shared custom control and search item survived both switches. Two distinct
+mode-specific views with the same item identifier were replaced correctly. This
+test did not launch Photos or touch its library. The findings combine static
+inspection of Photos and UXKit with controlled execution of the framework.
+The separate REA debugger run timed out before it captured any call events.
+
+Evidence locations in the ARM64e images: Photos launch setting at
+`0x100004D78`, grid/curated pushes at `0x10037CB4C` and `0x1003A918C`,
+One Up pop at `0x1004660D0`. UXKit's existing-controller branch is at
+`0x22D0D9170`, and its item removal, identifier comparison, and insertion
+sites include `0x22D0D76F0`, `0x22D0D77CC`, and `0x22D0D792C`.
+
+For Loupe the measurable experiment is a shared set of genuinely equivalent
+controls and an incremental update of mode-specific items. Loupe's existing
+`WindowToolbarController.show` detaches the entire previous set. Preserving
+items with shared identity is useful only where the two Loupe modes actually
+have equivalent controls. The framework probe does not establish a speedup
+for Loupe or a time to presentation for Photos.
+
+## Incremental Loupe toolbar update
+
+Loupe now updates the installed item list in place. It keeps system spacers in
+relative order and retains a shared custom item when its identifier and object
+match. A synthetic AppKit window kept the field editor and selected text in
+four switches. The original implementation dismissed the editor each time.
+The regression test checks that shared controls stay installed and distinct
+mode controls with matching identifiers are exchanged.
+
+On an M4 Max, four release runs per build made eight round trips each through a
+local 48-JPEG folder. The median main-thread CPU for Viewer → File View was
+135.1 → 135.3 ms on first entry and 87.4 → 88.1 ms on repeat entries.
+File View → viewer measured 23.5 → 23.1 ms and 19.6 → 18.6 ms respectively.
+The real Loupe toolbars share a spacer, and the timing showed no consistent
+speedup. The user manually verified the Toolbar Trial fullscreen workflow.

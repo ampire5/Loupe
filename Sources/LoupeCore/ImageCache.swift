@@ -181,6 +181,46 @@ public actor ImageCache<Loader: PyramidLoader> {
                               isSeededOnly: seededOnly, pyramidIsSeeded: e.seeded && e.pyramid != nil, sourceStamp: e.stamp)
     }
 
+    package func upscaleStamp(_ url: URL) async throws -> FileStamp {
+        try await reader.stamp(url, priority: ReadPriority(ReadPriority.background, isBackground: true))
+    }
+
+    /// An upscale request admits one missing neighbour at a time. It reuses the shared reader and decode pool,
+    /// and keeps a temporary pyramid outside the interactive cache only for the lifetime of this request.
+    package func upscaleSource(_ url: URL, stamp: FileStamp, factor: Int, limit: Int) async throws -> (Pyramid, ImageOrientation) {
+        try Task.checkCancellation()
+        if let e = entries[url], e.stamp == stamp, !e.seeded,
+           let image = e.pyramid, loader.finestResidentLevel(of: image) == 0, let info = e.info {
+            return (image, info.orientation)
+        }
+        let data: Data
+        if let e = entries[url], e.stamp == stamp, let resident = e.data {
+            data = resident
+        } else {
+            // A compressed source larger than the existing per-result limit cannot be held by a speculative job.
+            guard stamp.size <= limit else { throw DecodeError.tooLarge }
+            let read = try await reader.read(url, priority: ReadPriority(ReadPriority.background, isBackground: true))
+            guard read.stamp == stamp else { throw CancellationError() }
+            data = read.data
+        }
+        let rank = ReadPriority.background
+        let makeDecoder = self.makeDecoder
+        let (decoder, info) = try await pool.run(forCurrent: false, rank: rank) {
+            let decoder = makeDecoder(data).forRole(.thumbnail)
+            return (decoder, try decoder.probe(data))
+        }
+        let size = info.pixelSize
+        let maxSide = TileGrid.maxTilesPerLevel * TileGrid.tileSize / factor
+        guard (1...maxSide).contains(size.width), (1...maxSide).contains(size.height),
+              let bytes = UpscaleGeometry.residentBytes(PixelSize(width: size.width * factor, height: size.height * factor)),
+              bytes <= limit else { throw DecodeError.tooLarge }
+        let pixels = try await pool.run(forCurrent: false, rank: rank) { try decoder.decodeFull(data, info: info) }
+        try Task.checkCancellation()
+        let image = loader.makePyramid(grid: TileGrid(imageSize: size), colorSpace: pixels.colorSpace)
+        try await loader.upload(LevelImage(image: pixels, level: 0), into: image)
+        return (image, info.orientation)
+    }
+
     /// `usedBytes`: every entry's resident bytes (the pinned photo's included) plus the levels uploads are building;
     /// with a graphics tier, the system tier's (`usedSystemBytes`) and the graphics tier's (`usedGraphicsBytes`) apart.
     public func stats() -> CacheStats {
@@ -220,11 +260,9 @@ public actor ImageCache<Loader: PyramidLoader> {
     func pyramidBytes(_ e: CacheEntry<Pyramid>) -> Int {
         guard let info = e.info else { return 0 }
         let grid = TileGrid(imageSize: info.pixelSize)
-        var used = 0
-        for p in [e.pyramid, e.pending].compactMap({ $0 }) {
-            if let finest = loader.finestResidentLevel(of: p) { used += grid.byteCount(levels: finest..<grid.levelCount) }
-        }
-        return used
+        let resident = e.pyramid.map { loader.residentPyramidBytes(of: $0, grid: grid) } ?? 0
+        let pending = e.pending.map { loader.residentPyramidBytes(of: $0, grid: grid) } ?? 0
+        return resident + pending
     }
 
     /// What lives in graphics memory on a discrete card: every entry's resident levels plus the levels uploads are
@@ -354,7 +392,8 @@ public actor ImageCache<Loader: PyramidLoader> {
         planLimits.memory = max(0, effectiveMemory - keptElsewhere().reduce(0) { $0 + keepEstimate($1.key, $1.value) })
         let plan = focus.map { focus in
             CachePlan.make(focus: focus, limits: planLimits,
-                           isExcluded: { PlaybackMedia.candidate(files[$0]) == .video }) { facts(files[$0]) }
+                           isExcluded: { PlaybackMedia.candidate(files[$0]) == .video },
+                           pyramidBytes: loader.estimatedPyramidBytes) { facts(files[$0]) }
         } ?? []
         let keep = keepPlans()
         var wants: [URL: [CacheGoal: Int]] = [:]
@@ -488,9 +527,9 @@ public actor ImageCache<Loader: PyramidLoader> {
         }
         switch goal {
         case .bytes, .ready: return 0
-        case .coarse: return grid.byteCount(levels: coarse..<grid.levelCount)
-        case .preview: return grid.byteCount(levels: lfit..<grid.levelCount)
-        case .full: return grid.byteCount(levels: 0..<grid.levelCount)
+        case .coarse: return loader.estimatedPyramidBytes(for: grid, levels: coarse..<grid.levelCount)
+        case .preview: return loader.estimatedPyramidBytes(for: grid, levels: lfit..<grid.levelCount)
+        case .full: return loader.estimatedPyramidBytes(for: grid, levels: 0..<grid.levelCount)
         }
     }
 
@@ -683,13 +722,16 @@ public actor ImageCache<Loader: PyramidLoader> {
         }
         if let top, let wanted = wantedLevel(top, info, url) { keep = min(keep, wanted) }
         guard finest < keep else { return 0 }
+        let before = pyramidBytes(e)
         if keep >= l.grid.levelCount {
+            // A hidden viewer may still reference this pyramid after it leaves the cache.
+            loader.evict(finerThan: l.grid.levelCount, of: p)
             dropPyramid(e)
         } else {
             loader.evict(finerThan: keep, of: p)
         }
         notify(url)
-        return l.grid.byteCount(levels: finest..<min(keep, l.grid.levelCount))
+        return before - pyramidBytes(e)
     }
 
     // MARK: Seeding (M2.5 spec §5.1)
@@ -715,7 +757,7 @@ public actor ImageCache<Loader: PyramidLoader> {
         else { return }
         let e: CacheEntry<Pyramid>
         if let existing = entries[url] { e = existing } else { e = CacheEntry(); entries[url] = e }
-        let reserve = grid.byteCount(levels: level.level..<grid.levelCount)
+        let reserve = loader.estimatedPyramidBytes(for: grid, levels: level.level..<grid.levelCount)
         e.uploadReserve += reserve   // first, so making room never touches this entry
         evictToFit()
         let pyramid = loader.makePyramid(grid: grid, colorSpace: level.image.colorSpace)
@@ -766,13 +808,23 @@ public actor ImageCache<Loader: PyramidLoader> {
     /// reader's thread kept for it; running neighbour reads pause for this one stat), and is dropped when the photo
     /// stops being current, or its session active, before it runs.
     func becameCurrent(_ url: URL, of session: CacheSessionID) {
-        guard let e = entries[url] else { return }
+        let check = revalidateCurrentSource(url)
+        sessions[session]?.stampCheck = check
+        if let state = sessions[session], state.focus?.revalidatesCompanion == true,
+           let companion = state.companionURL, companion != url {
+            let check = revalidateCurrentSource(companion)
+            sessions[session]?.companionStampCheck = check
+        }
+    }
+
+    private func revalidateCurrentSource(_ url: URL) -> Task<Void, Never>? {
+        guard let e = entries[url] else { return nil }
         if e.failure != nil {
             reset(url)
         } else if let old = e.stamp {
             stampChecks += 1
             updateActivity()
-            sessions[session]?.stampCheck = Task {
+            return Task {
                 let priority = ReadPriority(1)
                 priority.isCurrent = true
                 let now = try? await reader.stamp(url, priority: priority)
@@ -783,6 +835,7 @@ public actor ImageCache<Loader: PyramidLoader> {
                 reconcile()
             }
         }
+        return nil
     }
 
     /// Forgets everything about `url`; its jobs are cancelled and their results dropped (the entry differs).

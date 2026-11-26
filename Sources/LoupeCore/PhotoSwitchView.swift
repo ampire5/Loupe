@@ -1,8 +1,7 @@
 import CoreGraphics
 
-/// The view a newly shown photo gets (M4b spec §4.2), one rule for every way of changing photos. A saved view from
-/// `folder-view-memory` (`ViewRestore`) comes first; the session asks here only when there is none, with the rules of
-/// the new photo's folder (a folder step takes the new folder's `keep-zoom-position` and `default-zoom-mode`).
+/// The view a newly shown photo gets when the session has no remembered or saved framing to apply.
+/// The rules belong to the destination photo's folder.
 public enum PhotoSwitchView {
     /// How the photo comes on screen: it is the photo the view is laid out for already (a finer level of it arrived,
     /// the cache asks about it again), another photo stepped to, or the photo `open` brought (a launch, Finder's Open).
@@ -14,26 +13,36 @@ public enum PhotoSwitchView {
     /// follows `next`, an opened photo `opened`. `rules` is read only for those two: the session asks about the photo
     /// on screen on every change, and its folder's settings need not be looked up for it.
     public static func shown(_ arrival: Arrival, current: ViewTransform, imageSize: CGSize,
-                             rules: @autoclosure () -> ZoomRules, subject: SubjectBoxes? = nil) -> ViewTransform {
+                             rules: @autoclosure () -> ZoomRules, subject: SubjectBoxes? = nil,
+                             manualReference: ViewTransform? = nil) -> ViewTransform {
         switch arrival {
         case .laidOut: return current.withImageSize(imageSize)
-        case .switched: return next(current: current, imageSize: imageSize, rules: rules(), subject: subject)
+        case .switched:
+            return next(current: current, imageSize: imageSize, rules: rules(), subject: subject,
+                        manualReference: manualReference)
         case .opened: return opened(viewSize: current.viewSize, imageSize: imageSize, rules: rules())
         }
     }
 
-    /// A switch to another photo from `current` (the session passes a running zoom animation's target): with `keep` the
-    /// mode stays, a free zoom carried by `keep-zoom-as` (`carryingZoom`), else the photo opens in `defaultMode`. Where
-    /// the view lands is `step-pan`'s either way (`pan`: `keep` keeps the relative centre also when the zoom is not kept).
+    /// A switch to another photo from `current`. With `keep`, use the mode from `manualReference` or the current view,
+    /// and translate free zoom by `keep-zoom-as`. Otherwise use `defaultMode`. Where the view lands is `step-pan`'s
+    /// either way (`pan`: `keep` keeps the relative centre also when the zoom is not kept).
     /// It takes `fit-upscale` from the rules, and the transient offset and stretch go. `subject`:
     /// the new photo's boxes when they are known already, for `step-pan=subject`.
     public static func next(current: ViewTransform, imageSize: CGSize, rules: ZoomRules,
-                            subject: SubjectBoxes? = nil) -> ViewTransform {
+                            subject: SubjectBoxes? = nil, manualReference: ViewTransform? = nil) -> ViewTransform {
         var t: ViewTransform
         if rules.keep {
-            t = current.withImageSize(imageSize)
+            let reference = manualReference ?? current
+            t = current.withImageSize(imageSize).withMode(reference.mode)
             t.fitUpscale = rules.fitUpscale
-            t = t.carryingZoom(from: current, rules.carry)
+            t = t.carryingZoom(from: reference, rules.carry)
+            // A small file can otherwise get a much larger pixel scale than the user chose.
+            // This applies to automatic manual carry; fixed percentage presets and SmartZoom keep their own rules.
+            if manualReference != nil, rules.carry == .share, case .free = reference.mode {
+                let maximum = max(reference.scale, 1)
+                if t.scale > maximum { t.mode = .free(maximum / t.fitScale) }
+            }
         } else {
             t = opened(viewSize: current.viewSize, imageSize: imageSize, rules: rules)
         }

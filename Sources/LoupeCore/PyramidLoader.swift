@@ -13,4 +13,19 @@ public protocol PyramidLoader: Sendable {
     func evict(finerThan level: Int, of pyramid: Pyramid)
     /// Finest resident level, nil when nothing is resident. Resident levels are a suffix finest...last.
     func finestResidentLevel(of pyramid: Pyramid) -> Int?
+    /// Allocation cost of building these levels, before any textures exist.
+    func estimatedPyramidBytes(for grid: TileGrid, levels: Range<Int>) -> Int
+    /// Bytes allocated for all levels currently resident.
+    func residentPyramidBytes(of pyramid: Pyramid, grid: TileGrid) -> Int
+}
+
+public extension PyramidLoader {
+    func estimatedPyramidBytes(for grid: TileGrid, levels: Range<Int>) -> Int {
+        grid.byteCount(levels: levels)
+    }
+
+    func residentPyramidBytes(of pyramid: Pyramid, grid: TileGrid) -> Int {
+        guard let finest = finestResidentLevel(of: pyramid) else { return 0 }
+        return estimatedPyramidBytes(for: grid, levels: finest..<grid.levelCount)
+    }
 }

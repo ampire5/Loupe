@@ -28,8 +28,16 @@ import StashKitUI
     /// A new controller with the app's shared stores, already added (`AppDelegate.makeController`).
     var makeController: (() -> ViewerWindowController)?
     var framingLibrary: FramingLearningLibrary?
+    var selectedComparisonPhoto: URL?
+    let openRequests: OpenRequests
+
+    init(openRequests: OpenRequests = OpenRequests()) {
+        self.openRequests = openRequests
+    }
 
     var controllers: [ViewerWindowController] { entries.map(\.controller) }
+
+    func hasViewer(_ controller: ViewerWindowController) -> Bool { index(of: controller) != nil }
 
     /// The controller of the main window if it is a viewer, else `active` — for menu actions.
     var current: ViewerWindowController? {
@@ -83,6 +91,11 @@ import StashKitUI
 
     // MARK: Opening (spec §2.2)
 
+    /// A filesystem probe can finish after the user has switched applications.
+    static func canActivate(after previousApp: NSRunningApplication?) -> Bool {
+        NSApp.isActive || (previousApp != nil && NSWorkspace.shared.frontmostApplication == previousApp)
+    }
+
     /// A file, folder or Stash gallery from outside the tab (Finder, `open`, the Dock, a hand-over, ⌘O): to the tab that
     /// already shows it, else to a new tab, a new window or the front tab by `open-in`; the tab it lands in comes
     /// forward, wherever it is (hidden, miniaturized, in a full-screen Space). `force`: a new tab or window whatever is
@@ -93,7 +106,10 @@ import StashKitUI
     /// `openIn`: instead of `open-in` (a Recent card's plain click: `.replace`, this tab). `returnTo`: the Home tab ⌘W
     /// goes back to when it lands in `from` itself.
     func open(_ target: OpenTarget, force: OpenForce? = nil, openIn: OpenIn? = nil, from: ViewerWindowController? = nil,
-              stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil, recursive: RecursivePhotoListing? = nil) {
+              stashPick: StashGalleryPick? = nil, returnTo: HomeTab? = nil, recursive: RecursivePhotoListing? = nil,
+              activating: Bool = true) {
+        guard !isQuitting else { return }
+        if let from, !hasViewer(from) { return }
         let front = from ?? current ?? lastKey
         let decision = OpenRouter.route(target, tabs: tabFacts(), front: front.map(Self.tabID),
                                         openIn: openIn ?? Settings.shared.config.openIn, force: force)
@@ -104,24 +120,24 @@ import StashKitUI
             activate(controller)
             if let recursive { controller.open(target, recursive: recursive) }
             else if let url { controller.open(url) }
-            controller.bringToFront()
+            controller.bringToFront(activating: activating)
         case .newTab(let tab):
-            guard let controller = makeTab(beside: tabController(tab) ?? front) else { return }
+            guard let controller = makeTab(beside: tabController(tab) ?? front, key: activating) else { return }
             activate(controller)
             controller.open(target, stashPick: stashPick, recursive: recursive)
-            controller.bringToFront()
+            controller.bringToFront(activating: activating)
         case .newWindow:
-            guard let (controller, fullScreen) = makeWindow(from: front) else { return }
+            guard let (controller, fullScreen) = makeWindow(from: front, key: activating) else { return }
             activate(controller)
             controller.open(target, stashPick: stashPick, recursive: recursive)
-            controller.bringToFront()
-            if fullScreen { controller.enterFullScreen() }
+            controller.bringToFront(activating: activating)
+            if fullScreen && activating { controller.enterFullScreen() }
         case .replace(let tab):
             guard let controller = tabController(tab) else { return }
             activate(controller)
             controller.open(target, stashPick: stashPick, returnTo: controller === from ? returnTo : nil,
                             recursive: recursive)
-            controller.bringToFront()
+            controller.bringToFront(activating: activating)
         }
     }
 
@@ -241,9 +257,17 @@ import StashKitUI
         return controller
     }
 
+    func openComparison(_ files: [URL], from source: ViewerWindowController) {
+        guard files.count == 2, files[0] != files[1],
+              let controller = makeTab(beside: source, key: false) else { return }
+        controller.showComparison(files)
+        controller.showWindow(nil)
+        controller.bringToFront()
+    }
+
     /// A new window on screen, empty, cascaded from `front`'s; `fullScreen`: it is to enter full screen (`front` is in
     /// it and `new-window-fullscreen=follow`).
-    private func makeWindow(from front: ViewerWindowController?) -> (ViewerWindowController, fullScreen: Bool)? {
+    private func makeWindow(from front: ViewerWindowController?, key: Bool = true) -> (ViewerWindowController, fullScreen: Bool)? {
         let front = front?.window
         guard let controller = makeController?(), let window = controller.window else { return nil }
         let frontInFullScreen = front?.styleMask.contains(.fullScreen) ?? false
@@ -253,7 +277,11 @@ import StashKitUI
             window.cascadeTopLeft(from: window.cascadeTopLeft(from: NSPoint(x: front.frame.minX, y: front.frame.maxY)))
         }
         window.tabbingMode = .disallowed   // `.preferred` would make it a tab of the main window as it is shown
-        controller.showWindow(nil)
+        if key { controller.showWindow(nil) }
+        else {
+            window.orderFront(nil)
+            window.makeFirstResponder(controller.viewerView)
+        }
         window.tabbingMode = .preferred
         return (controller, frontInFullScreen && Settings.shared.config.newWindowFullScreen == .follow)
     }
@@ -287,10 +315,14 @@ import StashKitUI
         for window in ordered {
             let group = window.tabGroup?.windows ?? [window]
             guard let first = group.first, seen.insert(ObjectIdentifier(first)).inserted else { continue }
-            let controllers = group.compactMap { w in entries.first { $0.controller.window === w }?.controller }
+            let controllers = group.compactMap { w in
+                entries.first { $0.controller.window === w && !$0.controller.isShowingComparison }?.controller
+            }
             guard !controllers.isEmpty else { continue }
             let shown = window.tabGroup?.selectedWindow ?? window
-            let selected = controllers.firstIndex { $0.window === shown } ?? 0
+            let selected = controllers.firstIndex { $0.window === shown }
+                ?? controllers.indices.max { activityRank(controllers[$0]) < activityRank(controllers[$1]) }
+                ?? 0
             groups.append((controllers.map(activityRank).max() ?? 0,
                            .init(frame: shown.frame, screen: shown.screen?.localizedName,
                                  fullScreen: shown.styleMask.contains(.fullScreen), selected: selected,
@@ -312,16 +344,15 @@ import StashKitUI
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self else { return }
             self.lastSaveScheduled = false
-            guard !self.entries.isEmpty, self.restoresUnderway == 0 else { return }
+            guard !self.isQuitting, !self.entries.isEmpty, self.restoresUnderway == 0 else { return }
             self.sessions?.saveLast(self.snapshot())
         }
     }
 
-    /// Last Session now, written before returning: quitting, or the last window closing.
-    func saveLastNow() {
+    /// Captures the open windows on the main actor before the app flushes the session queue.
+    func stageLastForQuit() {
         guard let sessions, !entries.isEmpty, restoresUnderway == 0 else { return }
         sessions.saveLast(snapshot())
-        sessions.flush()
     }
 
     /// The windows of `session` next to those open (Home spec §2.6). `first`: an empty window to take the first
@@ -330,7 +361,8 @@ import StashKitUI
     /// The session's front window is made first and alone made key (one activation, one plan for the cache); the others
     /// one per turn of the main thread, each ordered below the one made before it without becoming key, so a
     /// restore of many windows is no one long block and input gets through between them (spikes/rust/REPORT.md §3.4).
-    func open(session: SessionSnapshot, first: ViewerWindowController? = nil, completion: (() -> Void)? = nil) {
+    func open(session: SessionSnapshot, first: ViewerWindowController? = nil, whileCurrent: (() -> Bool)? = nil,
+              canActivate: @escaping () -> Bool = { true }, completion: (() -> Void)? = nil) {
         let paths = session.windows.flatMap(\.tabs).compactMap { tab -> String? in
             if case .file(let path, _) = tab { return path }
             return nil
@@ -339,11 +371,16 @@ import StashKitUI
         Task { [weak self] in
             let found = await HomeGrid.availability(of: paths, timeout: .seconds(1))
             guard let self else { return }
+            guard !isQuitting, whileCurrent?() != false else {
+                restoresUnderway -= 1
+                scheduleLastSave()
+                return
+            }
             let steps = SessionRestorePlan.steps(session) { found[$0] ?? nil }
-            let restore = Restore(steps: steps, tabCount: session.tabCount, completion: completion)
+            let restore = Restore(steps: steps, tabCount: session.tabCount, canActivate: canActivate, completion: completion)
             restore.turn {
                 guard let front = steps.first, let lead = self.restoreWindow(front, reused: first, below: nil, restore) else { return }
-                lead.bringToFront()
+                lead.bringToFront(activating: canActivate())
                 restore.lead = lead
                 restore.below = lead.window
             }
@@ -355,6 +392,7 @@ import StashKitUI
     private final class Restore {
         let steps: [SessionRestorePlan.WindowStep]
         let tabCount: Int
+        let canActivate: () -> Bool
         let completion: (() -> Void)?
         let screens = NSScreen.screens.map(\.visibleFrame)
         let main: CGRect
@@ -366,9 +404,11 @@ import StashKitUI
         var fullScreen: [ViewerWindowController] = []
         var cpu = 0.0, longest = 0.0
 
-        init(steps: [SessionRestorePlan.WindowStep], tabCount: Int, completion: (() -> Void)?) {
+        init(steps: [SessionRestorePlan.WindowStep], tabCount: Int, canActivate: @escaping () -> Bool,
+             completion: (() -> Void)?) {
             self.steps = steps
             self.tabCount = tabCount
+            self.canActivate = canActivate
             self.completion = completion
             main = NSScreen.main?.visibleFrame ?? screens.first ?? .zero
         }
@@ -390,13 +430,14 @@ import StashKitUI
                          + "CPU, longest turn \(Int(restore.longest)) ms")
             restoresUnderway -= 1
             scheduleLastSave()   // the windows as restored: each made one asked for it while the restore was out
-            return enterFullScreenInTurn(Array(restore.fullScreen.reversed())) { [weak self] in
+            return enterFullScreenInTurn(Array(restore.fullScreen.reversed()), whileAllowed: restore.canActivate) { [weak self] in
                 self?.frontAfterFullScreen(restore)
                 restore.completion?()
             }
         }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            guard !isQuitting else { restoresUnderway -= 1; return }
             restore.turn {
                 let lead = self.restoreWindow(restore.steps[index], reused: nil, below: restore.below, restore)
                 if let window = lead?.window { restore.below = window }
@@ -440,17 +481,21 @@ import StashKitUI
     /// last of them: the launch's window enters full screen on its own, before the others are made. It is shown again
     /// unless the user went to another window meanwhile (its Space; it is key all along, so no activation comes of it).
     private func frontAfterFullScreen(_ restore: Restore) {
-        guard !restore.fullScreen.isEmpty, let lead = restore.lead, active === lead else { return }
+        guard !isQuitting, restore.canActivate(), !restore.fullScreen.isEmpty,
+              let lead = restore.lead, active === lead else { return }
         lead.bringToFront()
     }
 
     /// Each of `controllers` into full screen after the previous one got there (each in its own Space).
-    private func enterFullScreenInTurn(_ controllers: [ViewerWindowController], completion: (() -> Void)?) {
-        guard let next = controllers.first else {
+    private func enterFullScreenInTurn(_ controllers: [ViewerWindowController], whileAllowed: @escaping () -> Bool,
+                                       completion: (() -> Void)?) {
+        guard !isQuitting, whileAllowed(), let next = controllers.first else {
             completion?()
             return
         }
-        next.enterFullScreen { [weak self] in self?.enterFullScreenInTurn(Array(controllers.dropFirst()), completion: completion) }
+        next.enterFullScreen { [weak self] in
+            self?.enterFullScreenInTurn(Array(controllers.dropFirst()), whileAllowed: whileAllowed, completion: completion)
+        }
     }
 
     // MARK: Activity
@@ -525,15 +570,15 @@ import StashKitUI
             beforeCloses = snapshot()
             DispatchQueue.main.async { [weak self] in self?.beforeCloses = nil }
         }
-        closedTabs.push(controller.sessionTab())
+        if !controller.isShowingComparison { closedTabs.push(controller.sessionTab()) }
         let group = controller.window?.tabGroup
         entries[i].observers.forEach(NotificationCenter.default.removeObserver)
         entries.remove(at: i)
         if entries.isEmpty {
             // The last window (all its tabs) keeps its place in Last Session.
-            if let sessions, let before = beforeCloses {
+            if !isQuitting, let sessions, let before = beforeCloses {
                 sessions.saveLast(before)
-                sessions.flush()
+                Task { await sessions.flush() }
             }
             active = nil
             onLastClosed?()

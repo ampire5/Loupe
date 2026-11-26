@@ -339,6 +339,7 @@ extension ThumbnailStore {
     ///
     /// Four of the folder's photos in the catalog (every one of a folder whose stored summary counts fewer:
     /// `catalogCount`), or the pick of this session's complete listing, are its pictures, at once, without a listing.
+    /// `onCachedPreview` receives the available catalog pictures before a listing completes the cover or summary.
     /// A summary in the catalog made at that date needs none either; else the card goes
     /// out with `summaryPending` and the next call for the folder lists it (limited to `coverListingTimeout` on a
     /// share, `coverLocalListingTimeout` elsewhere), until a listing answers, once a session (`summaryFollowUp`; while
@@ -358,7 +359,8 @@ extension ThumbnailStore {
     /// offline). Nothing here asks the system but the listing. New thumbnails wait while the viewer is busy;
     /// cancelling the task stops the listing and the reads.
     public func folderCard(_ folder: URL, archive: Bool, in location: ThumbnailLocation?, network: Bool? = nil,
-                           maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil) async -> FolderCard? {
+                           maxPixel: Int, lastViewed: String? = nil, modified: Date? = nil,
+                           onCachedPreview: (@Sendable ([CGImage]) async -> Void)? = nil) async -> FolderCard? {
         // Without a location, a share as the mount table says (which never hangs).
         let network = network ?? location?.isNetwork ?? coverVolumeIsNetwork(folder)
         let key = Self.memoKey(folder, modified)
@@ -370,10 +372,20 @@ extension ThumbnailStore {
                               modified: modified, maxPixel: maxPixel)
         // The catalog's four (or all of a smaller folder's): the pictures at once, whatever becomes of the summary's
         // listing.
-        if let location, let cells = await catalogCells(location, count: Self.catalogCount(stored),
-                                                        lastViewed: lastViewed, maxPixel: maxPixel) {
-            return await summaryFollowUp(cells.images, place, location: location, stored: stored, wants: wantsSummary,
-                                         pictured: cells.names, lastViewed: lastViewed)
+        let count = Self.catalogCount(stored)
+        if let location, let cells = await catalogCells(location, count: count, lastViewed: lastViewed,
+                                                        maxPixel: maxPixel, allowPartial: onCachedPreview != nil) {
+            guard !Task.isCancelled else { return nil }
+            let complete = cells.images.count >= count || onCachedPreview == nil
+            // An existing follow-up may also list the folder when a card reappears and needs its image again.
+            if !cells.images.isEmpty, !complete || (wantsSummary && summaryDue.contains(key) && probeDue(volume)) {
+                await onCachedPreview?(cells.images)
+            }
+            guard !Task.isCancelled else { return nil }
+            if complete {
+                return await summaryFollowUp(cells.images, place, location: location, stored: stored, wants: wantsSummary,
+                                             pictured: cells.names, lastViewed: lastViewed)
+            }
         }
         if emptyCovers.contains(key) {
             return FolderCard(images: [], summary: stored, problem: isOffline(volume) ? .offline : coverProblems[key])
@@ -473,7 +485,7 @@ extension ThumbnailStore {
         noteSummaryTried(key)
         var images = images
         if let listing, !Set(pictured).isSubset(of: Set(listing.names.files)), !Task.isCancelled,
-           let made = await pictures(of: listing, place.folder, location: location, network: place.network,
+           let made = await pictures(of: listing, place.folder, archive: place.archive, location: location, network: place.network,
                                      volume: volume, maxPixel: place.maxPixel, lastViewed: lastViewed,
                                      modified: place.modified, count: Self.coverPhotos, depth: 0, complete: true) {
             images = made
@@ -822,7 +834,7 @@ extension ThumbnailStore {
         case .notNow: return nil
         }
         let summarized = complete && depth == 0 ? listed : nil
-        guard let images = await pictures(of: listed, folder, location: location, network: network, volume: volume,
+        guard let images = await pictures(of: listed, folder, archive: archive, location: location, network: network, volume: volume,
                                           maxPixel: maxPixel, lastViewed: lastViewed, modified: modified, count: count,
                                           depth: depth, complete: complete) else { return nil }
         return CoverMade(images: images, listing: summarized, listed: true)
@@ -831,7 +843,7 @@ extension ThumbnailStore {
     /// The pictures of a listing's pick (remembered for the folder when the listing is complete): its photos made
     /// into thumbnails (or read from the catalog), else one of each of its first subfolders'; none for an empty
     /// folder (given up for the session when complete). Nil: a subfolder's cover not now.
-    private func pictures(of listed: CoverListing, _ folder: URL, location: ThumbnailLocation?, network: Bool,
+    private func pictures(of listed: CoverListing, _ folder: URL, archive: Bool, location: ThumbnailLocation?, network: Bool,
                           volume: String?, maxPixel: Int, lastViewed: String?, modified: Date?, count: Int, depth: Int,
                           complete: Bool) async -> [CGImage]? {
         let key = Self.memoKey(folder, modified)
@@ -850,14 +862,23 @@ extension ThumbnailStore {
         switch plan {
         case .photos(let picked):
             var images: [CGImage] = []
-            for name in picked.prefix(count) {
-                guard await idleViewer() else { break }
-                if let image = await coverCell(folder.appendingPathComponent(name), at: location?.sibling(name),
-                                               maxPixel: maxPixel) {
+            // Local photos can use two of the existing decode slots. Share and archive reads stay serial.
+            let canOverlap = !network && !archive && !ArchivePath.isArchive(folder) && decodeLimit.slotCount > 1
+            var remaining = picked.prefix(count)
+            while let name = remaining.popFirst() {
+                guard await idleViewer() else { return nil }
+                let url = folder.appendingPathComponent(name)
+                if canOverlap, let next = remaining.popFirst() {
+                    async let first = coverCell(url, at: location?.sibling(name), maxPixel: maxPixel)
+                    async let second = coverCell(folder.appendingPathComponent(next), at: location?.sibling(next),
+                                                 maxPixel: maxPixel)
+                    let pair = await [first, second]
+                    images.append(contentsOf: pair.compactMap { $0 })
+                } else if let image = await coverCell(url, at: location?.sibling(name), maxPixel: maxPixel) {
                     images.append(image)
                 }
             }
-            return images
+            return Task.isCancelled ? nil : images
         case .subfolders(let subfolders):
             return await subfolderCover(folder, Array(subfolders), location: location, network: network, volume: volume,
                                         maxPixel: maxPixel, count: count, depth: depth, complete: complete,
@@ -869,14 +890,14 @@ extension ThumbnailStore {
     }
 
     /// `count` photos of the folder at `location` with a thumbnail in the catalog, spread across them as Finder sorts
-    /// them, the one last viewed first, decoded, and their names; nil when there are fewer.
+    /// them, the one last viewed first, decoded, and their names. A preview may use fewer.
     private func catalogCells(_ location: ThumbnailLocation, count: Int, lastViewed: String?,
-                              maxPixel: Int) async -> (images: [CGImage], names: [String])? {
+                              maxPixel: Int, allowPartial: Bool = false) async -> (images: [CGImage], names: [String])? {
         guard let names = perform("cover", { try $0.namesWithThumbnails(in: location, limit: .max) }),
-              names.count >= count else { return nil }
+              !names.isEmpty, allowPartial || names.count >= count else { return nil }
         // Sorting thousands of names takes a while: not on the actor.
         let picked = await Self.offActor(qos: Self.coverQoS) {
-            CoverSampling.pick(Self.finderSorted(names), count: count, lastViewed: lastViewed)
+            CoverSampling.pick(Self.finderSorted(names), count: min(count, names.count), lastViewed: lastViewed)
         }
         var images: [CGImage] = []
         for name in picked where !Task.isCancelled {
@@ -1181,17 +1202,17 @@ extension ThumbnailStore {
     /// The real listing: a folder's names (`BrowserListingSource.names`, as `listCoverNames`), on a local volume
     /// (`dated`) with each photo's date and size from the same pass (no file opened); a zip's photo entries and its
     /// own size and date from one read of its directory.
-    @Sendable static func listCover(_ folder: URL, archive: Bool, dated: Bool,
+    @Sendable static func listCover(_ folder: URL, archive _: Bool, dated: Bool,
                                     part: @escaping @Sendable (CoverListing) -> Bool) throws -> CoverListing {
-        if archive || ArchivePath.isArchive(folder) {
+        if ArchivePath.resolveArchive(folder) {
             let (stamp, entries) = try ArchiveReader.shared.listing(of: folder)
             return CoverListing(names: CoverNames(files: entries.map(\.url.lastPathComponent), folders: []),
                                 summary: .ofArchive(photos: entries.count, bytes: Int64(stamp.size),
                                                     modified: stamp.modified))
         }
         // Parts every 100 ms at most: what a time limit finds is never older than that.
-        return CoverListing(listing: try BrowserListingSource.names(folder, archives: false, stat: dated, partEvery: 64,
-                                                                    partAfter: .milliseconds(100)) {
+        return CoverListing(listing: try BrowserListingSource.directoryNames(folder, archives: false, stat: dated,
+                                                                             partEvery: 64, partAfter: .milliseconds(100)) {
             part(CoverListing(listing: $0, dated: false))
         }, dated: dated)
     }

@@ -2,8 +2,7 @@ import LoupeCore
 import SettingsKit
 
 extension SettingsPanel {
-    /// Interface (spec §5): the stats bar (I) and two pages side by side (D, spread spec 2026-10-23). The info panel (⌘I)
-    /// has no keys: it remembers its size itself.
+    /// The viewer's stats bar, information panel text, full-screen chrome, toasts and two-page spread.
     static let interface = SettingsPage("interface", "Interface", symbol: "macwindow", sections: [
         SettingsSection("Stats Bar", rows: [
             .toggle("stats-bar-with-toolbar", "Show alongside toolbar", symbol: "menubar.rectangle",
@@ -40,6 +39,10 @@ extension SettingsPanel {
                     description: "White and grey only, without the yellow of the parameters. Default off."),
             .toggle("stats-folder-name", "Folder name", symbol: "folder",
                     description: "The open folder's name at the right end of the bar. Default on."),
+        ]),
+        SettingsSection("Information Panel", rows: [
+            .number("info-panel-font-size", "Text size (⌘I)", unit: "pt", step: 1, symbol: "textformat.size",
+                    description: "Text size in the photo viewer’s information panel. 8–40 pt, default 12."),
         ]),
         SettingsSection("Full Screen", rows: [
             .choice("fullscreen-toolbar", "Toolbar", [

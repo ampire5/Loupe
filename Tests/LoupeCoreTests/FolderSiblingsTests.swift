@@ -167,6 +167,38 @@ private final class Box<T>: @unchecked Sendable {
     #expect(calls.count(of: root) == 1)
 }
 
+@Test func cancelledFolderOpenDoesNotSubmitAListing() async {
+    let folder = URL(fileURLWithPath: "/unread-folder", isDirectory: true)
+    let calls = Counter()
+    let navigator = FolderNavigator { url in
+        calls.increment(url)
+        return []
+    }
+    let request = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await navigator.contents(of: folder)
+    }
+    await #expect(throws: CancellationError.self) { try await request.value }
+    #expect(calls.count(of: folder) == 0)
+}
+
+@Test func cancelledFolderOpenDiscardsAnInFlightListing() async {
+    let folder = URL(fileURLWithPath: "/unread-folder", isDirectory: true)
+    let (started, signal) = AsyncStream<Void>.makeStream()
+    let finishListing = DispatchSemaphore(value: 0)
+    let navigator = FolderNavigator { url in
+        signal.yield(())
+        _ = finishListing.wait(timeout: .now() + .seconds(2))
+        return [DirectoryEntry(url: url.appendingPathComponent("image.jpg"), isDirectory: false, isPackage: false)]
+    }
+    let request = Task { try await navigator.contents(of: folder) }
+    var entries = started.makeAsyncIterator()
+    _ = await entries.next()
+    request.cancel()
+    finishListing.signal()
+    await #expect(throws: CancellationError.self) { try await request.value }
+}
+
 @Test func hungCandidateIsSkippedAndTheNextOneTried() async throws {
     let root = try makeTree(["1": ["a.jpg"], "2": ["b.jpg"], "3": ["c.jpg"]])
     defer { try? FileManager.default.removeItem(at: root) }

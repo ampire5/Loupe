@@ -1,4 +1,6 @@
 import CoreGraphics
+import Foundation
+import Metal
 import LoupeCore
 import Testing
 @testable import LoupeRender
@@ -34,4 +36,37 @@ import Testing
     let got = try await TestImages.readSlice(pyramid.levels[1], slice: 0)
     #expect(got == (try await TestImages.readSlice(lanczos.levels[1], slice: 0)))
     #expect(got != (try await TestImages.readSlice(box.levels[1], slice: 0)))
+}
+
+@Test func cacheCountsAllocatedTextureBytes() async throws {
+    let loader = MetalPyramidLoader()
+    var limits = CacheLimits()
+    limits.graphicsMemory = nil
+    let cache = ImageCache(loader: loader, limits: limits)
+    let image = TestImages.synthetic(1100, 700)
+    let file = URL(fileURLWithPath: "/photo.jpg")
+    let info = ImageInfo(pixelSize: image.pixelSize, typeIdentifier: "public.jpeg",
+                         isProgressive: false, fileSize: 0, colorSpaceName: nil)
+    await cache.seed(file, info: info, level: LevelImage(image: image, level: 0))
+    let pyramid = try #require(await cache.entry(file)?.pyramid)
+    let allocated = pyramid.levels.reduce(0) { $0 + $1.allocatedSize }
+    #expect(await cache.stats().usedBytes == allocated)
+}
+
+@Test func cacheEvictionReleasesTexturesHeldByABorrower() async throws {
+    var limits = CacheLimits()
+    limits.graphicsMemory = nil
+    let cache = ImageCache(loader: MetalPyramidLoader(), limits: limits)
+    let image = TestImages.synthetic(600, 400)
+    let file = URL(fileURLWithPath: "/photo.jpg")
+    let info = ImageInfo(pixelSize: image.pixelSize, typeIdentifier: "public.jpeg",
+                         isProgressive: false, fileSize: 0, colorSpaceName: nil)
+    await cache.seed(file, info: info, level: LevelImage(image: image, level: 0))
+    let borrowed = try #require(await cache.entry(file)?.pyramid)
+
+    limits.memory = 0
+    await cache.setLimits(limits)
+
+    #expect(await cache.stats().usedBytes == 0)
+    #expect(borrowed.finestResidentLevel == nil)
 }

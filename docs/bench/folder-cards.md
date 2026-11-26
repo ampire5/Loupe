@@ -73,3 +73,31 @@ written at once. `ThumbnailDatabase.putSummaries` into a table of 10 000 rows, b
 | 256 | 3.35 |
 
 64 rows hold the store's actor about a millisecond; one row per transaction would cost a quarter of a millisecond each.
+
+## Overlapping image preparation within a local cover
+
+`LoupeBench thumbs --covers <folder>` on an Apple M4 Max (14 cores), macOS 27.2.1, release builds
+with two cover workers and four shared thumbnail decode slots. Each dataset had 24 local subfolders with
+200 JPEG entries each, hard-linked to six fixture images on the internal SSD. Every cold pass used a fresh
+catalog. The benchmark measures when the store delivers all frames for each card.
+
+The 1 ms Instruments Time Profiler samples during cold generation on the 12000 × 9000 set were concentrated
+in JPEG decoding. Of 5,586 self samples, `decode_mcu` accounted for 3,921, `decompress_onepass` for 845 and
+`fstatat` for 9. The ordinary thumbnail generator made 48 thumbnails from this set in 1.1 s. The original
+cover path took about 2.1 s to make 12 covers with the same number of frames because it processed each card's
+four frames one at a time, with two cards active.
+
+| JPEG size | Catalog | First 12 before | First 12 after | CPU for all 24 before | CPU for all 24 after |
+|---|---|---:|---:|---:|---:|
+| 1600 × 1200 | Cold | 0.15–0.16 s | 0.10–0.11 s | 0.7 s | 0.7 s |
+| 12000 × 9000 | Cold | 2.01–2.13 s | 1.06–1.45 s | 8.4–8.8 s | 9.3–10.5 s |
+| 12000 × 9000 | Warm | 0.04–0.06 s | 0.05–0.06 s | 0.2 s | 0.2–0.3 s |
+
+The small dataset uses two alternating pairs after excluding the first pair, which overlapped a build. The
+large dataset uses all three pairs. Total wall time for all 24 large cold covers ranged from 4.38–9.72 s before
+and 2.51–4.24 s after. The 9.72 s run spent 8.8 s of process CPU.
+
+The pair size of two lets both cover workers use up to four existing decode slots in total. The reader and
+decode pools still set the I/O and CPU limits, and frame order follows the original selection. Machines with
+one thumbnail decode slot, network folders and archives use serial preparation. The timings cover the local
+store and queue on Apple Silicon.

@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 
 /// App lifecycle, the main menu and the ways a file arrives: Finder / `open` (open events),
 /// a path argument (`swift run Loupe photo.jpg`) and File › Open….
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     /// The viewer windows (tabs) and which one is in front.
     private let registry = WindowRegistry()
     /// The process-wide photo cache (M2): every viewer reads from it. Made after the first config read.
@@ -21,11 +21,15 @@ import UniformTypeIdentifiers
     private var thumbnailsReady: Task<Void, Never>?
     /// Tells the cache about system memory pressure; primary instance only.
     private var pressureMonitor: MemoryPressureMonitor?
-    /// Finder open events can arrive before `applicationDidFinishLaunching` has built the window.
-    private var pendingURLs: [URL] = []
-    /// `Loupe.db` (positions and folder settings). Opened only by the primary instance: a secondary launch
-    /// neither reads nor writes it.
-    private var stateDatabase: StateDatabase?
+    private struct ExternalOpen {
+        let request: OpenRequests.Request
+        let previousApp: NSRunningApplication?
+    }
+    /// Launch can receive file events before the first window or the secondary handover is ready.
+    private var pendingExternalOpens: [ExternalOpen] = []
+    private weak var launchViewer: ViewerWindowController?
+    private var externalOpensReady = false
+    private var externalOpenGeneration = 0
     private let framingLibrary = FramingLearningLibrary(store: FramingReferenceStore(
         directory: (StateDatabase.defaultDirectory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".loupe"))
             .appendingPathComponent("Learning", isDirectory: true)))
@@ -46,6 +50,8 @@ import UniformTypeIdentifiers
     private var settingsObserver: NSObjectProtocol?
     /// The layout the menus' key equivalents show; a reload that changes it shows them again (`refreshShownKeys`).
     private var menuInputMap: InputMap?
+    private let pluginMenu = NSMenu(title: "Plugins")
+    private var isSettingDefaultPhotoApp = false
     /// `LOUPE_AUTOPAN` (debug): the synthetic pan driver for latency runs.
     private var autoPan: AutoPan?
     /// The Logitech mouse through MouseService (M4c spec §3.1; MouseService's core spec): the `MX_*` buttons and the
@@ -62,6 +68,14 @@ import UniformTypeIdentifiers
 
     private static let openFileNotification = Notification.Name("local.loupe.openFile")
 
+    private struct StateStores: Sendable {
+        let positions: FolderPositions
+        let recent: RecentStore
+        let sessions: SessionStore
+        let folderSettings: FolderSettings
+        let browserPlaces: BrowserPlaces
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let primary = Self.primaryInstance() {
             becomeSecondary(primary)
@@ -70,11 +84,29 @@ import UniformTypeIdentifiers
         // The Dock icon (~10 ms for an alternate's .icns) waits until the window is up.
         Settings.shared.reload(applyingIcon: false)
         Icons.set = Icons.Set(rawValue: Settings.shared.config.iconSet.rawValue) ?? .sf   // before the first icon
-        stateDatabase = Self.openStateDatabase()
-        positions = FolderPositions(database: stateDatabase)
-        recent = RecentStore(database: stateDatabase)
-        sessions = SessionStore(database: stateDatabase)
-        sessions?.beginRun()   // the run before becomes Last Session; this run saves beside it
+        let launchFrontmost = NSWorkspace.shared.frontmostApplication
+        observeHandOver()
+        Task { [weak self] in
+            let stores = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let database = Self.openStateDatabase()
+                    let sessions = SessionStore(database: database)
+                    sessions.beginRun()   // the run before becomes Last Session; this run saves beside it
+                    continuation.resume(returning: StateStores(
+                        positions: FolderPositions(database: database), recent: RecentStore(database: database),
+                        sessions: sessions, folderSettings: FolderSettings(database: database),
+                        browserPlaces: BrowserPlaces(database: database)))
+                }
+            }
+            guard let self, !isTerminating else { return }
+            finishPrimaryLaunch(stores, launchFrontmost: launchFrontmost)
+        }
+    }
+
+    private func finishPrimaryLaunch(_ stores: StateStores, launchFrontmost: NSRunningApplication?) {
+        positions = stores.positions
+        recent = stores.recent
+        sessions = stores.sessions
         registry.sessions = sessions
         registry.framingLibrary = framingLibrary
         Task { [weak self] in
@@ -82,10 +114,10 @@ import UniformTypeIdentifiers
             do { try await framingLibrary.reload() }
             catch { DebugLog.log("Framing references: \(error.localizedDescription)") }
         }
-        let folderSettings = FolderSettings(database: stateDatabase)
+        let folderSettings = stores.folderSettings
         self.folderSettings = folderSettings
         Settings.shared.folderSettings = folderSettings
-        let browserPlaces = BrowserPlaces(database: stateDatabase)
+        let browserPlaces = stores.browserPlaces
         registry.browserPlaces = browserPlaces
         registry.positions = positions
         var pathStores: [any PathMoving] = [positions, folderSettings, browserPlaces]
@@ -121,23 +153,22 @@ import UniformTypeIdentifiers
         // The first window takes the place and size it was left at and keeps them; the others cascade from the front one.
         controller.window?.setFrameUsingName(ViewerWindowController.frameName)
         controller.window?.setFrameAutosaveName(ViewerWindowController.frameName)
-        // The file to show goes to the cache before the menu is built and the window shown: its read and decode
-        // run while AppKit puts the window up (docs/bench/2026-10-15-startup.md).
-        // The window is empty: the first file opens in it without a route, the others are routed once it is up.
-        let launchURLs = Self.fileArgument(CommandLine.arguments.dropFirst()).map { [URL(fileURLWithPath: $0)] } ?? pendingURLs
-        pendingURLs = []
-        let launchTargets = OpenRouter.firstPerFolder(Self.targets(launchURLs))
-        if let first = launchTargets.first { controller.open(first) }
-        let menu = Self.makeMainMenu()
+        pluginMenu.delegate = self
+        let menu = Self.makeMainMenu(pluginMenu: pluginMenu)
         menu.onTabKey = { [weak self] key in self?.registry.tabKey(key) ?? false }
         menu.canChooseCardStyle = { [weak self] in self?.registry.keyWindowCanChooseCardStyle ?? false }
         NSApp.mainMenu = menu
         menuInputMap = Settings.shared.inputMap
         observeSettings()
-        observeHandOver()
         observeLastViewerClose()
-        controller.showWindow(nil)
-        NSApp.activate()
+        let activating = WindowRegistry.canActivate(after: launchFrontmost)
+        if activating {
+            controller.showWindow(nil)
+            NSApp.activate()
+        } else {
+            controller.window?.orderFront(nil)
+            controller.window?.makeFirstResponder(controller.viewerView)
+        }
         // Off the launch path, like the Dock icon: `start()` opens the receivers synchronously. `follow` takes the
         // app's state as it is then, so a `didBecomeActive` that came before is not missed.
         DispatchQueue.main.async { self.startMouseClient() }
@@ -149,18 +180,9 @@ import UniformTypeIdentifiers
             window.setFrameOrigin(NSPoint(x: area.midX - size.width / 2, y: area.midY - size.height / 2))
             DebugLog.log("window on screen \(i): \(NSScreen.screens[i].frame.size)")
         }
-        controller.restoreFullScreen()
-        if !launchTargets.isEmpty { controller.bringToFront() }   // to the front, as for any file opened from outside
-        for target in launchTargets.dropFirst() { registry.open(target) }
-        // No photo to show: Home (Home spec §2.1); WebKit is touched only when Home opens on Stash.
+        if activating { controller.restoreFullScreen() }
         refreshStashItem()
-        if launchTargets.isEmpty {
-            if Settings.shared.config.sessionRestore == .last, let last = sessions?.last() {
-                registry.open(session: last, first: controller)
-            } else {
-                controller.showHome()
-            }
-        }
+        finishLaunchOpening(in: controller, after: launchFrontmost)
         DispatchQueue.main.async { Settings.shared.applyAppIcon() }
         // `LOUPE_CHEATSHEET` (debug): the `?` sheet open from the start, to look at it without pressing a key.
         if DebugLog.isEnabled, ProcessInfo.processInfo.environment["LOUPE_CHEATSHEET"] != nil { controller.toggleCheatSheet() }
@@ -241,47 +263,140 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// The first argument naming an existing file, for `swift run Loupe photo.jpg`. A `-Key value` pair
-    /// (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) is a user-defaults override, so the
-    /// token after each `-Key` is its value, never a path.
-    private static func fileArgument(_ arguments: ArraySlice<String>) -> String? {
-        var tokens = arguments.makeIterator()
-        while let token = tokens.next() {
-            if token.hasPrefix("-") {
-                _ = tokens.next()
-                continue
+    private func finishLaunchOpening(in controller: ViewerWindowController, after previousApp: NSRunningApplication?) {
+        launchViewer = controller
+        let earlyCount = pendingExternalOpens.count
+        let generation = externalOpenGeneration
+        registry.openRequests.submit(.arguments(Array(CommandLine.arguments.dropFirst()))) {
+            [weak self, weak controller] targets in
+            guard let self, !self.isTerminating, !self.registry.controllers.isEmpty else { return }
+            let pending = self.pendingExternalOpens
+            self.pendingExternalOpens = []
+            self.externalOpensReady = true
+            if !targets.isEmpty { self.routeExternal(targets, after: previousApp) }
+            for (index, event) in pending.enumerated() {
+                // A path argument takes precedence over Finder URLs already present at launch.
+                if !targets.isEmpty, index < earlyCount, case .finder = event.request { continue }
+                self.queueExternal(event)
             }
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: token, isDirectory: &isDirectory), !isDirectory.boolValue { return token }
+            if targets.isEmpty, let controller {
+                self.restoreLaunchFallback(in: controller, generation: generation, after: previousApp)
+            }
         }
-        return nil
+    }
+
+    private func canUseLaunchViewer(_ controller: ViewerWindowController) -> Bool {
+        !isTerminating && registry.hasViewer(controller) && registry.current === controller
+            && controller.session.playlist == nil && !controller.session.entersFromOutside
+            && !controller.isShowingHome && !controller.isShowingComparison
+    }
+
+    private func restoreLaunchFallback(in controller: ViewerWindowController, generation: Int,
+                                       after previousApp: NSRunningApplication?) {
+        guard canUseLaunchViewer(controller), generation == externalOpenGeneration else { return }
+        guard Settings.shared.config.sessionRestore == .last, let sessions else {
+            controller.showHome()
+            return
+        }
+        Task { [weak self, weak controller] in
+            let last = await sessions.last()
+            guard let self, let controller, self.canUseLaunchViewer(controller),
+                  generation == self.externalOpenGeneration else { return }
+            if let last {
+                self.registry.open(session: last, first: controller, whileCurrent: { [weak self, weak controller] in
+                    guard let self, let controller else { return false }
+                    return generation == self.externalOpenGeneration && self.canUseLaunchViewer(controller)
+                }, canActivate: { [weak self] in
+                    self?.externalOpenGeneration == generation && WindowRegistry.canActivate(after: previousApp)
+                })
+            } else {
+                controller.showHome()
+            }
+        }
     }
 
     /// Finder, the Dock and loupe://open links share the same tab routing.
     func application(_ application: NSApplication, open urls: [URL]) {
         let urls = urls.compactMap { OpenLink.fileURL(for: $0) }
-        guard !urls.isEmpty else { return }
-        if isSecondary { Self.postHandOver(paths: urls.map(\.path)); return }
-        guard !registry.controllers.isEmpty else {
-            pendingURLs += urls
-            return
+        guard !urls.isEmpty, !isTerminating else { return }
+        let previousApp = NSWorkspace.shared.frontmostApplication
+        if isSecondary, externalOpensReady {
+            Self.postHandOver(paths: urls.map(\.path), after: previousApp)
+        } else {
+            queueExternal(ExternalOpen(request: .finder(urls), previousApp: previousApp))
         }
-        for target in OpenRouter.firstPerFolder(Self.targets(urls)) { registry.open(target) }
     }
 
-    /// What each URL is to the router: a directory is a folder to enter, anything else (a photo, a zip) a file.
-    private static func targets(_ urls: [URL]) -> [OpenTarget] {
-        urls.map { url in
-            var isDirectory: ObjCBool = false
-            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            return exists && isDirectory.boolValue && !ArchivePath.isArchive(url) ? .folder(url) : .file(url)
+    private func queueExternal(_ event: ExternalOpen) {
+        let finder: Bool
+        let expectsTarget: Bool
+        switch event.request {
+        case .finder:
+            finder = true
+            expectsTarget = true
+        case .handover(let paths):
+            finder = false
+            expectsTarget = !paths.isEmpty
+        case .arguments:
+            return
+        }
+
+        guard externalOpensReady else {
+            if pendingExternalOpens.count < OpenRequests.maxPendingBatches {
+                pendingExternalOpens.append(event)
+            } else if finder {
+                NSSound.beep()
+            }
+            return
+        }
+
+        let generation = expectsTarget ? externalOpenGeneration &+ 1 : externalOpenGeneration
+        let accepted = registry.openRequests.submit(event.request) { [weak self] targets in
+            guard let self, !self.isTerminating else { return }
+            if targets.isEmpty {
+                if !finder, WindowRegistry.canActivate(after: event.previousApp) {
+                    (self.registry.current ?? self.registry.controllers.last)?.bringToFront()
+                }
+                // A rejected handover path leaves an unused launch window eligible for its usual fallback.
+                if expectsTarget, let controller = self.launchViewer {
+                    self.restoreLaunchFallback(in: controller, generation: generation, after: event.previousApp)
+                }
+                return
+            }
+            self.routeExternal(targets, after: event.previousApp)
+        }
+        if accepted { externalOpenGeneration = generation }
+        else if finder { NSSound.beep() }
+    }
+
+    private func routeExternal(_ targets: [OpenTarget], after previousApp: NSRunningApplication?) {
+        guard !isTerminating, !registry.controllers.isEmpty else { return }
+        for target in targets {
+            let activating = WindowRegistry.canActivate(after: previousApp)
+            // The first result fills the original launch viewer if no other action has used it.
+            // A new event may have arrived while the previous session was being read.
+            if let controller = launchViewer, canUseLaunchViewer(controller) {
+                launchViewer = nil
+                controller.open(target)
+                controller.bringToFront(activating: activating)
+            } else {
+                registry.open(target, activating: activating)
+            }
+        }
+        // If ordering the viewer couldn't activate Loupe, ask Launch Services to bring the running
+        // application forward after the open event returns. Honor a switch to another app in the meantime.
+        guard !NSApp.isActive, WindowRegistry.canActivate(after: previousApp) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTerminating, !self.registry.controllers.isEmpty, !NSApp.isActive,
+                  WindowRegistry.canActivate(after: previousApp) else { return }
+            NSRunningApplication.current.activate(options: [])
         }
     }
 
     /// The delegate form of `NSApplication.didBecomeActiveNotification`: loupe.conf may have been edited
     /// in another app while this one was in the background.
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard !isSecondary else { return }
+        guard !isSecondary, sessions != nil else { return }
         let showBlurry = Settings.shared.config.showBlurry
         Settings.shared.reload()
         // A photo waiting to be sharp enough may qualify under the new rule.
@@ -296,7 +411,13 @@ import UniformTypeIdentifiers
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isSecondary else { return .terminateNow }
+        guard !isTerminating else { return .terminateLater }
+        isTerminating = true
+        registry.isQuitting = true   // closing a window will no longer start the next one's reads
+        registry.openRequests.cancel()
+        registry.stageLastForQuit()
         Task {
+            await sessions?.flush()
             await WebImageFiles.clearTemporaryFiles()
             sender.reply(toApplicationShouldTerminate: true)
         }
@@ -304,15 +425,12 @@ import UniformTypeIdentifiers
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        isTerminating = true
-        registry.isQuitting = true   // each window closing would make the next one active and start its reads
         for controller in registry.controllers { controller.playbackVisibilityChanged(false, active: false) }
         if let handOverObserver { DistributedNotificationCenter.default().removeObserver(handOverObserver) }
         if !isSecondary {
             // Every tab's photo keeps its zoom and position; the active window's full screen is the one restored.
             for controller in registry.controllers { controller.session.recordView() }
             registry.active?.rememberFullScreenAtQuit()
-            registry.saveLastNow()
             positions.flush()
             recent?.flush()
             folderSettings?.flush()
@@ -321,7 +439,7 @@ import UniformTypeIdentifiers
 
     /// `Loupe.db` in Application Support, or nil (positions and folder settings then live in memory for this
     /// run) when it cannot be opened.
-    private static func openStateDatabase() -> StateDatabase? {
+    nonisolated private static func openStateDatabase() -> StateDatabase? {
         guard let directory = StateDatabase.defaultDirectory else { return nil }
         do {
             return try StateDatabase(directory: directory)
@@ -350,20 +468,37 @@ import UniformTypeIdentifiers
     private func becomeSecondary(_ primary: NSRunningApplication) {
         isSecondary = true
         DebugLog.log("single instance: handing over to pid \(primary.processIdentifier)")
+        let previousApp = NSWorkspace.shared.frontmostApplication
         // We are the active app; on macOS 14+ the primary's own activate() may be refused unless we yield.
         NSApp.yieldActivation(to: primary)
-        if let path = Self.fileArgument(CommandLine.arguments.dropFirst()) {
-            Self.postHandOver(paths: [URL(fileURLWithPath: path).path])
-        } else {
-            Self.postHandOver(paths: pendingURLs.map(\.path))   // none: just bring the running window forward
+        let earlyCount = pendingExternalOpens.count
+        registry.openRequests.submit(.arguments(Array(CommandLine.arguments.dropFirst()))) {
+            [weak self] targets in
+            guard let self, !self.isTerminating else { return }
+            let argument: URL?
+            if case .file(let url)? = targets.first { argument = url } else { argument = nil }
+            if let argument {
+                Self.postHandOver(paths: [argument.path], after: previousApp)
+            } else if self.pendingExternalOpens.isEmpty {
+                Self.postHandOver(paths: [], after: previousApp)
+            }
+            for (index, event) in self.pendingExternalOpens.enumerated() {
+                guard case .finder(let batch) = event.request, argument == nil || index >= earlyCount else { continue }
+                Self.postHandOver(paths: batch.map(\.path), after: event.previousApp)
+            }
+            self.pendingExternalOpens = []
+            self.externalOpensReady = true
+            // A Finder open event can still arrive after launch; application(_:open:) forwards it while we wait.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
         }
-        // A Finder open event can still arrive after launch; application(_:open:) forwards it while we wait.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
     }
 
-    private static func postHandOver(paths: [String]) {
+    private static func postHandOver(paths: [String], after previousApp: NSRunningApplication?) {
+        // The receiver rechecks this original foreground app after validating the paths.
         DistributedNotificationCenter.default().postNotificationName(
-            openFileNotification, object: nil, userInfo: ["paths": paths], deliverImmediately: true)
+            openFileNotification, object: nil,
+            userInfo: ["paths": paths, "activationOrigin": previousApp?.processIdentifier ?? 0,
+                       "sender": NSRunningApplication.current.processIdentifier], deliverImmediately: true)
     }
 
     private func observeHandOver() {
@@ -371,17 +506,26 @@ import UniformTypeIdentifiers
             forName: Self.openFileNotification, object: nil, queue: .main
         ) { [weak self] note in
             let paths = note.userInfo?["paths"] as? [String] ?? []
+            let origin = (note.userInfo?["activationOrigin"] as? NSNumber)?.int32Value
+            let sender = (note.userInfo?["sender"] as? NSNumber)?.int32Value
             MainActor.assumeIsolated {
-                guard let self, !self.isSecondary, let front = self.registry.current ?? self.registry.controllers.last else { return }
-                // Any process can post this name, so only absolute paths to existing files and folders are opened.
-                DebugLog.log("single instance: hand-over received paths=\(paths.isEmpty ? "none" : paths.joined(separator: ", "))")
-                let urls = paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }.filter {
-                    let values = try? $0.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-                    return values?.isRegularFile == true || values?.isDirectory == true
+                guard let self, !self.isSecondary, !self.isTerminating else { return }
+                let previousApp: NSRunningApplication?
+                if let origin {
+                    previousApp = origin > 0 ? NSRunningApplication(processIdentifier: origin) : nil
+                } else {
+                    previousApp = NSWorkspace.shared.frontmostApplication   // handover from an older build
                 }
-                // Nothing to open: the running window comes forward, as it would for a file.
-                guard !urls.isEmpty else { return front.bringToFront() }
-                for target in OpenRouter.firstPerFolder(Self.targets(urls)) { self.registry.open(target) }
+                // A foreground secondary can quit while this process is probing the path. Take its
+                // yielded activation while it still has focus, then recheck focus before showing results.
+                let primary = NSRunningApplication.current
+                if let previousApp, let sender, sender == previousApp.processIdentifier,
+                   sender != primary.processIdentifier, NSWorkspace.shared.frontmostApplication == previousApp,
+                   let key = primary.bundleIdentifier ?? primary.executableURL?.path,
+                   key == (previousApp.bundleIdentifier ?? previousApp.executableURL?.path) {
+                    primary.activate(options: [])
+                }
+                self.queueExternal(ExternalOpen(request: .handover(paths), previousApp: previousApp))
             }
         }
     }
@@ -474,6 +618,39 @@ import UniformTypeIdentifiers
         openSettings(page: nil)
     }
 
+    @objc private func makeDefaultPhotoApp(_ sender: NSMenuItem) {
+        guard !isSettingDefaultPhotoApp, let type = sender.representedObject as? UTType else { return }
+        let appURL = Bundle.main.bundleURL.standardizedFileURL
+        let format = sender.title.trimmingCharacters(in: CharacterSet(charactersIn: "…"))
+        isSettingDefaultPhotoApp = true
+        Task {
+            defer { isSettingDefaultPhotoApp = false }
+            let workspace = NSWorkspace.shared
+            let explanation: String
+            do {
+                try await workspace.setDefaultApplication(at: appURL, toOpen: type)
+                let resolvedURL = await Task.detached(priority: .userInitiated) {
+                    NSWorkspace.shared.urlForApplication(toOpen: type)?.standardizedFileURL
+                }.value
+                guard resolvedURL != appURL else { return }
+                if let resolvedURL {
+                    explanation = "macOS is using \(resolvedURL.path). If this is another copy of Loupe, move it out of the way and try again."
+                } else {
+                    explanation = "macOS could not find a default app for this format."
+                }
+            } catch {
+                let error = error as NSError
+                if error.code == NSUserCancelledError && error.domain == NSCocoaErrorDomain { return }
+                if error.code == -128 && error.domain == NSOSStatusErrorDomain { return } // userCanceledErr
+                explanation = error.localizedDescription
+            }
+            let alert = NSAlert()
+            alert.messageText = "Couldn’t make Loupe the default for \(format)"
+            alert.informativeText = explanation
+            alert.runModal()
+        }
+    }
+
     func openSettings(page: String?) {
         let settings = Settings.shared
         if settingsStore == nil {
@@ -533,6 +710,7 @@ import UniformTypeIdentifiers
 
     /// Show in Finder needs a photo.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(makeDefaultPhotoApp(_:)) { return !isSettingDefaultPhotoApp }
         if item.action == #selector(showInFinder(_:)) || item.action == #selector(copyPath(_:)) {
             return registry.current?.session.playlist?.current.isFileURL == true
         }
@@ -667,13 +845,27 @@ import UniformTypeIdentifiers
         item?.isHidden = Settings.shared.config.stashURL == nil
     }
 
-    private static func makeMainMenu() -> MainMenu {
+    private static func makeMainMenu(pluginMenu: NSMenu) -> MainMenu {
         let main = MainMenu()
 
         let app = NSMenu(title: "Loupe")
         app.addItem(withTitle: "About Loupe", action: #selector(showAbout(_:)), keyEquivalent: "")
         app.addItem(.separator())
         app.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        if let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleDocumentTypes") as? [[String: Any]] {
+            let associations = NSMenu(title: "Make Loupe Default for")
+            for document in types {
+                guard let name = document["CFBundleTypeName"] as? String,
+                      let identifiers = document["LSItemContentTypes"] as? [String] else { continue }
+                for identifier in identifiers {
+                    guard let type = UTType(identifier), type.isSubtype(of: .image) else { continue }
+                    let item = associations.addItem(withTitle: name + "…", action: #selector(makeDefaultPhotoApp(_:)),
+                                                    keyEquivalent: "")
+                    item.representedObject = type
+                }
+            }
+            if !associations.items.isEmpty { app.addItem(submenu: associations, title: associations.title) }
+        }
         app.addItem(.separator())
         app.addItem(withTitle: "Hide Loupe", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.addItem(.separator())
@@ -693,6 +885,17 @@ import UniformTypeIdentifiers
         file.addItem(withTitle: "Copy Path", action: #selector(copyPath(_:)), keyEquivalent: "c")
             .keyEquivalentModifierMask = [.command, .option]
         file.addItem(.separator())
+        file.addItem(withTitle: "Compare Selected Photos", action: #selector(ViewerWindowController.compareSelectedPhotos(_:)),
+                     keyEquivalent: "")
+        file.addItem(withTitle: "Select for Comparison", action: #selector(ViewerWindowController.selectForComparison(_:)),
+                     keyEquivalent: "")
+        file.addItem(withTitle: "Compare with Selected Photo", action: #selector(ViewerWindowController.compareWithSelectedPhoto(_:)),
+                     keyEquivalent: "")
+        file.addItem(withTitle: "Batch Upscale", action: #selector(ViewerWindowController.batchUpscaleFileViewItems(_:)),
+                     keyEquivalent: "")
+        file.addItem(withTitle: "Cancel Batch Upscale", action: #selector(ViewerWindowController.cancelBatchUpscale(_:)),
+                     keyEquivalent: "")
+        file.addItem(.separator())
         // A viewer's own `showHomeScreen` comes first in its responder chain.
         file.addItem(withTitle: "Home", action: #selector(showHomeScreen(_:)), keyEquivalent: "h")
             .keyEquivalentModifierMask = [.command, .shift]
@@ -707,6 +910,7 @@ import UniformTypeIdentifiers
         file.addItem(withTitle: "Save Web Image Original", action: #selector(ViewerWindowController.saveWebImage(_:)), keyEquivalent: "")
         file.addItem(withTitle: "Open Web Image Source Page", action: #selector(ViewerWindowController.openWebImageSource(_:)), keyEquivalent: "")
         file.addItem(withTitle: "Retry Web Image Results", action: #selector(ViewerWindowController.retryWebImageResults(_:)), keyEquivalent: "")
+        file.addItem(submenu: pluginMenu, title: pluginMenu.title)
         file.addItem(withTitle: "Clear Recent", action: #selector(clearRecent(_:)), keyEquivalent: "")
         // Home's own keys (⌘= / ⌘− / ⌘0, ⌘ + wheel, pinch, the MX side wheel); listed here to be found in Help.
         file.addItem(withTitle: "Larger Cards", action: #selector(ViewerWindowController.largerCards(_:)), keyEquivalent: "")
@@ -733,9 +937,7 @@ import UniformTypeIdentifiers
             .keyEquivalentModifierMask = [.command, .shift]
         main.addItem(submenu: file, title: "File")
 
-        // The standard text commands, for the settings window's fields (and the info panel's values). Nil targets:
-        // the first responder answers, so in the viewer they are disabled; every item has ⌘, so no plain key of the
-        // viewer is taken (`MainMenu`), and none of the viewer's own ⌘ items uses Z, X, C, V or A.
+        // The first responder routes text editing and File View clipboard actions.
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
         let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
@@ -744,7 +946,12 @@ import UniformTypeIdentifiers
         edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Move Items Here", action: #selector(ViewerWindowController.moveFileViewItemsHere(_:)),
+                     keyEquivalent: "v").keyEquivalentModifierMask = [.command, .option]
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Move to Trash", action: #selector(ViewerWindowController.trashFileViewItems(_:)),
+                     keyEquivalent: "\u{8}")
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
@@ -849,6 +1056,27 @@ import UniformTypeIdentifiers
 
         return main
     }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === pluginMenu else { return }
+        menu.removeAllItems()
+        for action in registry.current?.slotPluginActions() ?? [] {
+            let item = menu.addItem(withTitle: action.label, action: #selector(runSlotPluginAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = action.id
+        }
+        if menu.items.isEmpty {
+            let item = NSMenuItem(title: "No Plugin Actions", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func runSlotPluginAction(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        registry.current?.invokeSlotPluginAction(id)
+    }
+
 }
 
 /// The menu bar admits ⌘/⌃ shortcuts and explicit ⌥1/⌥2 crop commands. Other items (Hide, Quit, Open…, Show in Finder, Close,

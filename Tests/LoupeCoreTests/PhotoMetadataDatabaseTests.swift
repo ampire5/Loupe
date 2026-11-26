@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import HomeScreenModel
 @testable import LoupeCore
@@ -86,6 +87,48 @@ import HomeScreenModel
 }
 
 @Suite struct PhotoMetadataStoreTests {
+    @Test func cancelledColdInspectorLookupWithdrawsLocationResolution() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pool = DecodePool(slots: 1, reserved: 0, qos: .utility)
+        let reads = Mutex<[String]>([])
+        let store = ThumbnailStore(directory: dir, reader: ThumbReader(), thumbSize: 32, limitBytes: 1 << 20,
+                                   locate: { url in
+            reads.withLock { $0.append(url.lastPathComponent) }
+            return ThumbnailLocation(volume: "test-volume", folder: "/Examples", name: url.lastPathComponent)
+        }, shareLocate: { _ in nil })
+        let stamp = FileStamp(modified: Date(timeIntervalSince1970: 1234), size: 2048)
+        let stale = URL(fileURLWithPath: "/Examples/cat.png")
+        let current = URL(fileURLWithPath: "/Examples/dog.png")
+        do {
+            try await pool.acquireSlot(forCurrent: false, rank: 0)
+            defer { pool.releaseSlot(forCurrent: false) }
+            let finished = Mutex(false)
+            let lookup = Task {
+                let result = await store.photoMetadata(for: stale, stamp: stamp, resolvingWith: pool)
+                finished.withLock { $0 = true }
+                return result
+            }
+            defer { lookup.cancel() }
+            let deadline = ContinuousClock.now + .seconds(5)
+            while pool.waitingCount == 0, !finished.withLock({ $0 }), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            #expect(pool.waitingCount == 1)
+            lookup.cancel()
+            #expect(await lookup.value == nil)
+            #expect(pool.waitingCount == 0)
+            #expect(reads.withLock { $0.isEmpty })
+        }
+
+        #expect(await store.photoMetadata(for: current, stamp: stamp, resolvingWith: pool) == nil)
+        var metadata = PhotoMetadata(properties: [:], pngText: [:], created: nil, modified: stamp.modified)
+        metadata.description = "dog"
+        await store.keepPhotoMetadata(metadata, for: current, stamp: stamp)
+        #expect(await store.photoMetadata(for: current, stamp: stamp, resolvingWith: pool)?.description == "dog")
+        #expect(reads.withLock { $0 } == ["dog.png"])
+    }
+
     @Test func directlyOpenedFilesSharePersistentMetadataWithoutMixingFolderNames() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }

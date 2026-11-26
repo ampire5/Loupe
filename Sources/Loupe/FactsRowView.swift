@@ -38,7 +38,7 @@ import LoupeCore
     }
 
     /// Which slots stay when there is no room for all: first the position, then the zoom, the size, the weight, the format.
-    private static let priority: [ImageStatus.Kind] = [.position, .zoom, .exposure, .size, .megapixels, .fileSize, .format]
+    private static let standardPriority: [ImageStatus.Kind] = [.position, .zoom, .exposure, .size, .megapixels, .fileSize, .format]
     private static let slotPadding: CGFloat = 12
     /// What a text field's cell takes round its text (4 points a side): a field narrower than its text and this cuts the
     /// text short ("JP…" for "JPEG"), so every width here is the text's and this.
@@ -54,6 +54,7 @@ import LoupeCore
 
     /// The kinds this row shows, in their order (every kind, or one side's of the stats bar).
     private let kinds: [ImageStatus.Kind]
+    private let priority: [ImageStatus.Kind]
     private let slots: [Slot]
     private var shown: [ImageStatus.Kind: ImageStatus.Fact] = [:]
     private var widths: [ImageStatus.Kind: CGFloat] = [:]
@@ -72,9 +73,10 @@ import LoupeCore
         }
     }
 
-    init(style: Style, kinds: [ImageStatus.Kind] = ImageStatus.Kind.allCases) {
+    init(style: Style, kinds: [ImageStatus.Kind] = ImageStatus.Kind.allCases, priority: [ImageStatus.Kind]? = nil) {
         self.style = style
         self.kinds = kinds
+        self.priority = priority ?? Self.standardPriority
         slots = kinds.map { Slot(kind: $0) }
         super.init(frame: .zero)
         for slot in slots {
@@ -190,7 +192,7 @@ import LoupeCore
     /// The row's width with every slot in it.
     var naturalWidth: CGFloat { width(for: kinds) }
 
-    private func width(for kinds: [ImageStatus.Kind]) -> CGFloat {
+    func width(for kinds: [ImageStatus.Kind]) -> CGFloat {
         kinds.reduce(0) { $0 + width(of: $1) } + CGFloat(max(0, kinds.count - 1)) * Self.hairlineSpace
     }
 
@@ -198,15 +200,22 @@ import LoupeCore
         NSSize(width: naturalWidth, height: ceil(ProCameraStyle.font(style.options.size).boundingRectForFont.height))
     }
 
-    override func layout() {
-        super.layout()
-        // The slots that fit, taken in order of priority, are laid out in their own order.
+    /// Let the owner give any width between whole slots back to adjacent content.
+    func fittingWidth(in limit: CGFloat) -> CGFloat { width(for: fittingKinds(in: limit)) }
+
+    private func fittingKinds(in limit: CGFloat) -> [ImageStatus.Kind] {
         var kept: [ImageStatus.Kind] = []
-        for kind in Self.priority where kinds.contains(kind) {
+        for kind in priority where kinds.contains(kind) {
             let candidate = kinds.filter { kept.contains($0) || $0 == kind }
-            guard width(for: candidate) <= bounds.width + 0.5 else { break }
+            guard width(for: candidate) <= limit + 0.5 else { break }
             kept = candidate
         }
+        return kept
+    }
+
+    override func layout() {
+        super.layout()
+        let kept = fittingKinds(in: bounds.width)
         var x: CGFloat = 0
         var anyShown = false
         for slot in slots {

@@ -6,6 +6,7 @@ public enum KeyAction: String, CaseIterable, Sendable {
     case fit, actual100, actual200, actual400, fitWidth, fitHeight, fill, toggleFitActual, zoomIn, zoomOut
     case toggleKeepZoom, saveKeepZoom
     case cycleZoomStops, saveZoomStops
+    case toggleNeuralUpscale, saveNeuralUpscale, toggleUpscaleOriginal
     /// `keep-zoom-as` for the folder (`share` ↔ `scale`), and as the loupe.conf default.
     case toggleZoomCarry, saveZoomCarry
     case zoomSubject, cycleStepPan, saveStepPan, cycleZoomAnchor, saveZoomAnchor
@@ -181,7 +182,7 @@ public struct KeyMap: Sendable, Equatable {
     /// The actions a menu item does (Zoom, Scaling, Colour, View); `menuKey` gives the key each item shows.
     static let menuActions: Set<KeyAction> = [
         .fit, .actual100, .actual200, .actual400, .fitWidth, .fitHeight, .fill, .toggleFitActual, .zoomIn, .zoomOut,
-        .cycleZoomStops, .saveZoomStops, .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
+        .cycleZoomStops, .saveZoomStops, .toggleNeuralUpscale, .saveNeuralUpscale, .toggleUpscaleOriginal, .toggleKeepZoom, .saveKeepZoom, .toggleZoomCarry, .saveZoomCarry,
         .zoomSubject, .cycleStepPan, .saveStepPan, .cycleZoomAnchor, .saveZoomAnchor,
         .toggleZoomSet, .screenShare, .fillSubject, .cycleSubjectTarget, .cycleDetectorMode, .saveDetectorSize, .nextTarget, .toggleSubjects, .rememberZoom, .toggleStepZoom, .toggleSmartZoom, .manualZoom,
         .cycleFilter, .saveFilters, .toggleAntiring, .saveAntiring, .toggleAutoColor, .saveAutoColor, .toggleVibrance, .saveVibrance, .toggleGrain, .saveGrain, .toggleDeband, .saveDeband,
@@ -288,6 +289,9 @@ public struct KeyMap: Sendable, Equatable {
         .zoomOut: ("Zoom out", .zoom),
         .cycleZoomStops: ("Cycle fixed / adaptive / off zoom stops (this tab)", .zoom),
         .saveZoomStops: ("Save zoom stop mode as default", .zoom),
+        .toggleNeuralUpscale: ("Toggle neural upscale", .zoom),
+        .saveNeuralUpscale: ("Save neural upscale as default", .zoom),
+        .toggleUpscaleOriginal: ("Show original photo", .zoom),
         .toggleKeepZoom: ("Keep zoom and position on/off (this folder)", .zoom),
         .saveKeepZoom: ("Save keep zoom as default", .zoom),
         .toggleZoomCarry: ("Keep the share of the photo / the scale / the share of the screen (this folder)", .zoom),
@@ -368,7 +372,6 @@ public struct KeyMap: Sendable, Equatable {
         ("Three-finger double tap", "Fit height / fit width"),
         ("One-finger double tap", "Show / hide status bar"),
         ("One-finger double click", "Browse the current folder"),
-        ("One-finger Force Click", "Toggle photo information"),
         ("Mouse wheel", "Previous / next photo"),
         ("MX thumb wheel right / left", "Zoom in / out at the pointer"),
         ("One finger holds click, two swipe left / right", "Next / previous folder (Natural direction)"),
@@ -378,8 +381,8 @@ public struct KeyMap: Sendable, Equatable {
         ("Strip: press and drag", "Move the strip; the photo in the middle opens"),
         ("Strip: two-finger swipe sideways", "Preview a selection; open it when the strip stops"),
         ("Strip: drag its top edge", "Resize the strip"),
-        ("Strip: buttons above its right end", "Beside or over the photo (⇧T); pin or hide (T)"),
-        ("Chevron at the bottom edge", "Show the hidden strip (T)"),
+        ("Strip: buttons above its right end", "Beside or over the photo; pin or hide"),
+        ("Chevron at the bottom edge", "Show the hidden strip"),
     ]
 
     /// Today's `ViewerView.keyDown`, as a table.
@@ -414,7 +417,9 @@ public struct KeyMap: Sendable, Equatable {
         // Zoom by key position (= on the top row, keypad +/−), so no layout needs Shift for +.
         KeyBinding(keyCodes: [24, 69], allowsRepeat: true, action: .zoomIn),
         KeyBinding(keyCodes: [27, 78], allowsRepeat: true, action: .zoomOut),
+        KeyBinding(character: "u", modifiers: [.option, .shift], allowsRepeat: false, action: .saveNeuralUpscale),
         KeyBinding(character: "u", modifiers: .shift, allowsRepeat: false, action: .saveZoomStops),
+        KeyBinding(character: "u", modifiers: .option, allowsRepeat: false, action: .toggleNeuralUpscale),
         KeyBinding(character: "u", allowsRepeat: false, action: .cycleZoomStops),
         // Keep zoom: ⇧ first, as plain letters ignore Shift.
         KeyBinding(character: "l", modifiers: .shift, allowsRepeat: false, action: .saveKeepZoom),

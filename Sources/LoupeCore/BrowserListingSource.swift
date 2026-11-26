@@ -3,8 +3,8 @@ import HomeScreenModel
 import UniformTypeIdentifiers
 
 /// What the file browser lists (file browser spec §4.2): folders (not packages), zips with `archive-folders`, and the
-/// photos Loupe opens; hidden names left out. A folder is listed twice: names only first (one `readdir`, ~0.05 s on
-/// the user's share), then with dates, sizes and packages (seconds on a cold share). Inside a zip the one directory
+/// photos Loupe opens; hidden names left out. A local folder is listed with dates, sizes and packages in one pass.
+/// A share has a names-only pass first because its full listing can take seconds. Inside a zip the one directory
 /// read has everything, and its photos are read-only. Blocking calls: run them off the main thread.
 public enum BrowserListingSource {
     /// How many names make a part on a slow share (each part is shown as it comes).
@@ -21,20 +21,42 @@ public enum BrowserListingSource {
     public static func names(_ folder: URL, archives: Bool, stat: Bool = false, partEvery: Int = partSize,
                              partAfter: Duration = partInterval,
                              part: ([BrowserEntry]) -> Bool = { _ in true }) throws -> [BrowserEntry] {
+        if ArchivePath.resolveArchive(folder) { return try archiveEntries(folder) }
+        return try directoryNames(folder, archives: archives, stat: stat, partEvery: partEvery, partAfter: partAfter, part: part)
+    }
+
+    static func directoryNames(_ folder: URL, archives: Bool, stat: Bool = false, partEvery: Int = partSize,
+                               partAfter: Duration = partInterval, part: ([BrowserEntry]) -> Bool) throws -> [BrowserEntry] {
+        try Task.checkCancellation()
         var last = ContinuousClock.now
-        if ArchivePath.isArchive(folder) { return try archiveEntries(folder) }
         guard let dir = opendir(folder.path) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { closedir(dir) }
         var entries: [BrowserEntry] = []
+        var untilCancellationCheck = partSize
         while let item = readdir(dir) {
+            untilCancellationCheck -= 1
+            if untilCancellationCheck == 0 {
+                try Task.checkCancellation()
+                untilCancellationCheck = partSize
+            }
             let name = withUnsafeBytes(of: item.pointee.d_name) { raw in
                 String(decoding: raw.prefix(Int(item.pointee.d_namlen)), as: UTF8.self)
             }
             guard !name.hasPrefix(".") else { continue }
             let ext = (name as NSString).pathExtension.lowercased()
-            let type = item.pointee.d_type
+            var type = Int32(item.pointee.d_type)
+            if type == DT_UNKNOWN, ext == "zip" {
+                var info = Darwin.stat()
+                if fstatat(dirfd(dir), name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+                    if info.st_mode & S_IFMT == S_IFDIR { type = DT_DIR }
+                    if info.st_mode & S_IFMT == S_IFREG { type = DT_REG }
+                }
+            }
             let isDirectory = type == DT_DIR || (type == DT_UNKNOWN && ext.isEmpty)
             let url = folder.appendingPathComponent(name, isDirectory: isDirectory)
+            if ext == "zip", type == DT_DIR || type == DT_REG {
+                ArchivePath.noteDirectoryType(url, isDirectory: isDirectory)
+            }
             var stamp: FileStamp?
             // A symlink is not followed: one into a share that hangs would hold the local listing.
             if stat, !isDirectory, type != DT_LNK, Playlist.mediaExtensions.contains(ext) {
@@ -58,31 +80,72 @@ public enum BrowserListingSource {
     /// With dates, sizes and packages (`FolderSiblings.listEntries`). A folder's date is its own modification date, as
     /// Finder's Date Modified (from the same listing, no further reads); it has no size.
     public static func full(_ folder: URL, archives: Bool) throws -> [BrowserEntry] {
-        if ArchivePath.isArchive(folder) { return try archiveEntries(folder) }
-        return try FolderSiblings.listEntries(folder).compactMap {
+        if ArchivePath.resolveArchive(folder) { return try archiveEntries(folder) }
+        return try fullDirectory(folder, archives: archives)
+    }
+
+    private static func fullDirectory(_ folder: URL, archives: Bool) throws -> [BrowserEntry] {
+        let entries = try FolderSiblings.directoryEntries(folder).compactMap {
             entry($0.url, isDirectory: $0.isDirectory, isPackage: $0.isPackage, stamp: $0.stamp, modified: $0.modified,
                   archives: archives)
         }
+        return markSavedUpscales(entries)
     }
 
-    /// The names, then the full listing (one listing inside a zip), off the caller's thread; stopping the iteration
-    /// stops the listing between the two.
+    /// Read at most one copy directory per source folder or archive's parent, with no per-photo disk reads.
+    package static func markSavedUpscales(_ entries: [BrowserEntry]) -> [BrowserEntry] {
+        var copies: [URL: Set<String>] = [:]
+        return entries.map { entry in
+            guard entry.isFile, let date = entry.date, let size = entry.size else { return entry }
+            let folder = SavedUpscale.directory(for: entry.url)
+            let names: Set<String>
+            if let known = copies[folder] {
+                names = known
+            } else {
+                names = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+                copies[folder] = names
+            }
+            guard !names.isEmpty else { return entry }
+            let copy = SavedUpscale(source: entry.url, stamp: FileStamp(modified: date, size: Int(size)))
+            guard names.contains(copy.file.lastPathComponent) else { return entry }
+            var marked = entry
+            marked.badge = SavedUpscale.badge
+            marked.subtitle = SavedUpscale.badge
+            return marked
+        }
+    }
+
+    /// A complete listing off the caller's thread. On a share, send the names while the stamps are still pending.
     public static func listings(_ folder: URL, archives: Bool, partEvery: Int = partSize,
-                                partAfter: Duration = partInterval) -> AsyncThrowingStream<BrowserListing, Error> {
+                                partAfter: Duration = partInterval,
+                                isLocal: @escaping @Sendable (URL) -> Bool = FileReader.volumeIsLocal)
+        -> AsyncThrowingStream<BrowserListing, Error> {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
                 do {
-                    if ArchivePath.isArchive(folder) {
-                        continuation.yield(BrowserListing(entries: try archiveEntries(folder), complete: true))
-                    } else {
-                        let all = try names(folder, archives: archives, partEvery: partEvery, partAfter: partAfter) { soFar in
-                            guard !Task.isCancelled else { return false }
-                            continuation.yield(BrowserListing(entries: soFar, complete: false, more: true))
-                            return true
-                        }
-                        continuation.yield(BrowserListing(entries: all, complete: false))
+                    try Task.checkCancellation()
+                    if ArchivePath.resolveArchive(folder) {
+                        let entries = try archiveEntries(folder)
                         try Task.checkCancellation()
-                        continuation.yield(BrowserListing(entries: try full(folder, archives: archives), complete: true))
+                        continuation.yield(BrowserListing(entries: entries, complete: true))
+                    } else {
+                        // The mount table keeps a known share out of the resource-value call. Confirm the actual
+                        // volume for local-looking paths, which may reach a share through a symlink.
+                        let localMount = ThumbnailStore.mount(of: folder.path, in: ThumbnailStore.mounts())?.local == true
+                        let local = localMount && isLocal(folder)
+                        try Task.checkCancellation()
+                        if !local {
+                            let all = try directoryNames(folder, archives: archives, partEvery: partEvery, partAfter: partAfter) { soFar in
+                                guard !Task.isCancelled else { return false }
+                                continuation.yield(BrowserListing(entries: soFar, complete: false, more: true))
+                                return true
+                            }
+                            continuation.yield(BrowserListing(entries: all, complete: false))
+                        }
+                        try Task.checkCancellation()
+                        let entries = try fullDirectory(folder, archives: archives)
+                        try Task.checkCancellation()
+                        continuation.yield(BrowserListing(entries: entries, complete: true))
                     }
                     continuation.finish()
                 } catch {
@@ -140,7 +203,7 @@ public enum BrowserListingSource {
             guard !isPackage else { return nil }
             return BrowserEntry(url: url, name: name, kind: .folder, date: modified, canRename: true, canTrash: true)
         }
-        if ArchivePath.isArchive(url) {
+        if ArchivePath.hasZipExtension(url) {
             guard archives else { return nil }
             return BrowserEntry(url: url, name: name, kind: .archive, date: stamp?.modified, size: stamp.map { Int64($0.size) },
                                 canRename: true, canTrash: true)
@@ -159,6 +222,7 @@ public enum BrowserListingSource {
 
     /// A zip's photos, by their inner paths; the archive's date for each, its own size.
     private static func archiveEntries(_ archive: URL) throws -> [BrowserEntry] {
-        try ArchiveReader.shared.entries(of: archive).map { fileEntry($0.url, stamp: $0.stamp) }
+        let entries = try ArchiveReader.shared.entries(of: archive).map { fileEntry($0.url, stamp: $0.stamp) }
+        return markSavedUpscales(entries)
     }
 }

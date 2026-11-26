@@ -1,4 +1,5 @@
 import CoreGraphics
+import Metal
 import os
 import LoupeCore
 
@@ -25,6 +26,8 @@ public struct MetalPyramidLoader: PyramidLoader {
     public typealias Pyramid = TiledImage
     private let context: MetalContext
     private let filter: PyramidFilterSetting
+    // All levels have the same texture descriptor except for their slice count (bounded by maxTilesPerLevel).
+    private let allocationSizes = OSAllocatedUnfairLock(initialState: [Int: Int]())
 
     public init(context: MetalContext = .shared, filter: PyramidFilterSetting = PyramidFilterSetting()) {
         self.context = context
@@ -45,5 +48,28 @@ public struct MetalPyramidLoader: PyramidLoader {
 
     public func finestResidentLevel(of pyramid: TiledImage) -> Int? {
         pyramid.finestResidentLevel
+    }
+
+    public func estimatedPyramidBytes(for grid: TileGrid, levels: Range<Int>) -> Int {
+        let lower = max(0, levels.lowerBound), upper = min(grid.levelCount, levels.upperBound)
+        guard lower < upper else { return 0 }
+        return allocationSizes.withLock { sizes in
+            (lower..<upper).reduce(0) { total, level in
+                let slices = grid.columns(level) * grid.rows(level)
+                guard slices > 0, slices <= TileGrid.maxTilesPerLevel else {
+                    return total + grid.byteCount(levels: level..<(level + 1))
+                }
+                if let bytes = sizes[slices] { return total + bytes }
+                let descriptor = TiledImage.textureDescriptor(slices: slices)
+                let size = context.device.heapTextureSizeAndAlign(descriptor: descriptor).size
+                let bytes = max(size, grid.byteCount(levels: level..<(level + 1)))
+                sizes[slices] = bytes
+                return total + bytes
+            }
+        }
+    }
+
+    public func residentPyramidBytes(of pyramid: TiledImage, grid: TileGrid) -> Int {
+        pyramid.allocatedBytes
     }
 }

@@ -72,14 +72,33 @@ import Testing
         #expect(try BrowserListingSource.names(root, archives: false).map(\.name) == ["a.jpg"])
     }
 
-    @Test func namesThenFull() async throws {
+    @Test func localFolderListsWithStampsInOnePass() async throws {
         let root = try tree(["a.jpg", "b.jpg"])
         defer { try? fm.removeItem(at: root) }
         var got: [BrowserListing] = []
         for try await listing in BrowserListingSource.listings(root, archives: true) { got.append(listing) }
-        #expect(got.count == 2)
-        #expect(got.first?.complete == false && got.first?.entries.allSatisfy { $0.date == nil } == true)
+        #expect(got.count == 1)
         #expect(got.last?.complete == true && got.last?.entries.allSatisfy { $0.date != nil } == true)
+    }
+
+    @Test func insideZipNamedDirectoryListsAndReadsRegularFiles() async throws {
+        let root = try tree([], dirs: ["shots.zip"])
+        defer { try? fm.removeItem(at: root) }
+        let folder = root.appendingPathComponent("shots.zip", isDirectory: true)
+        let photo = folder.appendingPathComponent("frame.avif")
+        let bytes = Data([4, 5, 6])
+        try bytes.write(to: photo)
+        let reader = FileReader(isLocal: { _ in true })
+        #expect(try await reader.read(photo).data == bytes)
+
+        var got: [BrowserListing] = []
+        for try await listing in BrowserListingSource.listings(folder, archives: true) { got.append(listing) }
+        #expect(got.count == 1)
+        let entry = try #require(got.last?.entries.first)
+        #expect(got.last?.complete == true)
+        #expect(entry.name == "frame.avif" && entry.kind == .file && entry.canRename && entry.canTrash)
+        #expect(try await reader.stamp(entry.url).size == bytes.count)
+        #expect(await Playlist.quickList(current: entry.url)?.files == [photo.standardizedFileURL])
     }
 
     @Test func insideZipListsEntriesReadOnly() async throws {
@@ -206,7 +225,8 @@ import Testing
         let root = try folder(5)
         defer { try? fm.removeItem(at: root) }
         var got: [(Int, Bool, Bool)] = []
-        for try await l in BrowserListingSource.listings(root, archives: true, partEvery: 2, partAfter: .zero) {
+        for try await l in BrowserListingSource.listings(root, archives: true, partEvery: 2, partAfter: .zero,
+                                                        isLocal: { _ in false }) {
             got.append((l.entries.count, l.complete, l.more))
         }
         #expect(got.map(\.0) == [2, 4, 5, 5])

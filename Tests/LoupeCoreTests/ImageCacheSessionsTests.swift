@@ -462,6 +462,25 @@ struct ImageCacheSessionsTests {
         #expect(atLeast(.preview, await rig.state(a[3])))
     }
 
+    @Test func comparisonRevalidatesTheSecondPhotoOnReturn() async {
+        let rig = Rig()
+        let files = Array(folder("comparison").prefix(2))
+        await rig.open(sessionA, active: true, visible: true)
+        await rig.open(sessionB, active: false, visible: false)
+        let focus = CacheFocus(count: 2, current: 0, direction: 1, dwelling: false, needsFull: false,
+                               screen: rigScreen, opened: true, companion: 1, step: 2, revalidatesCompanion: true)
+        await rig.cache.setFocus(sessionA, files: files, focus: focus)
+        #expect(await eventually { atLeast(.preview, await rig.state(files[1])) })
+        #expect(await rig.settle())
+        await rig.switchTo(sessionB, from: sessionA)
+
+        let updated = FileStamp(modified: Date(timeIntervalSince1970: 2), size: 2000)
+        rig.reader.setStamp(files[1], updated)
+        await rig.switchTo(sessionA, from: sessionB)
+        #expect(await eventually { await rig.cache.entry(files[1])?.sourceStamp == updated })
+        #expect(rig.reader.readCount(files[1]) == 2)
+    }
+
     /// The single-session API still serves one window as before (ImageCacheTests' `oneReadForPreviewAndFull` and
     /// `onUpdatePerStoredStage`).
     @Test func soloWrappersStillWork() async {

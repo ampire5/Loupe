@@ -17,8 +17,9 @@ public enum ThumbnailStatus: Sendable, Equatable {
 ///
 /// The generator keeps out of the viewer's way (spec §3.6): at most `maxReads` thumbnail reads, marked
 /// `ReadPriority.isBackground`, which `FileReader` runs only on threads beyond the viewer's two (so even reads stuck
-/// on a dead share never hold up the viewer's); new ones start only `idleDelay` after the current photo's work is done
-/// (the viewer's signal flickers between jobs), only `neighbourReads` while the viewer's neighbours are being read
+/// on a dead share never hold up the viewer's). An on-screen cell in the key window may use one job once the current
+/// photo's work ends. The other jobs wait `idleDelay` (the viewer's signal flickers between jobs). There are only
+/// `neighbourReads` while the viewer's neighbours are being read
 /// (stepping through photos keeps the cache from going idle for long: they stopped altogether before, docs/bench/
 /// 2026-10-26-thumbs-while-flipping.md), and those still reading are cancelled when the current photo needs I/O. A finished read is decoded in the store's own `DecodePool`
 /// (`decodes` at once, at utility QoS, so the viewer's decodes win the cores) while the next one runs. A new thumbnail lands in memory at once and reaches the database in batches
@@ -163,7 +164,9 @@ public actor ThumbnailStore {
     /// folder, not now, or a folder bigger than the limit would be read in circles.
     var evicted: Set<URL> = []
     var cells = ThumbnailCells(capacity: cellCapacity)
-    /// Bumped whenever cached cells may no longer match: a decode that started before is not cached.
+    private var cellDecodes: [ThumbnailCells.Key: (id: UInt64, task: Task<CGImage?, Never>)] = [:]
+    private var nextCellDecodeID: UInt64 = 0
+    /// Saved upscale previews use a separate read path. A decode started before invalidation is not cached.
     var cellEpoch = 0
     /// Files whose `cell` or `image` came back nil while pending: told about when they turn up in the database, which
     /// (unlike a newly made thumbnail) would otherwise go unannounced.
@@ -420,23 +423,57 @@ public actor ThumbnailStore {
     /// Thumbnails are stored turned by the photo's EXIF orientation; with `applyingOrientation` false
     /// (`exif-orientation=no`) the cell is turned back to the stored layout, as the viewer shows the photo.
     public func cell(_ url: URL, maxPixel: Int, applyingOrientation: Bool = true) async -> CGImage? {
+        guard !Task.isCancelled else { return nil }
         let key = ThumbnailCells.Key(url: url, maxPixel: maxPixel, applyingOrientation: applyingOrientation)
         if let image = cells.image(key) {
             touch(url)
             used(url)
             return image
         }
+        if let decode = cellDecodes[key] { return await decode.task.value }
         guard let (jpeg, info) = storedThumbnail(url) else {
             if !unavailable.contains(url) { missed.insert(url) }
             return nil
         }
-        let epoch = cellEpoch
         let turnedBack = applyingOrientation ? ImageOrientation.up : info.orientation
-        let image = await Self.offActor {
-            ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel).map { ThumbnailMaker.unturned($0, from: turnedBack) ?? $0 }
+        nextCellDecodeID += 1
+        let id = nextCellDecodeID
+        let task = Task<CGImage?, Never> { [weak self] in
+            guard !Task.isCancelled else { return nil }
+            let image = await Self.offActor {
+                ThumbnailMaker.decodeCell(jpeg, maxPixel: maxPixel).map { ThumbnailMaker.unturned($0, from: turnedBack) ?? $0 }
+            }
+            return await self?.finishCellDecode(key, id: id, image: image)
+        }
+        cellDecodes[key] = (id, task)
+        return await task.value
+    }
+
+    private func finishCellDecode(_ key: ThumbnailCells.Key, id: UInt64, image: CGImage?) -> CGImage? {
+        guard cellDecodes[key]?.id == id else { return nil }
+        cellDecodes[key] = nil
+        if let image { cells.insert(image, for: key) }
+        return image
+    }
+
+    package func upscaledCell(_ copy: SavedUpscale, maxPixel: Int) async -> CGImage? {
+        let url = copy.previewFile
+        let key = ThumbnailCells.Key(url: url, maxPixel: maxPixel)
+        if let image = cells.image(key) { return image }
+        guard activity != .current else { return nil }
+        let epoch = cellEpoch
+        let priority = ReadPriority(ReadPriority.background, isBackground: true)
+        guard let bytes = try? await reader.read(url, priority: priority), !Task.isCancelled else { return nil }
+        let image = await Self.offActor(qos: .utility) {
+            ThumbnailMaker.decodeCell(bytes.data, maxPixel: maxPixel)
         }
         if let image, epoch == cellEpoch { cells.insert(image, for: key) }
         return image
+    }
+
+    package func discardUpscaledCell(_ copy: SavedUpscale) {
+        cells.remove(copy.previewFile)
+        cellEpoch += 1
     }
 
     /// The thumbnail at its stored size; nil while it is not made. The colour corrector's source (M3c spec §3.1),
@@ -642,18 +679,25 @@ public actor ThumbnailStore {
         return result
     }
 
-    /// The folder's place in the catalog, resolved off the actor and once per folder (concurrent asks share
-    /// the lookup). A share's comes from the mount table, no I/O (`shareLocate`); a failure is not remembered: the
-    /// next listing of the folder tries again.
-    func location(of dir: URL, sample: URL) async -> ThumbnailLocation? {
+    /// The folder's place in the catalog. A share's comes from the mount table (`shareLocate`); a failure can be
+    /// retried. Ordinary lookups share one detached resolve per folder. The viewer's cold lookup uses its own
+    /// cancellable admission so a stopped selection cannot accumulate behind a slow background resolve.
+    func location(of dir: URL, sample: URL, resolvingWith pool: DecodePool? = nil) async -> ThumbnailLocation? {
         if let known = locations[dir] { return known }
         if let share = shareLocate(sample) {
             locations[dir] = share
             shareLocated.insert(dir)
             return share
         }
-        if let task = locating[dir] { return await task.value }
         let locate = self.locate
+        if let pool {
+            let result = try? await pool.run(forCurrent: false, rank: 0) { locate(sample) }
+            guard !Task.isCancelled else { return nil }
+            if let known = locations[dir] { return known }
+            if let result { locations[dir] = result }
+            return result
+        }
+        if let task = locating[dir] { return await task.value }
         let task = Task.detached(priority: .utility) { locate(sample) }
         locating[dir] = task
         let result = await task.value
@@ -705,8 +749,8 @@ public actor ThumbnailStore {
         }) else { return }
         // Synced under the mount table's key: it holds for the session (`knowLocation` leaves it).
         shareLocated.remove(dir)
-        for file in folder.listing {
-            guard let id = names[file.url.lastPathComponent] else { continue }
+        for (file, row) in zip(folder.listing, files) {
+            guard let id = names[row.name] else { continue }
             ids[file.url] = id
             if have.contains(id) { stored.insert(file.url) } else { stored.remove(file.url) }
             // Made while there was no id for it (memory only, a catalog made anew): the database gets it now.
@@ -753,12 +797,21 @@ public actor ThumbnailStore {
     func forget(_ url: URL) {
         removeMade(url)
         uncommitted.remove(url)
+        forgetCell(url)
+        cellEpoch += 1
+    }
+
+    func forgetCell(_ url: URL) {
         cells.remove(url)
-        cellEpoch += 1   // a decode of the old JPEG still running must not be cached
+        for key in cellDecodes.keys where key.url == url {
+            cellDecodes.removeValue(forKey: key)?.task.cancel()
+        }
     }
 
     func forgetCells() {
         cells.removeAll()
+        for decode in cellDecodes.values { decode.task.cancel() }
+        cellDecodes.removeAll()
         cellEpoch += 1
     }
 

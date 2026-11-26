@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — 2026-11-26
+
+- Compare two photos side by side and keep manual zoom while navigating.
+- Save neural upscales, upscale selected files in batches, and prepare upcoming photos in the background.
+- Find local files with Everything and manage multiple files from File View.
+- Open videos through the optional FrameScrub playback provider.
+- Improve large-folder browsing, thumbnail scheduling, and filmstrip controls.
+
 ## 0.4.1 — 2026-11-09
 
 - Choose Fixed, Adaptive or Off for continuous zoom stops. Adaptive settles at nearby stops during slow gestures and lets fast gestures pass through. `u` cycles the mode for the current tab; `⇧U` saves the default.

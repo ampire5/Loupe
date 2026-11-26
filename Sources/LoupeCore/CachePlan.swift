@@ -90,14 +90,17 @@ public struct CacheFocus: Equatable, Sendable {
     /// The second page of the pair on screen (spread), nil for a single page. It is current too: planned right
     /// after the current photo, with the same goals, and its full resolution is wanted on dwell like the current's.
     public var companion: Int?
+    /// A fixed comparison's second address has the same source freshness contract as its first.
+    public var revalidatesCompanion: Bool
     /// How far the neighbours go: 1 for single pages, 2 when the viewer steps by pairs. Neighbours are then
     /// planned as pairs beside the one on screen (ahead first, reading order within a pair).
     public var step: Int
 
     public init(count: Int, current: Int, direction: Int, dwelling: Bool, needsFull: Bool, screen: PixelSize,
                 previous: Int? = nil, scrubbing: Bool = false, appliesOrientation: Bool = true, opened: Bool = false,
-                companion: Int? = nil, step: Int = 1, previousCompanion: Int? = nil) {
+                companion: Int? = nil, step: Int = 1, previousCompanion: Int? = nil, revalidatesCompanion: Bool = false) {
         self.companion = companion
+        self.revalidatesCompanion = revalidatesCompanion
         self.previousCompanion = previousCompanion
         self.step = step
         self.count = count
@@ -129,11 +132,13 @@ public enum CachePlan {
 
     /// The exclusion check applies only to jobs being considered. Size estimation reads the cached facts alone.
     public static func make(focus: CacheFocus, limits: CacheLimits, isExcluded: (Int) -> Bool = { _ in false },
+                            pyramidBytes: @escaping (TileGrid, Range<Int>) -> Int = { $0.byteCount(levels: $1) },
                             facts: (Int) -> EntryFacts) -> [CacheItem] {
         guard !focus.scrubbing, (0..<focus.count).contains(focus.current) else { return [] }
         return withoutActuallyEscaping(isExcluded) { isExcluded in
             withoutActuallyEscaping(facts) { facts in
-                var builder = Builder(focus: focus, limits: limits, isExcluded: isExcluded, facts: facts)
+                var builder = Builder(focus: focus, limits: limits, isExcluded: isExcluded,
+                                      pyramidBytes: pyramidBytes, facts: facts)
                 builder.run()
                 return builder.items
             }
@@ -167,6 +172,7 @@ public enum CachePlan {
         let limits: CacheLimits
         let facts: (Int) -> EntryFacts
         let isExcluded: (Int) -> Bool
+        let pyramidBytes: (TileGrid, Range<Int>) -> Int
         let estimate: PixelSize
         let direction: Int
         var items: [CacheItem] = []
@@ -179,10 +185,12 @@ public enum CachePlan {
         /// Photos that have a preview or coarse item (or a full one), for `cache-previews`.
         var previewed: Set<Int> = []
 
-        init(focus: CacheFocus, limits: CacheLimits, isExcluded: @escaping (Int) -> Bool, facts: @escaping (Int) -> EntryFacts) {
+        init(focus: CacheFocus, limits: CacheLimits, isExcluded: @escaping (Int) -> Bool,
+             pyramidBytes: @escaping (TileGrid, Range<Int>) -> Int, facts: @escaping (Int) -> EntryFacts) {
             self.focus = focus
             self.limits = limits
             self.isExcluded = isExcluded
+            self.pyramidBytes = pyramidBytes
             self.facts = facts
             estimate = CachePlan.estimatedSize(focus: focus, facts: facts)
             direction = focus.direction < 0 ? -1 : 1
@@ -362,9 +370,9 @@ public enum CachePlan {
             let cost: Int
             switch goal {
             case .bytes: cost = e.facts.fileSize ?? CachePlan.defaultFileSize
-            case .coarse: cost = e.grid.byteCount(levels: e.coarseLevel..<levels)
-            case .preview: cost = e.grid.byteCount(levels: e.lfit..<levels)
-            case .full: cost = e.grid.byteCount(levels: 0..<(allLevels ? levels : e.lfit))
+            case .coarse: cost = pyramidBytes(e.grid, e.coarseLevel..<levels)
+            case .preview: cost = pyramidBytes(e.grid, e.lfit..<levels)
+            case .full: cost = pyramidBytes(e.grid, 0..<(allLevels ? levels : e.lfit))
             case .ready: cost = DecodedImage.byteCount(e.grid.imageSize)   // the decoder's buffer
             }
             if goal.isPyramid, let graphics = limits.graphicsMemory {

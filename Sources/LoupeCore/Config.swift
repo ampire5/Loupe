@@ -394,6 +394,8 @@ public struct Config: Equatable, Sendable {
     // The thumbnail strip and thumbnail cache (M2.5 spec §7).
     /// `strip-window`: how the strip shows in a window; fullscreen always uses `over`.
     public var slots = FolderSlotSettings.defaults
+    /// Repeatable `plugin=Name | HTTPS URL` declarations, in file order.
+    public var plugins: [SlotPluginConfiguration] = []
     public var stripWindow = StripWindowMode.over
     public static let stripHeightRange = 40...240
 
@@ -414,11 +416,11 @@ public struct Config: Equatable, Sendable {
     /// `strip-scroll-direction`: a two-finger swipe over the strip scrubs this way (`FilmstripScroll`).
     public var stripScrollDirection = StripScrollDirection.natural
     /// `strip-hide-delay`: milliseconds before the idle strip hides, 0...10000 (0: as soon as the mouse leaves).
-    public var stripHideDelayMilliseconds = 250
-    /// `strip-fade-in`: milliseconds of the strip's show fade, 0...2000 (0: it appears without animation).
-    public var stripFadeInMilliseconds = 150
-    /// `strip-fade-out`: milliseconds of the strip's hide fade, 0...2000 (0: it disappears without animation).
-    public var stripFadeOutMilliseconds = 250
+    public var stripHideDelayMilliseconds = 150
+    /// `strip-fade-in`: milliseconds of the strip's show animation, 0...2000 (0: it appears at once).
+    public var stripFadeInMilliseconds = 250
+    /// `strip-fade-out`: milliseconds of the strip's hide animation, 0...2000 (0: it disappears at once).
+    public var stripFadeOutMilliseconds = 150
     /// `strip-jump-preview`: show the stretched thumbnail at once on a jump or scrub (`no`: a normal
     /// transition, as `show-blurry` says).
     public var stripJumpPreview = true
@@ -489,6 +491,9 @@ public struct Config: Equatable, Sendable {
     /// `toast-duration`: milliseconds a toast (the key's one-line answer) stays before it fades, 500...10000.
     public var toastDurationMilliseconds = 2000
 
+    /// `info-panel-font-size`: the photo viewer's information panel text size in points.
+    public var infoPanelFontSize = 12
+    public static let infoPanelFontSizeRange = 8...40
     /// `stats-progress`: the stats bar is lightened from the left up to the photo's place in the folder.
     public var statsProgress = true
     /// `stats-progress-opacity`: how strongly the filled part is lightened, as the opacity of white laid over the bar,
@@ -727,7 +732,8 @@ public struct Config: Equatable, Sendable {
                               "haptic-long-armed", "haptic-detent",
                               "slot-left", "slot-right", "slot-bottom",
                               "stash-url", "stash-api-key", "stash-path-map", "stash-title",
-                              "appearance", "home-tab", "home-start", "home-sidebar", "home-path-bar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore", "config-warnings", "toast-duration",
+                              "appearance", "home-tab", "home-start", "home-sidebar", "home-path-bar", "home-sidebar-width", "home-sidebar-compact", "home-sidebar-indent", "home-sidebar-folders-first", "home-sidebar-reroot", "browser-card-size", "grid-style", "grid-names", "folder-cover", "folder-cards", "grid-style-memory", "thumbs-ahead", "thumbs-depth", "thumbs-pill-delay", "recent-count", "session-restore",
+                              "info-panel-font-size", "config-warnings", "toast-duration",
                               "stats-progress", "stats-progress-opacity", "stats-bar-opacity", "stats-bar-rows", "stats-folder-name", "toast-position", "stats-bar-with-toolbar", "stats-icons", "stats-monochrome", "icon-set",
                               "fullscreen-toolbar", "fullscreen-tabs", "stats-modified", "stats-bar-autohide", "stats-bar-hide-delay",
                               "app-icon"]
@@ -883,6 +889,7 @@ public struct Config: Equatable, Sendable {
         case "archive-folders": return archiveFolders ? "yes" : "no"
         case "folder-toast": return folderToast ? "yes" : "no"
         case "config-warnings": return configWarnings ? "yes" : "no"
+        case "info-panel-font-size": return String(infoPanelFontSize)
         case "stats-progress": return statsProgress ? "yes" : "no"
         case "stats-progress-opacity": return formatNumber(statsProgressOpacity)
         case "stats-bar-opacity": return formatNumber(statsBarOpacity)
@@ -1182,6 +1189,9 @@ public struct Config: Equatable, Sendable {
             if Self.bool(value) == false { cursorAutohideMilliseconds = nil }
             else if let v = Int(value), (1...600_000).contains(v) { cursorAutohideMilliseconds = v }
             else { return .badValue }
+        case "plugin":
+            guard let plugin = SlotPluginConfiguration(line: value) else { return .badValue }
+            if !plugins.contains(where: { $0.slotID == plugin.slotID }) { plugins.append(plugin) }
         case "slot-left", "slot-right", "slot-bottom":
             guard let edge = SlotEdge.allCases.first(where: { $0.key == key }),
                   let setting = FolderSlotSettings.parse(value, edge: edge) else { return .badValue }
@@ -1236,6 +1246,9 @@ public struct Config: Equatable, Sendable {
             if let v = Self.bool(value) { folderToast = v } else { return .badValue }
         case "config-warnings":
             if let v = Self.bool(value) { configWarnings = v } else { return .badValue }
+        case "info-panel-font-size":
+            guard let v = Int(value), Self.infoPanelFontSizeRange.contains(v) else { return .badValue }
+            infoPanelFontSize = v
         case "stats-progress":
             if let v = Self.bool(value) { statsProgress = v } else { return .badValue }
         case "stats-progress-opacity":

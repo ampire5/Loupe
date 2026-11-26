@@ -13,6 +13,8 @@ private let map = KeyMap.standard
     #expect(action(32, "u") == .cycleZoomStops)
     #expect(action(32, "u", .shift) == .saveZoomStops)
     #expect(action(32, "u", .shift, repeat: true) == nil)
+    #expect(action(32, "u", [.option, .shift]) == .saveNeuralUpscale)
+    #expect(action(32, "u", [.option, .shift], repeat: true) == nil)
 }
 
 private func action(_ code: UInt16, _ character: String? = nil, _ modifiers: KeyModifiers = [], repeat isRepeat: Bool = false) -> KeyAction? {
@@ -22,7 +24,7 @@ private func action(_ code: UInt16, _ character: String? = nil, _ modifiers: Key
 /// Actions with no key of their own by default: they are on the mouse (spec §4; the info panel also has ⌘I in the menu),
 /// and input.conf can add a key. Framing confirmations have menu-owned Option shortcuts.
 /// The tab and window actions have no key or button at all (⌘T, ⌘N, ⌘W, ⌘⇧] / ⌘⇧[ are the menu's): input.conf only.
-private let mouseOnlyByDefault: Set<KeyAction> = [.toggleInfoPanel, .newTab, .newWindow, .closeTab, .nextTab, .previousTab,
+private let mouseOnlyByDefault: Set<KeyAction> = [.toggleUpscaleOriginal, .toggleInfoPanel, .newTab, .newWindow, .closeTab, .nextTab, .previousTab,
                                                        .openInNewTab, .openInNewWindow, .home,
                                                        .back, .reopenTab, .closeWindow,
                                                        .screenShare, .manualZoom, .fillSubject,
@@ -110,7 +112,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .cycleStats: "I", .toggleStrip: "T", .toggleStripPlacement: "⇧T", .cheatSheet: "?",
         .cycleFilter: "S", .saveFilters: "⇧S", .toggleAntiring: "A", .saveAntiring: "⇧A",
         .toggleGrain: "J", .saveGrain: "⇧J", .toggleDeband: "N", .saveDeband: "⇧N", .toggleAutoColor: "C", .saveAutoColor: "⇧C", .toggleVibrance: "V", .saveVibrance: "⇧V",
-        .cycleZoomStops: "U", .saveZoomStops: "⇧U",
+        .cycleZoomStops: "U", .saveZoomStops: "⇧U", .toggleNeuralUpscale: "⌥U", .saveNeuralUpscale: "⌥⇧U",
         .toggleKeepZoom: "L", .saveKeepZoom: "⇧L", .toggleZoomCarry: "K", .saveZoomCarry: "⇧K", .cyclePanIndicators: "P", .savePanIndicators: "⇧P",
         .toggleSpread: "D", .saveSpread: "⇧D", .shiftSpread: "⌥D",
         .toggleZoomSet: "G", .cycleSubjectTarget: "⌥G", .cycleDetectorMode: "M", .saveDetectorSize: "⌥⇧M", .previousDetectorMode: "⇧M", .previousTarget: "⌥⇧N", .toggleToolbarPin: "B", .nextTarget: "⌥N", .toggleSubjects: "⇧G", .rememberZoom: "⌥L", .toggleStepZoom: "⌥⇧G", .toggleSmartZoom: "⌥S",
@@ -312,7 +314,7 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
         .cycleFilter: ("s", []), .saveFilters: ("s", .shift), .toggleAntiring: ("a", []), .saveAntiring: ("a", .shift),
         .toggleGrain: ("j", []), .saveGrain: ("j", .shift), .toggleDeband: ("n", []), .saveDeband: ("n", .shift), .toggleAutoColor: ("c", []), .saveAutoColor: ("c", .shift), .toggleVibrance: ("v", []), .saveVibrance: ("v", .shift),
         .toggleStrip: ("t", []), .toggleStripPlacement: ("t", .shift), .cycleStats: ("i", []), .cheatSheet: ("?", []),
-        .cycleZoomStops: ("u", []), .saveZoomStops: ("u", .shift),
+        .cycleZoomStops: ("u", []), .saveZoomStops: ("u", .shift), .toggleNeuralUpscale: ("u", .option), .saveNeuralUpscale: ("u", [.option, .shift]),
         .toggleKeepZoom: ("l", []), .saveKeepZoom: ("l", .shift),
         .toggleZoomCarry: ("k", []), .saveZoomCarry: ("k", .shift),
         .cyclePanIndicators: ("p", []), .savePanIndicators: ("p", .shift),
@@ -365,6 +367,6 @@ private let usCharacters: [UInt16: (plain: String?, shifted: String?)] = [
     let key = KeyMap.standard.menuKey(.toggleStripPlacement)
     #expect(key?.keyEquivalent == "t" && key?.modifiers == .shift)
     #expect(KeyMap.standard.menuKey(.toggleStrip)?.modifiers == [])
-    #expect(KeyMap.gestures.contains { $0.input == "Chevron at the bottom edge" && $0.title == "Show the hidden strip (T)" })
-    #expect(KeyMap.gestures.contains { $0.input.hasPrefix("Strip: buttons") && $0.title.contains("(⇧T)") })
+    #expect(KeyMap.gestures.contains { $0.input == "Chevron at the bottom edge" && $0.title == "Show the hidden strip" })
+    #expect(KeyMap.gestures.contains { $0.input.hasPrefix("Strip: buttons") && $0.title == "Beside or over the photo; pin or hide" })
 }

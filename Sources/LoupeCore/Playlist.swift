@@ -91,12 +91,13 @@ public struct Playlist: Equatable, Sendable {
     /// The listing includes hidden entries, so this costs no stat; only a `current` missing from it is checked
     /// (spelled differently, or gone). The result's own position means nothing; a folder left with nothing to show
     /// is just `current`.
-    public static func relist(current: URL, keeping: [URL] = []) async -> Playlist? {
+    public static func relist(current: URL, keeping: [URL] = [],
+                              sort: @autoclosure @escaping @Sendable () -> BrowserSort = .standard) async -> Playlist? {
         guard current.isFileURL else { return nil }
         return await Task.detached(priority: .userInitiated) {
             guard let entries = list(folderOf: current) else { return nil }
             let me = current.standardizedFileURL
-            let keep = Set(keeping.map(\.standardizedFileURL))
+            let keep = Set(keeping.map(\.quicklyStandardized))
             var images: [URL] = [], odd: [URL] = [], stamps: [URL: FileStamp] = [:], listsMe = false
             for (url, stamp, hidden) in entries {
                 let wanted = url == me || keep.contains(url)
@@ -110,10 +111,11 @@ public struct Playlist: Equatable, Sendable {
                 }
             }
             // An archive's listing is all its entries: one it does not list is gone.
+            let sort = sort()
             if listsMe || (ArchivePath.split(me) == nil && FileManager.default.fileExists(atPath: me.path)) {
-                return Playlist(files: images, current: me, stamps: stamps, keeping: odd)
+                return Playlist(files: images, current: me, stamps: stamps, keeping: odd, sort: sort)
             }
-            return Playlist(files: images, current: images.first ?? odd.first ?? me, stamps: stamps, keeping: odd)
+            return Playlist(files: images, current: images.first ?? odd.first ?? me, stamps: stamps, keeping: odd, sort: sort)
         }.value
     }
 
@@ -122,16 +124,17 @@ public struct Playlist: Equatable, Sendable {
     /// even `contentsOfDirectory(atPath:)`'s, costs the full time (docs/bench/2026-10-19-folder-listing.md). It is the
     /// playlist shown after an open until `relist` brings the stamps: dot names are left out, the hidden flag is not
     /// known yet, `current` always stays. Nil if the folder cannot be opened.
-    public static func quickList(current: URL) async -> Playlist? {
+    public static func quickList(current: URL,
+                                 sort: @autoclosure @escaping @Sendable () -> BrowserSort = .standard) async -> Playlist? {
         guard current.isFileURL else { return nil }
         return await Task.detached(priority: .userInitiated) {
             let me = current.standardizedFileURL
             let folder = me.deletingLastPathComponent()
-            if ArchivePath.split(me) != nil {
+            if ArchivePath.isArchiveEntryOnDisk(me) {
                 // The directory is one read: the names come with their stamps anyway.
                 guard let entries = try? ArchiveReader.shared.entries(of: folder) else { return nil }
                 return Playlist(files: entries.map(\.url), current: me, stamps: Dictionary(
-                    entries.map { ($0.url, $0.stamp) }, uniquingKeysWith: { a, _ in a }))
+                    entries.map { ($0.url, $0.stamp) }, uniquingKeysWith: { a, _ in a }), sort: sort())
             }
             guard let dir = opendir(folder.path) else { return nil }
             defer { closedir(dir) }
@@ -144,7 +147,7 @@ public struct Playlist: Equatable, Sendable {
                 guard !name.hasPrefix("."), mediaExtensions.contains((name as NSString).pathExtension.lowercased()) else { continue }
                 images.append(folder.appendingPathComponent(name, isDirectory: false))
             }
-            return Playlist(files: images, current: me)
+            return Playlist(files: images, current: me, stamps: [:], sort: sort())
         }.value
     }
 
@@ -153,15 +156,15 @@ public struct Playlist: Equatable, Sendable {
     /// the main thread.
     private static func list(folderOf current: URL) -> [(url: URL, stamp: FileStamp?, hidden: Bool)]? {
         let folder = current.standardizedFileURL.deletingLastPathComponent()
-        if ArchivePath.split(current.standardizedFileURL) != nil {
-            return (try? ArchiveReader.shared.entries(of: folder))?.map { ($0.url.standardizedFileURL, $0.stamp, false) }
+        if ArchivePath.isArchiveEntryOnDisk(current) {
+            return (try? ArchiveReader.shared.entries(of: folder))?.map { ($0.url.quicklyStandardized, $0.stamp, false) }
         }
         let keys = FileStamp.listingKeys + [.isHiddenKey]
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: keys, options: []) else { return nil }
         return contents.map { url in
             let values = try? url.resourceValues(forKeys: Set(keys))
-            return (url.standardizedFileURL, values.flatMap { FileStamp($0) }, values?.isHidden == true)
+            return (url.quicklyStandardized, values.flatMap { FileStamp($0) }, values?.isHidden == true)
         }
     }
 

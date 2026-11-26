@@ -70,7 +70,7 @@ public struct FolderSiblings: Equatable, Sendable {
         if entry.isDirectory {
             return entry.isPackage ? nil : BrowserEntry(url: url, name: name, kind: .folder, date: entry.modified)
         }
-        guard archives, ArchivePath.isArchive(url) else { return nil }
+        guard archives, ArchivePath.hasZipExtension(url) else { return nil }
         return BrowserEntry(url: url, name: name, kind: .archive, date: entry.stamp?.modified,
                             size: entry.stamp.map { Int64($0.size) })
     }
@@ -78,17 +78,22 @@ public struct FolderSiblings: Equatable, Sendable {
     /// Lists `url`, skipping hidden items; a zip file lists its photos (`ArchiveReader.entries`). Blocking: call it
     /// off the main thread.
     public static func listEntries(_ url: URL) throws -> [DirectoryEntry] {
-        if ArchivePath.isArchive(url), (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+        if ArchivePath.resolveArchive(url) {
             return try ArchiveReader.shared.entries(of: url).map {
                 DirectoryEntry(url: $0.url, isDirectory: false, isPackage: false, stamp: $0.stamp)
             }
         }
+        return try directoryEntries(url)
+    }
+
+    static func directoryEntries(_ url: URL) throws -> [DirectoryEntry] {
         let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey] + FileStamp.listingKeys
         let urls = try FileManager.default.contentsOfDirectory(
             at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         return urls.map { item in
             let values = try? item.resourceValues(forKeys: Set(keys))
             let isDirectory = values?.isDirectory ?? false
+            if let isDirectory = values?.isDirectory { ArchivePath.noteDirectoryType(item, isDirectory: isDirectory) }
             let stamp = isDirectory ? nil : values.flatMap { FileStamp($0) }
             return DirectoryEntry(url: item, isDirectory: isDirectory, isPackage: values?.isPackage ?? false,
                                   stamp: stamp, modified: values?.contentModificationDate, isSymbolicLink: values?.isSymbolicLink ?? false)
@@ -177,8 +182,11 @@ public actor FolderNavigator {
     /// One folder or archive as a target (an open from Finder or Stash): its photos, or nil when it has none. Fails
     /// as a listing does (`.timedOut` for a hang).
     public func contents(of folder: URL) async throws -> FolderTarget? {
+        try Task.checkCancellation()
         let folder = folder.standardizedFileURL
-        return Self.target(folder, try await listed(folder))
+        let entries = try await listed(folder)
+        try Task.checkCancellation()
+        return Self.target(folder, entries)
     }
 
     private static func target(_ folder: URL, _ entries: [DirectoryEntry]) -> FolderTarget? {
@@ -186,7 +194,9 @@ public actor FolderNavigator {
             .filter { !$0.isDirectory && Playlist.mediaExtensions.contains($0.url.pathExtension.lowercased()) }
         guard !imageEntries.isEmpty else { return nil }
         var stamps: [URL: FileStamp] = [:]
-        for entry in imageEntries { stamps[entry.url.standardizedFileURL] = entry.stamp }
+        // Ordinary absolute listing URLs are already canonical. Foundation's full
+        // standardization otherwise probes reachability for every file.
+        for entry in imageEntries { stamps[entry.url.quicklyStandardized] = entry.stamp }
         return FolderTarget(folder: folder, images: imageEntries.map(\.url), stamps: stamps)
     }
 

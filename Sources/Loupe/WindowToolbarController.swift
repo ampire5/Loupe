@@ -50,15 +50,36 @@ import AppKit
 
     func show(_ source: NSToolbar) {
         guard self.source !== source else { return }
-        // Source controllers retain their items and update them directly. Return
-        // those same items, preserving actions, selection, and cached custom views.
-        for index in toolbar.items.indices.reversed() { toolbar.removeItem(at: index) }
+        let delegate = source.delegate
+        let identifiers = delegate?.toolbarDefaultItemIdentifiers?(source) ?? []
+        let installed = toolbar.items.map { ItemIdentity($0.itemIdentifier, item: $0) }
+        let installedIdentifiers = Set(installed.map(\.identifier))
+        let requested = identifiers.map { identifier in
+            let item = installedIdentifiers.contains(identifier)
+                ? delegate?.toolbar?(source, itemForItemIdentifier: identifier, willBeInsertedIntoToolbar: false)
+                : nil
+            return ItemIdentity(identifier, item: item)
+        }
+        let changes = requested.difference(from: installed)
+
+        // Release the destination's items from its own toolbar before mounting them here.
+        for case let .remove(index, _, _) in changes { toolbar.removeItem(at: index) }
         for index in source.items.indices.reversed() { source.removeItem(at: index) }
         self.source = source
         toolbar.centeredItemIdentifiers = source.centeredItemIdentifiers
-        let identifiers = source.delegate?.toolbarDefaultItemIdentifiers?(source) ?? []
-        for (index, identifier) in identifiers.enumerated() {
-            toolbar.insertItem(withItemIdentifier: identifier, at: index)
+        for case let .insert(index, item, _) in changes {
+            toolbar.insertItem(withItemIdentifier: item.identifier, at: index)
+        }
+    }
+
+    private struct ItemIdentity: Equatable {
+        let identifier: NSToolbarItem.Identifier
+        let object: ObjectIdentifier?
+
+        init(_ identifier: NSToolbarItem.Identifier, item: NSToolbarItem?) {
+            self.identifier = identifier
+            // System spacers are interchangeable. A custom item can carry its own view and action.
+            object = identifier == .space || identifier == .flexibleSpace ? nil : item.map(ObjectIdentifier.init)
         }
     }
 

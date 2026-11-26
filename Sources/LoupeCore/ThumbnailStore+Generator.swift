@@ -1,7 +1,8 @@
 import Foundation
 
 // The generator: up to `readLimit` reads in flight (`neighbourReads` while the viewer's neighbours read), new ones
-// started only once the current photo's work has been over for `idleDelay` (spec §3.6). A job reads, tells the store its read is over and decodes in `DecodePool` while the
+// started once the current photo's work has been over for `idleDelay` (spec §3.6). The key window's on-screen cells
+// can use one job during this delay. A job reads, tells the store its read is over and decodes in `DecodePool` while the
 // next job's read runs: on a share the reads are the limit, so the decode is hidden behind them. A job reports
 // back through `finish`; its slot stays taken until its task really ends, cancelled or not.
 
@@ -31,6 +32,13 @@ extension ThumbnailStore {
             guard activity != .current, let since = idleSince else { return }
             let waited = ContinuousClock.now - since
             guard waited >= idleDelay else {
+                if jobs.isEmpty {
+                    let requests = windows.sorted { $0.key < $1.key }.map(\.value.request)
+                    if let url = nextKeyVisible(in: requests, includeMargin: false), let stamp = listed[url] {
+                        queueIsStale = true   // the old background queue may still contain this job
+                        start(url, listedStamp: stamp)
+                    }
+                }
                 if idleWake == nil {
                     let rest = idleDelay - waited
                     idleWake = Task { [weak self] in
@@ -94,9 +102,12 @@ extension ThumbnailStore {
 
     func nextFile() -> URL? {
         if queueIsStale {
+            let requests = windows.sorted { $0.key < $1.key }.map(\.value.request)
+            // Key-window visible cells are the head of the normal order. Feed those first without walking the
+            // rest of a large folder on each scroll update. The full order is built once that head runs out.
+            if let url = nextKeyVisible(in: requests, includeMargin: true) { return url }
             // Files in flight are left out: they come back through `finish` if they stay pending.
             let skip = stored.union(made.keys).union(unavailable).union(evicted).union(jobs.values.map(\.url))
-            let requests = windows.sorted { $0.key < $1.key }.map(\.value.request)
             queue = ThumbnailQueue.order(requests, skip: skip, trailing: walkWindow?.request, visibleOnly: aheadPaused)
             queuePosition = 0
             queueIsStale = false
@@ -105,6 +116,18 @@ extension ThumbnailStore {
             let url = queue[queuePosition]
             queuePosition += 1
             if listed[url] != nil, status(url) == .pending, !evicted.contains(url) { return url }
+        }
+        return nil
+    }
+
+    private func nextKeyVisible(in requests: [ThumbnailRequest], includeMargin: Bool) -> URL? {
+        for request in requests where request.isKey {
+            let count = includeMargin ? request.visible.count : request.inViewCount ?? request.visible.count
+            for index in request.visible.prefix(max(0, count)) where request.files.indices.contains(index) {
+                let url = request.files[index]
+                if listed[url] != nil, status(url) == .pending, !evicted.contains(url),
+                   !jobs.values.contains(where: { $0.url == url }) { return url }
+            }
         }
         return nil
     }
@@ -198,7 +221,7 @@ extension ThumbnailStore {
 
     func add(_ url: URL, _ thumbnail: Made) {
         setMade(url, thumbnail)
-        cells.remove(url)
+        forgetCell(url)
         unavailable.remove(url)
         broken.remove(url)
         missed.remove(url)

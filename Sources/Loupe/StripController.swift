@@ -4,6 +4,8 @@ import FilmstripModel
 import HomeChrome
 import HomeScreenModel
 import LoupeCore
+import QuartzCore
+import SlotModel
 
 extension Notification.Name {
     /// Posted on the main thread with the file URL as `object` whenever the thumbnail store reports a status
@@ -22,15 +24,15 @@ extension Notification.Name {
 /// (`stripBarHidden`); hidden, a glass nub (`FilmstripRevealView`) 6 pt above the window's bottom edge shows while
 /// the mouse is within 24 pt of that edge and brings it back. In full screen, and in a window with `over` (the
 /// default), it floats over the bottom of the picture and is visible while it is pinned (`T`, persisted as `stripPinned`), while the
-/// mouse is within the strip's whole height of the window's bottom edge or over the strip or its capsule, while its
+/// mouse reaches the narrow reveal edge or stays over the strip, its capsule or just below the window, while its
 /// top edge is being dragged, while it moves, or while the cursor is over a cell (`revealedByEdge`); it hides
 /// `strip-hide-delay` ms after none of these holds. While the `?` cheat sheet is open (`staysShown`) a strip on screen
 /// stays too. `hidden` never shows it in a window, and `T` does nothing there.
 ///
-/// The tool capsule (`FilmstripToolsView`, the strip sketch's `.cap`) sits on the strip, 14 pt in from its right end and
-/// centred on the cells (`StripPlacement.capsuleX`), while the pointer is over the strip or the capsule, and
-/// leaves `strip-hide-delay` ms after it with the strip's fade. The hover label steps aside from it
-/// (`FilmstripView.labelAvoid`). Its buttons: "where the strip is" (`⇧T`, not in full screen) and, after a divider,
+/// The tool capsule (`FilmstripToolsView`) sits above the strip's right edge (`StripPlacement.capsuleX`),
+/// clear of the thumbnail hit targets. It appears while the pointer is over the strip or the capsule, and
+/// leaves `strip-hide-delay` ms after it with the strip's fade. Its buttons: "where the strip is"
+/// (`⇧T`, not in full screen) and, after a divider,
 /// `T`'s pin or hide button (`StripPlacement.tools`). `⇧T` writes `strip-window` (beside ↔
 /// over) to loupe.conf; in full screen it only says the strip is always over the photo there.
 ///
@@ -61,8 +63,9 @@ extension Notification.Name {
     static let barHiddenKey = "stripBarHidden"
     /// The reveal chevron's gap to the window's bottom edge.
     private static let revealGap: CGFloat = 6
-    /// How near the window's bottom edge the pointer brings up the reveal chevron.
-    private static let revealZone: CGFloat = 24
+    /// Reveal band for the chevron when the strip has its own row below the picture.
+    private static let chevronRevealZone: CGFloat = 24
+    private static let toolsGap: CGFloat = 4
 
     let view = FilmstripView()
     /// The capsule of the strip's buttons, on the strip's right end.
@@ -83,12 +86,13 @@ extension Notification.Name {
 
     private var mode = StripWindowMode.beside
     private var cellHeight: CGFloat = 68
+    private var configuredCellHeight: CGFloat = 68
     private var cellMax = 1.5
-    private var hideDelay: Duration = .milliseconds(500)
+    private var hideDelay: Duration = .milliseconds(150)
     /// `strip-fade-in` / `strip-fade-out` in seconds; read at each show / hide, so a loupe.conf edit applies at the
     /// next activation.
-    private var fadeIn: TimeInterval = 0.15
-    private var fadeOut: TimeInterval = 0.25
+    private var fadeIn: TimeInterval = 0.25
+    private var fadeOut: TimeInterval = 0.15
     private var thumbSize = 512
     private var isFullScreen = false
     /// `exif-orientation` as this strip last applied it: the session sets it on the shared aspects too, so whether the
@@ -105,12 +109,18 @@ extension Notification.Name {
         set { UserDefaults.standard.set(newValue, forKey: Self.barHiddenKey) }
     }
 
-    /// The cursor is in the bottom zone (the band's height above the window's bottom edge, shown or not).
+    /// The cursor is in the narrow reveal zone above the window edge or the playback transport.
     private var mouseNearBottom = false
-    /// The cursor is within `revealZone` of the window's bottom edge: a hidden `beside` strip's chevron shows.
-    private var mouseNearEdge = false
     /// The cursor is over the strip on screen or over the capsule on screen (the strip's hit zone).
     private var mouseOverStrip = false
+    private var mouseOverSlot = false
+    private var pointerPastBottom = false
+    private var pointerOutsideWindow = false
+    private var pointerButtonDown = false
+    private var buttonHoldsStrip = false
+    private var menusOpen = 0
+    private var localPointerMonitor: Any?
+    private var outsidePointerMonitor: Any?
     /// `mouseOverStrip`, let go `strip-hide-delay` after the cursor left: the capsule stays that long.
     private var capsuleHeld = false
     /// The capsule's left edge along the strip.
@@ -126,11 +136,34 @@ extension Notification.Name {
     /// ended where it began.
     private var heightBeforeResize: CGFloat = 0
     private let hoverState = StripHover()
+    private let caption = StripCaption()
+    private let centreMark = CALayer()
     /// The strip's motion: a trackpad gesture with its momentum (`FilmstripScroll`), or a mouse drag (`dragging`).
     private var scroll = FilmstripScroll()
     private var scrollRest: Task<Void, Never>?
-    private var scrollCandidate: Int?
+    private var shownPosition: Int?
+    private struct Settle {
+        let pages: StripPages
+        let from: Double
+        let target: Double
+        let started: TimeInterval
+        let duration: TimeInterval
+        let fromExpansion: Double
+        var offset: Double
+        var expansion: Double
+    }
+    private var settle: Settle?
+    private var settleLink: CADisplayLink?
+    /// The prior selection narrows on the first fraction of a cell's travel.
+    private struct MovingSelection {
+        let pages: StripPages
+        let anchor: Double
+        let initialExpansion: Double
+        var expansion: Double
+    }
+    private var movingSelection: MovingSelection?
     private var gestureSuppressesReveal = false
+    private var needsEdgeExitAfterHide = false
     private var dragging = false
     /// Ends the session's scrub once a drag rests on one file.
     private var dragRest: Task<Void, Never>?
@@ -142,10 +175,12 @@ extension Notification.Name {
     /// it, not from the session's current page.
     private var reachedPage: Int?
     private(set) var isShown = false
+    private var visibilityGeneration = 0
     private var hideTask: Task<Void, Never>?
     /// Set by `close()`: a settings push or a late callback must not touch the closed window's session.
     private var closed = false
     private var container: NSView?
+    weak var slotOverlayArea: SlotOverlayArea?
     private var observers: [NSObjectProtocol] = []
 
     /// The playlist the layout was made for, and each file's index in it.
@@ -170,6 +205,12 @@ extension Notification.Name {
     /// The decoded picture each file's cell holds, by file (the same images the view shows, so no memory of their own):
     /// the viewer's stand-in for a photo navigated to (`cellPicture`).
     private var pictures: [URL: CGImage] = [:]
+
+    var benchThumbnails: (ready: Int, visible: Int) {
+        guard isShown else { return (0, 0) }
+        let visible = view.visibleItems.filter(files.indices.contains)
+        return (visible.lazy.filter { self.pictures[self.files[$0]] != nil }.count, visible.count)
+    }
     private var inViewSince: [Int: ContinuousClock.Instant] = [:]
     private var dwellTask: Task<Void, Never>?
 
@@ -195,7 +236,8 @@ extension Notification.Name {
         guard playbackClearance != clearance else { return }
         playbackClearance = clearance
         revealBottom?.constant = -Self.revealGap - clearance
-        pointer(nearBottom: false, nearEdge: false, overStrip: false)
+        fitConfiguredHeight()
+        pointer(nearBottom: false, overStrip: false)
     }
 
     private var isMoving: Bool { scroll.isMoving || dragging }
@@ -215,6 +257,14 @@ extension Notification.Name {
         }
         session.onStripAspectsChange = { [weak self] in self?.aspectsArrived() }
         hoverState.onRest = { [weak self] in self?.rested() }
+        hoverState.onDetail = { [weak self] in self?.showHoverDetail($0) }
+        view.addSubview(caption)
+        centreMark.backgroundColor = NSColor.white.cgColor
+        centreMark.borderWidth = 1
+        centreMark.borderColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        centreMark.cornerRadius = 2
+        centreMark.isHidden = true
+        view.layer?.addSublayer(centreMark)
         view.translatesAutoresizingMaskIntoConstraints = false
         heightConstraint = view.heightAnchor.constraint(equalToConstant: bandHeight)
         heightConstraint.isActive = true
@@ -237,7 +287,7 @@ extension Notification.Name {
         // `ViewerView`); the left button stays the strip's own (a click, a drag, a resize).
         view.onOtherMouse = { MouseButtons.shared.otherMouse($0, down: $1) }
         view.onOtherMouseDragged = { MouseButtons.shared.moved($0) }
-        view.onResize = { [weak self] in self?.relayout() }
+        view.onResize = { [weak self] in self?.resizeStrip() }
         view.onResizeDrag = { [weak self] in self?.resize(toBandHeight: $0) }
         view.onResizeEnd = { [weak self] in self?.endResize(save: $0) }
         view.onBackingChange = { [weak self] in self?.reloadAll() }
@@ -258,11 +308,18 @@ extension Notification.Name {
     /// whatever the window puts over the strip later, the cheat sheet included).
     func attach(to container: NSView) {
         self.container = container
+        container.postsFrameChangedNotifications = true
+        observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+                                                                object: container, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fitConfiguredHeight() }
+        })
         container.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited,
                                                                         .activeInKeyWindow, .inVisibleRect],
                                                  owner: self))
         tools.setShown(false, animated: false)
+        tools.wantsLayer = true
         tools.translatesAutoresizingMaskIntoConstraints = false
+        tools.setContentCompressionResistancePriority(.required, for: .vertical)
         container.addSubview(tools, positioned: .above, relativeTo: view)
         reveal.setShown(false, animated: false)
         reveal.toolTip = StripPlacement.revealHelp
@@ -270,18 +327,24 @@ extension Notification.Name {
         reveal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(reveal, positioned: .above, relativeTo: view)
         let leading = tools.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        let above = tools.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Self.toolsGap)
+        above.priority = .defaultHigh
         let revealBottom = reveal.bottomAnchor.constraint(equalTo: container.bottomAnchor,
                                                           constant: -Self.revealGap - playbackClearance)
         self.revealBottom = revealBottom
         toolsLeading = leading
         NSLayoutConstraint.activate([
             leading,
-            tools.centerYAnchor.constraint(equalTo: view.centerYAnchor),   // the cells are in the strip's middle
+            above,
+            tools.topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor, constant: Self.toolsGap),
             reveal.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             revealBottom,
             reveal.widthAnchor.constraint(equalToConstant: FilmstripRevealView.size.width),
             reveal.heightAnchor.constraint(equalToConstant: FilmstripRevealView.size.height),
         ])
+        observeMenu(NSMenu.didBeginTrackingNotification, opening: true)
+        observeMenu(NSMenu.didEndTrackingNotification, opening: false)
+        fitConfiguredHeight()
         update()
     }
 
@@ -294,6 +357,9 @@ extension Notification.Name {
     /// The window closes: no timers, no more notifications.
     func close() {
         closed = true
+        updatePointerMonitors()
+        view.layer?.removeAnimation(forKey: StripVisibilityMotion.key)
+        tools.layer?.removeAnimation(forKey: StripVisibilityMotion.key)
         positionPopover?.close()
         resizing = false   // a drag cut off by the close has nothing left to restore or save
         dragging = false
@@ -301,10 +367,12 @@ extension Notification.Name {
         dragRest?.cancel()
         scroll.takeOver()   // nothing to commit: the session closes too
         scrollRest?.cancel()
+        stopSettling()
         dwellTask?.cancel()
         hideTask?.cancel()
         capsuleRelease?.cancel()
-        hoverState.cancel()
+        hidePosition()
+        dropHover()
         aspects.close()
         loads.values.forEach { $0.cancel() }
         loads = [:]
@@ -344,33 +412,54 @@ extension Notification.Name {
             relayout()
             reloadAll()   // the cells' pictures are turned the other way
         }
-        if height != cellHeight {
-            setCellHeight(height)
-            reloadAll()   // a new pixel size for every cell
+        if height != configuredCellHeight {
+            configuredCellHeight = height
+            if setCellHeight(height) { reloadAll() }
         }
         if reservesSpace != reserved { onReservesSpaceChange?() }
         update()
     }
 
-    private func setCellHeight(_ height: CGFloat) {
+    /// Leave room for neighbours in a narrow window and for the photo and tools in a short one. The saved setting
+    /// is the requested height, so enlarging the window brings it back without writing any preferences.
+    private var maximumCellHeight: CGFloat {
+        let limits = Config.stripHeightRange
+        guard let container, container.bounds.width > 0, container.bounds.height > 0 else {
+            return CGFloat(limits.upperBound)
+        }
+        let usableHeight = container.bounds.height - playbackClearance
+        // Three heights leave room for a 3:2 selection, two 9:16 neighbours and their gaps.
+        let byWidth = floor(container.bounds.width / 3)
+        let byHeight = floor(usableHeight * 2 / 3) - 2 * FilmstripView.padding
+        return max(CGFloat(limits.lowerBound), min(byWidth, byHeight, CGFloat(limits.upperBound)))
+    }
+
+    private func fitConfiguredHeight() {
+        guard !closed, !resizing else { return }
+        setCellHeight(configuredCellHeight)
+    }
+
+    @discardableResult private func setCellHeight(_ requested: CGFloat) -> Bool {
+        let height = min(requested, maximumCellHeight)
+        guard height != cellHeight else { return false }
         cellHeight = height
         heightConstraint.constant = bandHeight
-        relayout()
+        resizeStrip()
+        return true
     }
 
     /// A drag of the top edge: the height follows the pointer within the allowed range. Layout runs now, so the
     /// strip (and, in `beside` mode, the viewer above it) is at the new height before the next drag event.
     private func resize(toBandHeight band: CGFloat) {
         guard !closed else { return }
-        let height = CGFloat(Config.clampedStripHeight(Double(band - 2 * FilmstripView.padding)))
+        let requested = CGFloat(Config.clampedStripHeight(Double(band - 2 * FilmstripView.padding)))
         if !resizing {
             resizing = true
             aspects.paused = true
             heightBeforeResize = cellHeight
             update()
         }
-        guard height != cellHeight else { return }
-        setCellHeight(height)
+        guard setCellHeight(requested) else { return }
         container?.layoutSubtreeIfNeeded()
     }
 
@@ -381,14 +470,13 @@ extension Notification.Name {
         guard resizing else { return }
         resizing = false
         DebugLog.log("strip resize \(save ? "end" : "cancelled"): \(Int(heightBeforeResize)) -> \(Int(cellHeight))")
-        if !save, cellHeight != heightBeforeResize {
-            setCellHeight(heightBeforeResize)
-            container?.layoutSubtreeIfNeeded()
-        }
         if save, cellHeight != heightBeforeResize {
             reloadAll()
             Settings.shared.setStripHeight(Int(cellHeight))
         } else {
+            let previousHeight = cellHeight
+            fitConfiguredHeight()
+            if cellHeight != previousHeight { container?.layoutSubtreeIfNeeded() }
             loadVisible()   // the cells the drag skipped
         }
         aspects.paused = false   // what arrived during the drag
@@ -402,8 +490,8 @@ extension Notification.Name {
         endMotion()
         isFullScreen = on
         gestureSuppressesReveal = false
+        needsEdgeExitAfterHide = false
         mouseNearBottom = false
-        mouseNearEdge = false
         if reservesSpace != reserved { onReservesSpaceChange?() }
         update()   // the capsule loses or gets back its "where" button at once
     }
@@ -422,10 +510,11 @@ extension Notification.Name {
             onReservesSpaceChange?()
         case .pinned?:
             let next = visible ?? !pinned
-            let suppress = visible == false && (mouseNearBottom || mouseOverStrip)
+            let suppress = visible == false
             guard next != pinned || suppress != gestureSuppressesReveal else { return }
             pinned = next
             gestureSuppressesReveal = suppress
+            needsEdgeExitAfterHide = suppress && mouseNearBottom
             DebugLog.log("strip \(pinned ? "pinned" : "unpinned")")
         case nil:
             return
@@ -465,16 +554,24 @@ extension Notification.Name {
     /// The strip floats over the picture: full screen, or `over` in a window.
     private var floats: Bool { isFullScreen || mode == .over }
 
+    /// The floating strip's reveal zone follows its fitted thumbnail height, with 24 pt at the default size.
+    private var revealZone: CGFloat {
+        floats ? min(44, max(20, (cellHeight * 0.23).rounded())) : Self.chevronRevealZone
+    }
+
     /// A floating strip is out: the mouse reached the bottom band or is over the strip or its capsule, a cell is
     /// hovered, the edge is dragged, the strip moves, or the cheat sheet keeps it.
     private var revealedByEdge: Bool {
-        !gestureSuppressesReveal && (mouseNearBottom || mouseOverStrip || hoverState.file != nil || resizing
-            || isMoving || ((staysShown || positionPopover?.isShown == true) && isShown))
+        let atEdge = mouseNearBottom && !pointerButtonDown && !needsEdgeExitAfterHide
+        if gestureSuppressesReveal { return atEdge }
+        return atEdge || mouseOverStrip || pointerPastBottom || hoverState.file != nil || resizing || isMoving
+            || (isShown && (settle != nil || buttonHoldsStrip || menusOpen > 0 || staysShown || mouseOverSlot
+                || positionPopover?.isShown == true))
     }
 
     private var placement: StripPlacement {
         StripPlacement(.init(mode: mode, fullScreen: isFullScreen, hidden: barHidden, pinned: pinned,
-                             pointerOverStrip: capsuleHeld, pointerNearBottom: mouseNearEdge,
+                             pointerOverStrip: capsuleHeld, pointerNearBottom: mouseNearBottom,
                              revealedByEdge: revealedByEdge))
     }
 
@@ -484,6 +581,7 @@ extension Notification.Name {
         guard !closed else { return }
         view.isOverlay = floats
         let p = placement
+        let wasShown = isShown
         if p.visible {
             hideTask?.cancel()
             hideTask = nil
@@ -498,29 +596,26 @@ extension Notification.Name {
                 try? await Task.sleep(for: delay)
                 guard !Task.isCancelled, let self else { return }
                 self.hideTask = nil
-                self.hide()
-                self.update()   // the capsule goes with it
+                self.update(hideAtOnce: true)
             }
         }
-        updateTools(p)
+        updateTools(p, followsStrip: floats && isShown != wasShown)
         updateReveal(p)
+        updatePointerMonitors()
     }
 
     private func show() {
         guard !isShown else { return }
+        visibilityGeneration &+= 1
+        let start = StripVisibilityMotion.state(of: view, enteringFromEdge: floats && view.isHidden)
         isShown = true
+        gestureSuppressesReveal = false
+        needsEdgeExitAfterHide = false
         view.acceptsMouse = true
         view.isHidden = false
+        view.alphaValue = 1
         DebugLog.log("strip show")
-        if Chrome.Motion.duration(fadeIn) > 0 {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Chrome.Motion.duration(fadeIn)
-                view.animator().alphaValue = 1
-            }
-        } else {
-            view.layer?.removeAllAnimations()   // a hide fade still running must not keep fading it out
-            view.alphaValue = 1
-        }
+        StripVisibilityMotion.animate(view, from: start, shown: true, slides: floats, duration: fadeIn)
         relayout()
         loadVisible()
         sendVisible()
@@ -533,27 +628,21 @@ extension Notification.Name {
             loads.values.forEach { $0.cancel() }
             loads = [:]
         }
+        visibilityGeneration &+= 1
+        let generation = visibilityGeneration
+        let start = StripVisibilityMotion.state(of: view, enteringFromEdge: false)
         isShown = false
         view.acceptsMouse = false   // clicks reach the picture while it fades
+        if let pages = settle?.pages { rest(on: pages, animated: false) }
+        hidePosition()
         dropHover()
         DebugLog.log("strip hide")
         // Hidden once the fade ends (or at once without one): its tracking areas stop too, so no arrow cursor
         // over an invisible strip.
-        let finishHide: @MainActor @Sendable () -> Void = { [weak self] in
-            guard let self, !self.isShown else { return }
+        view.alphaValue = 0
+        StripVisibilityMotion.animate(view, from: start, shown: false, slides: floats, duration: fadeOut) { [weak self] in
+            guard let self, self.visibilityGeneration == generation, !self.isShown, !self.closed else { return }
             self.view.isHidden = true
-        }
-        if Chrome.Motion.duration(fadeOut) > 0 {
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = Chrome.Motion.duration(fadeOut)
-                view.animator().alphaValue = 0
-            }, completionHandler: {
-                MainActor.assumeIsolated { finishHide() }
-            })
-        } else {
-            view.layer?.removeAllAnimations()   // a show fade still running must not keep fading it in
-            view.alphaValue = 0
-            finishHide()
         }
         sendVisible()
         onShownChange?()
@@ -563,7 +652,7 @@ extension Notification.Name {
     /// the "where" button at once), shown while the pointer is over the strip or held there (`capsuleHeld`) and the
     /// strip is on screen. "On screen" rather than `visible`: a floating strip waiting out its delay still shows its
     /// capsule, and both go together.
-    private func updateTools(_ p: StripPlacement) {
+    private func updateTools(_ p: StripPlacement, followsStrip: Bool) {
         guard container != nil else { return }
         let wanted = p.tools(mode: mode)
         let showsPosition = files.count > 1 && session.playlist != nil
@@ -587,7 +676,9 @@ extension Notification.Name {
             tools.tools = buttons
         }
         placeTools()
-        setToolsShown(isShown && (capsuleHeld || positionPopover?.isShown == true) && p.pin != nil)
+        let keepsControls = positionPopover?.isShown == true
+        setToolsShown(isShown && p.pin != nil && (keepsControls || (capsuleHeld && !isMoving && settle == nil)),
+                      followsStrip: followsStrip)
     }
 
     private func showPositionPopover() {
@@ -641,34 +732,22 @@ extension Notification.Name {
         update()
     }
 
-    /// The capsule on the strip's right end (the strip's width changes with the window's); the hover label keeps
-    /// clear of it while it shows.
+    /// The capsule on the strip's right end (the strip's width changes with the window's).
     private func placeTools() {
         let size = tools.fittingSize
         let x = StripPlacement.capsuleX(stripWidth: view.bounds.width, capsuleWidth: size.width)
         if toolsLeading?.constant != x { toolsLeading?.constant = x }
-        let avoid: ClosedRange<CGFloat>? = toolsShown ? x...(x + size.width) : nil
-        if view.labelAvoid != avoid { view.labelAvoid = avoid }
-        // The label sits above the cells: it steps aside only if the capsule reaches up to it (a thin strip).
-        let top = (view.bounds.height + size.height) / 2
-        if view.labelAvoidTop != top { view.labelAvoidTop = top }
     }
 
     /// Fades the capsule with the strip's `strip-fade-in` / `strip-fade-out`; it takes clicks only while wanted.
-    private func setToolsShown(_ shown: Bool) {
+    private func setToolsShown(_ shown: Bool, followsStrip: Bool) {
         guard shown != toolsShown else { return }
+        let start = StripVisibilityMotion.state(of: tools, enteringFromEdge: shown && followsStrip)
         toolsShown = shown
-        placeTools()   // the hover label keeps clear of it while it shows
-        let from = tools.alphaValue
         if shown { container?.layoutSubtreeIfNeeded() }   // in place first: it lights at once when under the pointer
         tools.setShown(shown, animated: false)   // its hit test; the fade is ours, from where it was
-        let duration = Chrome.Motion.duration(shown ? fadeIn : fadeOut)
-        guard duration > 0 else { return }
-        tools.alphaValue = from
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            tools.animator().alphaValue = shown ? 1 : 0
-        }
+        let duration = !shown && isMoving ? 0 : (shown ? fadeIn : fadeOut)
+        StripVisibilityMotion.animate(tools, from: start, shown: shown, slides: followsStrip, duration: duration)
     }
 
     /// The reveal chevron: a hidden `beside` strip in a window, the mouse near the bottom edge.
@@ -691,54 +770,139 @@ extension Notification.Name {
     @objc(mouseMoved:) func mouseMoved(with event: NSEvent) {
         guard let container else { return }
         if isShown { view.trackOutside(event) }
-        let p = container.convert(event.locationInWindow, from: nil)
+        trackPointer(at: container.convert(event.locationInWindow, from: nil))
+    }
+
+    private func trackPointer(at p: NSPoint) {
+        guard let container else { return }
         let inside = container.bounds.contains(p)
+        let buttonDown = NSEvent.pressedMouseButtons & 0b11111 != 0
+        if inside, let slotOverlayArea, !slotOverlayArea.isHidden, slotOverlayArea.hitTest(p) != nil {
+            // A floating strip would change the slot's usable frame under the pointer.
+            pointer(nearBottom: false, overStrip: false, overSlot: true, buttonDown: buttonDown)
+            return
+        }
         let height = p.y - container.bounds.minY - playbackClearance
-        let over = inside && ((isShown && view.frame.contains(p)) || (toolsShown && tools.frame.contains(p)))
-        pointer(nearBottom: inside && height >= 0 && height <= bandHeight,
-                nearEdge: inside && height >= 0 && height <= Self.revealZone, overStrip: over)
+        let atEdge = inside && (0...revealZone).contains(height)
+        let visible = isShown || !view.isHidden
+        let toolsAnimatingOut = !isShown && tools.layer?.animation(forKey: StripVisibilityMotion.key) != nil
+        let overTools = (toolsShown || toolsAnimatingOut) && !tools.isHidden
+            && tools.frame.insetBy(dx: 0, dy: -Self.toolsGap).contains(p)
+        let over = inside && ((visible && view.frame.contains(p)) || overTools)
+        let pastBottom = floats && visible && p.y < container.bounds.minY
+            && SlotHover.counts(p, slot: view.frame, edge: .bottom, window: container.bounds)
+        pointer(nearBottom: atEdge, overStrip: over,
+                pastBottom: pastBottom, outsideWindow: !inside, buttonDown: buttonDown)
     }
 
     @objc(mouseEntered:) func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
 
     @objc(mouseExited:) func mouseExited(with event: NSEvent) {
         if !dragging { hover(nil) }   // a drag keeps its hover
-        pointer(nearBottom: false, nearEdge: false, overStrip: false)
+        guard let container else { return }
+        let point = container.window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow
+        trackPointer(at: container.convert(point, from: nil))
     }
 
     /// The window is no longer key: mouse moves stop arriving, so what they said is stale.
     func windowDidResignKey() {
         view.cancelResize()
         endMotion()
-        hover(nil)
-        pointer(nearBottom: false, nearEdge: false, overStrip: false)
+        dropHover()
+        pointer(nearBottom: false, overStrip: false)
     }
 
     /// Where the pointer is now. Leaving the strip lets the capsule go `strip-hide-delay` later, as a floating strip
     /// goes; coming back before that keeps it.
-    private func pointer(nearBottom: Bool, nearEdge: Bool, overStrip: Bool) {
-        guard nearBottom != mouseNearBottom || nearEdge != mouseNearEdge || overStrip != mouseOverStrip else { return }
+    private func pointer(nearBottom: Bool, overStrip: Bool, overSlot: Bool = false,
+                         pastBottom: Bool = false, outsideWindow: Bool = false, buttonDown: Bool = false) {
+        let holds = buttonDown && isShown && (buttonHoldsStrip || nearBottom || overStrip)
+        guard nearBottom != mouseNearBottom
+            || overStrip != mouseOverStrip || overSlot != mouseOverSlot || pastBottom != pointerPastBottom
+            || outsideWindow != pointerOutsideWindow || buttonDown != pointerButtonDown || holds != buttonHoldsStrip
+        else { return }
         mouseNearBottom = nearBottom
-        mouseNearEdge = nearEdge
-        if !nearBottom, !overStrip { gestureSuppressesReveal = false }
-        if overStrip != mouseOverStrip {
-            mouseOverStrip = overStrip
+        mouseOverSlot = overSlot
+        pointerPastBottom = pastBottom
+        pointerOutsideWindow = outsideWindow
+        pointerButtonDown = buttonDown
+        buttonHoldsStrip = holds
+        if !nearBottom { needsEdgeExitAfterHide = false }
+        mouseOverStrip = overStrip
+        let overControls = overStrip || (floats && nearBottom && !buttonDown && !needsEdgeExitAfterHide)
+        let keepCapsule = overControls || (capsuleHeld && (pastBottom || holds))
+        if keepCapsule, !capsuleHeld || capsuleRelease != nil {
             capsuleRelease?.cancel()
             capsuleRelease = nil
-            if overStrip {
-                capsuleHeld = true
-            } else if capsuleHeld {
-                let delay = hideDelay
-                capsuleRelease = Task { [weak self] in
-                    try? await Task.sleep(for: delay)
-                    guard !Task.isCancelled, let self, !self.closed else { return }
-                    self.capsuleRelease = nil
-                    self.capsuleHeld = false
-                    self.update()
-                }
+            capsuleHeld = true
+        } else if !keepCapsule, capsuleHeld, capsuleRelease == nil {
+            let delay = hideDelay
+            capsuleRelease = Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled, let self, !self.closed else { return }
+                self.capsuleRelease = nil
+                self.capsuleHeld = false
+                if self.hideTask == nil { self.update() }   // a pending strip hide takes both layers together
             }
         }
         update()
+    }
+
+    /// Watch mouse buttons in the active floating strip. Follow the pointer outside only for an overshoot or a press.
+    private func updatePointerMonitors() {
+        let watchLocal = !closed && floats && isShown && !pinned && container?.window != nil
+        let watchOutside = watchLocal && pointerOutsideWindow && (pointerPastBottom || buttonHoldsStrip)
+        if watchLocal, localPointerMonitor == nil {
+            localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown,
+                .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp, .leftMouseDragged, .rightMouseDragged,
+                .otherMouseDragged]) { [weak self] event in
+                MainActor.assumeIsolated { self?.monitorPointerEvent(event) }
+                return event
+            }
+        } else if !watchLocal, let localPointerMonitor {
+            NSEvent.removeMonitor(localPointerMonitor)
+            self.localPointerMonitor = nil
+        }
+        if watchOutside, outsidePointerMonitor == nil {
+            outsidePointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseUp, .rightMouseUp,
+                .otherMouseUp, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { [weak self] event in
+                MainActor.assumeIsolated { self?.sampleOutsidePointer(event) }
+            }
+        } else if !watchOutside, let outsidePointerMonitor {
+            NSEvent.removeMonitor(outsidePointerMonitor)
+            self.outsidePointerMonitor = nil
+        }
+    }
+
+    private func monitorPointerEvent(_ event: NSEvent) {
+        guard let container, let window = container.window else { return }
+        if event.window === window {
+            if event.type != .mouseMoved { trackPointer(at: container.convert(event.locationInWindow, from: nil)) }
+        } else if pointerOutsideWindow {
+            sampleOutsidePointer(event)
+        }
+    }
+
+    private func sampleOutsidePointer(_ event: NSEvent) {
+        guard let container, let window = container.window else { return }
+        if isShown { view.trackOutside(event) }
+        trackPointer(at: container.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
+    private func observeMenu(_ name: Notification.Name, opening: Bool) {
+        observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.closed else { return }
+                if opening {
+                    guard self.isShown, self.container?.window?.isKeyWindow == true else { return }
+                    self.menusOpen += 1
+                } else {
+                    guard self.menusOpen > 0 else { return }
+                    self.menusOpen -= 1
+                }
+                self.update()
+            }
+        })
     }
 
     // MARK: Session
@@ -759,7 +923,7 @@ extension Notification.Name {
             updatePosition(index: list.index, count: list.files.count)
         }
         // While the strip moves, its preview selection owns the filmstrip position.
-        guard let pages = sessionPages, pages != shownPages, !isMoving else { return }
+        guard let pages = sessionPages, pages != shownPages, scroll.offset == nil, !dragging else { return }
         rest(on: pages, animated: pages.isStep(from: shownPages))
     }
 
@@ -782,7 +946,7 @@ extension Notification.Name {
     /// rest on `current`): the current file's centre.
     private func motionAnchor(current: Int) -> Double? {
         guard scroll.offset == nil, let pages = shownPages, pages.contains(current) else { return nil }
-        return pages.offset(in: view.layout)
+        return settle?.offset ?? pages.offset(in: view.layout)
     }
 
     /// The motion brought `file` to the centre: the session scrubs to it, unless it is a page on screen (the other page
@@ -800,10 +964,15 @@ extension Notification.Name {
     /// new places (a listing that arrives in parts, `FolderWatcher`); a motion whose centre file is still there goes
     /// on from it, anything else (another folder) ends with the old list and the strip rests on the current file.
     private func playlistChanged(_ list: [URL]) {
-        scrollCandidate = nil
+        hidePosition()
+        movingSelection = nil
         labelFacts = [:]
-        labelled = nil
-        let map = FilmstripItems.indexMap(from: files, to: list)
+        let newIndices = Dictionary(list.enumerated().lazy.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let map = list.starts(with: files)
+            ? Dictionary(uniqueKeysWithValues: files.indices.lazy.map { ($0, $0) })
+            : Dictionary(uniqueKeysWithValues: files.enumerated().lazy.compactMap { old, url in
+                newIndices[url].map { (old, $0) }
+            })
         let centre = scroll.offset.flatMap(view.layout.item(atBase:)).flatMap { map[$0] }
         let keepsMotion = isMoving && centre != nil
         if !keepsMotion {
@@ -814,15 +983,16 @@ extension Notification.Name {
             scroll.settle()
             scrollRest?.cancel()
             scrollRest = nil
+            stopSettling()
         }
         sessionScrubbing = false
         files = list
-        indices = Dictionary(list.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        indices = newIndices
         pictures = pictures.filter { indices[$0.key] != nil }
         aspects.setPlaylist(files)
         // The label showed a file of the old playlist (the interim one-file list replaced by the listing): the
         // hover comes back for the new file under the cursor on the next move.
-        hover(nil)
+        dropHover()
         loads.values.forEach { $0.cancel() }
         loads = [:]
         given = Dictionary(uniqueKeysWithValues: given.compactMap { file, held in map[file].map { ($0, held) } })
@@ -837,19 +1007,40 @@ extension Notification.Name {
     /// The strip at rest on `pages`: in the middle, expanded. A step (animated) shows the new file's label a moment.
     private func rest(on pages: StripPages, animated: Bool) {
         guard pages.items.lowerBound >= 0, pages.items.upperBound <= files.count else { return }
+        stopSettling()
         let moved = shownPages?.items != pages.items
         shownPages = pages
         view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: animated)
         view.refreshHover()
+        if let labelled { showLabel(labelled) }
         if animated, moved { showStepLabel(pages.items.lowerBound) }
     }
 
-    /// The strip moving: at the offset of the motion, every cell narrow; `animated` for the first move, so the
-    /// expanded cell narrows rather than jumps.
-    private func drawMotion(animated: Bool) {
+    /// Gesture travel sets the offset directly. Only the width of the last selection eases out over the
+    /// first fraction of a cell, with the same selection until its expansion reaches zero.
+    private func drawMotion() {
         guard let offset = scroll.offset else { return }
         let file = view.layout.item(atBase: offset) ?? 0
-        view.show(offset: offset, current: file, expansion: 0, animated: animated)
+        if var selection = movingSelection {
+            let width = view.layout.narrowLength(of: selection.pages.items.lowerBound)
+            let distance = abs(offset - selection.anchor) / max(1, width / 4)
+            selection.expansion = min(selection.expansion, selection.initialExpansion * max(0, 1 - distance))
+            movingSelection = distance >= 0.999 || selection.expansion == 0 ? nil : selection
+        }
+        view.show(offset: offset, current: movingSelection?.pages.items ?? file..<file,
+                  expansion: movingSelection?.expansion ?? 0, animated: false)
+        if isMoving { showPosition(file) }
+    }
+
+    private func resizeStrip() {
+        if isMoving { shownPosition = nil }
+        relayout()
+        placeTools()
+        if isMoving, let offset = scroll.offset, let file = view.layout.item(atBase: offset) {
+            showPosition(file)
+        } else if let labelled {
+            showLabel(labelled)
+        }
     }
 
     /// A layout for the view's width, the playlist and the aspects. The file at the centre stays there: the moving
@@ -862,7 +1053,7 @@ extension Notification.Name {
         view.setLayout(layout, animated: animated)
         if let centre {
             scroll.layoutChanged(keeping: centre, layout: layout)
-            drawMotion(animated: false)
+            drawMotion()
         } else if let pages = shownPages ?? sessionPages {
             rest(on: pages, animated: animated)
         }
@@ -901,6 +1092,7 @@ extension Notification.Name {
     /// The visible files changed: those that came into view start their dwell; at rest their pictures are asked
     /// for at once.
     private func visibleChanged() {
+        guard settle == nil else { return }   // the final window is requested once, after the snap
         let visible = view.visibleItems, now = ContinuousClock.now
         let set = Set(visible)
         if files.first.flatMap(PhotosLocation.asset(in:)) != nil {
@@ -1033,10 +1225,7 @@ extension Notification.Name {
     /// The motion is over (momentum end, cancel, rest, release): the strip settles on the nearest file and expands
     /// it, and the scrub ends there.
     private func finishMotion() {
-        if scrollCandidate != nil {
-            scrollCandidate = nil
-            view.endHover()
-        }
+        hidePosition()
         scrollRest?.cancel()
         scrollRest = nil
         dragRest?.cancel()
@@ -1049,29 +1238,86 @@ extension Notification.Name {
             if sessionPages?.contains(settled.item) != true { scrub(to: settled.item) }
             let pages = sessionPages ?? StripPages(item: settled.item)
             shownPages = pages
-            view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: true)
+            let expansion = movingSelection?.pages == pages ? movingSelection?.expansion ?? 0 : 0
+            startSettling(on: pages, from: scroll.offset ?? settled.offset, expansion: expansion)
         }
+        movingSelection = nil
         reachedPage = nil
         scroll.settle()
         endSessionScrub()
-        loadVisible()
-        sendVisible()
-        view.refreshHover()
+        if settle == nil {
+            visibleChanged()
+            view.refreshHover()
+        }
         update()
+    }
+
+    /// Settle only while visible. A new gesture can anchor itself on the last frame instead of the destination.
+    private func startSettling(on pages: StripPages, from start: Double, expansion: Double) {
+        stopSettling()
+        let target = pages.offset(in: view.layout)
+        let duration = Chrome.Motion.duration(Chrome.Motion.select)
+        guard duration > 0, isShown, view.window?.isVisible == true else {
+            view.show(offset: target, current: pages.items, expansion: 1, animated: false)
+            return
+        }
+        settle = Settle(pages: pages, from: start, target: target, started: CACurrentMediaTime(), duration: duration,
+                        fromExpansion: expansion, offset: start, expansion: expansion)
+        view.show(offset: start, current: pages.items, expansion: expansion, animated: false)
+        let link = view.displayLink(target: self, selector: #selector(settleTick(_:)))
+        settleLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func settleTick(_ link: CADisplayLink) {
+        guard link === settleLink, var frame = settle else { link.invalidate(); return }
+        let time = min(1, max(0, (link.targetTimestamp - frame.started) / frame.duration))
+        let remaining = 1 - time
+        let fraction = 1 - remaining * remaining * remaining
+        frame.offset = frame.from + (frame.target - frame.from) * fraction
+        frame.expansion = frame.fromExpansion + (1 - frame.fromExpansion) * fraction
+        settle = frame
+        view.show(offset: frame.offset, current: frame.pages.items, expansion: frame.expansion, animated: false)
+        if time == 1 {
+            stopSettling()
+            visibleChanged()
+            view.refreshHover()
+            update()
+        }
+    }
+
+    private func stopSettling() {
+        settleLink?.invalidate()
+        settleLink = nil
+        settle = nil
+    }
+
+    private func beginMotion(from anchor: Double?) {
+        if let anchor, let pages = shownPages, !Chrome.Motion.reduced {
+            let expansion = settle?.expansion ?? 1
+            movingSelection = MovingSelection(pages: pages, anchor: anchor, initialExpansion: expansion,
+                                              expansion: expansion)
+        }
+        stopSettling()
     }
 
     /// The window lost key or changes full screen, or the playlist changed: a motion under way finishes now.
     private func endMotion() {
         view.cancelPress()   // a drag ends as at a release
-        guard scroll.offset != nil || sessionScrubbing else { return }
-        _ = scroll.end()
-        finishMotion()
+        if scroll.offset != nil || sessionScrubbing {
+            _ = scroll.end()
+            finishMotion()
+        }
+        if let pages = settle?.pages { rest(on: pages, animated: false) }
     }
 
     /// A click on a cell: that file opens, and the strip moves to it; a momentum or a settling under way stops.
     private func pressed(_ file: Int) {
         guard !closed, files.indices.contains(file) else { return }
         scroll.takeOver()
+        stopSettling()
+        movingSelection = nil
+        hidePosition()
         scrollRest?.cancel()
         scrollRest = nil
         DebugLog.log("strip click on \(file + 1)")
@@ -1087,6 +1333,8 @@ extension Notification.Name {
         shownPages = pages
         view.show(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1, animated: true)
         scroll.settle()
+        view.refreshHover()
+        if let labelled { showLabel(labelled) }
         loadVisible()
         sendVisible()
         update()
@@ -1103,13 +1351,14 @@ extension Notification.Name {
             scrollRest = nil
             dropHover()
         }
-        let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current,
-                                  anchor: motionAnchor(current: current))
+        let anchor = motionAnchor(current: current)
+        let outcome = scroll.drag(by: Double(dx), layout: view.layout, current: current, anchor: anchor)
+        if first { beginMotion(from: anchor) }
         if let file = outcome.item {
             reached(file)
             armDragRest()
         }
-        drawMotion(animated: first)
+        drawMotion()
         if first { update() }
     }
 
@@ -1138,30 +1387,49 @@ extension Notification.Name {
     private func scrolled(_ event: NSEvent) {
         guard !closed, !view.isPressed, let current = motionCurrent else { return }
         let wasMoving = scroll.isMoving
+        let anchor = motionAnchor(current: current)
         let fingers = FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice)
-        let outcome = scroll.event(fingerDelta: fingers * event.scrollingDeltaX, crossDelta: event.scrollingDeltaY,
+        let horizontal = fingers * event.scrollingDeltaX
+        let bounded = boundedTrackpadTravel(horizontal, from: scroll.offset ?? anchor ?? view.layout.centre(of: current))
+        // Preserve the direction of diagonal input when the endpoint limits its horizontal component.
+        let vertical = horizontal == 0 ? event.scrollingDeltaY : event.scrollingDeltaY * (bounded / horizontal)
+        let outcome = scroll.event(fingerDelta: bounded, crossDelta: vertical,
                                    phase: ScrollPhase(rawValue: event.phase.rawValue),
                                    momentum: ScrollPhase(rawValue: event.momentumPhase.rawValue),
                                    layout: view.layout, current: current, now: event.timestamp,
-                                   anchor: motionAnchor(current: current))
+                                   anchor: anchor)
         if outcome.commit {
-            drawMotion(animated: false)
+            drawMotion()
             finishMotion()
             return
         }
         guard scroll.isMoving else { return }
         if !wasMoving {
+            beginMotion(from: anchor)
             dropHover()
-            stepLabelHide?.cancel()
         }
-        drawMotion(animated: !wasMoving)
-        if let offset = scroll.offset, let file = view.layout.item(atBase: offset),
-           file != scrollCandidate, files.indices.contains(file) {
-            scrollCandidate = file
-            view.showLabel(item: file, text: label(file))
-        }
+        drawMotion()
         armScrollRest()
         if !wasMoving { update() }
+    }
+
+    /// Keep the end thumbnail under the centre mark. Limit the input itself so reversing a large fling only
+    /// unwinds the travel the strip could show.
+    private func boundedTrackpadTravel(_ horizontal: Double, from shownOffset: Double) -> Double {
+        let layout = view.layout
+        guard horizontal != 0, layout.itemCount > 1 else { return horizontal }
+        let range = layout.offsetRange
+        let edge = min(max(shownOffset, range.lowerBound), range.upperBound)
+        let spring = FilmstripScroll.rubberBand
+        let raw = edge + (shownOffset - edge) / spring
+        let sign = scroll.direction == .natural ? -1.0 : 1.0
+        let travel = sign * horizontal
+        if travel < 0 {
+            let limit = range.lowerBound - layout.narrowLength(of: 0) / (4 * spring)
+            return sign * max(travel, min(0, limit - raw))
+        }
+        let limit = range.upperBound + layout.narrowLength(of: layout.itemCount - 1) / (4 * spring)
+        return sign * min(travel, max(0, limit - raw))
     }
 
     /// One timer for the rest: armed for the deadline it finds, and on waking it finishes or, when events put the
@@ -1182,50 +1450,112 @@ extension Notification.Name {
 
     // MARK: Hover
 
+    private var captionRoom: NSRect {
+        if let parent = view.superview { return view.convert(parent.bounds, from: parent) }
+        return NSRect(x: 0, y: 0, width: view.bounds.width, height: bandHeight + 44)
+    }
+
+    private func captionObstruction(in room: NSRect) -> NSRect? {
+        guard container != nil, capsuleHeld || positionPopover?.isShown == true else { return nil }
+        let size = tools.fittingSize
+        let x = StripPlacement.capsuleX(stripWidth: view.bounds.width, capsuleWidth: size.width)
+        let y = min(bandHeight + Self.toolsGap, room.maxY - Self.toolsGap - size.height)
+        return NSRect(origin: NSPoint(x: x, y: y), size: size).insetBy(dx: -Self.toolsGap, dy: -Self.toolsGap)
+    }
+
+    private func positionText(_ index: Int) -> String { "\(index + 1) / \(files.count)" }
+
+    private func showPosition(_ file: Int) {
+        guard files.indices.contains(file), shownPosition != file else { return }
+        let centre = view.bounds.midX
+        let needsPlacement = shownPosition == nil
+        if needsPlacement {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            centreMark.frame = NSRect(x: centre - 2, y: cellHeight + FilmstripView.padding - 2, width: 4, height: 8)
+            centreMark.isHidden = false
+            CATransaction.commit()
+        }
+        shownPosition = file
+        let limits = view.layout.offsetRange
+        if file == 0 || file == files.count - 1 || limits.upperBound - limits.lowerBound > view.bounds.width {
+            if needsPlacement || caption.isHidden {
+                let digits = String(repeating: "0", count: String(files.count).count)
+                caption.show(title: positionText(file), reservedTitle: "\(digits) / \(files.count)",
+                             centre: centre, above: bandHeight + 3, within: captionRoom)
+            } else {
+                caption.updateTitle(positionText(file))
+            }
+        } else {
+            caption.isHidden = true
+        }
+    }
+
+    private func hidePosition() {
+        guard shownPosition != nil else { return }
+        shownPosition = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        centreMark.isHidden = true
+        CATransaction.commit()
+        caption.isHidden = true
+    }
+
     private func hover(_ file: Int?) {
         // Moves seen while fading out (or before a show) must not leave a label to resurface on the next show.
-        if file != nil, !isShown || isMoving {
+        if file != nil, !isShown || isMoving || settle != nil {
             view.endHover()
             return
         }
         guard let file, files.indices.contains(file) else {
-            if hoverState.drop() {
-                view.endHover()
+            if hoverState.file != nil {
+                dropHover()
                 update()
             }
             return
         }
         let labelled = hoverState.restedFile != nil
         guard hoverState.set(file) else { return }
+        detailTask?.cancel()
+        detailTask = nil
         // Once a label is up it follows the cursor at once; the first waits for the rest.
         if labelled { showLabel(file) }
         update()
     }
 
-    /// "N / M · name", and the photo's exposure and megapixels when its thumbnail brought them (board «Эскизы файлов»
-    /// 4): "12 / 248 · DSC_0123.ARW · 1/250 · f/2.8 · ISO 400 · 24 MP".
-    private func label(_ file: Int) -> String {
-        var parts = ["\(file + 1) / \(view.layout.itemCount)", ArchivePath.shortName(files[file])]
-        if let facts = labelFacts[files[file]] {
-            parts += [FileFactsText.exposureLine(facts), FileFactsText.megapixels(facts)].compactMap { $0 }
+    private func showLabel(_ file: Int) {
+        guard isShown, !isMoving, settle == nil, files.indices.contains(file), let pages = shownPages else { return }
+        let cells = view.layout.cells(offset: pages.offset(in: view.layout), current: pages.items, expansion: 1)
+        guard let cell = cells.first(where: { $0.item == file && $0.start < view.bounds.maxX && $0.start + $0.length > 0 })
+        else { caption.isHidden = true; return }
+        labelled = file
+        let name = ArchivePath.shortName(files[file])
+        var detail = ""
+        if hoverState.detailedFile == file, let facts = labelFacts[files[file]] {
+            detail = [FileFactsText.exposureLine(facts), FileFactsText.megapixels(facts)].compactMap { $0 }
+                .joined(separator: " · ")
         }
-        return parts.joined(separator: " · ")
+        let room = captionRoom
+        caption.show(title: "\(positionText(file)) · \(name)", detail: detail, centre: cell.start + cell.length / 2,
+                     above: bandHeight, within: room, avoiding: captionObstruction(in: room))
     }
 
-    /// The file's label up; its facts, asked of the store (memory or the catalog, no read of the photo) the first
-    /// time, come into it when they are known and the label still shows that file.
-    private func showLabel(_ file: Int) {
-        labelled = file
-        view.showLabel(item: file, text: label(file))
+    /// Fetch the detail only for a pointer that stayed. The catalog read may finish after the pointer has left.
+    private func showHoverDetail(_ file: Int) {
+        guard isShown, !isMoving, settle == nil, labelled == file, files.indices.contains(file) else { return }
         let url = files[file]
-        guard url.isFileURL, labelFacts[url] == nil else { return }
+        if labelFacts[url] != nil { showLabel(file); return }
+        guard url.isFileURL else { return }
         let store = store
-        Task { @MainActor [weak self] in
-            guard let facts = await store.facts([url])[url], let self else { return }
+        detailTask = Task { @MainActor [weak self] in
+            let facts = await store.facts([url])[url]
+            guard !Task.isCancelled, let self else { return }
+            self.detailTask = nil
+            guard let facts else { return }
             if self.labelFacts.count > 500 { self.labelFacts = [:] }
             self.labelFacts[url] = facts
-            if self.labelled == file, self.files.indices.contains(file), self.files[file] == url {
-                self.view.showLabel(item: file, text: self.label(file))
+            if self.hoverState.detailedFile == file, self.files.indices.contains(file), self.files[file] == url {
+                self.showLabel(file)
             }
         }
     }
@@ -1234,6 +1564,7 @@ extension Notification.Name {
     private var labelled: Int?
     /// Facts of files the label showed, by file (`showLabel`); emptied past 500 and with another playlist.
     private var labelFacts: [URL: FileFacts] = [:]
+    private var detailTask: Task<Void, Never>?
     private var stepLabelHide: DispatchWorkItem?
 
     /// A step with the strip on screen and no hover: the new file's label for a moment (1.5 s), as a hover's.
@@ -1244,7 +1575,7 @@ extension Notification.Name {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.hoverState.restedFile == nil else { return }
             self.labelled = nil
-            self.view.endHover()
+            self.caption.isHidden = true
         }
         stepLabelHide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
@@ -1252,7 +1583,12 @@ extension Notification.Name {
 
     private func dropHover() {
         hoverState.drop()
+        detailTask?.cancel()
+        detailTask = nil
+        stepLabelHide?.cancel()
+        stepLabelHide = nil
         labelled = nil
+        if shownPosition == nil { caption.isHidden = true }
         view.endHover()
     }
 

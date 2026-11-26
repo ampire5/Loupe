@@ -1,7 +1,8 @@
 import Foundation
-import LoupeCore
+import Synchronization
 import Testing
 @testable import Loupe
+@testable import LoupeCore
 
 @Suite(.serialized) @MainActor struct ViewerMetadataLoaderTests {
     private let a = URL(fileURLWithPath: "/example/a.jpg")
@@ -129,6 +130,75 @@ import Testing
         #expect(!loader.isPending)
     }
 
+    @Test(arguments: [true, false])
+    func rapidSelectionsAcrossTwoWindowsWithdrawQueuedWork(blockStat: Bool) async throws {
+        let pool = DecodePool(slots: blockStat ? 2 : 3, reserved: blockStat ? 0 : 1, qos: .utility)
+        let held = HeldMetadataOperation()
+        defer { held.release() }
+        let cache = PhotoMetadataCache(pool: pool, reader: { url in
+            if !blockStat { held.start(url) }
+            return Self.metadata(url.lastPathComponent)
+        })
+        let loaders = (0..<2).map { _ in
+            ViewerMetadataLoader(pool: pool, fileStamp: { url in
+                if blockStat { held.start(url) }
+                return (42, nil)
+            }, read: { url, stamp in
+                try await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+            })
+        }
+        func select(_ step: Int) {
+            for (window, loader) in loaders.enumerated() {
+                loader.select(URL(fileURLWithPath: "/example/\(window)-\(step).jpg"))
+            }
+        }
+        select(0)
+        try #require(await wait { held.started.count == 2 })
+        for step in 1...20 {
+            select(step)
+            try #require(await wait { pool.waitingCount == 2 })
+        }
+        if !blockStat {
+            #expect(loaders.allSatisfy { $0.size == 42 && $0.metadata == nil })
+        }
+        #expect(held.started.count == 2)
+        held.release()
+        #expect(await wait { loaders[0].metadata?.camera == "0-20.jpg" && loaders[1].metadata?.camera == "1-20.jpg" })
+        #expect(Set(held.started) == ["0-0.jpg", "1-0.jpg", "0-20.jpg", "1-20.jpg"])
+        #expect(held.peak == 2)
+    }
+
+    @Test func stoppingOneWindowDoesNotWithdrawTheOtherWindowsQueuedRead() async throws {
+        let pool = DecodePool(slots: 2, reserved: 1, qos: .utility)
+        let held = HeldMetadataOperation()
+        defer { held.release() }
+        let cache = PhotoMetadataCache(pool: pool, reader: { url in
+            held.start(url)
+            return Self.metadata(url.lastPathComponent)
+        })
+        func newLoader() -> ViewerMetadataLoader {
+            ViewerMetadataLoader(pool: pool, fileStamp: { _ in (42, nil) }, read: { url, stamp in
+                try await cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+            })
+        }
+        let blocker = newLoader(), closing = newLoader(), staying = newLoader()
+        blocker.select(b)
+        try #require(await wait { held.started == ["b.jpg"] })
+        closing.select(a)
+        staying.select(a)
+        try #require(await wait {
+            let waiters = await cache.waiterCount
+            return waiters == 3 && pool.waitingCount == 1
+        })
+        closing.stop()
+        #expect(await cache.waiterCount == 2)
+        #expect(pool.waitingCount == 1)
+        held.release()
+        #expect(await wait { staying.metadata?.camera == "a.jpg" })
+        #expect(closing.metadata == nil)
+        #expect(held.started == ["b.jpg", "a.jpg"])
+    }
+
     private func wait(_ condition: () async -> Bool) async -> Bool {
         for _ in 0..<500 {
             if await condition() { return true }
@@ -141,6 +211,40 @@ import Testing
         var result = PhotoMetadata(properties: [:], pngText: [:], created: nil, modified: nil)
         result.camera = camera
         return result
+    }
+}
+
+private final class HeldMetadataOperation: Sendable {
+    private struct State {
+        var started: [String] = []
+        var active = 0
+        var peak = 0
+        var released = false
+    }
+    private let state = Mutex(State())
+    private let gate = DispatchGroup()
+
+    init() { gate.enter() }
+
+    var started: [String] { state.withLock { $0.started } }
+    var peak: Int { state.withLock { $0.peak } }
+
+    func start(_ url: URL) {
+        state.withLock {
+            $0.started.append(url.lastPathComponent)
+            $0.active += 1
+            $0.peak = max($0.peak, $0.active)
+        }
+        gate.wait()
+        state.withLock { $0.active -= 1 }
+    }
+
+    func release() {
+        let wasReleased = state.withLock { state in
+            defer { state.released = true }
+            return state.released
+        }
+        if !wasReleased { gate.leave() }
     }
 }
 

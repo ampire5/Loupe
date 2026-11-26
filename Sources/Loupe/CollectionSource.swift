@@ -24,7 +24,7 @@ enum SessionCardAction {
 
     private let thumbnails: ThumbnailStore
     private let recent: () -> [RecentEntry]
-    private let sessions: () -> [SavedSession]
+    private let sessions: () async -> [SavedSession]
     private let stashPage: () -> NSView?
     /// What the last listings showed, by card id: clicks, menus and pictures look them up.
     private var shownRecent: [String: RecentEntry] = [:]
@@ -41,7 +41,7 @@ enum SessionCardAction {
     /// How a session's card shows its photos (`folder-cover`, as folders' cards do).
     var coverLayout = HomeMosaic.Layout.hero
 
-    init(thumbnails: ThumbnailStore, recent: @escaping () -> [RecentEntry], sessions: @escaping () -> [SavedSession],
+    init(thumbnails: ThumbnailStore, recent: @escaping () -> [RecentEntry], sessions: @escaping () async -> [SavedSession],
          stashPage: @escaping () -> NSView?) {
         self.thumbnails = thumbnails
         self.recent = recent
@@ -87,12 +87,17 @@ enum SessionCardAction {
                 continuation.onTermination = { _ in task.cancel() }
             }
         case HomeCollections.sessions:
-            let saved = sessions()
-            shownSessions = Dictionary(saved.map { ("session:\($0.id)", $0) }, uniquingKeysWith: { a, _ in a })
-            let entries = HomeCollections.sessionEntries(saved)
             return AsyncThrowingStream { continuation in
-                continuation.yield(BrowserListing(entries: entries, complete: true))
-                continuation.finish()
+                let task = Task { @MainActor [weak self] in
+                    defer { continuation.finish() }
+                    guard let self, !Task.isCancelled else { return }
+                    let saved = await sessions()
+                    guard !Task.isCancelled else { return }
+                    shownSessions = Dictionary(saved.map { ("session:\($0.id)", $0) }, uniquingKeysWith: { a, _ in a })
+                    let entries = HomeCollections.sessionEntries(saved)
+                    continuation.yield(BrowserListing(entries: entries, complete: true))
+                }
+                continuation.onTermination = { _ in task.cancel() }
             }
         default:
             return AsyncThrowingStream { $0.finish() }

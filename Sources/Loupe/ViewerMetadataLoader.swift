@@ -6,7 +6,7 @@ import LoupeCore
 @MainActor final class ViewerMetadataLoader {
     typealias Stamp = (size: Int?, modified: Date?)
     typealias StatReader = @Sendable (URL) async -> Stamp
-    typealias Reader = @Sendable (URL, Stamp) async -> PhotoMetadata
+    typealias Reader = @Sendable (URL, Stamp) async throws -> PhotoMetadata
 
     private(set) var url: URL?
     private(set) var size: Int?
@@ -33,17 +33,26 @@ import LoupeCore
     }
 
     convenience init(thumbnails: ThumbnailStore) {
-        self.init(stamp: { url in
-            await Task.detached(priority: .utility) { Self.fileStamp(url) }.value
-        }, read: { url, stamp in
+        let pool = PhotoMetadataCache.inspectorPool
+        self.init(pool: pool, fileStamp: Self.fileStamp, read: { url, stamp in
+            try Task.checkCancellation()
             let version = stamp.size.flatMap { size in stamp.modified.map { FileStamp(modified: $0, size: size) } }
-            if let version, let stored = await thumbnails.photoMetadata(for: url, stamp: version) { return stored }
-            let result = await Self.cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
+            if let version, let stored = await thumbnails.photoMetadata(for: url, stamp: version, resolvingWith: pool) {
+                return stored
+            }
+            let result = try await Self.cache.metadata(for: url, size: stamp.size ?? -1, modified: stamp.modified)
             if let version, result.modified == version.modified {
+                try Task.checkCancellation()
                 await thumbnails.keepPhotoMetadata(result, for: url, stamp: version)
             }
             return result
         })
+    }
+
+    convenience init(pool: DecodePool, fileStamp: @escaping @Sendable (URL) -> Stamp, read: @escaping Reader) {
+        self.init(stamp: { url in
+            (try? await pool.run(forCurrent: true, rank: 0) { fileStamp(url) }) ?? (nil, nil)
+        }, read: read)
     }
 
     deinit { readTask?.cancel(); pendingTask?.cancel() }
@@ -60,8 +69,7 @@ import LoupeCore
             self?.size = version.size
             self?.onChange?(false)
             guard !Task.isCancelled, self?.url == url else { return }
-            let result = await read(url, version)
-            guard !Task.isCancelled, let self, self.url == url else { return }
+            guard let result = try? await read(url, version), !Task.isCancelled, let self, self.url == url else { return }
             self.pendingTask?.cancel()
             self.pendingTask = nil
             self.readTask = nil
@@ -92,7 +100,7 @@ import LoupeCore
     }
 
     nonisolated private static func fileStamp(_ url: URL) -> Stamp {
-        if ArchivePath.split(url) != nil {
+        if ArchivePath.isArchiveEntryOnDisk(url) {
             let stamp = try? ArchiveReader.shared.stamp(url)
             return (stamp?.size, stamp?.modified)
         }

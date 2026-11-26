@@ -95,7 +95,6 @@ import LoupeCore
         statusView.onAction = { action in
             switch action {
             case .info: actions.info()
-            case .step(let step): actions.step(step)
             case .key(let key): actions.zoom(key)
             case .advanced: actions.smartZoom()
             default: actions.statusAction?(action)
@@ -164,7 +163,8 @@ import LoupeCore
         case .vibrance:
             return sliderItem(item, label: "Vibrance Amount", tip: "How much vibrance is added", key: "vibrance-amount")
         case .stats:
-            return button(item, symbol: "text.alignleft", label: "Status", tip: "Show or hide the stats bar (I)", action: #selector(statsClicked))
+            return button(item, symbol: "rectangle.topthird.inset.filled", label: "Stats Bar",
+                          tip: "Show or hide the stats bar (I)", action: #selector(statsClicked))
         case .strip:
             return button(item, symbol: "rectangle.bottomthird.inset.filled", label: "Filmstrip", tip: "Pin or hide the filmstrip", action: #selector(stripClicked))
         case .status:

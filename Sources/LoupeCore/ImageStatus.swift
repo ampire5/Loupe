@@ -18,6 +18,26 @@ public struct ImageStatus: Equatable, Sendable {
         }
     }
     public var zoomDetails: ZoomDetails?
+    public var compactZoom: String?
+    public struct Upscale: Equatable, Sendable {
+        public let indicator: String
+        public let size: PixelSize?
+        public let milliseconds: Int?
+        public let detail: String?
+
+        public init(indicator: String, size: PixelSize? = nil, milliseconds: Int? = nil, detail: String? = nil) {
+            self.indicator = indicator
+            self.size = size
+            self.milliseconds = milliseconds
+            self.detail = detail
+        }
+    }
+    public var upscale: Upscale?
+    public var resolutionText: String? {
+        guard let original = value(.size) else { return nil }
+        guard let enhanced = upscale?.size else { return original }
+        return "\(original) → \(enhanced.width)×\(enhanced.height)"
+    }
     /// Zero-based position and complete known count, independent of the formatted spread position.
     public var index: Int?
     public var count: Int?

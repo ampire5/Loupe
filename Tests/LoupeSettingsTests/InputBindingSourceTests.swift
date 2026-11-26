@@ -51,6 +51,16 @@ struct InputBindingSourceTests {
         #expect(fixture.text == before)
     }
 
+    @Test func fixedGesturesAreSearchableAndReadOnly() throws {
+        let fixture = try Fixture("TP_FORCE ignore")
+        let gestures = fixture.source.rows().filter { $0.source == "gesture" }
+        #expect(gestures.contains { $0.input == "Pinch" && $0.action == "Zoom at the pointer" })
+        #expect(gestures.allSatisfy { $0.isMouse && !$0.isEditable && !$0.canRemove && !$0.canRestore })
+        #expect(!gestures.contains { $0.input.localizedStandardContains("Force Click") })
+        #expect(fixture.source.searchTexts(mouse: true).contains("Pinch"))
+        #expect(!fixture.source.searchTexts(mouse: false).contains("Pinch"))
+    }
+
     @Test func bindWritesFileAndReloads() throws {
         let fixture = try Fixture(InputConfTemplate.text)
         var posted = 0
@@ -231,6 +241,7 @@ struct InputBindingSourceTests {
         #expect(found("MX_PANEL+WHEEL") == ["#Mouse bindings"])
         #expect(found("add vibrance-amount") == ["#Keyboard bindings"])
         #expect(found("Panel + wheel") == ["#Mouse bindings"])
+        #expect(found("Pinch") == ["#Mouse bindings"])
         #expect(found("Toggle full screen") == ["#Keyboard bindings"])
         // The vibrance rows of the Colour page are found too.
         #expect(search.matches("vibrance").contains { $0.page == "colour" })

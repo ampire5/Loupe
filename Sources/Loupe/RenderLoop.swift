@@ -16,6 +16,9 @@ struct RenderPage: @unchecked Sendable {   // TiledImage is Sendable, ShownColor
     var color: ShownColor<ColorLUT>?
     var rect: CGRect
     var viewReceipt: FileViewReceipt?
+    weak var upscaleImage: TiledImage?
+    var prefersNeuralUpscale = false
+    var showsUpscaleAtFit = false
 
     init(image: TiledImage?, orientation: ImageOrientation, color: ShownColor<ColorLUT>?, rect: CGRect,
          viewReceipt: FileViewReceipt? = nil) {
@@ -608,16 +611,41 @@ final class RenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendabl
                           at now: Double, into commands: MTLCommandBuffer, target: MTLTexture) {
         guard let renderer else { return }
         var transform = snapshot.transform, viewport: CGRect?
-        if let image = page.image, let place = Self.placement(page, image, snapshot.transform) {
+        let neural = page.prefersNeuralUpscale && transform.drawnScale > 1
+        let enhanced = neural || page.showsUpscaleAtFit ? page.upscaleImage : nil
+        let image = enhanced ?? page.image
+        let orientation = page.orientation
+        if let enhanced {
+            let size = orientation.orientedSize(enhanced.grid.imageSize)
+            let place = PagePlacement(rect: page.rect, pageSize: CGSize(width: size.width, height: size.height),
+                                      shared: transform)
             transform = place.transform
             viewport = place.viewport
-            if !first, place.viewport.isEmpty { return }   // off screen
-        } else if !first, page.image == nil {
-            return   // nothing to draw: its part keeps the first page's background
+        } else if let image, let place = Self.placement(page, image, transform) {
+            transform = place.transform
+            viewport = place.viewport
+            if !first, place.viewport.isEmpty { return }
+        } else if !first, image == nil {
+            return
+        }
+        let saved = renderer.resample
+        if let enhanced, let original = page.image {
+            renderer.grainSourceScale = Double(enhanced.grid.imageSize.width) / Double(original.grid.imageSize.width)
+        }
+        if neural {
+            var settings = saved
+            settings.upscale = .metalfx
+            settings.upscaleHigh = .metalfx
+            settings.pixelArtPercent = 0
+            renderer.resample = settings
+        }
+        defer {
+            if neural { renderer.resample = saved }
+            renderer.grainSourceScale = 1
         }
         renderer.color = colorFrame(page.color, at: now)
         renderer.conversion = conversion
-        renderer.encode(image: page.image, transform: transform, orientation: page.orientation, into: commands,
+        renderer.encode(image: image, transform: transform, orientation: orientation, into: commands,
                         target: target, viewport: viewport, clears: first)
     }
 

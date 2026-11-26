@@ -1,4 +1,5 @@
 import AppKit
+import Filmstrip
 import LoupeCore
 import LoupeRender
 import Testing
@@ -88,8 +89,187 @@ import Testing
         strip.view.onStripScroll?(first)
         strip.view.onStripScroll?(second)
         #expect(session.playlist?.current == files[30])
+        func visibleText(in view: NSView) -> [String] {
+            guard !view.isHidden else { return [] }
+            if let field = view as? NSTextField { return [field.stringValue] }
+            return view.subviews.flatMap(visibleText)
+        }
+        #expect(visibleText(in: strip.view) == ["\(expected + 1) / 60"])
         strip.windowDidResignKey()
         #expect(session.playlist?.current == files[expected])
+        #expect(visibleText(in: strip.view).isEmpty)
+    }
+
+    @Test func filmstripDragReversesFromThePositionOnScreen() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        _ = NSApplication.shared
+        let thumbs = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: ImageCache(loader: MetalPyramidLoader()), thumbnails: thumbs,
+                                    positions: FolderPositions(database: nil))
+        let strip = StripController(session: session, store: thumbs)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { strip.close(); session.close(); window.close() }
+        strip.view.frame = NSRect(x: 0, y: 0, width: 600, height: strip.bandHeight)
+        window.contentView?.addSubview(strip.view)
+        window.orderBack(nil)
+        try #require(window.isVisible)
+        var config = Config()
+        config.stripWindow = .over
+        strip.apply(config)
+
+        let files = (0..<60).map { URL(fileURLWithPath: "/Loupe-reverse-test/\($0).png") }
+        session.openPhotos(files, current: files[30])
+        strip.sessionDidChange()
+        let pitch = strip.view.layout.centre(of: 31) - strip.view.layout.centre(of: 30)
+        strip.view.onDrag?(-pitch * 0.55)
+        try #require(session.playlist?.current == files[31])
+        strip.view.onDragEnd?()
+
+        // Reverse across the boundary while the strip is still just past it. A restart from the snap's
+        // destination would keep 31 selected with the same amount of pointer travel.
+        strip.view.onDrag?(pitch * 0.15)
+        strip.view.onDragEnd?()
+        #expect(session.playlist?.current == files[30])
+    }
+
+    @Test func filmstripHoverRestartsTheDetailsDwellWhenThePointerMoves() async throws {
+        let hover = StripHover()
+        var titles: [Int] = [], details: [Int] = []
+        hover.onRest = { [weak hover] in if let file = hover?.restedFile { titles.append(file) } }
+        hover.onDetail = { details.append($0) }
+        defer { hover.drop() }
+        #expect(hover.set(3))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while titles.isEmpty, .now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(titles == [3])
+        try #require(details.isEmpty)
+
+        #expect(hover.set(4))
+        while details.isEmpty, .now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(titles == [3, 4])
+        #expect(details == [4])
+    }
+
+    @Test func filmstripCaptionKeepsTheTitleInPlaceWhenDetailsArriveNearAnEdge() throws {
+        _ = NSApplication.shared
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
+        let caption = StripCaption()
+        root.addSubview(caption)
+        let title = "6 / 48 · Dunes.jpg"
+        let detail = "1/250 · f/2.8 · ISO 400 · 24 MP"
+
+        func fields(in view: NSView) -> [NSTextField] {
+            guard !view.isHidden else { return [] }
+            if let field = view as? NSTextField { return [field] }
+            return view.subviews.flatMap(fields)
+        }
+
+        caption.show(title: title, centre: 40, above: 80, within: root.bounds)
+        let titleField = try #require(fields(in: caption).first)
+        let frame = root.convert(titleField.bounds, from: titleField)
+        caption.show(title: title, detail: detail, centre: 40, above: 80, within: root.bounds)
+        #expect(fields(in: caption).map(\.stringValue) == [title, detail])
+        #expect(root.convert(titleField.bounds, from: titleField) == frame)
+
+        let tools = NSRect(x: 236, y: 84, width: 108, height: 32)
+        caption.show(title: title, detail: detail, centre: 310, above: 80, within: root.bounds, avoiding: tools)
+        #expect(caption.frame.maxX <= tools.minX)
+    }
+
+    @Test func filmstripToolsLeaveTheThumbnailsClear() throws {
+        _ = NSApplication.shared
+        let thumbs = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: ImageCache(loader: MetalPyramidLoader()), thumbnails: thumbs,
+                                    positions: FolderPositions(database: nil))
+        let strip = StripController(session: session, store: thumbs)
+        defer { strip.close(); session.close() }
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 460))
+        root.addSubview(strip.view)
+        NSLayoutConstraint.activate([
+            strip.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            strip.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            strip.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        strip.attach(to: root)
+        var config = Config()
+        config.stripWindow = .over
+        config.stripHeight = 192
+        config.stripFadeInMilliseconds = 0
+        strip.apply(config)
+        let files = (0..<10).map { URL(fileURLWithPath: "/Loupe-tools-test/\($0).png") }
+        session.openPhotos(files, current: files[5])
+        strip.sessionDidChange()
+        root.layoutSubtreeIfNeeded()
+
+        let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: NSPoint(x: 360, y: 4),
+                                                   modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                   context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        strip.mouseMoved(with: event)
+        root.layoutSubtreeIfNeeded()
+        strip.mouseMoved(with: event)
+        root.layoutSubtreeIfNeeded()
+        let capsule = try #require(root.subviews.compactMap { $0 as? FilmstripToolsView }.first)
+        try #require(capsule.alphaValue == 1)
+        #expect(strip.view.frame.height == 204)
+        #expect(capsule.frame.minY >= strip.view.frame.maxY)
+        #expect(root.bounds.contains(capsule.frame))
+
+        let gap = try #require(NSEvent.mouseEvent(with: .mouseMoved,
+                                                   location: NSPoint(x: capsule.frame.midX, y: capsule.frame.minY - 1),
+                                                   modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                   context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        strip.mouseMoved(with: gap)
+        #expect(capsule.alphaValue == 1)
+
+        root.setFrameSize(NSSize(width: 340, height: 224))
+        root.layoutSubtreeIfNeeded()
+        #expect(strip.view.frame.height < 204)
+        #expect(root.bounds.contains(capsule.frame))
+        #expect(capsule.frame.minY >= strip.view.frame.maxY)
+        root.setFrameSize(NSSize(width: 720, height: 460))
+        root.layoutSubtreeIfNeeded()
+        #expect(strip.view.frame.height == 204)
+    }
+
+    @Test func filmstripFlingAtEitherEndKeepsTheEndFrameAndReverses() throws {
+        _ = NSApplication.shared
+        let thumbs = ThumbnailStore(directory: nil, reader: FileReader(threads: 1), thumbSize: 320, limitBytes: 0)
+        let session = ViewerSession(cache: ImageCache(loader: MetalPyramidLoader()), thumbnails: thumbs,
+                                    positions: FolderPositions(database: nil))
+        let strip = StripController(session: session, store: thumbs)
+        defer { strip.close(); session.close() }
+        strip.view.frame = NSRect(x: 0, y: 0, width: 600, height: strip.bandHeight)
+        strip.apply(Config())
+
+        func swipe(_ phase: CGScrollPhase, towardNext pixels: Int32) throws {
+            let cg = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                          wheel1: 0, wheel2: pixels, wheel3: 0))
+            cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            let event = try #require(NSEvent(cgEvent: cg))
+            if FingerDirection.sign(invertedFromDevice: event.isDirectionInvertedFromDevice) > 0 {
+                cg.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: -Int64(pixels))
+            }
+            strip.view.onStripScroll?(try #require(NSEvent(cgEvent: cg)))
+        }
+
+        let files = (0..<100).map { URL(fileURLWithPath: "/Loupe-end-test/\($0).png") }
+        let centre = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: NSPoint(x: 300, y: 40),
+                                                    modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                    context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        var underCentre: Int?
+        strip.view.onHover = { underCentre = $0 }
+        for (edge, direction, neighbour) in [(0, Int32(-1), 1), (99, Int32(1), 98)] {
+            session.openPhotos(files, current: files[edge])
+            strip.sessionDidChange()
+            try swipe(.began, towardNext: 5000 * direction)
+            strip.view.mouseMoved(with: centre)
+            #expect(underCentre == edge)
+            try swipe(.changed, towardNext: -85 * direction)
+            strip.windowDidResignKey()
+            #expect(session.playlist?.current == files[neighbour])
+        }
     }
 
     @Test func manualPresetsAndThumbWheelDoNotDisableSmartZoom() {

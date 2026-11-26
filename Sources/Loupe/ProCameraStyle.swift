@@ -30,9 +30,9 @@ enum ProCameraStyle {
     /// A soft shadow that keeps text readable on whatever the picture is.
     static let shadow: NSShadow = {
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.7)
-        shadow.shadowBlurRadius = 2
-        shadow.shadowOffset = NSSize(width: 0, height: -0.5)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
+        shadow.shadowBlurRadius = 1.5
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
         return shadow
     }()
 

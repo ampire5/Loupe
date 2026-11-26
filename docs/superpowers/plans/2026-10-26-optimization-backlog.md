@@ -16,11 +16,9 @@ reads past half, close release, B, C, one activation per restore, the front wind
 
 ## Measurements still owed
 
-- Window-ownership plan task 9: the benches of this round (branch `spike/window-ownership-bench`,
-  `spikes/window-ownership/bench`; and `spikes/rust/bench/switch-bench.py` on branch `spike/rust`) into `scripts/`;
-  `LoupeBench replay
-  --script close` (20 open/close cycles, footprint per cycle: the plateau after closes); the final
-  `docs/bench/<date>-window-ownership.md` with spec §5's acceptance.
+- Window ownership on Apple Silicon: [results and reproduction commands](../../bench/2026-11-19-window-ownership.md).
+  A fresh GUI run can capture the time from `session opened` to the first full image and verify cache counters
+  on the current build.
 - Intel (the ~100 ms budget is checked there): restore, viewer ↔ Folders, flips.
 - The NAS over Wi-Fi: `FileReader.finishReadAbove` (0.5, the spec's starting value: on the PC share few reads are
   caught half-way), `ThumbnailStore.neighbourReads` (1; 2 not measured).

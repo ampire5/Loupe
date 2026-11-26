@@ -11,16 +11,20 @@ extension TiledImage {
     static func descriptors(for grid: TileGrid) throws -> [MTLTextureDescriptor] {
         guard grid.fitsTextureArrays else { throw DecodeError.tooLarge }
         return (0..<grid.levelCount).map { level in
-            let d = MTLTextureDescriptor()
-            d.textureType = .type2DArray
-            d.pixelFormat = .bgra8Unorm
-            d.width = TileGrid.slotSize
-            d.height = TileGrid.slotSize
-            d.arrayLength = grid.columns(level) * grid.rows(level)
-            d.storageMode = .private
-            d.usage = [.shaderRead, .shaderWrite, .pixelFormatView]
-            return d
+            textureDescriptor(slices: grid.columns(level) * grid.rows(level))
         }
+    }
+
+    static func textureDescriptor(slices: Int) -> MTLTextureDescriptor {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.textureType = .type2DArray
+        descriptor.pixelFormat = .bgra8Unorm
+        descriptor.width = TileGrid.slotSize
+        descriptor.height = TileGrid.slotSize
+        descriptor.arrayLength = slices
+        descriptor.storageMode = .private
+        descriptor.usage = [.shaderRead, .shaderWrite, .pixelFormatView]
+        return descriptor
     }
 
     /// Slices (528 x 528 slot textures) an upload hands the GPU per command buffer: the level's blits (or its

@@ -156,9 +156,8 @@ extension StripPlacement {
     /// The capsule's inset from the strip's right end (the sketch's `right: 14px`).
     public static let capsuleInset: CGFloat = 14
 
-    /// Where the tool capsule sits along the strip (owner, 2026-10-22): `capsuleInset` in from its right end (its
-    /// left edge, in the strip's x); a capsule wider than the room sits in the middle. Vertically it is centred on
-    /// the cells, which are in the strip's middle (the app's constraint).
+    /// The capsule's leading edge in strip coordinates. It is `capsuleInset` in from the right; a capsule wider
+    /// than the room sits in the middle. The window places it above the thumbnail row.
     public static func capsuleX(stripWidth: CGFloat, capsuleWidth: CGFloat) -> CGFloat {
         let right = stripWidth - capsuleInset - capsuleWidth
         return right >= capsuleInset ? right : (stripWidth - capsuleWidth) / 2

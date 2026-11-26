@@ -90,6 +90,8 @@ public enum InputConfTemplate {
     # KP_ADD zoom-in                                # zoom in
     # - zoom-out                                    # zoom out
     # KP_SUBTRACT zoom-out                          # zoom out
+    # Alt+u toggle-neural-upscale                   # toggle neural upscale in this viewer
+    # Alt+Shift+u save-neural-upscale               # save the current neural upscale mode as the default
     # u cycle-zoom-stops                           # fixed / adaptive / off zoom stops in this tab
     # U save-zoom-stops                             # save zoom stop mode as default
     # l toggle-keep-zoom                            # keep zoom and position in this folder, on/off

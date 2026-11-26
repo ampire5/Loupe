@@ -157,7 +157,7 @@ extension TileGrid {
         return Self.level(forScale: min(1, fitScale), levelCount: levelCount)
     }
 
-    /// GPU bytes of the slot arrays of `levels` (528² x 4 per tile, edge tiles cost a full slot). Levels outside
+    /// Nominal pixel bytes of the slot arrays of `levels` (528² x 4 per tile, edge tiles cost a full slot). Levels outside
     /// the pyramid count for nothing, so callers can pass `Lfit + 1 ..< levelCount` without clamping first.
     public func byteCount(levels: Range<Int>) -> Int {
         let slotBytes = Self.slotSize * Self.slotSize * 4

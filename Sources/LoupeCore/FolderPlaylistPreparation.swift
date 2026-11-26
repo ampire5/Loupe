@@ -39,4 +39,11 @@ public actor FolderPlaylistPreparation {
         try Task.checkCancellation()
         return list
     }
+
+    public func reorder(_ playlist: Playlist, sort: BrowserSort) throws -> Playlist {
+        try Task.checkCancellation()
+        let ordered = playlist.sorted(sort)
+        try Task.checkCancellation()
+        return ordered
+    }
 }

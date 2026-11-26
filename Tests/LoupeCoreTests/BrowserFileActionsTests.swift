@@ -77,7 +77,7 @@ import Testing
         #expect(positions.fileName(in: old) == nil)
     }
 
-    @Test func renameMovesRecentSessionsSettingsPins() throws {
+    @Test func renameMovesRecentSessionsSettingsPins() async throws {
         let root = try folder()
         defer { try? fm.removeItem(at: root) }
         let old = root.appendingPathComponent("old"), new = root.appendingPathComponent("new")
@@ -95,7 +95,7 @@ import Testing
         #expect(settings.ownValues(for: new)["browser-sort"] == "date")
         #expect(settings.ownValues(for: old).isEmpty)
         #expect(places.pins().map(\.path) == [new.path])
-        #expect(sessions.last()?.windows.first?.tabs.first == .file(path: new.appendingPathComponent("1.jpg").path, view: nil))
+        #expect(await sessions.last()?.windows.first?.tabs.first == .file(path: new.appendingPathComponent("1.jpg").path, view: nil))
     }
 
     @Test func renamedFileFollowsInPositionsAndRecent() {
@@ -131,5 +131,61 @@ import Testing
         try Data("x".utf8).write(to: a)
         try BrowserFileActions(stores: [], trasher: { _ in Issue.record("not to the Trash") }).trash(a, permanently: true)
         #expect(!fm.fileExists(atPath: a.path))
+    }
+
+    @Test func copyAndMoveKeepExistingDestinationFiles() throws {
+        let root = try folder()
+        defer { try? fm.removeItem(at: root) }
+        let destination = root.appendingPathComponent("destination", isDirectory: true)
+        try fm.createDirectory(at: destination, withIntermediateDirectories: false)
+        let source = root.appendingPathComponent("a.jpg")
+        let data = Data("source".utf8)
+        try data.write(to: source)
+        let moves = Moves()
+        let actions = BrowserFileActions(stores: [moves])
+        let copied = try #require(try actions.transfer(source, into: destination, moving: false))
+        #expect(try Data(contentsOf: copied) == data)
+        #expect(fm.fileExists(atPath: source.path))
+        #expect(moves.seen.isEmpty)
+
+        #expect(throws: RenameProblem.exists) {
+            try actions.transfer(source, into: destination, moving: true)
+        }
+        #expect(fm.fileExists(atPath: source.path))
+        #expect(try Data(contentsOf: copied) == data)
+        try fm.removeItem(at: copied)
+
+        let moved = try #require(try actions.transfer(source, into: destination, moving: true))
+        #expect(try Data(contentsOf: moved) == data)
+        #expect(!fm.fileExists(atPath: source.path))
+        #expect(moves.seen.map(\.1) == [moved.path])
+    }
+
+    @Test func pasteIntoSameFolderDuplicatesButMovingIsANoOp() throws {
+        let root = try folder()
+        defer { try? fm.removeItem(at: root) }
+        let source = root.appendingPathComponent("a.jpg")
+        try Data().write(to: source)
+        let actions = BrowserFileActions(stores: [])
+        #expect(try actions.transfer(source, into: root, moving: true) == nil)
+        #expect(try actions.transfer(source, into: root, moving: false)?.lastPathComponent == "a copy.jpg")
+        #expect(try actions.transfer(source, into: root, moving: false)?.lastPathComponent == "a copy 2.jpg")
+    }
+
+    @Test func cannotTransferFolderIntoItsOwnDescendantThroughAnAlias() throws {
+        let root = try folder()
+        defer { try? fm.removeItem(at: root) }
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let child = source.appendingPathComponent("child", isDirectory: true)
+        try fm.createDirectory(at: child, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: child)
+        let actions = BrowserFileActions(stores: [])
+        for moving in [false, true] {
+            #expect(throws: (any Error).self) {
+                try actions.transfer(source, into: alias, moving: moving)
+            }
+        }
+        #expect(try fm.contentsOfDirectory(atPath: child.path).isEmpty)
     }
 }

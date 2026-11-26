@@ -8,6 +8,10 @@ import LoupeCore
 /// its card's kind.
 @MainActor final class LoupeHomeSource: HomeSource {
     var onEverythingOpen: ((URL) -> Void)?
+    var fileViewPluginActions: (() -> [HomeMenuItem])?
+    var onFileViewPluginAction: ((String) -> Void)?
+    var canCompareFileViewSelection: ((URL) -> Bool)?
+    var onCompareFileViewSelection: (() -> Void)?
     private lazy var everythingPage = EverythingSearchPage(loadConnection: SavedEverythingConnection.load) { [weak self] url, isFolder in
         if isFolder { self?.view?.show(.folder(url), selecting: nil) }
         else { self?.onEverythingOpen?(url) }
@@ -127,19 +131,44 @@ import LoupeCore
         }
     }
 
+    static func isLocalFileView(_ location: BrowserLocation) -> Bool {
+        switch location {
+        case .folder(let folder): return folder.isFileURL
+        case .places: return true
+        case .source(let id): return id == HomeFavorites.sourceID
+        }
+    }
+
     func menu(for entry: BrowserEntry, in location: BrowserLocation) -> [HomeMenuItem] {
         if isPhotos(location) {
             return entry.kind == .file ? [HomeMenuItem(id: "photos-open", title: "Open"),
                 HomeMenuItem(id: "photos-tab", title: "Open in New Tab"),
                 HomeMenuItem(id: "photos-window", title: "Open in New Window")] : []
         }
-        guard entry.kind == .collection else { return folders.menu(for: entry, in: location) }
+        guard entry.kind == .collection else {
+            var items = folders.menu(for: entry, in: location)
+            if Self.isLocalFileView(location), entry.url.isFileURL {
+                if canCompareFileViewSelection?(entry.url) == true {
+                    items.append(HomeMenuItem(id: "compare-photos", title: "Compare Selected Photos"))
+                }
+                items += fileViewPluginActions?() ?? []
+            }
+            return items
+        }
         var items = collections.menu(for: entry)
         if let folder = collections.recentFolder(for: entry) { items.append(folders.favoriteMenuItem(for: folder)) }
         return items
     }
 
     func perform(_ item: String, on entry: BrowserEntry, in location: BrowserLocation) {
+        if item == "compare-photos", Self.isLocalFileView(location) {
+            onCompareFileViewSelection?()
+            return
+        }
+        if item.hasPrefix("plugin:"), Self.isLocalFileView(location), entry.url.isFileURL {
+            onFileViewPluginAction?(item)
+            return
+        }
         if isPhotos(location) {
             photos.open(entry, how: item == "photos-tab" ? .openNewTab : item == "photos-window" ? .openNewWindow : .open)
             return

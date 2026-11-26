@@ -34,9 +34,11 @@ import Testing
     static func render(_ image: TiledImage, settings: ResampleSettings,
                        color: ColorFrame? = nil, scale: Double = 2,
                        center: CGPoint = CGPoint(x: 0.5, y: 0.5),
-                       orientation: ImageOrientation = .up, viewport: CGRect? = nil) async throws -> [UInt8] {
+                       orientation: ImageOrientation = .up, viewport: CGRect? = nil,
+                       grainSourceScale: Double = 1) async throws -> [UInt8] {
         let r = TileRenderer(pixelFormat: .bgra8Unorm_srgb)
         r.resample = settings; r.color = color
+        r.grainSourceScale = grainSourceScale
         let target = TestImages.renderTarget(320, 240)
         let cb = try #require(MetalContext.shared.queue.makeCommandBuffer())
         let size=orientation.orientedSize(image.grid.imageSize)
@@ -45,6 +47,20 @@ import Testing
         r.encode(image: image, transform: t, orientation:orientation, into: cb, target: target, viewport:viewport)
         cb.commit()
         return try await TestImages.readTexture(target)
+    }
+
+    @Test(arguments: [2, 4])
+    func enhancedImageUsesOriginalGrainCoordinates(nativeScale: Int) async throws {
+        let gray: (Int, Int) -> (b: UInt8, g: UInt8, r: UInt8, a: UInt8) = { _, _ in (128, 128, 128, 255) }
+        let original = try await TiledImage.make(from: TestImages.synthetic(201, 177, pixel: gray))
+        let enhanced = try await TiledImage.make(from: TestImages.synthetic(201 * nativeScale, 177 * nativeScale, pixel: gray))
+        let settings = ResampleSettings(upscale: .bilinear, downscale: .bilinear, pixelArtPercent: 0,
+                                        grain: GrainSettings(style: .white, amount: 3, size: 1))
+        let center = CGPoint(x: 0.56, y: 0.48)
+        let plain = try await Self.render(original, settings: settings, scale: 2.37, center: center, orientation: .right)
+        let substituted = try await Self.render(enhanced, settings: settings, scale: 2.37 / Double(nativeScale),
+                                               center: center, orientation: .right, grainSourceScale: Double(nativeScale))
+        #expect(zip(plain, substituted).allSatisfy { abs(Int($0) - Int($1)) <= 1 })
     }
 
     /// A noise pattern painted onto the screen fails both comparisons: moving

@@ -6,6 +6,7 @@ import InfoPanelKit
 import LoupeInspector
 import LoupeCore
 import LoupeRender
+import SettingsKit
 import StashKitUI
 import UniformTypeIdentifiers
 
@@ -17,6 +18,8 @@ import UniformTypeIdentifiers
 @MainActor final class ViewerWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let session: ViewerSession
     let viewerView: ViewerView
+    private var comparisonView: PhotoComparisonView?
+    var isShowingComparison: Bool { comparisonView != nil }
     /// The app's viewer windows; set when added. The one whose `active` this is remembers full screen.
     weak var registry: WindowRegistry?
     private let statsBar = StatsBar()
@@ -38,6 +41,7 @@ import UniformTypeIdentifiers
     private let standInView = SwitchStandInView()
     private let warningsOverlay = ConfigWarningsOverlay()
     private let cheatSheet = CheatSheetView()
+    private var keyThatClosedCheatSheet: UInt16?
     /// What `S`, `A` and their ⇧ forms just did, at the bottom centre.
     private let toast = ToastView()
     /// The Stash WebUI over the viewer (Stash spec §2.1); nil until first shown, dropped when its settings change.
@@ -210,6 +214,7 @@ import UniformTypeIdentifiers
     /// Set when the window closes: a late notification (a full-screen exit finishing) must not restart the
     /// timer or the frame recording.
     private var isClosed = false
+    private var dropOpen: Task<Void, Never>?
     /// Observers of this window's notifications, removed when it closes.
     private var windowObservers: [NSObjectProtocol] = []
     /// The `background` the window and the viewer show, so a reload that leaves it alone touches neither.
@@ -344,6 +349,11 @@ import UniformTypeIdentifiers
         windowToolbarController.toolbar.isVisible = toolbarWasWanted
 
         session.onChange = { [weak self] in self?.sessionDidChange() }
+        viewerView.neuralUpscale.onChange = { [weak self] in
+            guard let self, !isClosed else { return }
+            viewerView.sessionDidChange()
+            updateStatus()
+        }
         session.onSourceStep = { [weak self] step, atBoundary in
             guard let self, let viewer = self.webImageViewer else { return false }
             return viewer.step(step, atBoundary: atBoundary, completed: self.webPageCompletion(for: viewer))
@@ -432,8 +442,10 @@ import UniformTypeIdentifiers
         cheatSheet.onClose = { [weak self] in self?.setCheatSheet(open: false) }
         strip.attach(to: container)
         makeInfoPanel(in: container)
-        let folderSlots = ViewerSlotsController(container: container, above: standInView, session: session, store: thumbnails, positions: positions, makeSmartZoom: { [weak self] in self?.makeSmartZoomPanel() ?? SmartZoomPanel() })
+        let folderSlots = ViewerSlotsController(container: container, above: strip.view, session: session, store: thumbnails, positions: positions, makeSmartZoom: { [weak self] in self?.makeSmartZoomPanel() ?? SmartZoomPanel() },
+                                               upscale: viewerView.neuralUpscale)
         self.folderSlots = folderSlots
+        strip.slotOverlayArea = folderSlots.area
         folderSlots.preview.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(folderSlots.preview, positioned: .above, relativeTo: standInView)
         NSLayoutConstraint.activate([
@@ -453,7 +465,11 @@ import UniformTypeIdentifiers
             stashList = context; stashGallery = (id, folder.standardizedFileURL)
             session.stashNavigator = StashGalleryNavigator.make(list: context, library: library, toast: toast)
         }
-        folderSlots.onMessage = { [weak self] in self?.toast.show($0) }
+        folderSlots.onMessage = { [weak self] message in
+            guard let self else { return }
+            if let browserView { browserView.showToast(message) }
+            else { toast.show(message) }
+        }
         folderSlots.onFocus = { [weak self] in guard let self else { return }; self.window?.makeFirstResponder(self.viewerView) }
 
         strip.onReservesSpaceChange = { [weak self] in
@@ -472,6 +488,7 @@ import UniformTypeIdentifiers
             self.scheduleToolbarLayoutReconciliation()
         }
         window.onKeyDown = { [weak self] in self?.windowKey($0) ?? false }
+        window.onFileViewTrashKey = { [weak self] in self?.fileViewTrashKey($0) ?? false }
         window.onPlaybackInput = { [weak self] event in self?.windowPlaybackInput(event) ?? false }
         strip.view.onScroll = { [weak viewerView] in viewerView?.scrollWheel(with: $0) }
         viewerView.isStripPressed = { [weak strip] in strip?.view.isPressed ?? false }
@@ -517,7 +534,9 @@ import UniformTypeIdentifiers
         // `background`, the transparency keys, `rubber-band`, the stats bar keys or `exif-orientation`.
         let settings = center.addObserver(forName: .settingsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.comparisonView?.applyConfig(Settings.shared.config)
                 self?.session.updateOrientationSetting()
+                self?.folderSlots?.applySettings(Settings.shared.config)
                 self?.applyBrowserSettings()
                 self?.updateLoadingIndicator()
                 self?.applyBackground()
@@ -527,6 +546,7 @@ import UniformTypeIdentifiers
                 self?.updateEffectiveConfig()
                 self?.session.setFitUpscale(Settings.shared.config.fitUpscale)
                 self?.statsBar.apply(Settings.shared.config)
+                self?.updateInfoPanelFontSize()
                 if let self, self.appliedFullScreenTabs != Settings.shared.config.fullScreenTabs {
                     self.appliedFullScreenTabs = Settings.shared.config.fullScreenTabs
                     self.toolbarPinnedOverride = nil
@@ -536,7 +556,9 @@ import UniformTypeIdentifiers
                 self?.applyStatsLayout()
                 self?.applyToastPosition()
                 self?.updateConfigWarnings()
-                self?.cheatSheet.inputMapChanged(Settings.shared.inputMap)
+                if let self, self.cheatSheet.isOpen {
+                    self.cheatSheet.update(.bindings(inputMap: Settings.shared.inputMap))
+                }
             }
         }
         windowObservers.append(settings)
@@ -599,6 +621,7 @@ import UniformTypeIdentifiers
 
     /// The window goes away: nothing it does from here on is the user's choice of full screen or not.
     func windowWillClose(_ notification: Notification) {
+        comparisonView?.stopRendering()
         webImageViewer?.pause()
         framingLearning?.close()
         stopPhotos()
@@ -612,6 +635,8 @@ import UniformTypeIdentifiers
         // not be remembered as the user choosing a window.
         isTerminating = true
         isClosed = true
+        dropOpen?.cancel()
+        dropOpen = nil
         windowObservers.forEach(NotificationCenter.default.removeObserver)
         windowObservers = []
         MouseButtons.shared.cancelAll()
@@ -736,7 +761,8 @@ import UniformTypeIdentifiers
 
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
-        window?.makeFirstResponder(viewerView)
+        if let comparisonView { comparisonView.focus() }
+        else { window?.makeFirstResponder(viewerView) }
     }
 
     @available(*, unavailable)
@@ -748,8 +774,12 @@ import UniformTypeIdentifiers
     /// Makes this window the one in front of the user: unhides the app, restores a miniaturized window, orders
     /// it front and activates the app. Ordering a window front while the app is active the window in its own Space, so a window in
     /// full screen is switched to.
-    func bringToFront() {
+    func bringToFront(activating: Bool = true) {
         guard let window else { return }
+        if !activating {
+            if let group = window.tabGroup, group.selectedWindow !== window { group.selectedWindow = window }
+            return
+        }
         if NSApp.isHidden { NSApp.unhide(nil) }
         if window.isMiniaturized { window.deminiaturize(nil) }
         if let group = window.tabGroup, group.selectedWindow !== window { group.selectedWindow = window }
@@ -809,6 +839,128 @@ import UniformTypeIdentifiers
     /// A new tab or window with nothing to show: Home (Home spec §2.1).
     func startEmpty() { showHome() }
 
+    private var comparisonPhoto: URL? {
+        guard !isShowingHome, !isShowingComparison, let photo = session.entry?.url,
+              session.image != nil, embeddedPlayback?.hasRemotePicture != true else { return nil }
+        return photo
+    }
+
+    private var comparisonSelection: [URL]? {
+        guard registry != nil, isShowingHome, let browser = homeView?.browser,
+              LoupeHomeSource.isLocalFileView(browser.location) else { return nil }
+        let chosen = browser.selectedEntries
+        guard chosen.count == 2, chosen.allSatisfy({ entry in
+            entry.isFile && Playlist.imageExtensions.contains(entry.url.pathExtension.lowercased())
+        }), chosen[0].url != chosen[1].url else { return nil }
+        return chosen.map(\.url)
+    }
+
+    @objc func compareSelectedPhotos(_ sender: Any?) {
+        guard let files = comparisonSelection else { return }
+        registry?.openComparison(files, from: self)
+    }
+
+    private var fileViewBrowser: HomeBrowserView? {
+        guard let browser = browserView, LoupeHomeSource.isLocalFileView(browser.location) else { return nil }
+        return browser
+    }
+
+    private var focusedFileViewBrowser: HomeBrowserView? {
+        guard let browser = fileViewBrowser, window?.firstResponder === browser else { return nil }
+        return browser
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard let browser = focusedFileViewBrowser else { return }
+        FileViewCommands.copy(FileViewCommands.files(browser.selectedEntries))
+    }
+
+    @objc func paste(_ sender: Any?) { pasteFileViewItems(moving: false) }
+    @objc func moveFileViewItemsHere(_ sender: Any?) { pasteFileViewItems(moving: true) }
+
+    private func pasteFileViewItems(moving: Bool) {
+        guard let browser = focusedFileViewBrowser, let folder = FileViewCommands.destination(in: browser.location),
+              FileViewCommands.hasClipboardFiles else { return }
+        homeSources?.folders.pasteFiles(into: folder, moving: moving)
+    }
+
+    @objc func trashFileViewItems(_ sender: Any?) {
+        guard let browser = focusedFileViewBrowser else { return }
+        homeSources?.folders.trashFiles(browser.selectedEntries.filter(\.canTrash).map(\.url))
+    }
+
+    private func fileViewTrashKey(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 51,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+              focusedFileViewBrowser != nil else { return false }
+        if !event.isARepeat { trashFileViewItems(nil) }
+        return true
+    }
+
+    @objc func batchUpscaleFileViewItems(_ sender: Any?) {
+        guard let browser = fileViewBrowser else { return }
+        startBatchUpscale(FileViewCommands.images(browser.selectedEntries))
+    }
+
+    @objc func cancelBatchUpscale(_ sender: Any?) { ViewerUpscale.cancelBatch() }
+
+    private func startBatchUpscale(_ urls: [URL]) {
+        guard let browser = fileViewBrowser, !urls.isEmpty else { return }
+        viewerView.neuralUpscale.startBatch(urls, cache: session.cache) { [weak browser] message in
+            browser?.showToast(message, for: 6)
+        }
+    }
+
+    @objc func selectForComparison(_ sender: Any?) {
+        guard let registry, let photo = comparisonPhoto else { return }
+        registry.selectedComparisonPhoto = photo
+        toast.show("Selected for comparison: \(ArchivePath.displayName(photo))")
+    }
+
+    @objc func compareWithSelectedPhoto(_ sender: Any?) {
+        guard let registry, let first = registry.selectedComparisonPhoto, let second = comparisonPhoto,
+              first != second else { return }
+        registry.openComparison([first, second], from: self)
+    }
+
+    func showComparison(_ files: [URL]) {
+        guard let window, let container = window.contentView else { return }
+        let view = PhotoComparisonView(files: files, config: Settings.shared.config, visible: playbackVisible)
+        comparisonView = view
+        windowedToolbarReveal.setEnabled(false, for: window)
+        window.toolbar?.isVisible = false
+        setViewerCoveredByHome(true)
+        viewerView.isHidden = true
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        let guide = window.contentLayoutGuide as! NSLayoutGuide
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: guide.topAnchor),
+            view.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+        ])
+        updateScreenSize()
+        session.showComparison(files) { [weak view] entry, url in view?.receive(entry, for: url) }
+        updateTitle()
+        view.focus()
+    }
+
+    private func clearComparison() {
+        guard let comparisonView else { return }
+        comparisonView.stopRendering()
+        comparisonView.removeFromSuperview()
+        self.comparisonView = nil
+        session.clearComparison()
+        viewerView.isHidden = false
+        setViewerCoveredByHome(false)
+        window?.makeFirstResponder(viewerView)
+        if isFullScreen { applyFullScreenToolbar() }
+        else { applyToolbarVisibility() }
+        updateTitle()
+        registry?.contentChanged()
+    }
+
     func startBrowsing(_ folder: URL) {
         restoreBrowserAt = (folder, nil)
         showHome(tab: .folders)
@@ -859,6 +1011,7 @@ import UniformTypeIdentifiers
     }
 
     func open(_ url: URL, recursive: RecursivePhotoListing? = nil) {
+        clearComparison()
         if let album = PhotosLocation.album(in: url), let asset = PhotosLocation.asset(in: url) {
             openPhotos(album: album, asset: asset)
             return
@@ -881,6 +1034,7 @@ import UniformTypeIdentifiers
     /// without photos of its own (only subfolders) or that cannot be listed shows in Folders instead, where its
     /// subfolders or the reason are, rather than leaving an empty viewer.
     private func openFolder(_ url: URL) {
+        clearComparison()
         stopPhotos()
         if isShowingHome {
             returnsTo = shownTab
@@ -991,7 +1145,9 @@ import UniformTypeIdentifiers
     private func updateTitle() {
         let home = isShowingHome ? shownTab : nil
         let text: String
-        if home == nil, let list = session.playlist, list.isSourceOrdered {
+        if let comparisonView {
+            text = comparisonView.files.map(ArchivePath.displayName).joined(separator: " ↔ ")
+        } else if home == nil, let list = session.playlist, list.isSourceOrdered {
             text = "\(list.index + 1) / \(list.files.count) · \(list.current.lastPathComponent)"
         } else if home == nil, let pending {
             text = WindowTitle.text(of: pending)
@@ -1026,6 +1182,10 @@ import UniformTypeIdentifiers
 
     /// Home's browser while it is on screen and not on Stash's page: a mouse's back and forward buttons go to it.
     var browserView: HomeBrowserView? { isShowingHome && !isShowingStash ? homeView?.browser : nil }
+
+    var benchFileViewThumbnails: (ready: Int, visible: Int) { homeSources?.folders.benchThumbnails ?? (0, 0) }
+    var benchStripThumbnails: (ready: Int, visible: Int) { strip.benchThumbnails }
+    func showBenchStrip() { strip.setStripVisibility(true) }
 
     /// File › Stash Library (⇧⌘L): Home on Stash.
     @objc func showStashLibrary(_ sender: Any?) { showHome(tab: .stash) }
@@ -1067,6 +1227,7 @@ import UniformTypeIdentifiers
     /// sessions are read afresh each time they are shown; Folders comes back where it was (`browseAt` and a restored
     /// tab's folder go first; the first time, the last folder of the last run).
     func showHome(tab: HomeTab? = nil) {
+        clearComparison()
         folderSlots?.setActive(false)
         guard let window else { return }
         windowedToolbarReveal.setEnabled(false, for: window)
@@ -1177,6 +1338,7 @@ import UniformTypeIdentifiers
     private func setViewerCoveredByHome(_ covered: Bool) {
         loadingIndicator.isViewerShown = !covered
         strip.setControlsCovered(covered)
+        viewerView.setUpscaleCovered(covered)
     }
 
     private func applyToastPosition() {
@@ -1274,7 +1436,7 @@ import UniformTypeIdentifiers
                                           recent: session.recent, stores: registry?.pathStores ?? [])
         let collections = CollectionSource(thumbnails: thumbnails, recent: { [weak self] in
             self?.session.recent?.shown(limit: Settings.shared.config.recentCount) ?? []
-        }, sessions: { [weak self] in self?.registry?.sessions?.all() ?? [] }, stashPage: { [weak self] in
+        }, sessions: { [weak self] in await self?.registry?.sessions?.all() ?? [] }, stashPage: { [weak self] in
             self?.attachedStash()?.container
         })
         let source = LoupeHomeSource(folders: folders, collections: collections,
@@ -1286,6 +1448,13 @@ import UniformTypeIdentifiers
         source.webImagesTabVisible = browserWindowIsVisible
         source.onWebImageOpen = { [weak self] result, search in self?.openWebImage(result, in: search) }
         source.onEverythingOpen = { [weak self] url in self?.open(url) }
+        source.fileViewPluginActions = { [weak self] in
+            self?.folderSlots?.pluginActions(for: .fileView).map { HomeMenuItem(id: $0.id, title: $0.label) } ?? []
+        }
+        source.onFileViewPluginAction = { [weak self] in self?.invokeSlotPluginAction($0) }
+        source.canCompareFileViewSelection = { [weak self] url in self?.comparisonSelection?.contains(url) == true }
+        source.onCompareFileViewSelection = { [weak self] in self?.compareSelectedPhotos(nil) }
+        folders.onBatchUpscale = { [weak self] in self?.startBatchUpscale($0) }
         view.browser.selectsOnHover = false
         let width = UserDefaults.standard.object(forKey: "browserInspector.width") as? Double ?? 320
         view.configureInspector(width: CGFloat(width)) { [weak self, weak view, thumbnails] in
@@ -1306,6 +1475,7 @@ import UniformTypeIdentifiers
         view.browser.unreadable = .app
         // A photo's exposure (else its pixels and size) under its name when names are below (file-cards spec).
         view.browser.files.factsLine = true
+        view.browser.files.facts = true
         folders.onFoldersChecked = { [weak view] entries, folder in view?.sidebarFoldersChanged(entries, in: folder) }
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
@@ -1315,8 +1485,9 @@ import UniformTypeIdentifiers
             self.homeWindowText = (title, subtitle)
             if self.isShowingHome { self.updateTitle() }
         }
-        browser.onLocation = { [weak self] location in
+        browser.onLocation = { [weak self, weak browser] location in
             guard let self else { return }
+            if let browser { self.applyFileViewSelection(to: browser) }
             if self.photosTask != nil, let album = self.photosAlbum,
                location != .source(PhotosLocation.collection(album)) { self.stopPhotos() }
             // A write to Loupe.db: off the main thread, in the order of the moves.
@@ -1358,10 +1529,16 @@ import UniformTypeIdentifiers
             _ = Settings.shared.saveAsDefault(["home-sidebar-width": String(Int(width.rounded()))])
         }
         view.onDrop = { [weak self] url in
-            guard let self else { return }
-            var isDirectory: ObjCBool = false
-            let folder = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
-            self.registry?.open(folder ? .folder(url) : .file(url), openIn: .replace, from: self)
+            guard let self, let registry = self.registry else { return }
+            let previousApp = NSWorkspace.shared.frontmostApplication
+            self.dropOpen?.cancel()
+            self.dropOpen = Task { [weak self, weak registry] in
+                guard let requests = registry?.openRequests, let target = await requests.resolveDrop(url),
+                      !Task.isCancelled, let self, !self.isClosed, let registry else { return }
+                self.dropOpen = nil
+                registry.open(target, openIn: .replace, from: self,
+                              activating: WindowRegistry.canActivate(after: previousApp))
+            }
         }
         folders.onOpen = { [weak self] target, how, recursive in self?.openFromBrowser(target, how, recursive: recursive) }
         source.photos.onOpen = { [weak self] target, how in self?.openFromBrowser(target, how) }
@@ -1372,15 +1549,16 @@ import UniformTypeIdentifiers
         folders.onProgress = { [weak browser] progress in
             browser?.setProgress(progress.display, delay: Config.pillDelay(seconds: Settings.shared.config.thumbsPillDelay))
         }
-        folders.confirmDelete = { [weak self] name, answer in
-            guard let window = self?.window else { answer(false); return }
+        folders.confirmDelete = { [weak self] count, name, answer in
+            guard let window = self?.window, window.isVisible, window.attachedSheet == nil else { answer(false); return }
             let alert = NSAlert()
             alert.messageText = "Delete permanently?"
-            alert.informativeText = "“\(name)” is on a volume without a Trash. It will be deleted right away."
-            alert.addButton(withTitle: "Delete")
-            alert.addButton(withTitle: "Cancel")
-            alert.buttons.first?.hasDestructiveAction = true
-            alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
+            alert.informativeText = count == 1
+                ? "“\(name)” is on a volume without a Trash. It will be deleted right away."
+                : "\(count) items are on volumes without a Trash. They will be deleted right away."
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+            alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+            alert.beginSheetModal(for: window) { answer($0 == .alertSecondButtonReturn) }
         }
         collections.onRecent = { [weak self] entry, action in self?.recentChosen(entry, action) }
         collections.onSession = { [weak self] saved, action in self?.sessionChosen(saved, action) }
@@ -1500,10 +1678,15 @@ import UniformTypeIdentifiers
 
     /// `browser-card-size`, `grid-style` (with `grid-style-memory`), `grid-names`, `folder-cover`, `folder-cards`: on
     /// every show and every settings change.
+    private func applyFileViewSelection(to browser: HomeBrowserView) {
+        browser.allowsMultipleSelection = LoupeHomeSource.isLocalFileView(browser.location)
+    }
+
     private func applyBrowserSettings() {
         guard let homeView else { return }
         let config = Settings.shared.config
         let view = homeView.browser
+        applyFileViewSelection(to: view)
         view.cardSize = CGFloat(config.browserCardSize)
         applyGridStyle()
         view.names = config.gridNames
@@ -1567,6 +1750,7 @@ import UniformTypeIdentifiers
     }
 
     func openWebImage(_ result: WebImageResult, in search: WebImageSearch) {
+        clearComparison()
         DebugLog.measureTurn("open Web Images result")
         webImageViewer?.pause()
         webImageViewer = nil
@@ -1698,6 +1882,7 @@ import UniformTypeIdentifiers
     private var photosViewerSort: BrowserSort?
 
     private func openPhotos(album: String, asset: String, refreshing: Bool = false) {
+        clearComparison()
         let sort = refreshing && photosAlbum == album ? photosViewerSort ?? photosSorts.sort(for: PhotosLocation.collection(album))
             : photosSorts.sort(for: PhotosLocation.collection(album))
         photosViewerSort = sort
@@ -1789,34 +1974,62 @@ import UniformTypeIdentifiers
         guard let registry, let sessions = registry.sessions, let window else { return }
         switch action {
         case .open:
-            registry.open(session: saved.snapshot) { [weak self] in
+            registry.open(session: saved.snapshot, completion: { [weak self] in
                 guard let self, self.isShowingHome else { return }
                 self.window?.performClose(nil)
-            }
+            })
         case .rename:
             Self.askName(on: window, title: "Rename “\(saved.name)”", initial: saved.name) { [weak self] name in
                 guard let self else { return }
-                if !sessions.rename(saved.id, to: name) {
-                    let alert = NSAlert()
-                    alert.messageText = "A session named “\(name)” already exists."
-                    alert.beginSheetModal(for: window)
+                Task {
+                    let result = await sessions.rename(saved, to: name)
+                    self.sessionMutationFinished(result, name: name)
                 }
-                self.sessionsChanged()
             }
         case .replaceWithCurrent:
-            sessions.replace(saved.id, with: registry.snapshot())
-            sessionsChanged()
+            let snapshot = registry.snapshot()
+            Task {
+                let result = await sessions.replace(saved, with: snapshot)
+                sessionMutationFinished(result, name: saved.name)
+            }
         case .delete:
             let alert = NSAlert()
             alert.messageText = "Delete “\(saved.name)”?"
             alert.addButton(withTitle: "Delete")
             alert.addButton(withTitle: "Cancel")
             alert.beginSheetModal(for: window) { [weak self] response in
-                guard response == .alertFirstButtonReturn else { return }
-                sessions.delete(saved.id)
-                self?.sessionsChanged()
+                guard response == .alertFirstButtonReturn, let self else { return }
+                Task {
+                    let result = await sessions.delete(saved)
+                    self.sessionMutationFinished(result, name: saved.name)
+                }
             }
         }
+    }
+
+    private func sessionMutationFinished(_ result: SessionStore.MutationResult, name: String) {
+        let message: String
+        switch result {
+        case .saved:
+            sessionsChanged()
+            return
+        case .missing:
+            sessionsChanged()
+            message = "This session no longer exists."
+        case .changed:
+            sessionsChanged()
+            message = "This session changed in another window. Try again."
+        case .nameTaken, .confirmationRequired:
+            message = "A session named “\(name)” already exists."
+        case .unavailable:
+            message = "The session storage is unavailable."
+        case .writeFailed:
+            message = "Loupe couldn’t save the session change."
+        }
+        guard !isClosed, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.beginSheetModal(for: window)
     }
 
     /// A sheet asking for a session name; `done` gets a non-empty one.
@@ -1840,20 +2053,26 @@ import UniformTypeIdentifiers
     @objc func saveSessionAs(_ sender: Any?) {
         guard let registry, let sessions = registry.sessions, let window else { return }
         Self.askName(on: window, title: "Save Session As", initial: "") { [weak self] name in
-            let snapshot = registry.snapshot()
-            guard sessions.all().contains(where: { !$0.isLast && $0.name == name }) else {
-                sessions.save(snapshot, name: name)
-                self?.sessionsChanged()
+            self?.saveSession(registry.snapshot(), name: name, in: sessions)
+        }
+    }
+
+    private func saveSession(_ snapshot: SessionSnapshot, name: String, in sessions: SessionStore,
+                             replacing confirmed: SessionStore.Replacement? = nil) {
+        Task { [self] in
+            let result = await sessions.save(snapshot, name: name, replacing: confirmed)
+            guard case .confirmationRequired(let replacement) = result else {
+                sessionMutationFinished(result, name: name)
                 return
             }
+            guard !isClosed, let window else { return }
             let alert = NSAlert()
             alert.messageText = "Replace “\(name)”?"
             alert.addButton(withTitle: "Replace")
             alert.addButton(withTitle: "Cancel")
-            alert.beginSheetModal(for: window) { response in
+            alert.beginSheetModal(for: window) { [weak self] response in
                 guard response == .alertFirstButtonReturn else { return }
-                sessions.save(snapshot, name: name)
-                self?.sessionsChanged()
+                self?.saveSession(snapshot, name: name, in: sessions, replacing: replacement)
             }
         }
     }
@@ -2076,6 +2295,9 @@ import UniformTypeIdentifiers
         updateBackButton()
         folderSlots?.refreshSmartZoom()
         var status = session.imageStatus
+        if !isShowingHome, !status.stale, status.photo != nil, status.photo == session.entry?.url {
+            status.upscale = viewerView.upscaleStatus
+        }
         status.mayLoadMore = webImageViewer?.search.hasMore == true
         askPhotoFacts(status.photo)
         statsBar.update(status)
@@ -2394,7 +2616,7 @@ import UniformTypeIdentifiers
         let previous = folder
         folder = current
         announceFolder(current, after: previous)
-        updateEffectiveConfig()
+        updateEffectiveConfig(changingFolder: true)
         NotificationCenter.default.post(name: .viewerFolderChanged, object: self)
     }
 
@@ -2407,7 +2629,7 @@ import UniformTypeIdentifiers
 
     /// loupe.conf with the folder's values on top, then the filters from it. A folder entry `Config.applying` refuses
     /// (a hand-edited file) is skipped, reported once, and does not count as the folder's.
-    private func updateEffectiveConfig() {
+    private func updateEffectiveConfig(changingFolder: Bool = false) {
         let (config, values, rejected) = folderConfig(folder)
         let accepted = values.filter { key, value in !rejected.contains("\(key)=\(value)") }
         let changed = config != effectiveConfig || accepted != folderValues
@@ -2419,7 +2641,9 @@ import UniformTypeIdentifiers
             }
         }
         let modelChanged = effectiveConfig.detectorSetup.analysisID != config.detectorSetup.analysisID
+        let keepZoomChanged = effectiveConfig.keepZoomPosition != config.keepZoomPosition
         effectiveConfig = config
+        if keepZoomChanged, !changingFolder { session.rebaseManualZoom(keeping: config.keepZoomPosition) }
         updatePlayback()
         viewerView.zoomStopMode = config.zoomStopMode
         if modelChanged {
@@ -2566,7 +2790,7 @@ import UniformTypeIdentifiers
         } else {
             windowToolbarController.resetFullScreenAutohiding()
             if let window { windowToolbarController.setFullScreenTabBarAutohiding(false, in: window) }
-            if !isShowingHome { windowToolbarController.toolbar.isVisible = toolbarWanted }
+            if !isShowingHome { windowToolbarController.toolbar.isVisible = !isShowingComparison && toolbarWanted }
             toolbarWasWanted = toolbarWanted
         }
         applyStatsLayout()
@@ -2577,8 +2801,34 @@ import UniformTypeIdentifiers
     /// or with nothing focused (`KeyMap.windowLookup`). A text field (Home's filter, a rename, a selected info panel
     /// value) and Stash's page keep every key, so F types there; the viewer takes its own keys (`ViewerView`).
     private func windowKey(_ event: NSEvent) -> Bool {
+        guard let window, window.isKeyWindow else { return false }
+        if let closedWith = keyThatClosedCheatSheet {
+            if event.isARepeat, event.keyCode == closedWith { return true }
+            if !event.isARepeat { keyThatClosedCheatSheet = nil }
+        }
+        if cheatSheet.isOpen {
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if flags.isEmpty {
+                switch event.keyCode {
+                case 53:
+                    if !event.isARepeat {
+                        keyThatClosedCheatSheet = event.keyCode
+                        setCheatSheet(open: false)
+                    }
+                    return true
+                case 116, 121:
+                    cheatSheet.scrollPage(down: event.keyCode == 121)
+                    return true
+                default: break
+                }
+            }
+            if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "f" {
+                cheatSheet.focusSearch()
+                return true
+            }
+            return false
+        }
         if folderSlots?.key(event) == true { return true }
-        guard let window, window.isKeyWindow, !cheatSheet.isOpen else { return false }
         if !isShowingHome, let playback = embeddedPlayback, playback.isViewLoaded, !playback.view.isHidden,
            event.keyCode == 123 || event.keyCode == 124 {
             let modifiers = event.modifierFlags.intersection([.shift, .option, .command, .control])
@@ -2655,7 +2905,12 @@ import UniformTypeIdentifiers
     private func setCheatSheet(open: Bool) {
         guard open != cheatSheet.isOpen else { return }
         embeddedPlayback?.cancelRightClick()
-        if open { cheatSheet.show() } else { cheatSheet.hide() }
+        if open {
+            cheatSheet.show(.bindings(inputMap: Settings.shared.inputMap))
+        } else {
+            cheatSheet.hide()
+        }
+        DebugLog.log(open ? "cheat sheet open" : "cheat sheet closed")
         strip.staysShown = open
         viewerView.overlayDidChange()
     }
@@ -2732,6 +2987,22 @@ import UniformTypeIdentifiers
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(copy(_:)):
+            return focusedFileViewBrowser.map { !FileViewCommands.files($0.selectedEntries).isEmpty } ?? false
+        case #selector(paste(_:)), #selector(moveFileViewItemsHere(_:)):
+            return focusedFileViewBrowser.flatMap { FileViewCommands.destination(in: $0.location) } != nil
+                && FileViewCommands.hasClipboardFiles
+        case #selector(trashFileViewItems(_:)):
+            return focusedFileViewBrowser?.selectedEntries.contains(where: \.canTrash) == true
+        case #selector(batchUpscaleFileViewItems(_:)):
+            return fileViewBrowser.map { !FileViewCommands.images($0.selectedEntries).isEmpty } ?? false
+        case #selector(cancelBatchUpscale(_:)):
+            return ViewerUpscale.batchIsRunning
+        case #selector(compareSelectedPhotos(_:)): return comparisonSelection != nil
+        case #selector(selectForComparison(_:)): return comparisonPhoto != nil && registry != nil
+        case #selector(compareWithSelectedPhoto(_:)):
+            guard let photo = comparisonPhoto, let selected = registry?.selectedComparisonPhoto else { return false }
+            return photo != selected
         case #selector(undoFramingFeedback(_:)): return framingLearning?.canUndoFeedback == true
         case #selector(saveDetailCrop(_:)), #selector(saveOverviewCrop(_:)),
              #selector(saveDetailCropAndNext(_:)), #selector(saveOverviewCropAndNext(_:)), #selector(saveFramingReference(_:)):
@@ -2815,12 +3086,44 @@ import UniformTypeIdentifiers
         folderSlots?.layout(in: container.bounds, top: max(0, container.bounds.maxY - top),
                             bottom: stripHeight + playbackStripLayout.height)
     }
+    /// The scope is determined by the frontmost surface at invocation.
+    private var slotPluginScope: SlotPluginScope? {
+        if let browserView {
+            return LoupeHomeSource.isLocalFileView(browserView.location) && browserView.selectedEntry?.url.isFileURL == true
+                ? .fileView : nil
+        }
+        return !isShowingHome && session.image != nil && session.entry?.url.isFileURL == true ? .viewer : nil
+    }
+
+    func slotPluginActions() -> [(id: String, label: String)] {
+        guard let scope = slotPluginScope else { return [] }
+        return folderSlots?.pluginActions(for: scope) ?? []
+    }
+
+    func invokeSlotPluginAction(_ id: String) {
+        guard let scope = slotPluginScope else { return }
+        let items: [SlotPluginItem]
+        switch scope {
+        case .viewer:
+            guard let url = session.entry?.url else { return }
+            items = [SlotPluginItem(url: url, name: ArchivePath.shortName(url), kind: "file")]
+        case .fileView:
+            guard let browserView else { return }
+            let selection = browserView.selectedEntries
+            guard selection.allSatisfy({ $0.url.isFileURL && $0.kind != .collection }) else {
+                browserView.showToast("Select only files, folders or archives")
+                return
+            }
+            items = selection.map { SlotPluginItem(url: $0.url, name: $0.name, kind: String(describing: $0.kind)) }
+        }
+        folderSlots?.invokePluginAction(id, scope: scope, items: items)
+    }
+
     @objc func toggleLeftSlot(_ sender: Any?) { folderSlots?.toggle(.left) }
     @objc func toggleRightSlot(_ sender: Any?) { folderSlots?.toggle(.right) }
     @objc func toggleBottomSlot(_ sender: Any?) { folderSlots?.toggle(.bottom) }
 
     private func applyStripLayout() {
-        folderSlots?.applySettings(Settings.shared.config)
         let clearance = playbackStripLayout.stripClearance(reservesSpace: strip.reservesSpace, bottomInset: slotInsets.bottom)
         stripAtBottom.constant = -clearance
         strip.setPlaybackClearance(clearance)
@@ -2841,7 +3144,7 @@ import UniformTypeIdentifiers
     /// bar in full screen, and setting it visible again pins it on screen. Only the viewer's own toolbar is touched, and
     /// only while it is the window's: Home's stays enabled, and `hideHome` puts the viewer's back as it was left.
     private func applyToolbarVisibility() {
-        guard !isClosed, !isShowingHome, let window else { return }
+        guard !isClosed, !isShowingHome, !isShowingComparison, let window else { return }
         let windowedAuto = !isFullScreen && toolbarPinnedOverride == false && windowToolbar
         windowedToolbarReveal.setEnabled(windowedAuto, for: window)
         if isFullScreen {
@@ -2878,7 +3181,7 @@ import UniformTypeIdentifiers
     private func applyFullScreenToolbar() {
         guard !isClosed, isFullScreen, let window, let toolbar = window.toolbar else { return }
         if let selected = window.tabGroup?.selectedWindow, selected !== window { return }
-        let enabled = isShowingHome || viewerToolbarPinned || fullScreenToolbar
+        let enabled = !isShowingComparison && (isShowingHome || viewerToolbarPinned || fullScreenToolbar)
         windowToolbarController.setFullScreenTabBarAutohiding(!isShowingHome && !viewerToolbarPinned, in: window)
         // willEnterFullScreen arrives before the native host is ready. didEnter
         // applies the policy again once AppKit has finished creating that host.
@@ -2962,6 +3265,12 @@ import UniformTypeIdentifiers
         // The panel may have come up under the cursor, or gone from under it.
         panel.onShownChange = { [weak self] _ in self?.viewerView.overlayDidChange() }
         infoPanel = panel
+        updateInfoPanelFontSize()
+    }
+
+    private func updateInfoPanelFontSize() {
+        let size = CGFloat(Settings.shared.config.infoPanelFontSize)
+        if infoPanel.fontSize != size { infoPanel.fontSize = size }
     }
 
     /// View › Show Info / Hide Info (`⌘I`): the panel opens or closes in every window.
@@ -3106,8 +3415,12 @@ import UniformTypeIdentifiers
     }
 
     func playbackVisibilityChanged(_ visible: Bool, active: Bool) {
+        let becameVisible = visible && !playbackVisible
         playbackVisible = visible
         playbackActive = active
+        comparisonView?.setVisible(visible)
+        if becameVisible, isShowingComparison { session.refreshComparisonEntries() }
+        viewerView.setUpscaleVisibility(visible, active: active)
         updatePlayback()
     }
 
@@ -3854,13 +4167,16 @@ import UniformTypeIdentifiers
 private final class ViewerWindow: NSWindow {
     var onKeyDown: ((NSEvent) -> Bool)?
     var onPlaybackInput: ((NSEvent) -> Bool)?
+    var onFileViewTrashKey: ((NSEvent) -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onFileViewTrashKey?(event) == true { return true }
         if onPlaybackInput?(event) == true { return true }
         return super.performKeyEquivalent(with: event)
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if onFileViewTrashKey?(event) == true { return }
         if onPlaybackInput?(event) == true { return }
         if event.type == .keyDown, onKeyDown?(event) == true { return }
         super.sendEvent(event)

@@ -44,6 +44,7 @@ Loupe is built for libraries of tens of thousands of photos on a NAS, not for a 
 - **Sessions.** **File → Save Session As…** keeps every window and tab under a name, to reopen from Home. *Last Session* is always there, and `session-restore=last` brings it back at launch.
 - **Favorite folders.** Choose **Add to Favorites** from a folder’s menu to keep it in the sidebar and on the Favorites page, with a cover. Open a sidebar folder in a new tab to keep your current view.
 - **Browse subfolders together.** Turn on **Include subfolders** in File View to browse photos from the current folder and its descendants in one grid.
+- **Compare two photos.** Command-click two cards in File View and choose **Compare Selected Photos**. Across viewer tabs, use **File → Select for Comparison** on the first photo and **File → Compare with Selected Photo** on the second. Equal-proportion photos open at the same displayed size. Use **Link Pan & Zoom** to align differently cropped photos by hand and then move them together.
 - **Search across sources.** A saved [Network Everything](https://github.com/ampire5/EverythingMac) connection adds **Everything** to Home. Configure a SearXNG server in Loupe settings to use **Web Images** and browse the results in the viewer.
 - **Drop a folder on Home** to open it, or a single photo.
 - **Tidy as you go.** Rename (`F2`) and move to the Trash right in the browser, sort by name, date or size per folder; Recent, Sessions and folder settings follow a rename.
@@ -123,7 +124,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 </tr>
 <tr>
 <td><b>Auto colour and vibrance.</b> <code>c</code> and <code>v</code> for this folder (<code>⇧C</code> / <code>⇧V</code> make it the default) — left half original, right half corrected. Applied on the GPU as a colour cube, never written to your files.</td>
-<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. Choose a file by click or keyboard; hovering another card keeps the information on your selection. Information sections start expanded and remember manual collapse. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size).</td>
+<td><b>Info panel.</b> In File View, <code>⌘I</code> opens a docked right inspector that follows the selected file, with a thumbnail, image facts and collapsible metadata sections. Resize its divider; its width and open sections are remembered. A closed inspector is created only when first opened, then reused. Choose a file by click or keyboard; hovering another card keeps the information on your selection. Information sections start expanded and remember manual collapse. In the photo viewer, <code>⌘I</code>: file, EXIF, colour profile, bit depth, the decoder and its timings, memory — and the A1111 generation parameters a PNG, JPEG or WebP carries (a ComfyUI workflow is noted with its size). Choose the viewer panel’s text size in <b>Settings → Interface → Information Panel</b>.</td>
 </tr>
 <tr>
 <td><img src="docs/images/sidebar.webp" alt="Sidebar with the folder tree"></td>
@@ -131,7 +132,7 @@ While you look, the toolbar's centre shows the file, its place in the folder, si
 </tr>
 <tr>
 <td><b>Sidebar.</b> Sources and places with a folder tree that follows you, for deep libraries.</td>
-<td><b>Everything is a key.</b> <code>?</code> shows every binding of your current layout, gestures included.</td>
+<td><b>Everything is a key.</b> <code>?</code> opens searchable keys and gestures for your current layout. Use Page Up / Page Down to scroll and Escape to close.</td>
 </tr>
 </table>
 
@@ -260,6 +261,8 @@ Native Swift and AppKit: no Electron and no web views, except the Stash tab, whi
 ## Install
 
 Loupe needs macOS 26 or later: on Apple Silicon, or on an Intel Mac with macOS 26 (every release has a `macOS-x86_64` zip, which the cask picks on Intel).
+
+To open photos in Loupe when you double-click them in Finder, choose **Loupe → Make Loupe Default for** and select a photo format. Confirm the change if macOS asks.
 
 ```sh
 brew install --cask ampire5/tap/loupe
