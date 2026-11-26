@@ -1,5 +1,5 @@
 {
-  "originHash" : "ce7eec17a85b02d8bab83286df5f0342f19908228ea324f8f2bd4e5c828a77f7",
+  "originHash" : "efb0f532e98b0f795d8c89208f2406d42087228abd799c67ba1e226fb0a880d6",
   "pins" : [
     {
       "identity" : "everythingmac",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ampire5/HomeScreenKit.git",
       "state" : {
-        "revision" : "2fa67425464ba9c4a0ad719f7d9059076c270065",
-        "version" : "0.16.0"
+        "revision" : "fd4956b2b45b85357db047cd82da0c5c9eeba248",
+        "version" : "0.16.2"
       }
     },
     {
