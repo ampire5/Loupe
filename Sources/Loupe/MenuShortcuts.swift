@@ -9,7 +9,7 @@ import LoupeCore
         let skipped: Set<String> = ["Edit"]
         let standard: Set<Selector> = [#selector(NSApplication.hide(_:)), #selector(NSApplication.terminate(_:))]
         var rows: [(input: String, title: String)] = []
-        for top in NSApp.mainMenu?.items ?? [] where !skipped.contains(top.title) {
+        for top in NSApp?.mainMenu?.items ?? [] where !skipped.contains(top.title) {
             for item in top.submenu?.items ?? [] where !item.isHidden && !item.keyEquivalent.isEmpty {
                 let flags = item.keyEquivalentModifierMask
                 guard flags.contains(.command), !(item.action.map(standard.contains) ?? false) else { continue }
